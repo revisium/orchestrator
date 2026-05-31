@@ -13,6 +13,7 @@
     "build": "tsc -p tsconfig.json",
     "revo": "tsx src/cli/index.ts",
     "smoke:control-plane": "tsx scripts/smoke-control-plane-data-access.ts",
+    "smoke:create-run": "tsx scripts/smoke-create-run.ts",
     "test": "tsx --test src/**/*.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

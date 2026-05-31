@@ -28,4 +28,4 @@ reference docs in [`../`](../) (the durable *what / why*).
 | --- | --- |
 | [0001-revisium-daemon-and-bootstrap](./0001-revisium-daemon-and-bootstrap.md) | Executed |
 | [0002-control-plane-data-access](./0002-control-plane-data-access.md) | Executed |
-| [0003-create-run-workflow](./0003-create-run-workflow.md) | Ready to execute |
+| [0003-create-run-workflow](./0003-create-run-workflow.md) | Executed |
