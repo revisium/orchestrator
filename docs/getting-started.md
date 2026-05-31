@@ -1,7 +1,6 @@
 # Getting started
 
-> **Status: DRAFT.** Commands reflect **Plan 0001**'s intended `revo` CLI. Verify each against the real binary
-> once the CLI is built; finalize this doc as part of executing Plan 0001.
+> **Status: verified.** Commands were checked against the Plan 0001 `revo` CLI.
 > **Depends on:** [plans/0001-revisium-daemon-and-bootstrap.md](./plans/0001-revisium-daemon-and-bootstrap.md)
 > (the CLI) · `revisium.config.json` (ports, org/project/branch).
 > **Realized by:** Plan 0001.
@@ -44,11 +43,19 @@ remote-debugging port.)
 This commits the **schema** only (a structural, ADR-worthy change). Runtime rows are written to draft later and
 never committed — see [control-plane-schema.md](./control-plane-schema.md).
 
+Verify the generated REST endpoint:
+
+```bash
+curl http://localhost:<port>/endpoint/rest/admin/control-plane/master/draft/tables
+curl http://localhost:<port>/endpoint/rest/admin/control-plane/master/draft/tables/steps
+```
+
 ## Where data lives / reset
 
 ```text
 ~/.revisium-orchestrator/
 ├── pgdata/          # embedded PostgreSQL
+├── jwt-secret       # generated internal JWT secret
 ├── uploads/         # local file uploads
 ├── runtime.json     # { httpPort, pgPort, pid, startedAt } — written by `start`
 └── standalone.log   # daemon stdout/stderr

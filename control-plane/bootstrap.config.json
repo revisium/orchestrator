@@ -1,0 +1,571 @@
+{
+  "projectName": "control-plane",
+  "branchName": "master",
+  "endpoints": [
+    "REST_API"
+  ],
+  "tables": [
+    {
+      "id": "task_runs",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "default": ""
+          },
+          "project_id": {
+            "type": "string",
+            "default": ""
+          },
+          "title": {
+            "type": "string",
+            "default": ""
+          },
+          "description": {
+            "type": "string",
+            "default": ""
+          },
+          "status": {
+            "type": "string",
+            "default": "pending",
+            "description": "pending|planning|ready|running|completed|failed|awaiting_approval|paused|cancelled"
+          },
+          "repos": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "default": ""
+            }
+          },
+          "scope": {
+            "type": "string",
+            "default": ""
+          },
+          "priority": {
+            "type": "number",
+            "default": 0
+          },
+          "created_by": {
+            "type": "string",
+            "default": ""
+          },
+          "created_at": {
+            "type": "string",
+            "default": ""
+          },
+          "updated_at": {
+            "type": "string",
+            "default": ""
+          }
+        },
+        "required": []
+      }
+    },
+    {
+      "id": "tasks",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "default": ""
+          },
+          "run_id": {
+            "type": "string",
+            "default": ""
+          },
+          "repo_ref": {
+            "type": "string",
+            "default": ""
+          },
+          "role_hint": {
+            "type": "string",
+            "default": ""
+          },
+          "title": {
+            "type": "string",
+            "default": ""
+          },
+          "status": {
+            "type": "string",
+            "default": "pending"
+          },
+          "depends_on": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "default": ""
+            }
+          },
+          "scope": {
+            "type": "string",
+            "default": ""
+          },
+          "priority": {
+            "type": "number",
+            "default": 0
+          },
+          "created_at": {
+            "type": "string",
+            "default": ""
+          },
+          "updated_at": {
+            "type": "string",
+            "default": ""
+          }
+        },
+        "required": []
+      }
+    },
+    {
+      "id": "steps",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "default": ""
+          },
+          "task_id": {
+            "type": "string",
+            "default": ""
+          },
+          "run_id": {
+            "type": "string",
+            "default": ""
+          },
+          "role": {
+            "type": "string",
+            "default": ""
+          },
+          "kind": {
+            "type": "string",
+            "default": ""
+          },
+          "status": {
+            "type": "string",
+            "default": "pending",
+            "description": "pending|ready|claimed|running|succeeded|failed|dead|awaiting_approval|skipped"
+          },
+          "input": {
+            "type": "string",
+            "default": "",
+            "description": "Serialized JSON"
+          },
+          "output": {
+            "type": "string",
+            "default": "",
+            "description": "Serialized JSON"
+          },
+          "model_profile": {
+            "type": "string",
+            "default": ""
+          },
+          "run_after": {
+            "type": "string",
+            "default": ""
+          },
+          "attempt_count": {
+            "type": "number",
+            "default": 0
+          },
+          "max_attempts": {
+            "type": "number",
+            "default": 3
+          },
+          "priority": {
+            "type": "number",
+            "default": 0
+          },
+          "lease_owner": {
+            "type": "string",
+            "default": ""
+          },
+          "lease_expires_at": {
+            "type": "string",
+            "default": ""
+          },
+          "dead_reason": {
+            "type": "string",
+            "default": ""
+          },
+          "created_at": {
+            "type": "string",
+            "default": ""
+          },
+          "updated_at": {
+            "type": "string",
+            "default": ""
+          }
+        },
+        "required": []
+      }
+    },
+    {
+      "id": "attempts",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "default": ""
+          },
+          "step_id": {
+            "type": "string",
+            "default": ""
+          },
+          "run_id": {
+            "type": "string",
+            "default": ""
+          },
+          "worker_id": {
+            "type": "string",
+            "default": ""
+          },
+          "attempt_no": {
+            "type": "number",
+            "default": 0
+          },
+          "status": {
+            "type": "string",
+            "default": ""
+          },
+          "idempotency_key": {
+            "type": "string",
+            "default": ""
+          },
+          "model_profile": {
+            "type": "string",
+            "default": ""
+          },
+          "input_tokens": {
+            "type": "number",
+            "default": 0
+          },
+          "output_tokens": {
+            "type": "number",
+            "default": 0
+          },
+          "lesson": {
+            "type": "string",
+            "default": ""
+          },
+          "error": {
+            "type": "string",
+            "default": ""
+          },
+          "started_at": {
+            "type": "string",
+            "default": ""
+          },
+          "finished_at": {
+            "type": "string",
+            "default": ""
+          }
+        },
+        "required": []
+      }
+    },
+    {
+      "id": "events",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "default": ""
+          },
+          "run_id": {
+            "type": "string",
+            "default": ""
+          },
+          "task_id": {
+            "type": "string",
+            "default": ""
+          },
+          "step_id": {
+            "type": "string",
+            "default": ""
+          },
+          "type": {
+            "type": "string",
+            "default": ""
+          },
+          "payload": {
+            "type": "string",
+            "default": "",
+            "description": "Serialized JSON"
+          },
+          "actor": {
+            "type": "string",
+            "default": ""
+          },
+          "created_at": {
+            "type": "string",
+            "default": ""
+          }
+        },
+        "required": []
+      }
+    },
+    {
+      "id": "inbox",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "default": ""
+          },
+          "kind": {
+            "type": "string",
+            "default": "",
+            "description": "approval|question|alert"
+          },
+          "run_id": {
+            "type": "string",
+            "default": ""
+          },
+          "task_id": {
+            "type": "string",
+            "default": ""
+          },
+          "step_id": {
+            "type": "string",
+            "default": ""
+          },
+          "project_id": {
+            "type": "string",
+            "default": ""
+          },
+          "title": {
+            "type": "string",
+            "default": ""
+          },
+          "context": {
+            "type": "string",
+            "default": "",
+            "description": "Serialized JSON"
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "default": ""
+            }
+          },
+          "status": {
+            "type": "string",
+            "default": "pending",
+            "description": "pending|resolved"
+          },
+          "answer": {
+            "type": "string",
+            "default": "",
+            "description": "Serialized JSON"
+          },
+          "resolved_by": {
+            "type": "string",
+            "default": ""
+          },
+          "created_at": {
+            "type": "string",
+            "default": ""
+          },
+          "resolved_at": {
+            "type": "string",
+            "default": ""
+          }
+        },
+        "required": []
+      }
+    },
+    {
+      "id": "roles",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "default": ""
+          },
+          "name": {
+            "type": "string",
+            "default": "",
+            "description": "architect|developer|tester|reviewer|integrator|triage"
+          },
+          "system_prompt": {
+            "type": "string",
+            "default": ""
+          },
+          "model_level": {
+            "type": "string",
+            "default": "standard",
+            "description": "cheap|standard|deep"
+          },
+          "effort": {
+            "type": "string",
+            "default": ""
+          },
+          "runner": {
+            "type": "string",
+            "default": "claude-code",
+            "description": "claude-code|codex"
+          },
+          "allowed_tools": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "default": ""
+            }
+          },
+          "scope_rules": {
+            "type": "string",
+            "default": "",
+            "description": "Serialized JSON"
+          },
+          "updated_at": {
+            "type": "string",
+            "default": ""
+          }
+        },
+        "required": []
+      }
+    },
+    {
+      "id": "model_profiles",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "default": ""
+          },
+          "level": {
+            "type": "string",
+            "default": "",
+            "description": "cheap|standard|deep"
+          },
+          "provider": {
+            "type": "string",
+            "default": ""
+          },
+          "model_id": {
+            "type": "string",
+            "default": ""
+          },
+          "params": {
+            "type": "string",
+            "default": "",
+            "description": "Serialized JSON"
+          },
+          "cost_per_input": {
+            "type": "number",
+            "default": 0
+          },
+          "cost_per_output": {
+            "type": "number",
+            "default": 0
+          },
+          "updated_at": {
+            "type": "string",
+            "default": ""
+          }
+        },
+        "required": []
+      }
+    },
+    {
+      "id": "routing_policy",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "default": ""
+          },
+          "rule": {
+            "type": "string",
+            "default": "",
+            "description": "Serialized JSON"
+          },
+          "model_level": {
+            "type": "string",
+            "default": "standard"
+          },
+          "requires_human": {
+            "type": "boolean",
+            "default": false
+          },
+          "updated_at": {
+            "type": "string",
+            "default": ""
+          }
+        },
+        "required": []
+      }
+    },
+    {
+      "id": "cost_ledger",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "default": ""
+          },
+          "run_id": {
+            "type": "string",
+            "default": ""
+          },
+          "step_id": {
+            "type": "string",
+            "default": ""
+          },
+          "attempt_id": {
+            "type": "string",
+            "default": ""
+          },
+          "model_profile": {
+            "type": "string",
+            "default": ""
+          },
+          "input_tokens": {
+            "type": "number",
+            "default": 0
+          },
+          "output_tokens": {
+            "type": "number",
+            "default": 0
+          },
+          "cost_amount": {
+            "type": "number",
+            "default": 0
+          },
+          "currency": {
+            "type": "string",
+            "default": "USD"
+          },
+          "recorded_at": {
+            "type": "string",
+            "default": ""
+          }
+        },
+        "required": []
+      }
+    }
+  ],
+  "rows": [],
+  "commitMessage": "Bootstrap control-plane schema (plan 0001)"
+}

@@ -1,0 +1,10 @@
+{
+  "host": "localhost",
+  "preferredPort": 19222,
+  "preferredPgPort": 15440,
+  "autoDiscover": true,
+  "dataDir": "~/.revisium-orchestrator",
+  "org": "admin",
+  "project": "control-plane",
+  "branch": "master"
+}
