@@ -69,13 +69,21 @@ function compactUtcStamp(date: Date): string {
 const maxSlugLength = 21;
 
 function slugTitle(title: string): string {
-  const slug = title
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    // Keep the longest event_<stamp>_<slug>_<suffix>_created ID within the live endpoint row-id limit.
-    .slice(0, maxSlugLength)
-    .replace(/-+$/g, '');
+  let slug = '';
+  let needsSeparator = false;
+  for (const char of title.toLowerCase()) {
+    const isAlphanumeric = (char >= 'a' && char <= 'z') || (char >= '0' && char <= '9');
+    if (!isAlphanumeric) {
+      needsSeparator = slug.length > 0;
+      continue;
+    }
+    if (needsSeparator && slug.length < maxSlugLength) slug += '-';
+    needsSeparator = false;
+    if (slug.length < maxSlugLength) slug += char;
+    if (slug.length >= maxSlugLength) break;
+  }
+
+  while (slug.endsWith('-')) slug = slug.slice(0, -1);
   return slug || 'run';
 }
 

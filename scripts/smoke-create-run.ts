@@ -1,7 +1,14 @@
 import { spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
 import { readRuntime } from '../src/config.js';
 import { createControlPlaneDataAccess } from '../src/control-plane/index.js';
 import { headRestBaseUrl } from '../src/control-plane/rest-transport.js';
+
+const require = createRequire(import.meta.url);
+const tsxPackagePath = require.resolve('tsx/package.json');
+const tsxPackage = require(tsxPackagePath) as { bin: string };
+const tsxCliPath = join(dirname(tsxPackagePath), tsxPackage.bin);
 
 type CliResult = {
   stdout: string;
@@ -11,7 +18,9 @@ type CliResult = {
 
 function runCli(args: string[]): Promise<CliResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn('npm', ['run', 'revo', '--', ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, [tsxCliPath, 'src/cli/index.ts', ...args], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
     let stdout = '';
     let stderr = '';
     child.stdout.setEncoding('utf8');
