@@ -34,7 +34,7 @@ Key facts (already confirmed — but re-verify if a command fails):
    - It is a **foreground** process. **SIGTERM / Ctrl+C = graceful shutdown** (it checkpoints and stops pg cleanly).
    - **Node requirement: `>=24.11.1 <25`.** The executor MUST run Node 24. Verify in step 1.
 2. **revisium-cli** (`npx revisium`) does declarative bootstrap against a no-auth instance:
-   ```
+   ```bash
    npx revisium example bootstrap \
      --config ./control-plane/bootstrap.config.json \
      --url revisium://localhost:<resolvedHttpPort>/admin/control-plane/master \
@@ -73,7 +73,7 @@ only `LICENSE` + `README.md`). Create exactly this layout:
 
 Files marked **(exists)** are already created — do **not** recreate them; the rest are yours to add.
 
-```
+```text
 agent-orchestrator/
 ├── AGENTS.md                         # (exists) repo-local context → ../agents method repo
 ├── CLAUDE.md -> AGENTS.md            # (exists) symlink
@@ -608,7 +608,7 @@ Use this exact file content (adjust only if a Verify step proves a type is rejec
    If not → print `Revisium is not running. Run: revo revisium start` and exit 1.
 2. Build `revisiumUri(httpPort)` and shell out to revisium-cli (use `spawn`/`execFile`, inherit stdio so the
    user sees CLI output):
-   ```
+   ```bash
    npx revisium example bootstrap \
      --config <repoRoot>/control-plane/bootstrap.config.json \
      --url <revisiumUri(httpPort)> \
@@ -699,4 +699,3 @@ When done, report: what was built, the Verify outputs, and answers to any of the
 loop (§7), runners (§9), seeding `roles`/`model_profiles` with real prompts (§10). Also the brief's open
 questions §15 (atomic conditional update, revision mechanics in `@revisium/client`) belong to the data-access
 slice — do not investigate them here.
-```

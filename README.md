@@ -1,7 +1,7 @@
 # agent-orchestrator
 
-Local orchestrator for software-development tasks driven by short-lived AI agents (architect, developer, tester,
-reviewer, integrator), with **Revisium** as the single source of truth. The orchestrator is a thin, dumb loop:
+Local orchestrator for software-development tasks driven by short-lived AI agents (triage, architect, developer,
+tester, reviewer, integrator), with **Revisium** as the single source of truth. The orchestrator is a thin, dumb loop:
 it claims a ready step, runs an agent with the role/model that step names, and writes the result back — the
 workflow emerges from data in Revisium, not from hardcoded code.
 

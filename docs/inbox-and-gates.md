@@ -36,7 +36,7 @@ A sorter step classifies each comment:
 - **objection to a decision (ADR)** → **up** (architect / human inbox). The developer may not change
   architecture on its own — stated explicitly in its prompt.
 - Live-human comments, when the type is unclear → lean toward escalation. Auto-posting replies to live reviewers
-  is deferred; at the start the user vises an agent's reply to a human.
+  is deferred; at the start the user vets an agent's reply to a human.
 
 "A comment appeared" is caught by the orchestrator (poll / GitHub webhook); "what is it and where does it go" is
 an agent step. The result is ordinary steps / inbox records — same state-driven principle.

@@ -6,8 +6,8 @@
 
 ## One paragraph
 
-A local orchestrator runs software-development tasks using AI agents with distinct roles (architect, developer,
-tester, reviewer, integrator). **The only source of truth is Revisium.** Tasks, steps, roles, policy, the human
+A local orchestrator runs software-development tasks using AI agents with distinct roles (triage, architect,
+developer, tester, reviewer, integrator). **The only source of truth is Revisium.** Tasks, steps, roles, policy, the human
 inbox, and domain data all live there. The orchestrator itself is a **thin, dumb loop**: it claims a ready step
 from Revisium, runs a short-lived agent with the role and model that step names, and writes the result back. The
 chain of work is **not hardcoded** — it emerges from step status changes in Revisium. A human steers through a
@@ -15,7 +15,7 @@ single inbox (approvals, answers to agent questions).
 
 ## Three layers
 
-```
+```text
 [ Management + human ]   CLI / interactive: create tasks, work the inbox
             │  reads/writes state
 [ Revisium — state bus ]  control plane (queue, inbox, roles, policy, cost)
@@ -77,7 +77,7 @@ ADR-worthy); runtime **rows** are written to draft and never trigger a commit. S
 
 ## How the chain moves (the loop, in essence)
 
-```
+```text
 // workerId is a STABLE identity, persisted across restarts (config / worker-id file) — not a per-process UUID,
 // so a restarted worker reclaims the steps its previous incarnation owned.
 recoverInFlight(workerId)                      // startup: reclaim only THIS worker's orphaned claimed/running steps

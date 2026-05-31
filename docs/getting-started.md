@@ -46,7 +46,7 @@ never committed — see [control-plane-schema.md](./control-plane-schema.md).
 
 ## Where data lives / reset
 
-```
+```text
 ~/.revisium-orchestrator/
 ├── pgdata/          # embedded PostgreSQL
 ├── uploads/         # local file uploads
