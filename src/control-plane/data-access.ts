@@ -1,6 +1,11 @@
 import { ControlPlaneError } from './errors.js';
 import { deserializeData, serializeData, serializePatches, type PatchOperation } from './json-fields.js';
-import { createRestTransport, type RestTransport } from './rest-transport.js';
+import {
+  createClientTransport,
+  type ControlPlaneTransport,
+  type TransportRow,
+  type TransportList,
+} from './client-transport.js';
 import { isRuntimeTable, type RuntimeTable } from './tables.js';
 
 export type ListRowsOptions = {
@@ -27,18 +32,6 @@ export type ControlPlaneDataAccess = {
   patchRow(table: RuntimeTable, rowId: string, patches: PatchOperation[]): Promise<ControlPlaneRow>;
 };
 
-type EndpointRow = {
-  id: string;
-  readonly?: boolean;
-  createdAt?: string;
-  updatedAt?: string;
-  data?: Record<string, unknown>;
-};
-
-type EndpointList = {
-  edges?: Array<{ node?: EndpointRow }>;
-};
-
 function assertRuntimeTable(table: RuntimeTable): void {
   if (!isRuntimeTable(table)) {
     throw new ControlPlaneError('VALIDATION_FAILURE', `Unsupported runtime table: ${String(table)}`, {
@@ -48,10 +41,10 @@ function assertRuntimeTable(table: RuntimeTable): void {
 }
 
 function rowPath(table: RuntimeTable, rowId: string): string {
-  return `/tables/${encodeURIComponent(table)}/row/${encodeURIComponent(rowId)}`;
+  return `${table}/${rowId}`;
 }
 
-function mapRow(table: RuntimeTable, row: EndpointRow): ControlPlaneRow {
+function mapRow(table: RuntimeTable, row: TransportRow): ControlPlaneRow {
   return {
     rowId: row.id,
     data: deserializeData(table, row.id, row.data ?? {}),
@@ -61,17 +54,24 @@ function mapRow(table: RuntimeTable, row: EndpointRow): ControlPlaneRow {
   };
 }
 
-export function createControlPlaneDataAccessForTransport(transport: RestTransport): ControlPlaneDataAccess {
+export function createControlPlaneDataAccessForTransport(
+  transport: ControlPlaneTransport,
+  options?: { revision?: 'draft' | 'head' },
+): ControlPlaneDataAccess {
+  const mode = options?.revision ?? 'draft';
+
+  function guardHead(): void {
+    if (mode === 'head') {
+      throw new ControlPlaneError('VALIDATION_FAILURE', 'Writes are not allowed on head revision');
+    }
+  }
+
   return {
     assertReady: () => transport.assertReady(),
 
-    async listRows(table, options = {}) {
+    async listRows(table, listOptions = {}) {
       assertRuntimeTable(table);
-      const body = { first: 100, ...options };
-      const result = await transport.request<EndpointList>(`/tables/${encodeURIComponent(table)}/rows`, {
-        method: 'POST',
-        body,
-      });
+      const result = await transport.listRows(table, listOptions);
       return (result.edges ?? []).map((edge) => {
         if (!edge.node) {
           throw new ControlPlaneError('HTTP_ERROR', `Malformed list response for ${table}`, { details: result });
@@ -83,7 +83,7 @@ export function createControlPlaneDataAccessForTransport(transport: RestTranspor
     async getRow(table, rowId) {
       assertRuntimeTable(table);
       try {
-        return mapRow(table, await transport.request<EndpointRow>(rowPath(table, rowId)));
+        return mapRow(table, await transport.getRow(table, rowId));
       } catch (error) {
         if (error instanceof ControlPlaneError && error.code === 'ROW_NOT_FOUND') return null;
         throw error;
@@ -91,27 +91,23 @@ export function createControlPlaneDataAccessForTransport(transport: RestTranspor
     },
 
     async createRow(table, rowId, data) {
+      guardHead();
       assertRuntimeTable(table);
       const serialized = serializeData(table, rowId, data);
-      return mapRow(
-        table,
-        await transport.request<EndpointRow>(rowPath(table, rowId), { method: 'POST', body: { data: serialized } }),
-      );
+      return mapRow(table, await transport.createRow(table, rowId, serialized));
     },
 
     async updateRow(table, rowId, data) {
+      guardHead();
       assertRuntimeTable(table);
       const serialized = serializeData(table, rowId, data);
       try {
-        return mapRow(
-          table,
-          await transport.request<EndpointRow>(rowPath(table, rowId), { method: 'PUT', body: { data: serialized } }),
-        );
+        return mapRow(table, await transport.updateRow(table, rowId, serialized));
       } catch (error) {
         if (error instanceof ControlPlaneError && error.code === 'ROW_NOT_FOUND') {
-          throw new ControlPlaneError('ROW_NOT_FOUND', `Cannot update missing row: ${table}/${rowId}`, {
-            status: error.status,
-            details: error.details,
+          throw new ControlPlaneError('ROW_NOT_FOUND', `Cannot update missing row: ${rowPath(table, rowId)}`, {
+            status: (error as ControlPlaneError).status,
+            details: (error as ControlPlaneError).details,
           });
         }
         throw error;
@@ -119,18 +115,16 @@ export function createControlPlaneDataAccessForTransport(transport: RestTranspor
     },
 
     async patchRow(table, rowId, patches) {
+      guardHead();
       assertRuntimeTable(table);
       const serialized = serializePatches(table, patches);
       try {
-        return mapRow(
-          table,
-          await transport.request<EndpointRow>(rowPath(table, rowId), { method: 'PATCH', body: { patches: serialized } }),
-        );
+        return mapRow(table, await transport.patchRow(table, rowId, serialized));
       } catch (error) {
         if (error instanceof ControlPlaneError && error.code === 'ROW_NOT_FOUND') {
-          throw new ControlPlaneError('ROW_NOT_FOUND', `Cannot patch missing row: ${table}/${rowId}`, {
-            status: error.status,
-            details: error.details,
+          throw new ControlPlaneError('ROW_NOT_FOUND', `Cannot patch missing row: ${rowPath(table, rowId)}`, {
+            status: (error as ControlPlaneError).status,
+            details: (error as ControlPlaneError).details,
           });
         }
         throw error;
@@ -139,8 +133,10 @@ export function createControlPlaneDataAccessForTransport(transport: RestTranspor
   };
 }
 
-export function createControlPlaneDataAccess(): ControlPlaneDataAccess {
-  return createControlPlaneDataAccessForTransport(createRestTransport());
+export function createControlPlaneDataAccess(options?: { revision?: 'draft' | 'head' }): ControlPlaneDataAccess {
+  const mode = options?.revision ?? 'draft';
+  return createControlPlaneDataAccessForTransport(createClientTransport(mode), { revision: mode });
 }
 
 export type { PatchOperation } from './json-fields.js';
+export type { ControlPlaneTransport, TransportRow, TransportList } from './client-transport.js';

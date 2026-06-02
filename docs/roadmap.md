@@ -25,9 +25,9 @@ Living page: per-doc draft status, dependencies, and the build-slice roadmap. Up
 | Plan | Status | Scope |
 | --- | --- | --- |
 | [0001 — daemon + bootstrap](./plans/0001-revisium-daemon-and-bootstrap.md) | Executed | `revo` daemon CLI + control-plane bootstrap + getting-started/schema docs |
-| [0002 — control-plane data access](./plans/0002-control-plane-data-access.md) | Executed | minimal generated-REST row access for draft runtime rows (superseded in runtime code by 0004) |
+| [0002 — control-plane data access](./plans/0002-control-plane-data-access.md) | Executed | minimal generated-REST row access for draft runtime rows (first implementation; superseded in runtime code by Plan 0004) |
 | [0003 — create-run workflow](./plans/0003-create-run-workflow.md) | Executed | `revo run create`: writes run/task/initial-step/event skeleton into draft runtime rows |
-| [0004 — Revisium client transport](./plans/0004-revisium-client-transport.md) | Draft | migrate runtime data access from generated endpoint to `@revisium/client` System API scopes (`draft`/`head`) |
+| [0004 — Revisium client transport](./plans/0004-revisium-client-transport.md) | Executed | migrate runtime data access from generated endpoint to `@revisium/client` System API scopes (`draft`/`head`) |
 | [0005 — run observability](./plans/0005-run-observability.md) | Draft | read-only `revo run list/show/events` (+`--json`) through the client-backed data-access layer |
 | [0006 — step-lifecycle verbs](./plans/0006-step-lifecycle-verbs.md) | Draft | hot-path data-access verbs: `claimNextStep`/`startAttempt`/`writeResult`/`failStep`/`createSteps`/`recoverInFlight`; opens `attempts`+`cost_ledger` |
 | [0007 — dumb worker loop](./plans/0007-dumb-worker-loop.md) | Draft | the dumb loop + **stub** runner + minimal roles/model_profiles seed + `loadRole`/`loadModelProfile` (head reads) + `buildContext` + `revo work` |

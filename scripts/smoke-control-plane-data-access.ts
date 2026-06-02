@@ -1,6 +1,4 @@
-import { readRuntime } from '../src/config.js';
 import { createControlPlaneDataAccess } from '../src/control-plane/index.js';
-import { headRestBaseUrl } from '../src/control-plane/rest-transport.js';
 
 const cp = createControlPlaneDataAccess();
 const suffix = Date.now();
@@ -97,15 +95,10 @@ if (!runs.some((row) => row.rowId === runId)) {
   throw new Error(`Smoke run ${runId} was not listed from draft task_runs`);
 }
 
-const runtime = readRuntime();
-if (!runtime) throw new Error('Missing runtime state after smoke writes');
-
-const headResponse = await fetch(`${headRestBaseUrl(runtime.httpPort)}/tables/steps/row/${encodeURIComponent(stepId)}`, {
-  signal: AbortSignal.timeout(5000),
-});
-if (headResponse.status !== 404) {
-  const body = await headResponse.text();
-  throw new Error(`Smoke step ${stepId} unexpectedly visible from head: ${headResponse.status} ${body}`);
+const headCp = createControlPlaneDataAccess({ revision: 'head' });
+const headStep = await headCp.getRow('steps', stepId);
+if (headStep !== null) {
+  throw new Error(`Smoke step ${stepId} unexpectedly visible from head`);
 }
 
 console.log(`smokeRunId=${runId}`);

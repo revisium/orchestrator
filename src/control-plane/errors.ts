@@ -1,7 +1,6 @@
 export type ControlPlaneErrorCode =
   | 'DAEMON_NOT_RUNNING'
   | 'BOOTSTRAP_NOT_APPLIED'
-  | 'REST_ENDPOINT_MISSING'
   | 'ROW_CONFLICT'
   | 'ROW_NOT_FOUND'
   | 'VALIDATION_FAILURE'

@@ -23,7 +23,7 @@ function printHint(error: ControlPlaneError, createdRows: boolean): void {
   if (error.code === 'DAEMON_NOT_RUNNING') {
     console.error('Run: ./bin/revo.js revisium start');
   }
-  if ((error.code === 'BOOTSTRAP_NOT_APPLIED' || error.code === 'REST_ENDPOINT_MISSING') && !createdRows) {
+  if (error.code === 'BOOTSTRAP_NOT_APPLIED' && !createdRows) {
     console.error('Run: ./bin/revo.js bootstrap --commit');
   }
 }

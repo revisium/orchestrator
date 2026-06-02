@@ -18,6 +18,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@revisium/client": "^0.6.0",
     "commander": "^12.1.0"
   },
   "devDependencies": {

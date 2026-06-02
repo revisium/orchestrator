@@ -1,9 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
-import { readRuntime } from '../src/config.js';
 import { createControlPlaneDataAccess } from '../src/control-plane/index.js';
-import { headRestBaseUrl } from '../src/control-plane/rest-transport.js';
 
 const require = createRequire(import.meta.url);
 const tsxPackagePath = require.resolve('tsx/package.json');
@@ -95,15 +93,10 @@ if (typeof event.data.payload !== 'object' || event.data.payload === null || Arr
   throw new Error('Event payload did not deserialize to an object');
 }
 
-const runtime = readRuntime();
-if (!runtime) throw new Error('Missing runtime state after smoke create-run');
-
-const headResponse = await fetch(`${headRestBaseUrl(runtime.httpPort)}/tables/task_runs/row/${encodeURIComponent(runId)}`, {
-  signal: AbortSignal.timeout(5000),
-});
-if (headResponse.status !== 404) {
-  const body = await headResponse.text();
-  throw new Error(`Smoke run ${runId} unexpectedly visible from head: ${headResponse.status} ${body}`);
+const headCp = createControlPlaneDataAccess({ revision: 'head' });
+const headRun = await headCp.getRow('task_runs', runId);
+if (headRun !== null) {
+  throw new Error(`Smoke run ${runId} unexpectedly visible from head`);
 }
 
 console.log(`smokeRunId=${runId}`);

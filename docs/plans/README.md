@@ -29,7 +29,7 @@ reference docs in [`../`](../) (the durable *what / why*).
 | [0001-revisium-daemon-and-bootstrap](./0001-revisium-daemon-and-bootstrap.md) | Executed |
 | [0002-control-plane-data-access](./0002-control-plane-data-access.md) | Executed |
 | [0003-create-run-workflow](./0003-create-run-workflow.md) | Executed |
-| [0004-revisium-client-transport](./0004-revisium-client-transport.md) | Draft |
+| [0004-revisium-client-transport](./0004-revisium-client-transport.md) | Executed |
 | [0005-run-observability](./0005-run-observability.md) | Draft |
 | [0006-step-lifecycle-verbs](./0006-step-lifecycle-verbs.md) | Draft |
 | [0007-dumb-worker-loop](./0007-dumb-worker-loop.md) | Draft |

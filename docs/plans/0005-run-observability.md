@@ -342,3 +342,14 @@ Open findings:
 - `--follow`
 - top-level `task` / `step` inspection
 - inbox inspection
+
+### Inherited from 0004 review
+
+- **getScope() scope per call:** `getScope()` rebuilds the client and makes 2 extra round-trips
+  (`fetchHead` / `fetchDraft`) on every transport method call; one `getRow` = 3 HTTP calls. Memoize
+  the scope per transport instance.
+- **updateRow/patchRow non-null assertion:** `updateRow` and `patchRow` use `result.data!.row!` double
+  non-null, but `row?` is optional in those response types — guard and raise
+  `HTTP_ERROR('Malformed response')` instead of letting a `TypeError` escape.
+- **ListRowsOptions type gap:** `ListRowsOptions.where` / `orderBy` are `Record<string,unknown>` cast
+  with `as` into the SDK body, silencing type mismatch; tighten when filter semantics land in 0005.
