@@ -4,7 +4,6 @@ import {
   createClientTransport,
   type ControlPlaneTransport,
   type TransportRow,
-  type TransportList,
 } from './client-transport.js';
 import { isRuntimeTable, type RuntimeTable } from './tables.js';
 
@@ -56,12 +55,9 @@ function mapRow(table: RuntimeTable, row: TransportRow): ControlPlaneRow {
 
 export function createControlPlaneDataAccessForTransport(
   transport: ControlPlaneTransport,
-  options?: { revision?: 'draft' | 'head' },
 ): ControlPlaneDataAccess {
-  const mode = options?.revision ?? 'draft';
-
   function guardHead(): void {
-    if (mode === 'head') {
+    if (transport.mode === 'head') {
       throw new ControlPlaneError('VALIDATION_FAILURE', 'Writes are not allowed on head revision');
     }
   }
@@ -106,8 +102,8 @@ export function createControlPlaneDataAccessForTransport(
       } catch (error) {
         if (error instanceof ControlPlaneError && error.code === 'ROW_NOT_FOUND') {
           throw new ControlPlaneError('ROW_NOT_FOUND', `Cannot update missing row: ${rowPath(table, rowId)}`, {
-            status: (error as ControlPlaneError).status,
-            details: (error as ControlPlaneError).details,
+            status: error.status,
+            details: error.details,
           });
         }
         throw error;
@@ -123,8 +119,8 @@ export function createControlPlaneDataAccessForTransport(
       } catch (error) {
         if (error instanceof ControlPlaneError && error.code === 'ROW_NOT_FOUND') {
           throw new ControlPlaneError('ROW_NOT_FOUND', `Cannot patch missing row: ${rowPath(table, rowId)}`, {
-            status: (error as ControlPlaneError).status,
-            details: (error as ControlPlaneError).details,
+            status: error.status,
+            details: error.details,
           });
         }
         throw error;
@@ -135,7 +131,7 @@ export function createControlPlaneDataAccessForTransport(
 
 export function createControlPlaneDataAccess(options?: { revision?: 'draft' | 'head' }): ControlPlaneDataAccess {
   const mode = options?.revision ?? 'draft';
-  return createControlPlaneDataAccessForTransport(createClientTransport(mode), { revision: mode });
+  return createControlPlaneDataAccessForTransport(createClientTransport(mode));
 }
 
 export type { PatchOperation } from './json-fields.js';

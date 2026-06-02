@@ -29,6 +29,7 @@ function createFakeAccess(handler?: (call: CapturedCall) => unknown): {
   const calls: CapturedCall[] = [];
 
   const transport: ControlPlaneTransport = {
+    mode: 'draft' as const,
     async assertReady() {},
 
     async listRows(table, options) {
@@ -192,6 +193,7 @@ test('nested JSON-ish patch paths are rejected before transport', async () => {
 
 test('assertReady propagates BOOTSTRAP_NOT_APPLIED from transport', async () => {
   const transport: ControlPlaneTransport = {
+    mode: 'draft' as const,
     async assertReady() {
       throw new ControlPlaneError('BOOTSTRAP_NOT_APPLIED', 'Bootstrap missing');
     },
@@ -213,6 +215,7 @@ test('assertReady propagates BOOTSTRAP_NOT_APPLIED from transport', async () => 
 test('head access rejects updateRow and patchRow before transport call', async () => {
   let transportCallCount = 0;
   const transport: ControlPlaneTransport = {
+    mode: 'head' as const,
     async assertReady() {},
     async listRows() { return { edges: [] }; },
     async getRow() { return fakeTransportRow('x', {}); },
@@ -221,7 +224,7 @@ test('head access rejects updateRow and patchRow before transport call', async (
     async patchRow() { transportCallCount++; return fakeTransportRow('x', {}); },
   };
 
-  const headAccess = createControlPlaneDataAccessForTransport(transport, { revision: 'head' });
+  const headAccess = createControlPlaneDataAccessForTransport(transport);
 
   await assert.rejects(
     () => headAccess.createRow('task_runs', 'run-1', { title: 'Run' }),
@@ -250,6 +253,7 @@ test('default access mode (draft) allows createRow writes', async () => {
 test('head access allows reads via listRows and getRow', async () => {
   let readCallCount = 0;
   const transport: ControlPlaneTransport = {
+    mode: 'head' as const,
     async assertReady() {},
     async listRows() {
       readCallCount++;
@@ -264,7 +268,7 @@ test('head access allows reads via listRows and getRow', async () => {
     async patchRow() { return fakeTransportRow('x', {}); },
   };
 
-  const headAccess = createControlPlaneDataAccessForTransport(transport, { revision: 'head' });
+  const headAccess = createControlPlaneDataAccessForTransport(transport);
 
   const rows = await headAccess.listRows('task_runs');
   const row = await headAccess.getRow('task_runs', 'run-1');

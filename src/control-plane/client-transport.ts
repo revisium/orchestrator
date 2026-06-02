@@ -21,6 +21,7 @@ export type TransportList = {
 };
 
 export type ControlPlaneTransport = {
+  readonly mode: 'draft' | 'head';
   assertReady(): Promise<void>;
   listRows(table: string, options?: ListRowsOptions): Promise<TransportList>;
   getRow(table: string, rowId: string): Promise<TransportRow>;
@@ -68,6 +69,14 @@ function toTransportRow(row: {
   };
 }
 
+export function extractMutationRow(result: {
+  data?: { row?: { id: string; data: Record<string, unknown>; readonly?: boolean; createdAt?: string; updatedAt?: string } };
+}): { id: string; data: Record<string, unknown>; readonly?: boolean; createdAt?: string; updatedAt?: string } {
+  const row = result.data?.row;
+  if (!row) throw new ControlPlaneError('HTTP_ERROR', 'Malformed response');
+  return row;
+}
+
 async function getScope(mode: RevisionMode): Promise<ScopeContext> {
   const runtime = readRuntime();
   if (!runtime || !isAlive(runtime.pid) || !(await isHealthy(runtime.httpPort))) {
@@ -102,8 +111,17 @@ async function getScope(mode: RevisionMode): Promise<ScopeContext> {
 }
 
 export function createClientTransport(mode: RevisionMode): ControlPlaneTransport {
+  let cachedScope: Promise<ScopeContext> | undefined;
+
+  function resolveScope(): Promise<ScopeContext> {
+    if (!cachedScope) {
+      cachedScope = getScope(mode);
+    }
+    return cachedScope;
+  }
+
   async function assertReady(): Promise<void> {
-    const { revisionId, client } = await getScope(mode);
+    const { revisionId, client } = await resolveScope();
     const result = await sdk.tables({ client, path: { revisionId }, query: { first: 100 } });
     if (result.error) {
       const err = result.error as { statusCode?: number };
@@ -125,7 +143,7 @@ export function createClientTransport(mode: RevisionMode): ControlPlaneTransport
   }
 
   async function listRows(table: string, options?: ListRowsOptions): Promise<TransportList> {
-    const { revisionId, client } = await getScope(mode);
+    const { revisionId, client } = await resolveScope();
     const body = { first: 100, ...options } as Parameters<typeof sdk.rows>[0]['body'];
     const result = await sdk.rows({ client, path: { revisionId, tableId: table }, body });
     if (result.error) throw mapApiError(result.error, `${table}/rows`);
@@ -134,14 +152,14 @@ export function createClientTransport(mode: RevisionMode): ControlPlaneTransport
   }
 
   async function getRow(table: string, rowId: string): Promise<TransportRow> {
-    const { revisionId, client } = await getScope(mode);
+    const { revisionId, client } = await resolveScope();
     const result = await sdk.row({ client, path: { revisionId, tableId: table, rowId } });
     if (result.error) throw mapApiError(result.error, `${table}/${rowId}`);
-    return toTransportRow(result.data!);
+    return toTransportRow(result.data);
   }
 
   async function createRow(table: string, rowId: string, data: object): Promise<TransportRow> {
-    const { revisionId, client } = await getScope(mode);
+    const { revisionId, client } = await resolveScope();
     const result = await sdk.createRow({
       client,
       path: { revisionId, tableId: table },
@@ -152,26 +170,26 @@ export function createClientTransport(mode: RevisionMode): ControlPlaneTransport
   }
 
   async function updateRow(table: string, rowId: string, data: object): Promise<TransportRow> {
-    const { revisionId, client } = await getScope(mode);
+    const { revisionId, client } = await resolveScope();
     const result = await sdk.updateRow({
       client,
       path: { revisionId, tableId: table, rowId },
       body: { data: data as Record<string, unknown> },
     });
     if (result.error) throw mapApiError(result.error, `${table}/${rowId}`);
-    return toTransportRow(result.data!.row!);
+    return toTransportRow(extractMutationRow(result));
   }
 
   async function patchRow(table: string, rowId: string, patches: PatchOperation[]): Promise<TransportRow> {
-    const { revisionId, client } = await getScope(mode);
+    const { revisionId, client } = await resolveScope();
     const result = await sdk.patchRow({
       client,
       path: { revisionId, tableId: table, rowId },
       body: { patches: patches as Array<{ op: 'replace'; path: string; value?: unknown }> },
     });
     if (result.error) throw mapApiError(result.error, `${table}/${rowId}`);
-    return toTransportRow(result.data!.row!);
+    return toTransportRow(extractMutationRow(result));
   }
 
-  return { assertReady, listRows, getRow, createRow, updateRow, patchRow };
+  return { mode, assertReady, listRows, getRow, createRow, updateRow, patchRow };
 }
