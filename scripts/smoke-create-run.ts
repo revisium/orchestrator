@@ -37,7 +37,7 @@ function runCli(args: string[]): Promise<CliResult> {
 }
 
 function matchId(output: string, pattern: RegExp, label: string): string {
-  const match = output.match(pattern);
+  const match = pattern.exec(output);
   if (!match?.[1]) throw new Error(`Could not parse ${label} from CLI output:\n${output}`);
   return match[1];
 }

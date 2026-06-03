@@ -1,5 +1,10 @@
 dist/
 node_modules/
+coverage/
+.sonar/
+.env.sonar
+.env.*
+!.env*.example
 
 # Private, machine/account-specific role-context overrides (never commit)
 .agents/*.local.md

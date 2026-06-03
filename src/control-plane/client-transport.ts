@@ -114,9 +114,7 @@ export function createClientTransport(mode: RevisionMode): ControlPlaneTransport
   let cachedScope: Promise<ScopeContext> | undefined;
 
   function resolveScope(): Promise<ScopeContext> {
-    if (!cachedScope) {
-      cachedScope = getScope(mode);
-    }
+    cachedScope ??= getScope(mode);
     return cachedScope;
   }
 

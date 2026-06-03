@@ -48,7 +48,7 @@ function printHint(error: ControlPlaneError, createdRows: boolean): void {
 function parsePriority(value: string): number {
   const priority = Number(value);
   if (!Number.isFinite(priority) || !Number.isInteger(priority)) {
-    throw new Error(`Invalid priority: ${value}`);
+    throw new TypeError(`Invalid priority: ${value}`);
   }
   return priority;
 }

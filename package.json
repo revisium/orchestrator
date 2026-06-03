@@ -17,7 +17,13 @@
     "smoke:inspect-run": "tsx scripts/smoke-inspect-run.ts",
     "smoke:step-lifecycle": "tsx scripts/smoke-step-lifecycle.ts",
     "test": "tsx --test src/**/*.test.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "test:cov": "mkdir -p coverage && node --import tsx --test --experimental-test-coverage --test-reporter=spec --test-reporter=lcov --test-reporter-destination=stdout --test-reporter-destination=coverage/lcov.info src/**/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint:ci": "eslint . --max-warnings 0",
+    "sonar:local": "bash scripts/sonar-local.sh",
+    "sonar:issues:local": "bash scripts/sonar-issues-local.sh",
+    "ci:local:sonar": "bash scripts/ci-local-sonar.sh",
+    "verify": "npm run typecheck && npm run lint:ci && npm run test:cov"
   },
   "dependencies": {
     "@revisium/client": "^0.6.0",
@@ -26,7 +32,10 @@
   "devDependencies": {
     "@revisium/standalone": "^2.7.2",
     "@types/node": "^24.0.0",
+    "eslint": "^9.39.4",
+    "globals": "^16.5.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.6.0"
+    "typescript": "^5.6.0",
+    "typescript-eslint": "^8.60.1"
   }
 }

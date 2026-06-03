@@ -224,12 +224,12 @@ test('showRun passes run_id where predicate to tasks and steps listRows', async 
   const tasksCall = listRowsArgs.find(([t]) => t === 'tasks');
   assert.ok(tasksCall, 'listRows called for tasks');
   assert.equal(tasksCall[1]?.where?.data?.path, 'run_id');
-  assert.equal(tasksCall[1]?.where?.data?.equals as unknown as string, 'run-a');
+  assert.equal(tasksCall[1]?.where?.data?.equals, 'run-a');
 
   const stepsCall = listRowsArgs.find(([t]) => t === 'steps');
   assert.ok(stepsCall, 'listRows called for steps');
   assert.equal(stepsCall[1]?.where?.data?.path, 'run_id');
-  assert.equal(stepsCall[1]?.where?.data?.equals as unknown as string, 'run-a');
+  assert.equal(stepsCall[1]?.where?.data?.equals, 'run-a');
 });
 
 test('showRun does not return tasks or steps from other runs', async () => {
@@ -302,7 +302,7 @@ test('listRunEvents passes run_id where predicate to events listRows', async () 
   const eventsCall = listRowsArgs.find(([t]) => t === 'events');
   assert.ok(eventsCall, 'listRows called for events');
   assert.equal(eventsCall[1]?.where?.data?.path, 'run_id');
-  assert.equal(eventsCall[1]?.where?.data?.equals as unknown as string, 'run-a');
+  assert.equal(eventsCall[1]?.where?.data?.equals, 'run-a');
 });
 
 test('listRunEvents does not return events from other runs', async () => {

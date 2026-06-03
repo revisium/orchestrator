@@ -114,7 +114,7 @@ function normalizeInput(input: CreateRunInput): NormalizedInput {
 
   const priority = input.priority ?? 0;
   if (!Number.isFinite(priority) || !Number.isInteger(priority)) {
-    throw new Error('priority must be a finite integer');
+    throw new TypeError('priority must be a finite integer');
   }
 
   const expandedRepo = expandHome(originalRepo);
@@ -136,7 +136,7 @@ function normalizeInput(input: CreateRunInput): NormalizedInput {
     scope: input.scope?.trim() ?? '',
     priority,
     now: input.now ?? new Date(),
-    idSuffix: input.idSuffix ?? randomUUID().replace(/-/g, '').slice(0, 8),
+    idSuffix: input.idSuffix ?? randomUUID().replaceAll('-', '').slice(0, 8),
   };
 }
 
