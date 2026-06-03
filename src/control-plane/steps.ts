@@ -1,4 +1,4 @@
-import { randomUUID, createHash } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import type { JsonFilterDto } from '@revisium/client';
 import type { ControlPlaneDataAccess, ControlPlaneRow } from './data-access.js';
 
@@ -75,12 +75,6 @@ function clockSuffix(opts?: StepClock): string {
   return opts?.idSuffix ?? randomUUID().replaceAll('-', '').slice(0, 8);
 }
 
-// Derive a short deterministic suffix from a parent step ID.
-// SHA-1 first-8-hex gives 32 bits of uniqueness; plenty for per-run child counts.
-// The result is always 8 lowercase hex chars — safe as a row-ID segment.
-function childStepSuffix(parentStepId: string): string {
-  return createHash('sha1').update(parentStepId).digest('hex').slice(0, 8);
-}
 
 export function toStr(v: unknown): string {
   if (typeof v === 'string') return v;
@@ -301,12 +295,10 @@ export async function createSteps(
     if (!ns) continue;
     // When parentStepId is supplied, derive a deterministic ID from parent + index so that a
     // crash-and-retry (new attemptId, same parent) regenerates the exact same child IDs.
-    // childStepSuffix hashes the parent ID to a short fixed-length hex string so child IDs
-    // remain within the 64-char row-ID limit even when parent IDs are themselves long.
-    // A getRow check before createRow makes the fan-out idempotent: if the child already exists
-    // (created by a previous attempt that crashed after createSteps but before writeResult), skip it.
+    // Using the full parent ID (collision-free, no hash needed) keeps the scheme deterministic
+    // and idempotent: the getRow check below skips already-existing rows on retry.
     const stepId = opts?.parentStepId
-      ? `step_ch_${childStepSuffix(opts.parentStepId)}_${i}`
+      ? `${opts.parentStepId}_ch_${i}`
       : `step_${st}_${ns.role}_${sfx}_${i}`;
     if (opts?.parentStepId) {
       const existing = await da.getRow('steps', stepId);

@@ -492,9 +492,9 @@ test('createSteps: with parentStepId, child IDs are deterministic (same parent â
   const created = rows('steps');
   assert.equal(created.length, 1);
   const childId = created[0]?.rowId ?? '';
-  assert.ok(childId.startsWith('step_ch_'), 'child ID starts with step_ch_');
+  assert.ok(childId.startsWith('step-parent-1_ch_'), 'child ID starts with parentStepId_ch_');
   assert.ok(childId.endsWith('_0'), 'first child has _0 index suffix');
-  assert.ok(childId.length <= 64, 'child ID is within the 64-char row-ID limit');
+  assert.equal(childId, 'step-parent-1_ch_0', 'child ID is parentStepId_ch_index');
 });
 
 test('createSteps: with parentStepId, repeated calls for the same parent are idempotent (no duplicate children)', async () => {

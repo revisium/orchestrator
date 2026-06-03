@@ -264,7 +264,7 @@ test('runWorker: rejects negative idleSleepMs before entering the loop', async (
     'negative idleSleepMs must be rejected',
   );
   await assert.rejects(
-    () => runWorker(deps, { ...ONCE_OPTS, idleSleepMs: NaN }),
+    () => runWorker(deps, { ...ONCE_OPTS, idleSleepMs: Number.NaN }),
     /idleSleepMs/,
     'NaN idleSleepMs must be rejected',
   );
