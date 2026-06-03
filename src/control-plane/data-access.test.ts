@@ -141,7 +141,7 @@ test('unsupported table id is rejected', async () => {
   const { access } = createFakeAccess();
 
   await assert.rejects(
-    () => access.listRows('attempts' as never),
+    () => access.listRows('unknown_table' as never),
     (error: unknown) => error instanceof ControlPlaneError && error.code === 'VALIDATION_FAILURE',
   );
 });

@@ -1,4 +1,12 @@
-export const runtimeTables = ['task_runs', 'tasks', 'steps', 'events', 'inbox'] as const;
+export const runtimeTables = [
+  'task_runs',
+  'tasks',
+  'steps',
+  'attempts',
+  'events',
+  'inbox',
+  'cost_ledger',
+] as const;
 
 export type RuntimeTable = (typeof runtimeTables)[number];
 

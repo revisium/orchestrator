@@ -11,3 +11,15 @@ export {
   type TransportList,
 } from './data-access.js';
 export { runtimeTables, type RuntimeTable } from './tables.js';
+export {
+  claimNextStep,
+  startAttempt,
+  writeResult,
+  createSteps,
+  failStep,
+  recoverInFlight,
+  type Step,
+  type NewStep,
+  type CostRecord,
+  type StepClock,
+} from './steps.js';

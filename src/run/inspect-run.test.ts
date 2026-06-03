@@ -12,8 +12,10 @@ type TableStore = {
   task_runs: ControlPlaneRow[];
   tasks: ControlPlaneRow[];
   steps: ControlPlaneRow[];
+  attempts: ControlPlaneRow[];
   events: ControlPlaneRow[];
   inbox: ControlPlaneRow[];
+  cost_ledger: ControlPlaneRow[];
 };
 
 function createFakeDataAccess(
@@ -29,8 +31,10 @@ function createFakeDataAccess(
     task_runs: [],
     tasks: [],
     steps: [],
+    attempts: [],
     events: [],
     inbox: [],
+    cost_ledger: [],
     ...store,
   };
 

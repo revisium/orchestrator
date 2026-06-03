@@ -1,2 +1,5 @@
 dist/
 node_modules/
+
+# Private, machine/account-specific role-context overrides (never commit)
+.agents/*.local.md

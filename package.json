@@ -15,6 +15,7 @@
     "smoke:control-plane": "tsx scripts/smoke-control-plane-data-access.ts",
     "smoke:create-run": "tsx scripts/smoke-create-run.ts",
     "smoke:inspect-run": "tsx scripts/smoke-inspect-run.ts",
+    "smoke:step-lifecycle": "tsx scripts/smoke-step-lifecycle.ts",
     "test": "tsx --test src/**/*.test.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
