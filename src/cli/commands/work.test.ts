@@ -16,11 +16,13 @@ test('workCommand: exits with code 1 and logs an error when --roles produces an 
     console.error = origConsoleError;
   }
 
-  assert.equal(process.exitCode, 1, 'exit code must be 1 when roles list is empty');
-  assert.ok(
-    errors.some((e) => e.toLowerCase().includes('roles')),
-    'error message must mention roles',
-  );
-
-  process.exitCode = origExitCode as number | undefined;
+  try {
+    assert.equal(process.exitCode, 1, 'exit code must be 1 when roles list is empty');
+    assert.ok(
+      errors.some((e) => e.toLowerCase().includes('roles')),
+      'error message must mention roles',
+    );
+  } finally {
+    process.exitCode = origExitCode as number | undefined;
+  }
 });

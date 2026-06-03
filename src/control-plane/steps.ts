@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { JsonFilterDto } from '@revisium/client';
 import type { ControlPlaneDataAccess, ControlPlaneRow } from './data-access.js';
+import { ControlPlaneError } from './errors.js';
 
 // ─── public types ───────────────────────────────────────────
 
@@ -296,38 +297,39 @@ export async function createSteps(
     // When parentStepId is supplied, derive a deterministic ID from parent + index so that a
     // crash-and-retry (new attemptId, same parent) regenerates the exact same child IDs.
     // Using the full parent ID (collision-free, no hash needed) keeps the scheme deterministic
-    // and idempotent: the getRow check below skips already-existing rows on retry.
+    // and idempotent: ROW_CONFLICT from createRow means the child already exists → skip.
     const stepId = opts?.parentStepId
       ? `${opts.parentStepId}_ch_${i}`
       : `step_${st}_${ns.role}_${sfx}_${i}`;
-    if (opts?.parentStepId) {
-      const existing = await da.getRow('steps', stepId);
-      if (existing) continue;
-    }
     // Steps with unresolved dependencies start 'pending'; promoting them to 'ready' once their
     // depends_on complete is the dependency resolver's job, deferred to a later plan (not Plan 0006).
     const hasDeps = ns.dependsOn !== undefined && ns.dependsOn.length > 0;
-    await da.createRow('steps', stepId, {
-      id: stepId,
-      task_id: ns.taskId,
-      run_id: ns.runId,
-      role: ns.role,
-      kind: ns.kind,
-      status: hasDeps ? 'pending' : 'ready',
-      input: ns.input,
-      output: null,
-      model_profile: ns.modelProfile,
-      run_after: ns.runAfter ?? '',
-      attempt_count: 0,
-      max_attempts: ns.maxAttempts ?? 3,
-      priority: ns.priority ?? 0,
-      depends_on: ns.dependsOn ?? [],
-      lease_owner: '',
-      lease_expires_at: '',
-      dead_reason: '',
-      created_at: nowIso,
-      updated_at: nowIso,
-    });
+    try {
+      await da.createRow('steps', stepId, {
+        id: stepId,
+        task_id: ns.taskId,
+        run_id: ns.runId,
+        role: ns.role,
+        kind: ns.kind,
+        status: hasDeps ? 'pending' : 'ready',
+        input: ns.input,
+        output: null,
+        model_profile: ns.modelProfile,
+        run_after: ns.runAfter ?? '',
+        attempt_count: 0,
+        max_attempts: ns.maxAttempts ?? 3,
+        priority: ns.priority ?? 0,
+        depends_on: ns.dependsOn ?? [],
+        lease_owner: '',
+        lease_expires_at: '',
+        dead_reason: '',
+        created_at: nowIso,
+        updated_at: nowIso,
+      });
+    } catch (e) {
+      if (e instanceof ControlPlaneError && e.code === 'ROW_CONFLICT') continue;
+      throw e;
+    }
   }
 }
 

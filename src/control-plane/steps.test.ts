@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { ControlPlaneDataAccess, ControlPlaneRow, ListRowsOptions, PatchOperation } from './data-access.js';
+import { ControlPlaneError } from './errors.js';
 import {
   claimNextStep,
   startAttempt,
@@ -48,6 +49,9 @@ function createFakeDA() {
     },
 
     async createRow(tbl, rowId, data) {
+      if (getTable(tbl).has(rowId)) {
+        throw new ControlPlaneError('ROW_CONFLICT', `Row already exists: ${tbl}/${rowId}`);
+      }
       writeCalls.push({ op: 'createRow', table: tbl, rowId });
       const row = fakeRow(rowId, data);
       getTable(tbl).set(rowId, row);
