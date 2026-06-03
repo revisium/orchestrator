@@ -1,6 +1,12 @@
+import { resolve } from 'node:path';
 import { Command } from 'commander';
-import { ControlPlaneError, createControlPlaneDataAccess, loadRole, loadModelProfile } from '../../control-plane/index.js';
+import { ControlPlaneError, createControlPlaneDataAccess, loadRole, loadModelProfile, type ControlPlaneDataAccess } from '../../control-plane/index.js';
+import { toStr, type Step } from '../../control-plane/steps.js';
 import { stubRunAgent } from '../../worker/stub-runner.js';
+import { createClaudeCodeRunner } from '../../worker/claude-code-runner.js';
+import { createRunAgent } from '../../worker/runner-dispatch.js';
+import { spawnExecutor } from '../../worker/process-executor.js';
+import type { RunAgent } from '../../worker/runner.js';
 import { runWorker } from '../../worker/loop.js';
 import { resolveWorkerId } from '../../worker/worker-id.js';
 
@@ -9,6 +15,8 @@ type WorkOptions = {
   roles?: string;
   workerId?: string;
   idleSleep?: string;
+  runner?: string;
+  runnerTimeoutMs?: string;
 };
 
 function formatCause(error: unknown): string {
@@ -29,10 +37,39 @@ function printHint(error: ControlPlaneError): void {
   }
 }
 
+// Default resolveCwd (wiring only — keeps schema knowledge out of the runner, per invariant 4).
+// Reads the step's task repo_ref via the data-access layer and resolves it against the workspace base.
+function makeResolveCwd(da: ControlPlaneDataAccess): (step: Step) => Promise<string> {
+  const base = process.cwd();
+  return async (step) => {
+    const task = await da.getRow('tasks', step.taskId);
+    if (task === null) {
+      // Never silently run claude in an unintended directory: throw a lesson-bearing error so the
+      // loop's catch → failStep records it.
+      throw new Error(`resolveCwd: task ${step.taskId} not found — cannot resolve a working directory`);
+    }
+    const repoRef = toStr(task.data.repo_ref);
+    if (repoRef === '' || repoRef === '.') return base;
+    return resolve(base, repoRef);
+  };
+}
+
 export async function workCommand(options: WorkOptions): Promise<void> {
   const roles = options.roles ? options.roles.split(',').map((r) => r.trim()).filter(Boolean) : ['architect', 'developer'];
   if (roles.length === 0) {
     console.error('Error: --roles produced an empty list; provide at least one role name');
+    process.exitCode = 1;
+    return;
+  }
+  const runnerMode = options.runner ?? 'stub';
+  if (runnerMode !== 'stub' && runnerMode !== 'auto') {
+    console.error(`Error: --runner must be 'stub' or 'auto', got: ${runnerMode}`);
+    process.exitCode = 1;
+    return;
+  }
+  const runnerTimeoutMs = options.runnerTimeoutMs === undefined ? 600000 : Number(options.runnerTimeoutMs);
+  if (!Number.isFinite(runnerTimeoutMs) || runnerTimeoutMs <= 0) {
+    console.error(`Error: --runner-timeout-ms must be a positive number, got: ${String(options.runnerTimeoutMs)}`);
     process.exitCode = 1;
     return;
   }
@@ -55,12 +92,25 @@ export async function workCommand(options: WorkOptions): Promise<void> {
     const da = createControlPlaneDataAccess();
     await da.assertReady();
 
+    // The injected runAgent is the ONLY thing that changes between modes — runWorker/WorkerDeps and
+    // the loop are untouched (invariant 2). stub stays the default (zero cost; real claude is opt-in).
+    const runAgent: RunAgent =
+      runnerMode === 'auto'
+        ? createRunAgent({
+            claudeCode: createClaudeCodeRunner({
+              executor: spawnExecutor,
+              resolveCwd: makeResolveCwd(da),
+              timeoutMs: runnerTimeoutMs,
+            }),
+          })
+        : stubRunAgent;
+
     await runWorker(
       {
         da,
         loadRole: (name) => loadRole(name),
         loadModelProfile: (level) => loadModelProfile(level),
-        runAgent: stubRunAgent,
+        runAgent,
       },
       {
         workerId,
@@ -86,10 +136,12 @@ export async function workCommand(options: WorkOptions): Promise<void> {
 export function registerWork(program: Command): void {
   program
     .command('work')
-    .description('Run the worker loop (processes ready steps using the stub runner)')
+    .description('Run the worker loop. --runner stub (default, zero-cost) or auto (real claude-code dispatch)')
     .option('--once', 'Process one step then exit; exit immediately when idle')
     .option('--roles <csv>', 'Comma-separated list of roles to claim', 'architect,developer')
     .option('--worker-id <id>', 'Override the stable worker identity')
     .option('--idle-sleep <ms>', 'Milliseconds to sleep when no step is available', '5000')
+    .option('--runner <mode>', "Runner mode: 'stub' (default, zero-cost) or 'auto' (real claude-code dispatch)", 'stub')
+    .option('--runner-timeout-ms <n>', 'Timeout in ms for the real (auto) runner', '600000')
     .action(workCommand);
 }

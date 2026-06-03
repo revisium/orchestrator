@@ -17,6 +17,7 @@
     "smoke:inspect-run": "tsx scripts/smoke-inspect-run.ts",
     "smoke:step-lifecycle": "tsx scripts/smoke-step-lifecycle.ts",
     "smoke:worker-loop": "tsx scripts/smoke-worker-loop.ts",
+    "smoke:claude-runner": "tsx scripts/smoke-claude-runner.ts",
     "test": "tsx --test $(find src -name '*.test.ts' | sort)",
     "test:cov": "mkdir -p coverage && node --import tsx --test --experimental-test-coverage --test-reporter=spec --test-reporter=lcov --test-reporter-destination=stdout --test-reporter-destination=coverage/lcov.info $(find src -name '*.test.ts' | sort)",
     "typecheck": "tsc -p tsconfig.json --noEmit",
