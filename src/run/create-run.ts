@@ -10,6 +10,7 @@ export type CreateRunInput = {
   description?: string;
   scope?: string;
   priority?: number;
+  role?: string;
   now?: Date;
   idSuffix?: string;
 };
@@ -35,6 +36,7 @@ type NormalizedInput = {
   description: string;
   scope: string;
   priority: number;
+  role: KnownRole;
   now: Date;
   idSuffix: string;
 };
@@ -65,6 +67,10 @@ function compactUtcStamp(date: Date): string {
     'Z',
   ].join('');
 }
+
+export const KNOWN_ROLES = ['architect', 'developer', 'reviewer', 'integrator', 'pr-watcher'] as const;
+export type KnownRole = (typeof KNOWN_ROLES)[number];
+const DEFAULT_ROLE: KnownRole = 'architect';
 
 const maxSlugLength = 21;
 
@@ -117,6 +123,11 @@ function normalizeInput(input: CreateRunInput): NormalizedInput {
     throw new TypeError('priority must be a finite integer');
   }
 
+  const role = (input.role?.trim() || DEFAULT_ROLE) as string;
+  if (!(KNOWN_ROLES as readonly string[]).includes(role)) {
+    throw new Error(`role must be one of: ${KNOWN_ROLES.join(', ')}`);
+  }
+
   const expandedRepo = expandHome(originalRepo);
   const existingDirectory = isDirectory(expandedRepo);
   if (isExplicitPath(originalRepo) && !existingDirectory) {
@@ -135,6 +146,7 @@ function normalizeInput(input: CreateRunInput): NormalizedInput {
     description: input.description?.trim() ?? '',
     scope: input.scope?.trim() ?? '',
     priority,
+    role: role as KnownRole,
     now: input.now ?? new Date(),
     idSuffix: input.idSuffix ?? randomUUID().replaceAll('-', '').slice(0, 8),
   };
@@ -184,7 +196,7 @@ export async function createRunWorkflow(
       id: ids.taskId,
       run_id: ids.runId,
       repo_ref: normalized.repoRef,
-      role_hint: 'architect',
+      role_hint: normalized.role,
       title: normalized.title,
       status: 'ready',
       depends_on: [],
@@ -199,7 +211,7 @@ export async function createRunWorkflow(
       id: ids.stepId,
       task_id: ids.taskId,
       run_id: ids.runId,
-      role: 'architect',
+      role: normalized.role,
       kind: 'plan_run',
       status: 'ready',
       input: {

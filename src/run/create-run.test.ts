@@ -6,6 +6,7 @@ import path from 'node:path';
 import {
   createRunWorkflow,
   CreateRunWorkflowError,
+  KNOWN_ROLES,
   type CreateRunInput,
   type CreateRunResult,
 } from './create-run.js';
@@ -232,4 +233,38 @@ test('long titles keep generated event IDs within the endpoint row-id limit', as
 
   assert.ok(result.eventId.length <= 64);
   assert.equal(result.eventId, 'event_20260601T020304005Z_smoke-create-run-1780_abc123ef_created');
+});
+
+test('role override applies to both tasks.role_hint and steps.role', async () => {
+  const { access, rows } = createFakeDataAccess();
+
+  await createRunWorkflow(access, { ...baseInput, role: 'developer' });
+
+  assert.equal(byTable(rows, 'tasks').data.role_hint, 'developer');
+  assert.equal(byTable(rows, 'steps').data.role, 'developer');
+});
+
+test('omitting role defaults both fields to architect', async () => {
+  const { access, rows } = createFakeDataAccess();
+
+  await createRunWorkflow(access, { ...baseInput, role: undefined });
+
+  assert.equal(byTable(rows, 'tasks').data.role_hint, 'architect');
+  assert.equal(byTable(rows, 'steps').data.role, 'architect');
+});
+
+test('unknown role rejects before assertReady or writes', async () => {
+  const { access, calls, rows } = createFakeDataAccess();
+
+  await assert.rejects(() => createRunWorkflow(access, { ...baseInput, role: 'tester' }), /role must be one of/);
+  assert.deepEqual(calls, []);
+  assert.deepEqual(rows, []);
+});
+
+test('each known role is accepted and written to steps.role', async () => {
+  for (const knownRole of KNOWN_ROLES) {
+    const { access, rows } = createFakeDataAccess();
+    await createRunWorkflow(access, { ...baseInput, role: knownRole });
+    assert.equal(byTable(rows, 'steps').data.role, knownRole);
+  }
 });

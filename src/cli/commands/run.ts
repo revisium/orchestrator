@@ -9,6 +9,7 @@ type CreateOptions = {
   description?: string;
   scope?: string;
   priority: string;
+  role: string;
 };
 
 type ListOptions = {
@@ -61,6 +62,7 @@ async function createRun(options: CreateOptions): Promise<void> {
       description: options.description,
       scope: options.scope,
       priority: parsePriority(options.priority),
+      role: options.role,
     });
 
     console.log(`created run ${result.runId}`);
@@ -187,6 +189,7 @@ export function registerRun(program: Command): void {
     .option('--description <text>', 'Run description')
     .option('--scope <text>', 'Run scope')
     .option('--priority <n>', 'Run priority', '0')
+    .option('--role <name>', 'Initial step role (architect|developer|reviewer|integrator|pr-watcher)', 'architect')
     .action(createRun);
 
   run
