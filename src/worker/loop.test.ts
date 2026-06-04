@@ -362,13 +362,13 @@ test('loop: crash-after-createSteps retry creates children exactly once (idempot
     }),
   };
 
-  // First run: createSteps succeeds, then writeResult's attempt-close throws. handleResult
-  // CATCHES it and calls failStep — the error must NOT escape the loop. The step backs off to
-  // 'ready' for another attempt.
-  await runWorker(deps, ONCE_OPTS);
+  // First run: createSteps succeeds, then writeResult's attempt-close throws. writeResult is
+  // intentionally OUTSIDE handleResult's catch (a partial multi-row write must not be routed to
+  // failStep), so the error propagates and the step is left 'running'.
+  await assert.rejects(() => runWorker(deps, ONCE_OPTS), /simulated writeResult crash/);
 
-  // Second run: the step is re-claimed and re-processed → createSteps regenerates the SAME
-  // deterministic child IDs and skips the already-existing row (idempotent fan-out).
+  // Second run: recoverInFlight resets the 'running' step to 'ready' → it is re-processed →
+  // createSteps regenerates the SAME deterministic child IDs and skips the existing row.
   await runWorker(deps, ONCE_OPTS);
 
   const childSteps = rows('steps').filter((r) => r.rowId !== 'step-arch');

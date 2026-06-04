@@ -48,21 +48,26 @@ async function handleResult(
     return;
   }
   const nextSteps: NewStep[] = result.nextSteps.map((ns) => ({ ...ns, runId: step.runId }));
-  // Children are created BEFORE making the parent terminal (writeResult's final patch:steps).
-  // If writeResult then throws, the step stays 'running' → recoverInFlight resets it → safe retry.
-  // Child IDs are derived from a bounded hash of the parent step ID (+ index), not from attemptId,
-  // so a retry regenerates the same IDs and createSteps' idempotency check skips existing rows.
-  // A failure here (e.g. createSteps rejecting a malformed/invalid next step) must NOT escape the
-  // loop — fail the step gracefully so it backs off / goes dead instead of crashing the worker.
+  // createSteps runs BEFORE writeResult makes the parent terminal. Child IDs are a bounded,
+  // deterministic hash of (parent id + index), so a retry regenerates the same IDs and
+  // createSteps' idempotency check skips existing rows.
+  //
+  // createSteps failures (e.g. Revisium rejecting an invalid next step) are pre-terminal and
+  // SAFE to fail gracefully: nothing has been finalized yet, so failStep lets the step back off
+  // / go dead instead of crashing the worker. writeResult is DIFFERENT — it mutates several rows
+  // (attempt close, event, cost, then the step), so a partial failure must NOT be routed through
+  // failStep (that would mark a half-written step failed). We let writeResult errors propagate:
+  // the step stays 'running' → recoverInFlight resets it on the next start → idempotent retry.
   try {
     await createSteps(da, nextSteps, { parentStepId: step.id });
-    await writeResult(da, step, attemptId, result.output, result.costs);
   } catch (err) {
     await failStep(da, step, attemptId, {
       lesson: err instanceof Error ? err.message : String(err),
       error: err instanceof Error ? (err.stack ?? err.message) : String(err),
     });
+    return;
   }
+  await writeResult(da, step, attemptId, result.output, result.costs);
 }
 
 export type WorkerDeps = {

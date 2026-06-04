@@ -86,7 +86,7 @@ function fnv1a64Hex(input: string): string {
   const prime = 0x100000001b3n;
   const mask = 0xffffffffffffffffn;
   for (let i = 0; i < input.length; i++) {
-    hash ^= BigInt(input.charCodeAt(i));
+    hash ^= BigInt(input.codePointAt(i) ?? 0);
     hash = (hash * prime) & mask;
   }
   return hash.toString(16).padStart(16, '0');
@@ -314,10 +314,13 @@ export async function createSteps(
     // (parent id + index) so that a crash-and-retry (new attemptId, same parent) regenerates the
     // exact same child IDs (idempotent: ROW_CONFLICT from createRow means it already exists → skip)
     // WITHOUT growing the id per chain level. Concatenating the full parent id per level
-    // (`${parent}_ch_${i}`) overflowed Revisium's 64-char rowId limit on deep chains. The role
-    // prefix keeps the id readable; the 64-bit hash keeps it collision-resistant.
+    // (`${parent}_ch_${i}`) overflowed Revisium's 64-char rowId limit on deep chains. The id
+    // depends ONLY on (parent id, index) — NOT on role — so the retry contract holds even if a
+    // re-run yields a different role for the same logical next step, and the length is fixed
+    // ("step_" + 16 hex = 21 chars) regardless of role. The 64-bit hash keeps it collision-resistant.
+    const childKey = `${opts?.parentStepId ?? ''}:${i}`;
     const stepId = opts?.parentStepId
-      ? `step_${ns.role}_${fnv1a64Hex(`${opts.parentStepId}:${i}`)}`
+      ? `step_${fnv1a64Hex(childKey)}`
       : `step_${st}_${ns.role}_${sfx}_${i}`;
     // Steps with unresolved dependencies start 'pending'; promoting them to 'ready' once their
     // depends_on complete is the dependency resolver's job, deferred to a later plan (not Plan 0006).

@@ -496,7 +496,7 @@ test('createSteps: with parentStepId, child IDs are deterministic (same parent â
   const created = rows('steps');
   assert.equal(created.length, 1);
   const childId = created[0]?.rowId ?? '';
-  assert.match(childId, /^step_developer_[0-9a-f]{16}$/, 'child ID is step_<role>_<16-hex-hash>');
+  assert.match(childId, /^step_[0-9a-f]{16}$/, 'child ID is step_<16-hex-hash> (role-independent)');
   assert.ok(childId.length <= 64, 'child ID stays within the Revisium 64-char rowId limit');
 });
 
@@ -510,7 +510,7 @@ test('createSteps: child ID stays bounded (<=64) regardless of parent id length 
   await createSteps(da, [ns], { parentStepId: longParent, now: FIXED_NOW });
   const childId = rows('steps')[0]?.rowId ?? '';
   assert.ok(childId.length <= 64, `child ID must be <= 64 chars, got ${childId.length}: ${childId}`);
-  assert.match(childId, /^step_pr-watcher_[0-9a-f]{16}$/, 'bounded id keeps the step_<role>_<hash> shape');
+  assert.match(childId, /^step_[0-9a-f]{16}$/, 'bounded id is a fixed-length step_<hash>, independent of role/parent length');
 });
 
 test('createSteps: with parentStepId, repeated calls for the same parent are idempotent (no duplicate children)', async () => {
