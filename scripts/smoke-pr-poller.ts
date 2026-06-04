@@ -18,7 +18,7 @@ const args = process.argv.slice(2);
 
 function getArg(flag: string): string | undefined {
   const idx = args.indexOf(flag);
-  return idx !== -1 ? args[idx + 1] : undefined;
+  return idx === -1 ? undefined : args[idx + 1];
 }
 
 const prNumber = Number(getArg('--pr') ?? process.env['SMOKE_PR_NUMBER'] ?? '');

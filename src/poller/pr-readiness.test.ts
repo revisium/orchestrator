@@ -64,7 +64,7 @@ test('pending CI: re-queues with incremented poll_count and future runAfter', as
   const result = await run(BASE_INPUT, STEP, execGh);
 
   assert.equal(result.nextSteps.length, 1);
-  const ns = result.nextSteps[0]!;
+  const ns = result.nextSteps[0];
   assert.equal(ns.role, 'ci-poller');
   assert.equal(ns.kind, 'poll');
   const inp = ns.input as PollInput;
@@ -123,7 +123,7 @@ test('all checks terminal + CI passed: judge step with ci_passed:true', async ()
   const result = await run(BASE_INPUT, STEP, execGh);
 
   assert.equal(result.nextSteps.length, 1);
-  const ns = result.nextSteps[0]!;
+  const ns = result.nextSteps[0];
   assert.equal(ns.role, 'pr-watcher');
   assert.equal(ns.kind, 'judge');
   const inp = ns.input as { ci_passed: boolean };
@@ -142,7 +142,7 @@ test('all checks terminal + CI failed: judge step with ci_passed:false', async (
 
   const result = await run(BASE_INPUT, STEP, execGh);
 
-  const ns = result.nextSteps[0]!;
+  const ns = result.nextSteps[0];
   assert.equal(ns.role, 'pr-watcher');
   const inp = ns.input as { ci_passed: boolean };
   assert.equal(inp.ci_passed, false);
@@ -233,7 +233,7 @@ test('empty statusCheckRollup ([]): re-queues as pending, NOT terminal (BLOCKER 
   const result = await run(BASE_INPUT, STEP, execGh);
 
   assert.equal(result.nextSteps.length, 1);
-  const ns = result.nextSteps[0]!;
+  const ns = result.nextSteps[0];
   assert.equal(ns.role, 'ci-poller', 'empty rollup must re-queue, not go to the judge');
   assert.equal(ns.kind, 'poll');
   assert.equal((ns.input as PollInput).poll_count, 1);
@@ -254,7 +254,7 @@ test('null statusCheckRollup: re-queues as pending, NOT terminal (BLOCKER 2)', a
   const result = await run(BASE_INPUT, STEP, execGh);
 
   assert.equal(result.nextSteps.length, 1);
-  const ns = result.nextSteps[0]!;
+  const ns = result.nextSteps[0];
   assert.equal(ns.role, 'ci-poller', 'null rollup must re-queue, not go to the judge');
   assert.equal(ns.kind, 'poll');
   assert.equal((ns.input as PollInput).poll_count, 1);
@@ -308,7 +308,7 @@ test('draft PR with all checks passing: re-queues, NEVER handed to the judge', a
   const result = await run(BASE_INPUT, STEP, execGh);
 
   assert.equal(result.nextSteps.length, 1);
-  const ns = result.nextSteps[0]!;
+  const ns = result.nextSteps[0];
   assert.equal(ns.role, 'ci-poller', 'draft must re-queue, not go to the judge');
   assert.equal(ns.kind, 'poll');
   assert.equal((ns.input as PollInput).poll_count, 1);
@@ -339,7 +339,7 @@ test('unknown __typename node: terminal but never counted as passed (fails close
 
   const result = await run(BASE_INPUT, STEP, execGh);
 
-  const ns = result.nextSteps[0]!;
+  const ns = result.nextSteps[0];
   assert.equal(ns.role, 'pr-watcher', 'unknown terminal node still resolves to the judge');
   assert.equal((ns.input as { ci_passed: boolean }).ci_passed, false, 'unknown node must not pass');
 });
@@ -350,7 +350,7 @@ test('CheckRun COMPLETED with conclusion null: not passed (ci_passed false)', as
 
   const result = await run(BASE_INPUT, STEP, execGh);
 
-  const ns = result.nextSteps[0]!;
+  const ns = result.nextSteps[0];
   assert.equal(ns.role, 'pr-watcher');
   assert.equal((ns.input as { ci_passed: boolean }).ci_passed, false);
 });
@@ -423,9 +423,9 @@ test('issue (top-level) comments are fetched and merged into human/bot comments'
   };
   assert.equal(inp.human_comments.length, 2, 'inline review comment + top-level human comment');
   assert.equal(inp.bot_comments.length, 1, 'top-level bot summary comment');
-  const bodies = inp.human_comments.map((c) => c.body);
-  assert.ok(bodies.includes('inline nit'), 'merged from the review thread');
-  assert.ok(bodies.includes('LGTM'), 'merged from the top-level PR conversation');
+  const bodies = new Set(inp.human_comments.map((c) => c.body));
+  assert.ok(bodies.has('inline nit'), 'merged from the review thread');
+  assert.ok(bodies.has('LGTM'), 'merged from the top-level PR conversation');
   assert.equal(inp.bot_comments[0]?.body, 'Quality Gate passed');
 });
 
@@ -465,7 +465,7 @@ test('null user (ghost account): no throw; comment classified as non-bot', async
   const terminalView = prViewResponse([checkRun('Gitar', 'COMPLETED', 'SUCCESS')]);
   const reviews = [{ user: null, state: 'COMMENTED', body: 'ghost review' }];
   const comments = [{ user: null, body: 'ghost comment' }];
-  const execGh = makeFullResponses(terminalView, reviews as never, comments as never);
+  const execGh = makeFullResponses(terminalView, reviews, comments);
 
   const result = await run(BASE_INPUT, STEP, execGh);
 
@@ -509,7 +509,7 @@ test('poll_count incremented carries forward all other input fields', async () =
 
   const result = await run(input, STEP, execGh);
 
-  const ns = result.nextSteps[0]!;
+  const ns = result.nextSteps[0];
   const inp = ns.input as PollInput;
   assert.equal(inp.pr_number, 99);
   assert.equal(inp.repo, 'acme/app');

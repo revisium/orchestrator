@@ -63,7 +63,7 @@ test('createScriptRunner: handles object input (already parsed)', async () => {
     step: stepWithObjInput,
   });
 
-  assert.deepEqual((calls[0] as { input: unknown }).input, { poll_count: 1 });
+  assert.deepEqual(calls[0].input, { poll_count: 1 });
 });
 
 test('createScriptRunner: handles null/empty input as empty object', async () => {
@@ -85,7 +85,7 @@ test('createScriptRunner: handles null/empty input as empty object', async () =>
     step: stepWithNullInput,
   });
 
-  assert.deepEqual((calls[0] as { input: unknown }).input, {});
+  assert.deepEqual(calls[0].input, {});
 });
 
 test('createScriptRunner: unregistered role throws SCRIPT_NOT_FOUND', async () => {

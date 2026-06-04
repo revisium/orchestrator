@@ -144,6 +144,74 @@ function fetchSonarIssues(_sonarProject: string): { issues: SonarIssue[]; unavai
   return { issues: [], unavailable: true };
 }
 
+// ─── helpers (continued) ─────────────────────────────────────
+
+/** Gathers sonar issues, reviews, and comments; returns the pr-watcher judge step result. */
+function buildJudgeResult(
+  input: PollInput,
+  step: Step,
+  execGh: ExecGhFn,
+  prView: { mergeStateStatus?: string; reviewDecision?: string; mergeable?: string },
+  ci_passed: boolean,
+  checkSummary: Array<{ name: string; result: string }>,
+): AttemptResult {
+  let sonar_issues: SonarIssue[] = [];
+  let sonar_unavailable: boolean | undefined;
+
+  if (input.sonar_project) {
+    const sonarResult = fetchSonarIssues(input.sonar_project);
+    sonar_issues = sonarResult.issues;
+    if (sonarResult.unavailable) sonar_unavailable = true;
+  }
+
+  const reviewsRaw = execGh(['api', `repos/${input.repo}/pulls/${input.pr_number}/reviews`]);
+  const reviews = parseGhJson<ReviewEntry[]>(reviewsRaw, `reviews #${input.pr_number}`);
+
+  const reviewCommentsRaw = execGh(['api', `repos/${input.repo}/pulls/${input.pr_number}/comments`]);
+  const reviewComments = parseGhJson<CommentEntry[]>(reviewCommentsRaw, `review-comments #${input.pr_number}`);
+
+  const issueCommentsRaw = execGh(['api', `repos/${input.repo}/issues/${input.pr_number}/comments`]);
+  const issueComments = parseGhJson<CommentEntry[]>(issueCommentsRaw, `issue-comments #${input.pr_number}`);
+
+  const allComments = [...reviewComments, ...issueComments];
+
+  const latestHumanReviewByAuthor = new Map<string, ReviewEntry>();
+  for (const r of reviews) {
+    if (!r.user || isBot(r.user)) continue;
+    latestHumanReviewByAuthor.set(r.user.login, r);
+  }
+  const human_reviews = [...latestHumanReviewByAuthor.values()];
+  const human_comments = allComments.filter((c) => !isBot(c.user));
+  const bot_comments = allComments.filter((c) => isBot(c.user));
+
+  const ci_summary: CiSummary = {
+    ci_passed,
+    checks: checkSummary,
+    mergeStateStatus: prView.mergeStateStatus,
+    reviewDecision: prView.reviewDecision,
+    mergeable: prView.mergeable,
+    sonar_issues,
+    human_reviews,
+    human_comments,
+    bot_comments,
+    ...(sonar_unavailable ? { sonar_unavailable: true } : {}),
+  };
+
+  return {
+    output: { verdict: 'terminal', ci_passed },
+    nextSteps: [
+      {
+        role: 'pr-watcher',
+        kind: 'judge',
+        input: ci_summary,
+        taskId: step.taskId,
+        modelProfile: step.modelProfile,
+      },
+    ],
+    costs: [],
+  };
+}
+
 // ─── main script entry ───────────────────────────────────────
 
 /** Polls a GitHub PR for CI readiness; re-queues while pending or hands off to the judge when terminal. */
@@ -267,80 +335,6 @@ export async function run(
     };
   }
 
-  // 2. All checks terminal — gather findings
-  let sonar_issues: SonarIssue[] = [];
-  let sonar_unavailable: boolean | undefined;
-
-  if (input.sonar_project) {
-    const sonarResult = fetchSonarIssues(input.sonar_project);
-    sonar_issues = sonarResult.issues;
-    if (sonarResult.unavailable) sonar_unavailable = true;
-  }
-
-  // 3. Fetch PR reviews (formal review states) and comments from BOTH conversation surfaces:
-  //    - /pulls/<N>/reviews   → human review states (APPROVED, CHANGES_REQUESTED, …)
-  //    - /pulls/<N>/comments  → inline (file-anchored) review comments
-  //    - /issues/<N>/comments → top-level PR conversation, where humans write "LGTM" and where
-  //                             CodeRabbit/Sonar post summary comments. Without this they are invisible.
-  const reviewsRaw = execGh([
-    'api',
-    `repos/${input.repo}/pulls/${input.pr_number}/reviews`,
-  ]);
-  const reviews = parseGhJson<ReviewEntry[]>(reviewsRaw, `reviews #${input.pr_number}`);
-
-  const reviewCommentsRaw = execGh([
-    'api',
-    `repos/${input.repo}/pulls/${input.pr_number}/comments`,
-  ]);
-  const reviewComments = parseGhJson<CommentEntry[]>(reviewCommentsRaw, `review-comments #${input.pr_number}`);
-
-  const issueCommentsRaw = execGh([
-    'api',
-    `repos/${input.repo}/issues/${input.pr_number}/comments`,
-  ]);
-  const issueComments = parseGhJson<CommentEntry[]>(issueCommentsRaw, `issue-comments #${input.pr_number}`);
-
-  const allComments = [...reviewComments, ...issueComments];
-
-  // human_reviews keeps each .state so the judge can tell APPROVED/COMMENTED from a blocking
-  // CHANGES_REQUESTED — the previous `open_threads` name implied all of these were blocking.
-  // Reviews arrive chronologically and a reviewer may CHANGES_REQUESTED then later APPROVE — both
-  // appear. The effective per-reviewer state is the LATEST review, so collapse to the last entry
-  // per author (Map.set keeps insertion order while overwriting with the newer state). Without
-  // this a superseded CHANGES_REQUESTED would falsely block.
-  const latestHumanReviewByAuthor = new Map<string, ReviewEntry>();
-  for (const r of reviews) {
-    if (!r.user || isBot(r.user)) continue;
-    latestHumanReviewByAuthor.set(r.user.login, r);
-  }
-  const human_reviews = [...latestHumanReviewByAuthor.values()];
-  const human_comments = allComments.filter((c) => !isBot(c.user));
-  const bot_comments = allComments.filter((c) => isBot(c.user));
-
-  const ci_summary: CiSummary = {
-    ci_passed,
-    checks: checkSummary,
-    mergeStateStatus: prView.mergeStateStatus,
-    reviewDecision: prView.reviewDecision,
-    mergeable: prView.mergeable,
-    sonar_issues,
-    human_reviews,
-    human_comments,
-    bot_comments,
-    ...(sonar_unavailable ? { sonar_unavailable: true } : {}),
-  };
-
-  return {
-    output: { verdict: 'terminal', ci_passed },
-    nextSteps: [
-      {
-        role: 'pr-watcher',
-        kind: 'judge',
-        input: ci_summary,
-        taskId: step.taskId,
-        modelProfile: step.modelProfile,
-      },
-    ],
-    costs: [],
-  };
+  // 2. All checks terminal — delegate to helper (sonar, reviews, comments → judge step)
+  return buildJudgeResult(input, step, execGh, prView, ci_passed, checkSummary);
 }
