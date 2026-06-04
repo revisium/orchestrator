@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { getEventListeners } from 'node:events';
 import { runWorker, sleep, type WorkerDeps, type WorkerOptions } from './loop.js';
 import type { ControlPlaneDataAccess, ControlPlaneRow, ListRowsOptions, PatchOperation } from '../control-plane/data-access.js';
+import { ControlPlaneError } from '../control-plane/errors.js';
 import type { AttemptResult, NewStepSpec } from './runner.js';
 import { fakeRow, makeRole, TEST_PROFILE } from './test-fixtures.js';
 
@@ -361,18 +362,59 @@ test('loop: crash-after-createSteps retry creates children exactly once (idempot
     }),
   };
 
-  // First run: createSteps succeeds, writeResult throws → worker crashes.
-  await assert.rejects(
-    () => runWorker(deps, ONCE_OPTS),
-    /simulated writeResult crash/,
-  );
+  // First run: createSteps succeeds, then writeResult's attempt-close throws. handleResult
+  // CATCHES it and calls failStep — the error must NOT escape the loop. The step backs off to
+  // 'ready' for another attempt.
+  await runWorker(deps, ONCE_OPTS);
 
-  // Second run: recoverInFlight resets the running step to ready → it is re-processed →
-  // createSteps uses the same deterministic child IDs and skips already-existing rows.
+  // Second run: the step is re-claimed and re-processed → createSteps regenerates the SAME
+  // deterministic child IDs and skips the already-existing row (idempotent fan-out).
   await runWorker(deps, ONCE_OPTS);
 
   const childSteps = rows('steps').filter((r) => r.rowId !== 'step-arch');
   assert.equal(childSteps.length, 1, 'child step must be created exactly once despite crash-and-retry');
+});
+
+test('loop: a createSteps failure is caught (failStep) and does not crash the worker', async () => {
+  const opLog: string[] = [];
+  const { da: baseDa, seedStep, seedTask, rows } = createTrackedDA(opLog);
+
+  // Reject the child createRow (e.g. Revisium validation) to prove handleResult fails the step
+  // gracefully instead of letting the error escape runWorker.
+  const faultyDa: ControlPlaneDataAccess = {
+    assertReady: baseDa.assertReady,
+    listRows: baseDa.listRows,
+    getRow: baseDa.getRow,
+    createRow: async (tbl, rowId, data) => {
+      if (tbl === 'steps' && rowId !== 'step-arch') {
+        throw new ControlPlaneError('VALIDATION_FAILURE', `Validation failure: steps/${rowId}`);
+      }
+      return baseDa.createRow(tbl, rowId, data);
+    },
+    updateRow: baseDa.updateRow,
+    patchRow: baseDa.patchRow,
+  };
+
+  seedStep('step-arch');
+  seedTask('task-1');
+
+  const deps: WorkerDeps = {
+    da: faultyDa,
+    loadRole: async (name) => makeRole(name),
+    loadModelProfile: async () => TEST_PROFILE,
+    runAgent: async () => ({
+      output: { done: true },
+      nextSteps: [{ taskId: 'task-1', role: 'reviewer', kind: 'review', input: null, modelProfile: 'standard' }],
+      costs: [],
+      needsHuman: false,
+    }),
+  };
+
+  // Must resolve, not reject — the worker survives a createSteps validation failure.
+  await runWorker(deps, ONCE_OPTS);
+
+  const arch = rows('steps').find((r) => r.rowId === 'step-arch');
+  assert.notEqual(arch?.data.status, 'running', 'step must not be left stuck in running after a createSteps failure');
 });
 
 // ─── sleep abort-listener not accumulated ─────────────────────────────────────

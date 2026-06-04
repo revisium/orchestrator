@@ -50,10 +50,19 @@ async function handleResult(
   const nextSteps: NewStep[] = result.nextSteps.map((ns) => ({ ...ns, runId: step.runId }));
   // Children are created BEFORE making the parent terminal (writeResult's final patch:steps).
   // If writeResult then throws, the step stays 'running' → recoverInFlight resets it → safe retry.
-  // Child IDs are derived from the parent step ID (+ index), not from attemptId, so a retry
-  // regenerates the same IDs and createSteps' idempotency check skips already-existing rows.
-  await createSteps(da, nextSteps, { parentStepId: step.id });
-  await writeResult(da, step, attemptId, result.output, result.costs);
+  // Child IDs are derived from a bounded hash of the parent step ID (+ index), not from attemptId,
+  // so a retry regenerates the same IDs and createSteps' idempotency check skips existing rows.
+  // A failure here (e.g. createSteps rejecting a malformed/invalid next step) must NOT escape the
+  // loop — fail the step gracefully so it backs off / goes dead instead of crashing the worker.
+  try {
+    await createSteps(da, nextSteps, { parentStepId: step.id });
+    await writeResult(da, step, attemptId, result.output, result.costs);
+  } catch (err) {
+    await failStep(da, step, attemptId, {
+      lesson: err instanceof Error ? err.message : String(err),
+      error: err instanceof Error ? (err.stack ?? err.message) : String(err),
+    });
+  }
 }
 
 export type WorkerDeps = {

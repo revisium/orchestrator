@@ -76,6 +76,22 @@ function clockSuffix(opts?: StepClock): string {
   return opts?.idSuffix ?? randomUUID().replaceAll('-', '').slice(0, 8);
 }
 
+// Non-cryptographic FNV-1a 64-bit hash → 16 hex chars. Used to derive a child step id that is
+// DETERMINISTIC (same parent + index → same id, so a crash-retry is idempotent) yet BOUNDED in
+// length. Revisium rowIds max out at 64 chars; concatenating the parent id per level
+// (`${parent}_ch_${i}`) overflowed on deep chains. Not crypto, so it does not trip the
+// weak-hash security hotspot.
+function fnv1a64Hex(input: string): string {
+  let hash = 0xcbf29ce484222325n;
+  const prime = 0x100000001b3n;
+  const mask = 0xffffffffffffffffn;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= BigInt(input.charCodeAt(i));
+    hash = (hash * prime) & mask;
+  }
+  return hash.toString(16).padStart(16, '0');
+}
+
 
 export function toStr(v: unknown): string {
   if (typeof v === 'string') return v;
@@ -294,12 +310,14 @@ export async function createSteps(
   for (let i = 0; i < steps.length; i++) {
     const ns = steps[i];
     if (!ns) continue;
-    // When parentStepId is supplied, derive a deterministic ID from parent + index so that a
-    // crash-and-retry (new attemptId, same parent) regenerates the exact same child IDs.
-    // Using the full parent ID (collision-free, no hash needed) keeps the scheme deterministic
-    // and idempotent: ROW_CONFLICT from createRow means the child already exists → skip.
+    // When parentStepId is supplied, derive a deterministic, BOUNDED-length ID from a hash of
+    // (parent id + index) so that a crash-and-retry (new attemptId, same parent) regenerates the
+    // exact same child IDs (idempotent: ROW_CONFLICT from createRow means it already exists → skip)
+    // WITHOUT growing the id per chain level. Concatenating the full parent id per level
+    // (`${parent}_ch_${i}`) overflowed Revisium's 64-char rowId limit on deep chains. The role
+    // prefix keeps the id readable; the 64-bit hash keeps it collision-resistant.
     const stepId = opts?.parentStepId
-      ? `${opts.parentStepId}_ch_${i}`
+      ? `step_${ns.role}_${fnv1a64Hex(`${opts.parentStepId}:${i}`)}`
       : `step_${st}_${ns.role}_${sfx}_${i}`;
     // Steps with unresolved dependencies start 'pending'; promoting them to 'ready' once their
     // depends_on complete is the dependency resolver's job, deferred to a later plan (not Plan 0006).
