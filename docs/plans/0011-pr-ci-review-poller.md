@@ -334,13 +334,13 @@ Update the existing `integrator` role (currently line 628 of `bootstrap.config.j
 `ci-poller` as the chain entry instead of `pr-watcher` directly. Change the final sentence of its
 `system_prompt` from:
 
-```
+```text
 …set nextSteps to one pr-watcher step (role 'pr-watcher', kind 'watch').
 ```
 
 to:
 
-```
+```text
 …set nextSteps to one ci-poller step (role 'ci-poller', kind 'poll', input: { pr_number: <N>, repo: '<owner/repo>', sonar_project: '<key-or-omit>', poll_count: 0 }).
 ```
 

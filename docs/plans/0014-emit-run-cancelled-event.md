@@ -24,9 +24,9 @@
 >   id on the captured row instead.
 > - **CLI output / messaging changes.** `runCancel` in `src/cli/commands/run.ts` (lines 183–196) keeps
 >   printing the same "cancelled run … (was …)" / "already cancelled" lines. No new flags.
-> - Numbering: `0012` and `0013` are taken (`0013` twice: `0013-revo-version-flag.md`,
->   `0016-run-cancel-subcommand.md`); `0009`/`0010`/`0011` are reserved by name in `../roadmap.md`.
->   This slice takes the next free number, `0014`.
+> - Numbering: `0012` and `0013` are taken (`0013-revo-version-flag.md`; the run-cancel plan was
+>   renumbered to `0016-run-cancel-subcommand.md`); `0009`/`0010`/`0011` are reserved by name in
+>   `../roadmap.md`. This slice takes the next free number, `0014`.
 
 ---
 

@@ -262,7 +262,7 @@ Extend the existing unit tests in `claude-code-runner.test.ts` (without touching
 
 Append one line:
 
-```
+```text
 .worktrees/
 ```
 
