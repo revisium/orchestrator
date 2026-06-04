@@ -27,7 +27,8 @@ export async function cancelRun(
     { op: 'replace', path: 'updated_at', value: nowIso },
   ]);
 
-  const suffix = opts?.idSuffix ?? randomUUID().replaceAll('-', '').slice(0, 8);
+  const rawSuffix = opts?.idSuffix;
+  const suffix = rawSuffix && rawSuffix.length > 0 ? rawSuffix : randomUUID().replaceAll('-', '').slice(0, 8);
   const eventId = `event_${compactStamp(now)}_run-cancelled_${suffix}`;
   await da.createRow('events', eventId, {
     id: eventId,

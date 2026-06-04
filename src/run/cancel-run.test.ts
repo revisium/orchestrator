@@ -24,7 +24,7 @@ function makeFake(
     },
     async createRow(table, rowId, data) {
       calls.push(`create:${table}:${rowId}`);
-      creates.push({ table, rowId, data: data as Record<string, unknown> });
+      creates.push({ table, rowId, data });
       return { rowId, data };
     },
     async updateRow(table, rowId, data) {
