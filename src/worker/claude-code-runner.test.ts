@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createClaudeCodeRunner } from './claude-code-runner.js';
 import type { ExecRequest, ExecResult, ProcessExecutor } from './process-executor.js';
+import type { WorktreeManager } from './worktree-manager.js';
 import { makeRole, BASE_STEP } from './test-fixtures.js';
 import type { ModelProfile } from '../control-plane/definitions.js';
 
@@ -274,4 +275,129 @@ test('claude-code runner: defaults command to "claude"', async () => {
   const stdout = transport(agentBlock({ output: 'ok', nextSteps: [], needsHuman: false }));
   await run(fakeExecutor(ok(stdout), captured));
   assert.equal(captured[0]?.command, 'claude');
+});
+
+// ─── worktree lifecycle ───────────────────────────────────────────────────────
+
+test('claude-code runner: creates and releases an injected worktree around executor cwd', async () => {
+  const captured: ExecRequest[] = [];
+  const createCalls: Array<{ stepId: string; baseDir: string }> = [];
+  const releaseCalls: string[] = [];
+  const manager: WorktreeManager = {
+    async create(stepId, baseDir) {
+      createCalls.push({ stepId, baseDir });
+      return '/workspace/repo/.worktrees/step-1';
+    },
+    async release(worktreePath) {
+      releaseCalls.push(worktreePath);
+    },
+  };
+  const stdout = transport(agentBlock({ output: 'ok', nextSteps: [], needsHuman: false }));
+  const runner = createClaudeCodeRunner({
+    executor: fakeExecutor(ok(stdout), captured),
+    resolveCwd: async () => '/workspace/repo',
+    worktreeManager: manager,
+    timeoutMs: 5_000,
+  });
+
+  await runner({
+    role: makeRole('architect'),
+    profile: PROFILE,
+    context: 'ctx',
+    attemptId: ATTEMPT_ID,
+    step: BASE_STEP,
+  });
+
+  assert.deepEqual(createCalls, [{ stepId: BASE_STEP.id, baseDir: '/workspace/repo' }]);
+  assert.equal(captured[0]?.cwd, '/workspace/repo/.worktrees/step-1');
+  assert.deepEqual(releaseCalls, ['/workspace/repo/.worktrees/step-1']);
+});
+
+test('claude-code runner: propagates worktree create errors without release', async () => {
+  const releaseCalls: string[] = [];
+  const manager: WorktreeManager = {
+    async create() {
+      throw new Error('worktree create failed');
+    },
+    async release(worktreePath) {
+      releaseCalls.push(worktreePath);
+    },
+  };
+  const runner = createClaudeCodeRunner({
+    executor: async () => ok('unreachable'),
+    resolveCwd: async () => '/workspace/repo',
+    worktreeManager: manager,
+    timeoutMs: 5_000,
+  });
+
+  await assert.rejects(
+    () => runner({
+      role: makeRole('architect'),
+      profile: PROFILE,
+      context: 'ctx',
+      attemptId: ATTEMPT_ID,
+      step: BASE_STEP,
+    }),
+    /worktree create failed/,
+  );
+  assert.deepEqual(releaseCalls, []);
+});
+
+test('claude-code runner: releases worktree when result parsing throws', async () => {
+  const releaseCalls: string[] = [];
+  const manager: WorktreeManager = {
+    async create() {
+      return '/workspace/repo/.worktrees/parse-error';
+    },
+    async release(worktreePath) {
+      releaseCalls.push(worktreePath);
+    },
+  };
+  const runner = createClaudeCodeRunner({
+    executor: fakeExecutor(ok('this is not json'), []),
+    resolveCwd: async () => '/workspace/repo',
+    worktreeManager: manager,
+    timeoutMs: 5_000,
+  });
+
+  await assert.rejects(
+    () => runner({
+      role: makeRole('architect'),
+      profile: PROFILE,
+      context: 'ctx',
+      attemptId: ATTEMPT_ID,
+      step: BASE_STEP,
+    }),
+    /transport envelope/,
+  );
+  assert.deepEqual(releaseCalls, ['/workspace/repo/.worktrees/parse-error']);
+});
+
+test('claude-code runner: release failure does not mask a successful AttemptResult', async () => {
+  const manager: WorktreeManager = {
+    async create() {
+      return '/workspace/repo/.worktrees/step-release-fail';
+    },
+    async release() {
+      throw new Error('release failed');
+    },
+  };
+  const stdout = transport(agentBlock({ output: 'done', nextSteps: [], needsHuman: false }));
+  const runner = createClaudeCodeRunner({
+    executor: fakeExecutor(ok(stdout), []),
+    resolveCwd: async () => '/workspace/repo',
+    worktreeManager: manager,
+    timeoutMs: 5_000,
+  });
+
+  const result = await runner({
+    role: makeRole('architect'),
+    profile: PROFILE,
+    context: 'ctx',
+    attemptId: ATTEMPT_ID,
+    step: BASE_STEP,
+  });
+
+  assert.equal(result.output, 'done', 'success AttemptResult is returned despite release failure');
+  assert.equal(result.needsHuman, false);
 });

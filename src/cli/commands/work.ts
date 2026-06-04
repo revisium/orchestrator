@@ -4,6 +4,7 @@ import { ControlPlaneError, createControlPlaneDataAccess, loadRole, loadModelPro
 import { toStr, type Step } from '../../control-plane/steps.js';
 import { stubRunAgent } from '../../worker/stub-runner.js';
 import { createClaudeCodeRunner } from '../../worker/claude-code-runner.js';
+import { GitWorktreeManager } from '../../worker/git-worktree-manager.js';
 import { createRunAgent } from '../../worker/runner-dispatch.js';
 import { spawnExecutor } from '../../worker/process-executor.js';
 import type { RunAgent } from '../../worker/runner.js';
@@ -17,6 +18,7 @@ type WorkOptions = {
   idleSleep?: string;
   runner?: string;
   runnerTimeoutMs?: string;
+  worktrees?: boolean;
 };
 
 function formatCause(error: unknown): string {
@@ -73,6 +75,9 @@ export async function workCommand(options: WorkOptions): Promise<void> {
     process.exitCode = 1;
     return;
   }
+  if (options.worktrees && runnerMode === 'stub') {
+    console.warn('--worktrees has no effect with --runner stub');
+  }
   const runnerTimeoutMs = options.runnerTimeoutMs === undefined ? 600000 : Number(options.runnerTimeoutMs);
   if (!Number.isFinite(runnerTimeoutMs) || runnerTimeoutMs <= 0) {
     console.error(`Error: --runner-timeout-ms must be a positive number, got: ${String(options.runnerTimeoutMs)}`);
@@ -107,6 +112,7 @@ export async function workCommand(options: WorkOptions): Promise<void> {
               executor: spawnExecutor,
               resolveCwd: makeResolveCwd(da),
               timeoutMs: runnerTimeoutMs,
+              worktreeManager: options.worktrees ? new GitWorktreeManager() : undefined,
             }),
           })
         : stubRunAgent;
@@ -149,5 +155,6 @@ export function registerWork(program: Command): void {
     .option('--idle-sleep <ms>', 'Milliseconds to sleep when no step is available', '5000')
     .option('--runner <mode>', "Runner mode: 'stub' (default, zero-cost) or 'auto' (real claude-code dispatch)", 'stub')
     .option('--runner-timeout-ms <n>', 'Timeout in ms for the real (auto) runner', '600000')
+    .option('--worktrees', 'Use per-step git worktrees with --runner auto (git-level isolation only; npm install and port bindings are NOT isolated)')
     .action(workCommand);
 }

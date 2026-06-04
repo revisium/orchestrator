@@ -5,11 +5,13 @@
 > Do not skip Verify. If reality contradicts this plan, **stop and report**, do not guess.
 >
 > **This slice only:** give each step's agent its own `git worktree` — an isolated working tree
-> off the shared `.git` — so parallel workers cannot collide, the integrator's `git add -A` is
-> clean (only this run's files), and the developer's stray uncommitted work cannot bleed across
-> runs. Realized as an **injectable `WorktreeManager`** in the existing `ClaudeCodeRunnerDeps`
-> seam; the loop, the `revo work` wiring, and the `resolveCwd` path-traversal guard require only
-> additive changes.
+> off the shared `.git` — so parallel workers cannot collide and a step's stray uncommitted work
+> cannot bleed into another step's working tree. Note: under per-step worktrees with **no
+> merge-back**, every step (including the integrator) starts from a fresh worktree off `HEAD`;
+> the integrator does **not** inherit a prior developer step's uncommitted files — each step sees
+> only what is already committed. Realized as an **injectable `WorktreeManager`** in the existing
+> `ClaudeCodeRunnerDeps` seam; the loop, the `revo work` wiring, and the `resolveCwd`
+> path-traversal guard require only additive changes.
 >
 > **Out of scope:**
 > - Container / VM isolation (heavier; a later hardening pass).
@@ -393,6 +395,20 @@ git diff --check
 or failure, the runner's existing `AttemptResult` contract is unchanged, the loop and `WorkerDeps`
 are untouched, the stub path (no `--worktrees`) is unaffected, all unit and smoke tests pass, and
 `git diff --check` is clean.
+
+---
+
+## Known gaps — git-level isolation only (NOT for parallel)
+
+Worktrees provide **git-level isolation** (clean staging area, isolated branch and working tree per step) but no resource isolation. Three specific dangers must be understood before using `--worktrees` for parallel or resource-sensitive workloads:
+
+1. **`npm install` / `npm ci` inside a worktree writes through the `node_modules` symlink into the main workspace's `node_modules`**, corrupting the shared install for every other concurrent or subsequent run. §0 key fact 3 describes the symlink as "safe for a single-worker sequential loop" but does not name this danger explicitly. Do NOT run `npm install` or `npm ci` inside a worktree; install dependencies in the main workspace only, before starting the worker loop.
+
+2. **Parallel test-environment tasks will collide on shared ports.** The Revisium daemon and Postgres are process/host-level resources whose ports are resolved at runtime via the `revo` CLI / `~/.revisium-orchestrator/runtime.json`; they are not isolated per worktree. Two runs that each try to start the daemon will fight over whatever the active ports are. Worktrees give zero port or process isolation.
+
+3. **The real fix for parallel or resource-isolated runs is container/VM-level isolation**, not worktrees. Worktrees isolate the git working tree only. Container/VM isolation is tracked as a later hardening pass and is already noted under §8 deferred / "Needs human" below.
+
+4. **Worktree mode discards a step's on-disk work on release — there is no merge-back.** `release()` runs `git worktree remove --force` then `git branch -D run/<stepId>`; the runner consumes only the JSON result envelope and never commits, merges, or copies the worktree's file or git changes back before teardown. Any uncommitted file changes a step produces (for example, the developer role, which leaves code uncommitted for the integrator) are force-deleted when the step ends. `--worktrees` is only safe for steps that either (a) return results purely via the JSON envelope, or (b) commit and push within the step. The developer-writes → integrator-commits cross-step handoff **requires** the default single-tree mode — do **not** pass `--worktrees` for it. A merge-back / export mechanism is deferred (see §8).
 
 ---
 

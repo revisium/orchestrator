@@ -2,6 +2,7 @@ import type { ProcessExecutor, ExecRequest } from './process-executor.js';
 import type { RunAgent, AttemptResult } from './runner.js';
 import type { Step, CostRecord } from '../control-plane/steps.js';
 import type { ModelProfile } from '../control-plane/definitions.js';
+import { noopWorktreeManager, type WorktreeManager } from './worktree-manager.js';
 import {
   REVO_RESULT_CONTRACT,
   parseTransportEnvelope,
@@ -17,6 +18,7 @@ import {
 export type ClaudeCodeRunnerDeps = {
   executor: ProcessExecutor;
   resolveCwd: (step: Step) => Promise<string>; // injected; the default (reads task repo_ref) is wired in revo work
+  worktreeManager?: WorktreeManager; // default no isolation; opt-in wiring lives in revo work
   timeoutMs?: number; // default 10 min
   command?: string; // default 'claude'
 };
@@ -78,57 +80,67 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
 
   return async ({ role, profile, context, attemptId, step }) => {
     // attemptId is already minted by startAttempt (loop) — consumed here, never re-minted.
-    const cwd = await deps.resolveCwd(step);
-    const req: ExecRequest = {
-      command,
-      args: buildArgs(profile.modelId, role.allowedTools),
-      cwd,
-      timeoutMs,
-      input: buildPrompt(context, attemptId),
-    };
+    const baseCwd = await deps.resolveCwd(step);
+    const manager = deps.worktreeManager ?? noopWorktreeManager;
+    const cwd = await manager.create(step.id, baseCwd);
+    try {
+      const req: ExecRequest = {
+        command,
+        args: buildArgs(profile.modelId, role.allowedTools),
+        cwd,
+        timeoutMs,
+        input: buildPrompt(context, attemptId),
+      };
 
-    const result = await deps.executor(req);
+      const result = await deps.executor(req);
 
-    // Timeout / process failure → throw; the loop's catch → failStep returns the step to ready
-    // (backoff) or dead at the attempt cap. No loop change needed.
-    if (result.timedOut) {
-      throw new Error(`claude-code runner exceeded ${timeoutMs}ms`);
-    }
-    if (result.code !== 0) {
-      throw new Error(
-        `claude-code runner exited with code ${String(result.code)}: ${tail(result.stderr || result.stdout)}`,
-      );
-    }
+      // Timeout / process failure → throw; the loop's catch → failStep returns the step to ready
+      // (backoff) or dead at the attempt cap. No loop change needed.
+      if (result.timedOut) {
+        throw new Error(`claude-code runner exceeded ${timeoutMs}ms`);
+      }
+      if (result.code !== 0) {
+        throw new Error(
+          `claude-code runner exited with code ${String(result.code)}: ${tail(result.stderr || result.stdout)}`,
+        );
+      }
 
-    const transport = parseTransportEnvelope(result.stdout);
-    if (transport.isError) {
-      throw new Error(`claude-code runner reported is_error: ${tail(transport.text)}`);
-    }
+      const transport = parseTransportEnvelope(result.stdout);
+      if (transport.isError) {
+        throw new Error(`claude-code runner reported is_error: ${tail(transport.text)}`);
+      }
 
-    const agent = extractAgentResult(transport.text);
-    const costs = buildCosts(step, profile, transport);
+      const agent = extractAgentResult(transport.text);
+      const costs = buildCosts(step, profile, transport);
 
-    // needsHuman: do NOT write nextSteps — the loop parks via the existing awaiting_approval path.
-    if (agent.needsHuman) {
-      const parked: AttemptResult = {
+      // needsHuman: do NOT write nextSteps — the loop parks via the existing awaiting_approval path.
+      if (agent.needsHuman) {
+        const parked: AttemptResult = {
+          output: agent.output,
+          nextSteps: [],
+          costs,
+          needsHuman: true,
+          lesson: agent.lesson,
+        };
+        return parked;
+      }
+
+      const success: AttemptResult = {
         output: agent.output,
-        nextSteps: [],
+        artifacts: agent.artifacts,
+        nextSteps: normalizeNextSteps(agent.nextSteps, step),
         costs,
-        needsHuman: true,
+        needsHuman: false,
         lesson: agent.lesson,
       };
-      return parked;
+      return success;
+    } finally {
+      try {
+        await manager.release(cwd);
+      } catch (err) {
+        console.warn(`Warning: worktree release failed for ${cwd}: ${String(err)}`);
+      }
     }
-
-    const success: AttemptResult = {
-      output: agent.output,
-      artifacts: agent.artifacts,
-      nextSteps: normalizeNextSteps(agent.nextSteps, step),
-      costs,
-      needsHuman: false,
-      lesson: agent.lesson,
-    };
-    return success;
   };
 }
 

@@ -1,6 +1,7 @@
 dist/
 node_modules/
 coverage/
+.worktrees/
 .sonar/
 .env.sonar
 .env.*
