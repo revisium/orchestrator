@@ -68,8 +68,8 @@ status (pending|resolved), answer, resolved_by, created_at, resolved_at` · Glob
 `context` and `answer` store serialized JSON.
 
 ### `roles` — role definitions (VERSIONED)
-`id, name (architect|developer|tester|reviewer|integrator|triage), system_prompt, model_level (cheap|standard|deep),
-effort, runner (claude-code|codex), allowed_tools[], scope_rules, updated_at`
+`id, name (architect|developer|reviewer|integrator|ci-poller|pr-watcher), system_prompt, model_level (cheap|standard|deep),
+effort, runner (claude-code|codex|script), allowed_tools[], scope_rules, updated_at`
 `scope_rules` stores serialized JSON.
 
 ### `model_profiles` — level → real model (VERSIONED)

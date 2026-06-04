@@ -6,7 +6,7 @@ export type Role = {
   systemPrompt: string;
   modelLevel: 'cheap' | 'standard' | 'deep';
   effort: string;
-  runner: 'claude-code' | 'codex';
+  runner: 'claude-code' | 'codex' | 'script';
   allowedTools: string[];
   scopeRules: unknown;
 };

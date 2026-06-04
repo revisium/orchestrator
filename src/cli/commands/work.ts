@@ -6,6 +6,7 @@ import { stubRunAgent } from '../../worker/stub-runner.js';
 import { createClaudeCodeRunner } from '../../worker/claude-code-runner.js';
 import { GitWorktreeManager } from '../../worker/git-worktree-manager.js';
 import { createRunAgent } from '../../worker/runner-dispatch.js';
+import { createScriptRunner } from '../../worker/script-runner.js';
 import { spawnExecutor } from '../../worker/process-executor.js';
 import type { RunAgent } from '../../worker/runner.js';
 import { runWorker } from '../../worker/loop.js';
@@ -105,17 +106,22 @@ export async function workCommand(options: WorkOptions): Promise<void> {
 
     // The injected runAgent is the ONLY thing that changes between modes — runWorker/WorkerDeps and
     // the loop are untouched (invariant 2). stub stays the default (zero cost; real claude is opt-in).
-    const runAgent: RunAgent =
-      runnerMode === 'auto'
-        ? createRunAgent({
-            claudeCode: createClaudeCodeRunner({
-              executor: spawnExecutor,
-              resolveCwd: makeResolveCwd(da),
-              timeoutMs: runnerTimeoutMs,
-              worktreeManager: options.worktrees ? new GitWorktreeManager() : undefined,
-            }),
-          })
-        : stubRunAgent;
+    let runAgent: RunAgent;
+    if (runnerMode === 'auto') {
+      const { run: prReadinessRun } = await import('../../poller/pr-readiness.js');
+      const scriptRunner = createScriptRunner({ scripts: { 'ci-poller': { run: prReadinessRun } } });
+      runAgent = createRunAgent({
+        claudeCode: createClaudeCodeRunner({
+          executor: spawnExecutor,
+          resolveCwd: makeResolveCwd(da),
+          timeoutMs: runnerTimeoutMs,
+          worktreeManager: options.worktrees ? new GitWorktreeManager() : undefined,
+        }),
+        script: scriptRunner,
+      });
+    } else {
+      runAgent = stubRunAgent;
+    }
 
     await runWorker(
       {
