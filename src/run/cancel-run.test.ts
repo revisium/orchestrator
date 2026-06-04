@@ -10,6 +10,7 @@ function makeFake(
 ) {
   const calls: string[] = [];
   const patches: Array<{ table: RuntimeTable; rowId: string; ops: PatchOperation[] }> = [];
+  const creates: Array<{ table: RuntimeTable; rowId: string; data: Record<string, unknown> }> = [];
   const da: ControlPlaneDataAccess = {
     async assertReady() {
       if (opts.assertReadyError) throw opts.assertReadyError;
@@ -23,6 +24,7 @@ function makeFake(
     },
     async createRow(table, rowId, data) {
       calls.push(`create:${table}:${rowId}`);
+      creates.push({ table, rowId, data: data as Record<string, unknown> });
       return { rowId, data };
     },
     async updateRow(table, rowId, data) {
@@ -35,7 +37,7 @@ function makeFake(
       return { rowId, data: { id: rowId } };
     },
   };
-  return { da, calls, patches };
+  return { da, calls, patches, creates };
 }
 
 const RUN = (status: string): ControlPlaneRow => ({
@@ -89,4 +91,21 @@ test('already-cancelled run still patches and reports previousStatus cancelled',
   assert.equal(result.previousStatus, 'cancelled');
   assert.equal(result.status, 'cancelled');
   assert.equal(patches.length, 1);
+});
+
+test('known run emits a run_cancelled event', async () => {
+  const { da, creates } = makeFake([RUN('running')]);
+  const now = new Date('2026-06-04T00:00:00.000Z');
+  await cancelRun(da, 'run-a', { now, idSuffix: 'abc123ef' });
+
+  const events = creates.filter((c) => c.table === 'events');
+  assert.equal(events.length, 1, 'exactly one event row written');
+  const event = events[0];
+  assert.equal(event.rowId, 'event_20260604T000000000Z_run-cancelled_abc123ef');
+  assert.equal(event.data.id, event.rowId);
+  assert.equal(event.data.type, 'run_cancelled');
+  assert.equal(event.data.run_id, 'run-a');
+  assert.equal(event.data.actor, 'cli');
+  assert.equal(event.data.created_at, '2026-06-04T00:00:00.000Z');
+  assert.deepEqual(event.data.payload, { source: 'revo run cancel', previous_status: 'running' });
 });

@@ -1,4 +1,6 @@
+import { randomUUID } from 'node:crypto';
 import type { ControlPlaneDataAccess } from '../control-plane/index.js';
+import { compactStamp } from '../control-plane/steps.js';
 
 export type CancelRunResult = {
   runId: string;
@@ -9,7 +11,7 @@ export type CancelRunResult = {
 export async function cancelRun(
   da: ControlPlaneDataAccess,
   runId: string,
-  opts?: { now?: Date },
+  opts?: { now?: Date; idSuffix?: string },
 ): Promise<CancelRunResult | null> {
   await da.assertReady();
 
@@ -17,12 +19,24 @@ export async function cancelRun(
   if (!row) return null;
 
   const previousStatus = typeof row.data.status === 'string' ? row.data.status : '';
-  const nowIso = (opts?.now ?? new Date()).toISOString();
+  const now = opts?.now ?? new Date();
+  const nowIso = now.toISOString();
 
   await da.patchRow('task_runs', runId, [
     { op: 'replace', path: 'status', value: 'cancelled' },
     { op: 'replace', path: 'updated_at', value: nowIso },
   ]);
+
+  const suffix = opts?.idSuffix ?? randomUUID().replaceAll('-', '').slice(0, 8);
+  const eventId = `event_${compactStamp(now)}_run-cancelled_${suffix}`;
+  await da.createRow('events', eventId, {
+    id: eventId,
+    run_id: runId,
+    type: 'run_cancelled',
+    payload: { source: 'revo run cancel', previous_status: previousStatus },
+    actor: 'cli',
+    created_at: nowIso,
+  });
 
   return { runId, previousStatus, status: 'cancelled' };
 }
