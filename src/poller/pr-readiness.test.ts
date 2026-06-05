@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { run, type PollInput, type ExecGhFn } from './pr-readiness.js';
+import { run, defaultFetchSonar, type PollInput, type ExecGhFn, type FetchSonarFn, type SonarResult } from './pr-readiness.js';
 import { BASE_STEP } from '../worker/test-fixtures.js';
 
 // ─── fixtures ────────────────────────────────────────────────
@@ -166,43 +166,84 @@ test('SKIPPED and NEUTRAL conclusions treated as passed', async () => {
   assert.equal(inp.ci_passed, true);
 });
 
-test('sonar_project absent: sonar_issues is empty, no Sonar call made', async () => {
+test('sonar_project absent: sonar_issues is empty, fetchSonar never called', async () => {
   const terminalView = prViewResponse([checkRun('Gitar', 'COMPLETED', 'SUCCESS')]);
-  let sonarCalled = false;
-  const execGh: ExecGhFn = (args) => {
-    const key = args.join(' ');
-    if (key.includes('sonarcloud')) { sonarCalled = true; return '{}'; }
-    if (key.includes('statusCheckRollup')) return JSON.stringify(terminalView);
-    if (key.includes('reviews')) return '[]';
-    if (key.includes('comments')) return '[]';
-    throw new Error(`Unexpected: ${key}`);
+  const execGh = makeFullResponses(terminalView);
+  let sonarCallCount = 0;
+  const fakeFetchSonar: FetchSonarFn = async () => {
+    sonarCallCount++;
+    return { issues: [], hotspots: [], unavailable: false };
   };
 
-  const result = await run(BASE_INPUT, STEP, execGh);
+  const result = await run(BASE_INPUT, STEP, execGh, fakeFetchSonar);
 
-  assert.equal(sonarCalled, false);
-  const inp = (result.nextSteps[0]?.input ?? {}) as { sonar_issues: unknown[] };
+  assert.equal(sonarCallCount, 0, 'fetchSonar must not be called when sonar_project is absent');
+  const inp = (result.nextSteps[0]?.input ?? {}) as { sonar_issues: unknown[]; sonar_hotspots_to_review: unknown[] };
   assert.deepEqual(inp.sonar_issues, []);
+  assert.deepEqual(inp.sonar_hotspots_to_review, []);
 });
 
 test('Sonar API unavailable: sonar_unavailable:true flag, judge step still emitted', async () => {
   const terminalView = prViewResponse([checkRun('Gitar', 'COMPLETED', 'SUCCESS')]);
-  const execGh: ExecGhFn = (args) => {
-    const key = args.join(' ');
-    if (key.includes('sonarcloud')) throw new Error('network error');
-    if (key.includes('statusCheckRollup')) return JSON.stringify(terminalView);
-    if (key.includes('reviews')) return '[]';
-    if (key.includes('comments')) return '[]';
-    throw new Error(`Unexpected: ${key}`);
-  };
+  const execGh = makeFullResponses(terminalView);
+  const fakeFetchSonar: FetchSonarFn = async () => ({ issues: [], hotspots: [], unavailable: true });
   const input: PollInput = { ...BASE_INPUT, sonar_project: 'my-project' };
 
-  const result = await run(input, STEP, execGh);
+  const result = await run(input, STEP, execGh, fakeFetchSonar);
 
   assert.equal(result.nextSteps.length, 1);
-  const inp = (result.nextSteps[0]?.input ?? {}) as { sonar_unavailable: boolean; sonar_issues: unknown[] };
+  const inp = (result.nextSteps[0]?.input ?? {}) as { sonar_unavailable: boolean; sonar_issues: unknown[]; sonar_hotspots_to_review: unknown[] };
   assert.equal(inp.sonar_unavailable, true);
   assert.deepEqual(inp.sonar_issues, []);
+  assert.deepEqual(inp.sonar_hotspots_to_review, []);
+});
+
+test('sonar_project present + 2 issues returned: judge input has 2 sonar_issues, hotspots []', async () => {
+  const terminalView = prViewResponse([checkRun('Gitar', 'COMPLETED', 'SUCCESS')]);
+  const execGh = makeFullResponses(terminalView);
+  const fakeIssues: SonarResult['issues'] = [
+    { severity: 'MAJOR', message: 'Cognitive complexity too high', component: 'proj:src/foo.ts', rule: 'typescript:S3776', line: 10 },
+    { severity: 'MINOR', message: 'Remove unused import', component: 'proj:src/bar.ts', rule: 'typescript:S1128' },
+  ];
+  const fakeFetchSonar: FetchSonarFn = async () => ({ issues: fakeIssues, hotspots: [], unavailable: false });
+  const input: PollInput = { ...BASE_INPUT, sonar_project: 'my-project' };
+
+  const result = await run(input, STEP, execGh, fakeFetchSonar);
+
+  const inp = (result.nextSteps[0]?.input ?? {}) as { sonar_issues: unknown[]; sonar_hotspots_to_review: unknown[]; sonar_unavailable?: boolean };
+  assert.equal(inp.sonar_issues.length, 2, '2 issues forwarded to judge');
+  assert.deepEqual(inp.sonar_hotspots_to_review, [], 'no hotspots');
+  assert.equal(inp.sonar_unavailable, undefined, 'sonar_unavailable must be absent on successful fetch');
+});
+
+test('sonar_project present + 1 hotspot returned: sonar_hotspots_to_review has 1 entry', async () => {
+  const terminalView = prViewResponse([checkRun('Gitar', 'COMPLETED', 'SUCCESS')]);
+  const execGh = makeFullResponses(terminalView);
+  const fakeHotspot: SonarResult['hotspots'][number] = {
+    message: 'Hard-coded credentials', component: 'proj:src/config.ts',
+    line: 5, securityCategory: 'hardcoded-credentials', vulnerabilityProbability: 'HIGH',
+  };
+  const fakeFetchSonar: FetchSonarFn = async () => ({ issues: [], hotspots: [fakeHotspot], unavailable: false });
+  const input: PollInput = { ...BASE_INPUT, sonar_project: 'my-project' };
+
+  const result = await run(input, STEP, execGh, fakeFetchSonar);
+
+  const inp = (result.nextSteps[0]?.input ?? {}) as { sonar_hotspots_to_review: unknown[]; sonar_issues: unknown[] };
+  assert.equal(inp.sonar_hotspots_to_review.length, 1, '1 hotspot forwarded to judge');
+  assert.deepEqual(inp.sonar_issues, [], 'no issues');
+});
+
+test('defaultFetchSonar no-token path: resolves unavailable:true, no network call', async () => {
+  const savedToken = process.env['SONAR_TOKEN'];
+  delete process.env['SONAR_TOKEN'];
+  try {
+    const result = await defaultFetchSonar('my-project', 42);
+    assert.equal(result.unavailable, true);
+    assert.deepEqual(result.issues, []);
+    assert.deepEqual(result.hotspots, []);
+  } finally {
+    if (savedToken !== undefined) process.env['SONAR_TOKEN'] = savedToken;
+  }
 });
 
 test('bot vs human comment separation', async () => {
