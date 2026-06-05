@@ -162,7 +162,7 @@ export async function defaultFetchSonar(projectKey: string, prNumber: number): P
       fetch(hotspotsUrl, { headers: { Authorization: auth }, signal: AbortSignal.timeout(30_000) }),
     ]);
     if (!issuesRes.ok || !hotspotsRes.ok) {
-      const failed = !issuesRes.ok ? `issues ${issuesRes.status}` : `hotspots ${hotspotsRes.status}`;
+      const failed = issuesRes.ok ? `hotspots ${hotspotsRes.status}` : `issues ${issuesRes.status}`;
       console.warn(`[sonar] fetch degraded: ${failed}`);
       return { issues: [], hotspots: [], unavailable: true };
     }
