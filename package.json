@@ -30,12 +30,18 @@
     "verify": "npm run typecheck && npm run lint:ci && npm run test:cov"
   },
   "dependencies": {
+    "@dbos-inc/dbos-sdk": "4.19.8",
+    "@nestjs/common": "11.1.24",
+    "@nestjs/core": "11.1.24",
     "@revisium/client": "^0.6.0",
-    "commander": "^12.1.0"
+    "commander": "^12.1.0",
+    "pg": "8.21.0",
+    "reflect-metadata": "0.2.2"
   },
   "devDependencies": {
     "@revisium/standalone": "^2.7.2",
     "@types/node": "^24.0.0",
+    "@types/pg": "^8.20.0",
     "eslint": "^9.39.4",
     "globals": "^16.5.0",
     "tsx": "^4.19.0",

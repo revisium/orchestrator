@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
+import type { INestApplicationContext } from '@nestjs/common';
 import { Command } from 'commander';
 import { registerBootstrap } from './commands/bootstrap.js';
+import { registerDev } from './commands/dev.js';
 import { registerRevisium } from './commands/revisium.js';
 import { registerRun } from './commands/run.js';
 import { registerWork } from './commands/work.js';
@@ -18,7 +20,16 @@ export function readPackageVersion(): string {
   return pkg.version;
 }
 
-export function buildProgram(): Command {
+/**
+ * Build the commander program.
+ *
+ * @param app - Optional Nest app context (host path only).
+ *   - When `app` is provided, dev:ping/dev:status actions are wired to the DI context.
+ *   - When `app` is absent (host-free path or tests), dev command DEFINITIONS are still
+ *     registered so `dev:ping --help` works; actions guard on the absent `app`.
+ *   - The no-arg overload is preserved for program.test.ts compatibility.
+ */
+export function buildProgram(app?: INestApplicationContext): Command {
   const program = new Command();
   program
     .name('revo')
@@ -28,5 +39,6 @@ export function buildProgram(): Command {
   registerBootstrap(program);
   registerRun(program);
   registerWork(program);
+  registerDev(program, app);
   return program;
 }

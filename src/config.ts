@@ -9,6 +9,8 @@ export type RuntimeState = {
   pgPort: number;
   pid: number;
   startedAt: string;
+  /** Data directory used by the standalone daemon. Written by ensureRevisium(). */
+  dataDir?: string;
 };
 
 type ConfigFile = {

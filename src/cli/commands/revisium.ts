@@ -1,19 +1,15 @@
 import { spawn } from 'node:child_process';
-import { closeSync, existsSync, openSync, readFileSync, writeFileSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { Command } from 'commander';
 import {
   baseUrl,
-  findFreePort,
   getConfig,
-  healthUrl,
   isAlive,
   isHealthy,
   readRuntime,
   removeRuntime,
 } from '../config.js';
-
-const require = createRequire(import.meta.url);
+import { ensureRevisium } from '../../host/ensure-revisium.js';
+import { killTree, tailLines, waitForExit } from './revisium-helpers.js';
 
 type StartOptions = {
   port?: string;
@@ -26,111 +22,23 @@ type LogsOptions = {
   follow?: boolean;
 };
 
-function parsePort(value: string | undefined, fallback: number): number {
-  if (!value) return fallback;
-  const port = Number(value);
-  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
-    throw new Error(`Invalid port: ${value}`);
-  }
-  return port;
-}
-
-async function waitHealthy(url: string, timeoutMs = 120_000): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
-      if (res.status >= 200 && res.status < 400) return true;
-    } catch {
-      // Not ready yet.
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-  }
-  return false;
-}
-
-function tailLines(path: string, lines: number): string {
-  if (!existsSync(path)) return '';
-  const content = readFileSync(path, 'utf8').replace(/(?:\r?\n)+$/, '');
-  return content.split(/\r?\n/).slice(-lines).join('\n');
-}
-
-function killTree(pid: number, signal: NodeJS.Signals): void {
-  try {
-    process.kill(-pid, signal);
-  } catch {
-    try {
-      process.kill(pid, signal);
-    } catch {
-      // Already gone.
-    }
-  }
-}
-
-async function waitForExit(pid: number, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (!isAlive(pid)) return true;
-    await new Promise((resolve) => setTimeout(resolve, 500));
-  }
-  return !isAlive(pid);
-}
-
 async function startRevisium(options: StartOptions): Promise<void> {
-  const config = getConfig();
-  const runtime = readRuntime();
-  if (runtime && isAlive(runtime.pid)) {
-    if (await isHealthy(runtime.httpPort)) {
+  try {
+    const { runtime, alreadyRunning } = await ensureRevisium(options);
+    if (alreadyRunning) {
       console.log(`already running on ${baseUrl(runtime.httpPort)}`);
       return;
     }
-
-    console.log(`running (pid ${runtime.pid}) on ${baseUrl(runtime.httpPort)} but health FAILING`);
+    console.log(`Revisium started (pid ${runtime.pid})`);
+    console.log(`Admin: ${baseUrl(runtime.httpPort)}/`);
+    console.log(`REST: ${baseUrl(runtime.httpPort)}/api`);
+    console.log(`GraphQL: ${baseUrl(runtime.httpPort)}/graphql`);
+    console.log(`MCP: ${baseUrl(runtime.httpPort)}/mcp`);
+    console.log(`PostgreSQL port: ${runtime.pgPort}`);
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
     process.exitCode = 1;
-    return;
   }
-
-  if (runtime) removeRuntime();
-
-  const httpPort = await findFreePort(parsePort(options.port, config.preferredPort));
-  const pgPort = await findFreePort(parsePort(options.pgPort, config.preferredPgPort));
-  const standaloneDataDir = options.data ?? config.dataDir;
-  const entry = require.resolve('@revisium/standalone/bin/revisium-standalone.js');
-  const out = openSync(config.logFile, 'a');
-  const child = spawn(
-    process.execPath,
-    [entry, '--port', String(httpPort), '--pg-port', String(pgPort), '--data', standaloneDataDir],
-    { detached: true, stdio: ['ignore', out, out] },
-  );
-  closeSync(out);
-
-  if (!child.pid) {
-    throw new Error('Failed to start standalone Revisium');
-  }
-
-  child.unref();
-  writeFileSync(
-    config.runtimeFile,
-    JSON.stringify({ httpPort, pgPort, pid: child.pid, startedAt: new Date().toISOString() }, null, 2),
-  );
-
-  if (!(await waitHealthy(healthUrl(httpPort)))) {
-    console.error(`Revisium did not become healthy on ${baseUrl(httpPort)} within 120s`);
-    console.error(tailLines(config.logFile, 20));
-    killTree(child.pid, 'SIGTERM');
-    await waitForExit(child.pid, 20_000);
-    if (isAlive(child.pid)) killTree(child.pid, 'SIGKILL');
-    removeRuntime();
-    process.exitCode = 1;
-    return;
-  }
-
-  console.log(`Revisium started (pid ${child.pid})`);
-  console.log(`Admin: ${baseUrl(httpPort)}/`);
-  console.log(`REST: ${baseUrl(httpPort)}/api`);
-  console.log(`GraphQL: ${baseUrl(httpPort)}/graphql`);
-  console.log(`MCP: ${baseUrl(httpPort)}/mcp`);
-  console.log(`PostgreSQL port: ${pgPort}`);
 }
 
 async function stopRevisium(): Promise<void> {
