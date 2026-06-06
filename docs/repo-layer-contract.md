@@ -1,5 +1,12 @@
 # Data-access (repo) layer — contract
 
+> **Partially superseded by the DBOS pivot ([ADR-0001](./adr/0001-execution-engine-and-host.md)).** This layer
+> now covers Revisium **meaning** verbs only — `loadRole`, `loadModelProfile`, inbox (`buildInboxRow`/`listInbox`/
+> `resolveInbox`), and run reads/writes. The **progress** verbs below (`claimNextStep`, `startAttempt`,
+> `writeResult`, `failStep`, `createSteps`, `recoverInFlight`) are **retired** — DBOS owns step/attempt/lease
+> state. Treat their sections as historical until the post-MVP cleanup removes them from code. The meaning verbs
+> are wrapped as Nest providers in [plans/0002-revisium-nest-module.md](./plans/0002-revisium-nest-module.md).
+
 > The **only** module that knows Revisium's table structure (invariant #4 in
 > [architecture-overview.md](./architecture-overview.md)). The loop and the interactive CLI call **these verbs**,
 > never tables or HTTP directly. Schema changes → only this layer changes.

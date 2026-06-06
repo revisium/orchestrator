@@ -1,5 +1,9 @@
 # Multi-repo tasks & dependency strategies
 
+> **Deferred to post-MVP ([ADR-0001](./adr/0001-execution-engine-and-host.md)).** The MVP pipeline is single-repo
+> and **workflow-as-code**. Strategies/primitives are part of the "workflow-as-data" direction and land after the
+> MVP. The design below stands; `createSteps` references are superseded by DBOS-driven step creation.
+
 > **Status: DRAFT.** Concept settled; built last among the core slices.
 > **Depends on:** [architecture-overview.md](./architecture-overview.md) (data-vs-code; strategies are data) ·
 > [repo-layer-contract.md](./repo-layer-contract.md) (`createSteps` materializes the plan) ·

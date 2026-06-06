@@ -1,5 +1,11 @@
 # Open questions
 
+> **Updated by the DBOS pivot ([ADR-0001](./adr/0001-execution-engine-and-host.md)).** **Q1 (atomic compare-and-
+> set) and Q3 (server-side filter/sort for the claim query) are resolved — removed as concerns:** the durable
+> engine (DBOS) owns step claiming, leasing, and queue dequeue, so Revisium never runs the hot claim query. Q2
+> (revision/commit mechanic for versioned `roles`/`model_profiles`/`routing_policy`), Q4 (custom MCP), and Q5
+> (release channels) still stand.
+
 > Things to **verify against real Revisium, not guess** (brief §15). Each has an owner-slice, a "blocks what"
 > line, and a place to record the answer. When you resolve one, fill in **Answer** with the date and evidence
 > (the exact API call / doc link), then update the dependent doc. Do not implement past an unresolved **BLOCKING**

@@ -1,5 +1,11 @@
 # Control-plane schema
 
+> **Partially superseded by the DBOS pivot ([ADR-0001](./adr/0001-execution-engine-and-host.md)).** **Execution
+> progress left Revisium:** the `steps` and `attempts` tables (and all lease/recover/backoff fields) are **retired
+> from the control plane — DBOS owns them** in its own Postgres database. What stays in Revisium: `roles`,
+> `model_profiles`, `routing_policy` (versioned), and `tasks`, `task_runs`, `events`, `inbox`, `cost_ledger`
+> (runtime, draft). Read the `steps`/`attempts` sections below as historical.
+
 > **Status: verified.** The source of truth for the schema is `control-plane/bootstrap.config.json`; this doc is
 > the human-readable reference.
 > **Depends on:** [architecture-overview.md](./architecture-overview.md) (the versioning boundary) ·

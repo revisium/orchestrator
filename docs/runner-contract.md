@@ -1,5 +1,11 @@
 # Runner contract (runAgent)
 
+> **In force after the DBOS pivot ([ADR-0001](./adr/0001-execution-engine-and-host.md)).** The `runAgent`
+> abstraction is reused unchanged; only the *caller* changes — a DBOS workflow **step** invokes `runAgent`
+> instead of the dumb loop. `attemptId`/idempotency now come from DBOS (workflow + step identity), not a
+> hand-generated key. Wired in [plans/0003-dbos-pipeline-workflow.md](./plans/0003-dbos-pipeline-workflow.md) and
+> [plans/0005-real-runners-and-integrator.md](./plans/0005-real-runners-and-integrator.md).
+
 > **Status: DRAFT.** The Claude Code headless branch is the MVP; Codex is a later branch of the same function.
 > **Depends on:** [repo-layer-contract.md](./repo-layer-contract.md) (the loop calls `runAgent`; `attemptId`
 > generated before the run) · [control-plane-schema.md](./control-plane-schema.md) (`roles.runner`,

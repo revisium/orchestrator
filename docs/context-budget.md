@@ -1,5 +1,9 @@
 # Context budget (buildContext)
 
+> **In force after the DBOS pivot ([ADR-0001](./adr/0001-execution-engine-and-host.md)).** `buildContext` is
+> reused as-is; it is called from a DBOS workflow step. The `lesson` source moves: prior-attempt takeaways now
+> come from DBOS step/attempt history (or a Revisium event) rather than a Revisium `attempts` table.
+
 > **Status: DRAFT.** Concept is settled; the implementation lands with the data-access layer.
 > **Depends on:** [architecture-overview.md](./architecture-overview.md) (state-not-history) ·
 > [repo-layer-contract.md](./repo-layer-contract.md) (`buildContext`) ·

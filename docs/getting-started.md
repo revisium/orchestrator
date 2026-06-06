@@ -1,5 +1,10 @@
 # Getting started
 
+> **Pre-pivot — to be rewritten in [plans/0006-end-to-end-mvp.md](./plans/0006-end-to-end-mvp.md).** The Revisium
+> standalone bootstrap commands below still apply, but the worker model has changed: the dumb `revo work` polling
+> loop is replaced by the NestJS host + DBOS engine ([ADR-0001](./adr/0001-execution-engine-and-host.md)). Ignore
+> loop/polling references until this page is rewritten.
+
 > **Status: verified.** Commands were checked against the Plan 0001 `revo` CLI.
 > **Depends on:** [plans/0001-revisium-daemon-and-bootstrap.md](./plans/0001-revisium-daemon-and-bootstrap.md)
 > (the CLI) · `revisium.config.json` (ports, org/project/branch).
