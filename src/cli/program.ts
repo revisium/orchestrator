@@ -3,6 +3,7 @@ import type { INestApplicationContext } from '@nestjs/common';
 import { Command } from 'commander';
 import { registerBootstrap } from './commands/bootstrap.js';
 import { registerDev } from './commands/dev.js';
+import { registerInbox } from './commands/inbox.js';
 import { registerRevisium } from './commands/revisium.js';
 import { registerRun } from './commands/run.js';
 import { registerWork } from './commands/work.js';
@@ -39,6 +40,7 @@ export function buildProgram(app?: INestApplicationContext): Command {
   registerBootstrap(program);
   registerRun(program);
   registerWork(program);
+  registerInbox(program);
   registerDev(program, app);
   return program;
 }
