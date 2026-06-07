@@ -18,6 +18,7 @@ export {
   createSteps,
   failStep,
   recoverInFlight,
+  fnv1a64Hex,
   type Step,
   type NewStep,
   type CostRecord,

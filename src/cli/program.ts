@@ -38,7 +38,7 @@ export function buildProgram(app?: INestApplicationContext): Command {
     .version(readPackageVersion(), '-v, --version', 'Print the revo version');
   registerRevisium(program);
   registerBootstrap(program);
-  registerRun(program);
+  registerRun(program, app);
   registerWork(program);
   registerInbox(program);
   registerDev(program, app);

@@ -59,7 +59,7 @@ test('stubRunAgent: architect returns one developer next step', async () => {
   assert.equal(result.nextSteps[0]?.kind, 'implement');
 });
 
-test('stubRunAgent: developer returns no next steps', async () => {
+test('stubRunAgent: developer returns one reviewer next step', async () => {
   const devStep: Step = { ...STEP, id: 'step-dev-1', role: 'developer' };
   const result = await stubRunAgent({
     role: makeRole('developer'),
@@ -69,7 +69,10 @@ test('stubRunAgent: developer returns no next steps', async () => {
     step: devStep,
   });
 
-  assert.equal(result.nextSteps.length, 0);
+  // Updated in 0003: stub now teaches the full architect→developer→reviewer→integrator chain.
+  assert.equal(result.nextSteps.length, 1);
+  assert.equal(result.nextSteps[0]?.role, 'reviewer');
+  assert.equal(result.nextSteps[0]?.kind, 'review');
 });
 
 test('stubRunAgent: returns zero costs', async () => {

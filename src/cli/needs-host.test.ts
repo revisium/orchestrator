@@ -37,8 +37,36 @@ test('needsHost: bootstrap → false', () => {
   assert.equal(needsHost(argv('bootstrap')), false);
 });
 
-test('needsHost: run → false', () => {
+test('needsHost: run list → false', () => {
   assert.equal(needsHost(argv('run', 'list')), false);
+});
+
+test('needsHost: run create → false', () => {
+  assert.equal(needsHost(argv('run', 'create', '--title', 'X', '--repo', '.')), false);
+});
+
+test('needsHost: run show → false', () => {
+  assert.equal(needsHost(argv('run', 'show', 'run-1')), false);
+});
+
+test('needsHost: run events → false', () => {
+  assert.equal(needsHost(argv('run', 'events', 'run-1')), false);
+});
+
+test('needsHost: run cancel → false', () => {
+  assert.equal(needsHost(argv('run', 'cancel', 'run-1')), false);
+});
+
+test('needsHost: run start → true (host-requiring)', () => {
+  assert.equal(needsHost(argv('run', 'start', 'run-id-1')), true);
+});
+
+test('needsHost: run start --stub → true', () => {
+  assert.equal(needsHost(argv('run', 'start', 'run-id-1', '--stub')), true);
+});
+
+test('needsHost: run start --help → false (help wins)', () => {
+  assert.equal(needsHost(argv('run', 'start', '--help')), false);
 });
 
 test('needsHost: work → false', () => {

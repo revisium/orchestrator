@@ -128,3 +128,90 @@ test('RunService.getRun returns null when run not found', async () => {
   const result = await svc.getRun('run-nope');
   assert.equal(result, null);
 });
+
+// ─── C4: RunService.loadPipelineContext focused unit tests ───────────────────
+
+test('C4: loadPipelineContext synthesizes Step with modelProfile from caller (B7 guard)', async () => {
+  // Simulate a run with a task whose role is 'deep' (architect-level)
+  const runId = 'run-lpc-1';
+  const taskId = 'task-lpc-1';
+
+  const transport: ControlPlaneTransport = {
+    ...makeDraftTransport(),
+    async listRows(table): Promise<TransportList> {
+      if (table === 'tasks') {
+        return {
+          edges: [
+            {
+              node: makeFakeRow(taskId, {
+                id: taskId,
+                run_id: runId,
+                title: 'My task',
+                status: 'ready',
+                repos: [],
+              }),
+            },
+          ],
+        };
+      }
+      if (table === 'task_runs') {
+        return {
+          edges: [
+            {
+              node: makeFakeRow(runId, {
+                id: runId,
+                title: 'Test run',
+                status: 'ready',
+                priority: 0,
+                repos: [],
+              }),
+            },
+          ],
+        };
+      }
+      return { edges: [] };
+    },
+    async getRow(table, rowId) {
+      if (table === 'task_runs' && rowId === runId) {
+        return makeFakeRow(runId, { id: runId, title: 'Test run', status: 'ready', priority: 0, repos: [] });
+      }
+      if (table === 'tasks') {
+        return makeFakeRow(taskId, { id: taskId, run_id: runId, title: 'My task', status: 'ready', repos: [] });
+      }
+      throw new ControlPlaneError('ROW_NOT_FOUND', `not found: ${rowId}`, { status: 404 });
+    },
+  };
+
+  const svc = new RunService(transport);
+  const { step, da } = await svc.loadPipelineContext(runId, 'architect', 'architect', { phase: 'plan' }, 'deep');
+
+  // B7 guard: modelProfile must be the caller-supplied 'deep', NOT hardcoded 'standard'
+  assert.equal(step.modelProfile, 'deep', 'step.modelProfile must equal the caller-supplied modelProfile arg');
+  assert.equal(step.role, 'architect');
+  assert.equal(step.runId, runId);
+  assert.equal(step.taskId, taskId);
+  assert.ok(step.id.startsWith('pstep_'), `step.id must start with pstep_: ${step.id}`);
+  assert.ok(step.id.length <= 64, `step.id must be ≤64 chars: ${step.id.length}`);
+  assert.ok(da !== null && da !== undefined, 'da must be returned');
+});
+
+test('C4: loadPipelineContext throws ROW_NOT_FOUND when run does not exist (B6 guard)', async () => {
+  const transport: ControlPlaneTransport = {
+    ...makeDraftTransport(),
+    async listRows(): Promise<TransportList> { return { edges: [] }; },
+    async getRow(_table, rowId) {
+      throw new ControlPlaneError('ROW_NOT_FOUND', `not found: ${rowId}`, { status: 404 });
+    },
+  };
+
+  const svc = new RunService(transport);
+  await assert.rejects(
+    () => svc.loadPipelineContext('run-missing', 'architect', 'architect', {}, 'deep'),
+    (err: unknown) => {
+      assert.ok(err instanceof ControlPlaneError);
+      assert.equal(err.code, 'ROW_NOT_FOUND');
+      assert.ok(err.message.includes('run not found'), `expected 'run not found' in: ${err.message}`);
+      return true;
+    },
+  );
+});

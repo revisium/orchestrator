@@ -81,7 +81,7 @@ function clockSuffix(opts?: StepClock): string {
 // length. Revisium rowIds max out at 64 chars; concatenating the parent id per level
 // (`${parent}_ch_${i}`) overflowed on deep chains. Not crypto, so it does not trip the
 // weak-hash security hotspot.
-function fnv1a64Hex(input: string): string {
+export function fnv1a64Hex(input: string): string {
   let hash = 0xcbf29ce484222325n;
   const prime = 0x100000001b3n;
   const mask = 0xffffffffffffffffn;

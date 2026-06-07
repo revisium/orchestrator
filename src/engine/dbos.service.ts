@@ -1,5 +1,9 @@
 /**
- * DbosService — the ONLY file that imports @dbos-inc/dbos-sdk.
+ * DbosService — the engine layer owns all @dbos-inc/dbos-sdk imports.
+ *
+ * This file (`dbos.service.ts`) is the primary importer; `engine/types.ts` re-exports
+ * type-only symbols (`WorkflowHandle`) so pipeline callers can annotate return types
+ * without importing from @dbos-inc directly. `src/pipeline/*` must import ZERO @dbos-inc.
  *
  * Owns DBOS lifecycle (setConfig / launch / shutdown) and thin verbs
  * (startPingWorkflow / getWorkflowStatus / waitForWorkflow).
@@ -31,7 +35,7 @@
  */
 
 import { Injectable } from '@nestjs/common';
-import { DBOS, type WorkflowHandle } from '@dbos-inc/dbos-sdk';
+import { DBOS, WorkflowQueue, type WorkflowHandle } from '@dbos-inc/dbos-sdk';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
@@ -49,6 +53,9 @@ type SleepStepFn = (ms: number) => Promise<void>;
 @Injectable()
 export class DbosService {
   private launched = false;
+
+  /** Registered WorkflowQueues — guarded map to ensure idempotent registration. */
+  private readonly queues = new Map<string, WorkflowQueue>();
 
   // Registered DBOS functions — assigned in constructor before launch().
   private readonly pingWorkflow: PingWorkflowFn;
@@ -102,6 +109,81 @@ export class DbosService {
       { name: 'pingImpl', className: 'DbosService' },
     );
   }
+
+  // ── Generic engine verbs (M1 — DBOS seal, TASK 0003) ───────────────────────
+  //
+  // `src/pipeline/*` imports NO `@dbos-inc/dbos-sdk`. These verbs expose the minimal
+  // surface needed for the pipeline module: register a step/workflow (returns the
+  // DBOS-wrapped fn with the same signature), register a queue (idempotent), and enqueue
+  // a workflow by ID + queue name.
+  //
+  // `name` format: 'ClassName.methodName' — split on the LAST dot to fill DBOS's
+  // { name, className } (matching how dev:ping uses { name:'pingImpl', className:'DbosService' }).
+  // Stable across releases — the recovery seam binds on name+className.
+
+  /**
+   * Register a plain async function as a DBOS step.
+   * Returns the DBOS-wrapped function with the same call signature.
+   * Call in the consumer's constructor, BEFORE DBOS.launch().
+   */
+  registerStep<A extends unknown[], R>(
+    name: string,
+    fn: (...a: A) => Promise<R>,
+  ): (...a: A) => Promise<R> {
+    const lastDot = name.lastIndexOf('.');
+    const className = lastDot >= 0 ? name.slice(0, lastDot) : 'Pipeline';
+    const methodName = lastDot >= 0 ? name.slice(lastDot + 1) : name;
+    return DBOS.registerStep(fn, { name: methodName, className });
+  }
+
+  /**
+   * Register a plain async function as a DBOS workflow.
+   * Returns the DBOS-wrapped function with the same call signature.
+   * Call in the consumer's constructor, BEFORE DBOS.launch().
+   */
+  registerWorkflow<A extends unknown[], R>(
+    name: string,
+    fn: (...a: A) => Promise<R>,
+  ): (...a: A) => Promise<R> {
+    const lastDot = name.lastIndexOf('.');
+    const className = lastDot >= 0 ? name.slice(0, lastDot) : 'Pipeline';
+    const methodName = lastDot >= 0 ? name.slice(lastDot + 1) : name;
+    return DBOS.registerWorkflow(fn, { name: methodName, className });
+  }
+
+  /**
+   * Construct and register a WorkflowQueue (idempotent — Map-guarded).
+   * The ONLY place `new WorkflowQueue(...)` is called, keeping @dbos-inc inside this file.
+   * Call before DBOS.launch().
+   */
+  registerQueue(name: string, opts: { concurrency?: number; workerConcurrency?: number }): void {
+    if (!this.queues.has(name)) {
+      this.queues.set(name, new WorkflowQueue(name, opts));
+    }
+  }
+
+  /**
+   * Enqueue a registered workflow with a stable workflowID and queue name.
+   * Idempotent by workflowID: if a workflow with the same id already exists, DBOS returns
+   * a handle to the existing workflow and does NOT start a second run.
+   *
+   * Generic over the workflow's arg tuple A so it accepts any registered fn signature.
+   *
+   * @param fn        - The DBOS-wrapped workflow function (returned by registerWorkflow).
+   * @param workflowID - Stable dedup key (e.g. the runId).
+   * @param queueName  - Name of the queue to enqueue on.
+   * @param args       - Arguments forwarded to the workflow (persisted as durable input).
+   */
+  startWorkflowOn<A extends unknown[], R>(
+    fn: (...args: A) => Promise<R>,
+    workflowID: string,
+    queueName: string,
+    ...args: A
+  ): Promise<WorkflowHandle<R>> {
+    return DBOS.startWorkflow(fn, { workflowID, queueName })(...args);
+  }
+
+  // ── end generic engine verbs ────────────────────────────────────────────────
 
   /**
    * Configure DBOS with the pid-proven system database URL.
@@ -161,9 +243,26 @@ export class DbosService {
    * Recover-and-wait: retrieve an existing workflow handle and await its result.
    * Used by `dev:status <id>` — the resume-test command (E10, F2).
    * `DBOS.retrieveWorkflow()` always returns a handle even if the workflow does not exist yet.
+   *
+   * @deprecated Use `waitForWorkflowResult<T>` for typed workflows. Kept for ping backward compat.
    */
   async waitForWorkflow(id: string): Promise<PingResult | null> {
     const handle = DBOS.retrieveWorkflow<PingResult>(id);
+    return handle.getResult();
+  }
+
+  /**
+   * Generic recover-and-wait: retrieve a workflow handle by id and await its typed result.
+   * Used by `run start` to await workflow completion (C2 fix — so the CLI process does not
+   * close before the workflow finishes). Also used for crash-resume: re-running `run start <id>`
+   * re-attaches to the existing handle and waits for it to finish — not a double-enqueue.
+   *
+   * `DBOS.retrieveWorkflow()` always returns a handle (even for a workflow that does not exist yet),
+   * so callers should confirm the workflow exists (via `getWorkflowStatus`) before calling this if
+   * they want to distinguish "not found" from "in progress".
+   */
+  async waitForWorkflowResult<T>(id: string): Promise<T | null> {
+    const handle = DBOS.retrieveWorkflow<T>(id);
     return handle.getResult();
   }
 }
