@@ -1,8 +1,19 @@
+/**
+ * run.ts — CLI commands for managing orchestrator runs.
+ *
+ * Routes through RunService obtained from a per-invocation Revisium-only Nest context
+ * (Option A, §3.0). NestJS is lazily imported so the host-free path never loads it.
+ * run/inbox stay host-free — NOT added to HOST_COMMANDS, needsHost() unchanged.
+ *
+ * Invariant #4: no @revisium/client import in this file (verbs only; mapping stays
+ * inside the control-plane/run layer that RevisiumModule fronts).
+ */
 import { Command } from 'commander';
-import { ControlPlaneError, createControlPlaneDataAccess } from '../../control-plane/index.js';
-import { createRunWorkflow, CreateRunWorkflowError } from '../../run/create-run.js';
-import { listRuns, showRun, listRunEvents, formatRunList, formatRunDetail, formatEventList } from '../../run/inspect-run.js';
-import { cancelRun } from '../../run/cancel-run.js';
+import { ControlPlaneError } from '../../control-plane/index.js';
+import { CreateRunWorkflowError, type CreateRunInput } from '../../run/create-run.js';
+import { formatRunList, formatRunDetail, formatEventList } from '../../run/inspect-run.js';
+import type { RunService } from '../../revisium/run.service.js';
+import { withRevisiumService } from './revisium-context.js';
 
 type CreateOptions = {
   title: string;
@@ -29,7 +40,7 @@ type EventsOptions = {
   json: boolean;
 };
 
-function formatCause(error: unknown): string {
+export function formatCause(error: unknown): string {
   if (error instanceof ControlPlaneError) {
     const status = error.status === undefined ? '' : ` status=${error.status}`;
     return `${error.code}${status}: ${error.message}`;
@@ -38,7 +49,7 @@ function formatCause(error: unknown): string {
   return String(error);
 }
 
-function printHint(error: ControlPlaneError, createdRows: boolean): void {
+export function printHint(error: ControlPlaneError, createdRows: boolean): void {
   if (error.code === 'DAEMON_NOT_RUNNING') {
     console.error('Run: ./bin/revo.js revisium start');
   }
@@ -55,16 +66,35 @@ function parsePriority(value: string): number {
   return priority;
 }
 
+function parseLimit(value: string | undefined, flag: string): number | undefined {
+  if (value === undefined) return undefined;
+  const n = Number(value);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1) {
+    throw new Error(`Invalid ${flag}: ${value} (must be a positive integer)`);
+  }
+  return n;
+}
+
+/**
+ * withRunService — thin wrapper around the shared withRevisiumService helper.
+ * Opens exactly ONE Nest context per invocation and closes it in finally.
+ */
+async function withRunService<T>(fn: (svc: RunService) => Promise<T>): Promise<T> {
+  const { RunService: RunServiceClass } = await import('../../revisium/run.service.js');
+  return withRevisiumService(RunServiceClass, fn);
+}
+
 async function createRun(options: CreateOptions): Promise<void> {
   try {
-    const result = await createRunWorkflow(createControlPlaneDataAccess(), {
+    const input: CreateRunInput = {
       title: options.title,
       repo: options.repo,
       description: options.description,
       scope: options.scope,
       priority: parsePriority(options.priority),
       role: options.role,
-    });
+    };
+    const result = await withRunService((svc) => svc.createRun(input));
 
     console.log(`created run ${result.runId}`);
     console.log(`task ${result.taskId}`);
@@ -92,20 +122,10 @@ async function createRun(options: CreateOptions): Promise<void> {
   }
 }
 
-function parseLimit(value: string | undefined, flag: string): number | undefined {
-  if (value === undefined) return undefined;
-  const n = Number(value);
-  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1) {
-    throw new Error(`Invalid ${flag}: ${value} (must be a positive integer)`);
-  }
-  return n;
-}
-
 async function runList(options: ListOptions): Promise<void> {
   try {
     const limit = parseLimit(options.limit, '--limit');
-    const da = createControlPlaneDataAccess();
-    const runs = await listRuns(da, { status: options.status, limit });
+    const runs = await withRunService((svc) => svc.listRuns({ status: options.status, limit }));
     if (options.json) {
       process.stdout.write(JSON.stringify(runs, null, 2) + '\n');
     } else {
@@ -126,8 +146,7 @@ async function runList(options: ListOptions): Promise<void> {
 
 async function runShow(runId: string, options: ShowOptions): Promise<void> {
   try {
-    const da = createControlPlaneDataAccess();
-    const detail = await showRun(da, runId);
+    const detail = await withRunService((svc) => svc.showRun(runId));
     if (!detail) {
       console.error(`run not found: ${runId}`);
       process.exitCode = 1;
@@ -154,19 +173,21 @@ async function runShow(runId: string, options: ShowOptions): Promise<void> {
 async function runEvents(runId: string, options: EventsOptions): Promise<void> {
   try {
     const limit = parseLimit(options.limit, '--limit');
-    const da = createControlPlaneDataAccess();
-    const runRow = await da.getRow('task_runs', runId);
-    if (!runRow) {
-      console.error(`run not found: ${runId}`);
-      process.exitCode = 1;
-      return;
-    }
-    const events = await listRunEvents(da, runId, { type: options.type, limit });
-    if (options.json) {
-      process.stdout.write(JSON.stringify(events, null, 2) + '\n');
-    } else {
-      console.log(formatEventList(events));
-    }
+    // Both reads happen inside ONE Nest context (C2 fix: no two separate withRunService calls).
+    await withRunService(async (svc) => {
+      const found = await svc.getRun(runId);
+      if (!found) {
+        console.error(`run not found: ${runId}`);
+        process.exitCode = 1;
+        return;
+      }
+      const events = await svc.listRunEvents(runId, { type: options.type, limit });
+      if (options.json) {
+        process.stdout.write(JSON.stringify(events, null, 2) + '\n');
+      } else {
+        console.log(formatEventList(events));
+      }
+    });
   } catch (error) {
     if (error instanceof ControlPlaneError) {
       console.error(`Error: ${formatCause(error)}`);
@@ -182,8 +203,7 @@ async function runEvents(runId: string, options: EventsOptions): Promise<void> {
 
 async function runCancel(runId: string): Promise<void> {
   try {
-    const da = createControlPlaneDataAccess();
-    const result = await cancelRun(da, runId);
+    const result = await withRunService((svc) => svc.cancelRun(runId));
     if (!result) {
       console.error(`run not found: ${runId}`);
       process.exitCode = 1;
