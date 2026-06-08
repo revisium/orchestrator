@@ -1,7 +1,7 @@
-import { resolve, sep } from 'node:path';
 import { Command } from 'commander';
 import { ControlPlaneError, createControlPlaneDataAccess, loadRole, loadModelProfile, type ControlPlaneDataAccess } from '../../control-plane/index.js';
-import { toStr, type Step } from '../../control-plane/steps.js';
+import type { Step } from '../../control-plane/steps.js';
+import { makeResolveCwd as sharedMakeResolveCwd } from '../../control-plane/resolve-cwd.js';
 import { stubRunAgent } from '../../worker/stub-runner.js';
 import { createClaudeCodeRunner } from '../../worker/claude-code-runner.js';
 import { GitWorktreeManager } from '../../worker/git-worktree-manager.js';
@@ -11,6 +11,7 @@ import { spawnExecutor } from '../../worker/process-executor.js';
 import type { RunAgent } from '../../worker/runner.js';
 import { runWorker } from '../../worker/loop.js';
 import { resolveWorkerId } from '../../worker/worker-id.js';
+import { warnLiveCost, requireLiveFlag } from '../live-guard.js';
 
 type WorkOptions = {
   once?: boolean;
@@ -20,6 +21,7 @@ type WorkOptions = {
   runner?: string;
   runnerTimeoutMs?: string;
   worktrees?: boolean;
+  live?: boolean;
 };
 
 function formatCause(error: unknown): string {
@@ -40,27 +42,14 @@ function printHint(error: ControlPlaneError): void {
   }
 }
 
-// Default resolveCwd (wiring only — keeps schema knowledge out of the runner, per invariant 4).
-// Reads the step's task repo_ref via the data-access layer and resolves it against the workspace base.
+/**
+ * makeResolveCwd — delegates to the shared resolve-cwd module (B1 fix).
+ * Kept here for backward compatibility with existing call sites in workCommand.
+ * Now accepts absolute existing dirs (the external target repo case), rejects
+ * non-existent/non-dir paths, and guards relative '../..' traversal.
+ */
 export function makeResolveCwd(da: ControlPlaneDataAccess, base = process.cwd()): (step: Step) => Promise<string> {
-  return async (step) => {
-    const task = await da.getRow('tasks', step.taskId);
-    if (task === null) {
-      // Never silently run claude in an unintended directory: throw a lesson-bearing error so the
-      // loop's catch → failStep records it.
-      throw new Error(`resolveCwd: task ${step.taskId} not found — cannot resolve a working directory`);
-    }
-    const repoRef = toStr(task.data.repo_ref);
-    if (repoRef === '' || repoRef === '.') return base;
-    const resolved = resolve(base, repoRef);
-    // Guard against path traversal: an absolute repoRef or a '../..' chain can escape the workspace.
-    if (resolved !== base && !resolved.startsWith(base + sep)) {
-      throw new Error(
-        `resolveCwd: repo_ref ${JSON.stringify(repoRef)} resolves outside the workspace base ${JSON.stringify(base)} — refusing to launch`,
-      );
-    }
-    return resolved;
-  };
+  return sharedMakeResolveCwd(da, base);
 }
 
 export async function workCommand(options: WorkOptions): Promise<void> {
@@ -93,6 +82,14 @@ export async function workCommand(options: WorkOptions): Promise<void> {
     return;
   }
   const once = options.once ?? false;
+
+  // Cost guard: fail fast BEFORE connecting to Revisium.
+  // --runner auto requires --live. Check here so tests don't need a live Revisium daemon.
+  if (runnerMode === 'auto') {
+    if (!requireLiveFlag(options.live ?? false, 'auto')) return;
+    // Emit cost warning immediately so the user sees it before any daemon connection.
+    warnLiveCost();
+  }
 
   const abortController = new AbortController();
   process.once('SIGINT', () => {
@@ -162,5 +159,10 @@ export function registerWork(program: Command): void {
     .option('--runner <mode>', "Runner mode: 'stub' (default, zero-cost) or 'auto' (real claude-code dispatch)", 'stub')
     .option('--runner-timeout-ms <n>', 'Timeout in ms for the real (auto) runner', '600000')
     .option('--worktrees', 'Use per-step git worktrees with --runner auto (git-level isolation only; npm install and port bindings are NOT isolated)')
+    .option(
+      '--live',
+      'Use the REAL Claude runner AND the real git/gh integrator — THIS WILL CALL claude, INCUR COST, AND PUSH/OPEN A PR (requires --runner auto)',
+      false,
+    )
     .action(workCommand);
 }

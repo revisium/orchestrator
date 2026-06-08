@@ -6,27 +6,30 @@
  *
  * Registration happens in the constructor, BEFORE DBOS.launch() (mirroring dev:ping).
  *
- * B9 cost-safety: the claudeCode dep is a THROWING stub in 0003 so a non-`--stub` start
- * fails fast with RUNNER_NOT_IMPLEMENTED before any real Claude call. 0005 replaces ONLY
- * the claudeCode dep with createClaudeCodeRunner — no other change.
- *
- * B4 durable override: `developTask(runId, opts?)` is the PINNED signature (B11).
- * `opts.runnerOverride` is a DURABLE workflow argument persisted by DBOS in the input row
- * and re-supplied on recovery, so the stub selection survives a kill/restart.
+ * 0005 changes:
+ * - runnerMode (REQUIRED, durable): 'script' | 'live'. Replaces runnerOverride.
+ *   Default/missing/invalid → 'script' (fail-safe). --live is the only path to real claude/git/gh.
+ * - ClaudeCodeService injected via RUN_AGENT token (replaces throwing stub dep).
+ * - IntegratorService injected: runIntegrate (live) + runStub (script) + runPreflight (live).
+ * - loadRunTaskContext called once in the workflow body (B6).
+ * - Live preflight as a memoized DBOS step (B5/B7): clean + base invariant.
+ * - Integrator dispatched on mode: live → integrateFn (DBOS step); script → runStub (pure).
+ * - integrate_succeeded event emitted on integrator success (observability MINOR).
+ * - Merge gate receives the real prUrl from the integrator result.
  *
  * C1 architecture: the step and workflow bodies are extracted as DBOS-free builder functions
  * (`makeRunStep` / `makeDevelopTask`). PipelineService registers exactly those builders via
  * the engine seam, so tests can import and exercise the SAME production logic directly.
  */
-import { Injectable } from '@nestjs/common';
+import { Injectable, Inject } from '@nestjs/common';
 import type { WorkflowHandle } from '../engine/types.js';
 import { DbosService } from '../engine/dbos.service.js';
 import { RolesService } from '../revisium/roles.service.js';
 import { RunService } from '../revisium/run.service.js';
 import { InboxService } from '../revisium/inbox.service.js';
+import { IntegratorService, type IntegratorInput, type IntegratorOutput, type IntegratorBlocked } from '../runners/integrator.js';
+import { RUN_AGENT } from '../runners/tokens.js';
 import { buildContext } from '../worker/build-context.js';
-import { createRunAgent } from '../worker/runner-dispatch.js';
-import { stubRunAgent } from '../worker/stub-runner.js';
 import type { RunAgent, AttemptResult } from '../worker/runner.js';
 import { fnv1a64Hex } from '../control-plane/steps.js';
 import type { AppendEventInput } from '../run/append-event.js';
@@ -43,6 +46,9 @@ const DEV_TASKS_QUEUE = 'dev-tasks';
 /** Concurrency limit for the dev-tasks queue. */
 const DEV_TASKS_CONCURRENCY = 2;
 
+/** Durable mode controlling whether real or stub runners + integrator are used. */
+export type RunnerMode = 'script' | 'live';
+
 /** Returned by developTask when the pipeline completes, is blocked, or is cancelled by a gate. */
 export type DevelopResult = {
   runId: string;
@@ -53,9 +59,9 @@ export type DevelopResult = {
   cancelled: boolean;
 };
 
-/** Opts accepted by developTask — slot-1 of the PINNED arity (B11). */
+/** Opts accepted by developTask — slot-1 of the PINNED arity (B11). runnerMode REQUIRED. */
 export type DevelopTaskOpts = {
-  runnerOverride?: 'script';
+  runnerMode: RunnerMode;
 };
 
 /**
@@ -125,6 +131,26 @@ export type DevelopTaskDeps = {
    * Injected so tests can assert without a real data-access.
    */
   cancelRun: (runId: string, opts?: { actor?: string; source?: string }) => Promise<CancelRunResult | null>;
+  /**
+   * Load run task context once in the workflow body (B6).
+   * Returns { taskId, title, base, repoRef } from showRun.tasks[0] + run.repos[0].
+   */
+  loadRunTaskContext: RunService['loadRunTaskContext'];
+  /**
+   * Real integrator — DBOS step (live only).
+   * Execute git/gh ops (branch/commit/push/PR) in the target repo.
+   */
+  integrateFn: (input: IntegratorInput) => Promise<IntegratorOutput | IntegratorBlocked>;
+  /**
+   * Stub integrator — pure, zero external effects (script only).
+   * Returns { prUrl:'stub://pr/placeholder', branch, prNumber:0 }.
+   */
+  runStub: (input: IntegratorInput) => IntegratorOutput;
+  /**
+   * Live preflight — memoized DBOS step (B5/B7, live only).
+   * Clean check + base invariant before any claude step runs.
+   */
+  preflightFn: (taskId: string, base: string) => Promise<{ ok: true } | { needsHuman: true; lesson: string }>;
 };
 
 /**
@@ -142,7 +168,7 @@ export function makeRunStep(deps: RunStepDeps) {
     role: string,
     stepKey: string,
     stepInput: unknown,
-    runnerOverride?: 'script',
+    runnerMode: RunnerMode,
   ): Promise<AttemptResult> {
     // 1. Load the canonical role (B1: role is NEVER mutated with #k).
     const loadedRole = await loadRole(role);
@@ -165,10 +191,11 @@ export function makeRunStep(deps: RunStepDeps) {
     // 5. Deterministic, bounded attemptId (B2).
     const attemptId = `attempt_${fnv1a64Hex(`${runId}|${stepKey}`)}`;
 
-    // 6. Apply durable runner override (B4): effectiveRunner = override ?? seeded runner.
-    //    Dispatch on a role COPY so the HEAD role row is never mutated.
-    const effectiveRunner = runnerOverride ?? loadedRole.runner;
-    const dispatchRole = { ...loadedRole, runner: effectiveRunner as typeof loadedRole.runner };
+    // 6. Apply durable runner mode (M1): live → use role.runner; script → force stub.
+    //    Missing/invalid mode coerces to 'script' (NEVER live) — fail-safe.
+    const effectiveRunner: typeof loadedRole.runner =
+      runnerMode === 'live' ? loadedRole.runner : 'script';
+    const dispatchRole = { ...loadedRole, runner: effectiveRunner };
 
     // 7. Run the agent.
     const result = await runAgent({ role: dispatchRole, profile, context, attemptId, step });
@@ -215,17 +242,38 @@ export function makeDevelopTask(
     role: string,
     stepKey: string,
     stepInput: unknown,
-    runnerOverride?: 'script',
+    runnerMode: RunnerMode,
   ) => Promise<AttemptResult>,
   deps: DevelopTaskDeps,
 ) {
-  const { appendEvent, awaitHuman, cancelRun } = deps;
+  const { appendEvent, awaitHuman, cancelRun, loadRunTaskContext, integrateFn, runStub, preflightFn } = deps;
 
   return async function developTaskImpl(
     runId: string,
     opts?: DevelopTaskOpts,
   ): Promise<DevelopResult> {
-    const ro = opts?.runnerOverride;
+    // Coerce mode: missing/invalid → 'script' (NEVER 'live' — fail-safe, M1).
+    const mode: RunnerMode = opts?.runnerMode === 'live' ? 'live' : 'script';
+
+    // B6: resolve task context once at workflow start (deterministic pure read).
+    const { taskId, title, base } = await loadRunTaskContext(runId);
+
+    // B5/B7: live preflight — one memoized DBOS step, evaluated exactly once.
+    // Skipped entirely on script/stub runs (no git, no cost, no mutation beyond fetch).
+    if (mode === 'live') {
+      const pf = await preflightFn(taskId, base);
+      if ('needsHuman' in pf) {
+        await appendEvent({
+          runId,
+          taskId,
+          stepId: '',
+          stepKey: 'pipeline',
+          type: 'pipeline_blocked',
+          payload: { reason: 'preflight', lesson: pf.lesson },
+        });
+        return { runId, blocked: true, iterations: 0, verdict: 'BLOCKED', cancelled: false };
+      }
+    }
 
     // architect step
     const architectResult = await runStepFn(
@@ -233,15 +281,12 @@ export function makeDevelopTask(
       'architect',
       'architect',
       { phase: 'plan' },
-      ro,
+      mode,
     );
 
     // ── PLAN GATE (after architect, before developer) ──────────────────────────
-    // Workflow parks here in DBOS.recv until a human signals via `inbox resolve --approve|--reject`.
-    // pushInbox + appendEvent are idempotent in the workflow body (G1 deterministic id + ROW_CONFLICT).
     const planDecision = await awaitHuman(runId, 'plan', 'Plan approval', architectResult.output);
     if (planDecision.decision === 'reject') {
-      // gate_rejected: idempotent (deterministic event id + ROW_CONFLICT no-op via appendRunEvent).
       await appendEvent({
         runId,
         taskId: '',
@@ -250,11 +295,7 @@ export function makeDevelopTask(
         type: 'gate_rejected',
         payload: { topic: 'plan' },
       });
-      // cancelRun is idempotent (G3: deterministic event id + ROW_CONFLICT no-op).
-      // CR-B: gate reject passes pipeline-appropriate metadata so the run_cancelled event
-      // is NOT mislabeled as a CLI cancel (actor:'cli', source:'revo run cancel').
       await cancelRun(runId, { actor: 'pipeline', source: 'plan-gate-reject' });
-      // No developer/reviewer/integrator steps run on the reject path.
       return { runId, blocked: false, iterations: 0, verdict: 'CANCELLED', cancelled: true };
     }
     // ── end PLAN GATE ──────────────────────────────────────────────────────────
@@ -265,7 +306,7 @@ export function makeDevelopTask(
       'developer',
       'developer',
       { phase: 'implement', from: architectResult.output },
-      ro,
+      mode,
     );
 
     // reviewer step (first pass)
@@ -274,7 +315,7 @@ export function makeDevelopTask(
       'reviewer',
       'reviewer',
       { phase: 'review', from: developerResult.output },
-      ro,
+      mode,
     );
 
     // bounded reviewer→developer loop (E5, E6)
@@ -286,14 +327,14 @@ export function makeDevelopTask(
         'developer',
         `developer#${iteration}`,
         { phase: 'rework', feedback: reviewResult.output },
-        ro,
+        mode,
       );
       reviewResult = await runStepFn(
         runId,
         'reviewer',
         `reviewer#${iteration}`,
         { phase: 'review', from: developerResult.output },
-        ro,
+        mode,
       );
     }
 
@@ -316,23 +357,47 @@ export function makeDevelopTask(
       };
     }
 
-    // integrator step
-    const integratorResult = await runStepFn(
+    // B3 — mode-gated integrator step (core Round-4 fix).
+    // live → DBOS-registered integrateFn (real git/gh, resumable).
+    // script → runStub (pure, zero external effects — no git, no gh, no fs).
+    const integratorInput: IntegratorInput = { runId, taskId, title, base };
+    const integratorResult: IntegratorOutput | IntegratorBlocked =
+      mode === 'live'
+        ? await integrateFn(integratorInput)
+        : runStub(integratorInput);
+
+    // On integrator blocked (live only — nothing to integrate / ambiguous PR / missing remote)
+    if ('needsHuman' in integratorResult) {
+      await appendEvent({
+        runId,
+        taskId,
+        stepId: '',
+        stepKey: 'pipeline',
+        type: 'pipeline_blocked',
+        payload: { reason: 'integrate', lesson: integratorResult.lesson },
+      });
+      return { runId, blocked: true, iterations: iteration, verdict: 'BLOCKED', cancelled: false };
+    }
+
+    // Observability MINOR: integrate_succeeded event (mirrors step_succeeded at makeRunStep).
+    await appendEvent({
       runId,
-      'integrator',
-      'integrator',
-      { phase: 'integrate', from: developerResult.output },
-      ro,
-    );
+      taskId,
+      stepId: '',
+      stepKey: 'integrator',
+      type: 'integrate_succeeded',
+      payload: {
+        prUrl: integratorResult.prUrl,
+        branch: integratorResult.branch,
+        prNumber: integratorResult.prNumber,
+      },
+    });
 
     // ── MERGE GATE (after integrator) ──────────────────────────────────────────
-    // The integrator produces a PR url (placeholder in 0004; 0005 supplies the real url).
-    // Park here until the human signals. Approve ⇒ workflow completes (human merges externally).
-    // Reject ⇒ work is done, merge declined — run ends normally, NOT cancelled (E12/OQ-3).
-    const prUrl = (integratorResult.output as Record<string, unknown> | null)?.prUrl ?? 'stub://pr/placeholder';
+    // Real prUrl from the integrator (live) or 'stub://pr/placeholder' (script).
+    const prUrl = integratorResult.prUrl ?? 'stub://pr/placeholder';
     const mergeDecision = await awaitHuman(runId, 'merge', 'Merge approval', { prUrl });
     if (mergeDecision.decision === 'reject') {
-      // merge-gate reject ⇒ end normally (NOT cancelled — work is complete, merge declined).
       await appendEvent({
         runId,
         taskId: '',
@@ -342,7 +407,6 @@ export function makeDevelopTask(
         payload: { topic: 'merge' },
       });
     }
-    // No auto-merge either way. Approve ⇒ workflow completes; the human merges externally.
     // ── end MERGE GATE ─────────────────────────────────────────────────────────
 
     return {
@@ -357,13 +421,13 @@ export function makeDevelopTask(
 
 @Injectable()
 export class PipelineService {
-  /** Registered DBOS-wrapped function types (inferred from registerStep/registerWorkflow). */
+  /** Registered DBOS-wrapped function types. */
   private readonly runStepFn: (
     runId: string,
     role: string,
     stepKey: string,
     stepInput: unknown,
-    runnerOverride?: 'script',
+    runnerMode: RunnerMode,
   ) => Promise<AttemptResult>;
 
   private readonly developTaskFn: (
@@ -371,7 +435,7 @@ export class PipelineService {
     opts?: DevelopTaskOpts,
   ) => Promise<DevelopResult>;
 
-  /** The single run-agent used by all steps. claudeCode is a throwing stub (B9). */
+  /** The single run-agent used by all steps. */
   private readonly runAgent: RunAgent;
 
   constructor(
@@ -379,16 +443,10 @@ export class PipelineService {
     private readonly rolesService: RolesService,
     private readonly runService: RunService,
     private readonly inboxService: InboxService,
+    private readonly integratorService: IntegratorService,
+    @Inject(RUN_AGENT) runAgentToken: RunAgent,
   ) {
-    // B9: throwing claudeCode dep — fails fast on non-`--stub` starts with a clear message.
-    // 0005 replaces ONLY this dep with createClaudeCodeRunner.
-    const throwingClaudeCode: RunAgent = async () => {
-      throw new Error(
-        "RUNNER_NOT_IMPLEMENTED — slice 0003 is stub-only; use 'run start --stub'",
-      );
-    };
-
-    this.runAgent = createRunAgent({ claudeCode: throwingClaudeCode, script: stubRunAgent });
+    this.runAgent = runAgentToken;
 
     // Capture bound dep methods (S7740: no `this`-aliasing in closures).
     const stepDeps: RunStepDeps = {
@@ -406,6 +464,18 @@ export class PipelineService {
       makeRunStep(stepDeps),
     );
 
+    // Register the REAL integrator as a DBOS step (M6/B7: .bind so `this` survives registration).
+    const integrateFn = this.dbos.registerStep(
+      'PipelineService.integrate',
+      this.integratorService.runIntegrate.bind(this.integratorService),
+    );
+
+    // Register the live preflight as a memoized DBOS step (B5/B7).
+    const preflightFn = this.dbos.registerStep(
+      'PipelineService.preflightLive',
+      this.integratorService.runPreflight.bind(this.integratorService),
+    );
+
     // Build the awaitHuman factory — DBOS-free, depends on injected service verbs.
     const awaitHuman = makeAwaitHuman({
       pushInbox: (item, id) => this.inboxService.pushInbox(item, { id }),
@@ -416,7 +486,12 @@ export class PipelineService {
     const workflowDeps: DevelopTaskDeps = {
       appendEvent: stepDeps.appendEvent,
       awaitHuman,
-      cancelRun: (runId: string, opts?: { actor?: string; source?: string }) => this.runService.cancelRun(runId, opts),
+      cancelRun: (runId: string, cancelOpts?: { actor?: string; source?: string }) =>
+        this.runService.cancelRun(runId, cancelOpts),
+      loadRunTaskContext: this.runService.loadRunTaskContext.bind(this.runService),
+      integrateFn,
+      runStub: this.integratorService.runStub,
+      preflightFn,
     };
 
     // Register the workflow using the production builder with the DBOS-wrapped step.
@@ -433,17 +508,16 @@ export class PipelineService {
    * Enqueue the developTask workflow for the given runId.
    *
    * Idempotent by workflowID=runId: re-starting the same runId returns the existing handle.
-   * opts is forwarded as a durable workflow argument (B4/B11) — persisted in the DBOS
-   * workflow input row, re-supplied verbatim on crash recovery.
+   * opts.runnerMode is required and forwarded as a durable workflow argument (M1/B11) —
+   * persisted in the DBOS workflow input row, re-supplied verbatim on crash recovery.
    *
-   * B10: `--stub` only takes effect on the FIRST start (idempotent-by-runId);
-   * a second `run start --stub` on an already-started run returns the existing handle
-   * and does NOT switch the runner (DBOS does not overwrite persisted args).
-   * To switch, create a NEW run (new runId) and start THAT with --stub.
+   * B10: mode only takes effect on the FIRST start (idempotent-by-runId);
+   * a second `run start` on an already-started run returns the existing handle
+   * and does NOT switch the runner. To switch, create a NEW run.
    */
   startDevelopTask(
     runId: string,
-    opts?: DevelopTaskOpts,
+    opts: DevelopTaskOpts,
   ): Promise<WorkflowHandle<DevelopResult>> {
     return this.dbos.startWorkflowOn(this.developTaskFn, runId, DEV_TASKS_QUEUE, runId, opts);
   }

@@ -21,9 +21,11 @@ import type { RunService } from '../../revisium/run.service.js';
 import { withRevisiumService } from './revisium-context.js';
 import { sanitizeWorkflowID } from './dev.js';
 import { pollWorkflowState } from './poll-workflow-state.js';
+import { assertNoStubLive, warnLiveCost } from '../live-guard.js';
 
 type StartOptions = {
   stub: boolean;
+  live: boolean;
 };
 
 type CreateOptions = {
@@ -78,6 +80,80 @@ async function runPollWorkflowState(
 }
 
 /**
+ * RunStartDeps — injectable service verbs for runStartCore (C1: enables unit testing).
+ *
+ * Production wiring: built by runStart from the Nest app context + withRevisiumService.
+ * Tests: inject fakes directly, skipping NestJS context creation entirely.
+ */
+export type RunStartDeps = {
+  /** Look up a run by ID. Returns null if not found. */
+  getRun: (runId: string) => Promise<{ rowId: string; data: Record<string, unknown> } | null>;
+  /** Get the DBOS workflow status (null = not started). */
+  getWorkflowStatus: (id: string) => Promise<{ status: string } | null>;
+  /** Enqueue / idempotently start the pipeline workflow. */
+  startDevelopTask: (
+    runId: string,
+    opts: { runnerMode: 'script' | 'live' },
+  ) => Promise<{ workflowID: string }>;
+  /** Poll until the workflow reaches a parked or terminal state. */
+  pollState: (runId: string) => Promise<void>;
+};
+
+/**
+ * runStartCore — testable core of `run start`.
+ *
+ * Exported for unit tests (C1 pattern): tests inject fake RunStartDeps and assert the
+ * EXACT runnerMode forwarded to startDevelopTask without creating a NestJS context.
+ * Production: called by runStart after building deps from the live app context.
+ */
+export async function runStartCore(
+  safeRunId: string,
+  options: StartOptions,
+  deps: RunStartDeps,
+): Promise<void> {
+  // Validate flag combination: --stub + --live is an error
+  if (!assertNoStubLive(options.stub ?? false, options.live ?? false)) return;
+
+  // E12: pre-check the run exists in Revisium before enqueueing.
+  const runRow = await deps.getRun(safeRunId);
+  if (!runRow) {
+    console.error(`run not found: ${safeRunId}`);
+    process.exitCode = 1;
+    return;
+  }
+
+  // Emit cost/effect warning BEFORE enqueue (live mode).
+  if (options.live) warnLiveCost();
+
+  const existingStatus = await deps.getWorkflowStatus(safeRunId);
+
+  // Map flags to runnerMode (M1):
+  //   --live → 'live'; default or --stub → 'script'
+  const runnerMode = options.live ? ('live' as const) : ('script' as const);
+  const handle = await deps.startDevelopTask(safeRunId, { runnerMode });
+
+  if (existingStatus !== null) {
+    console.log(
+      'note: this run was already started — the runner cannot be changed after the first start.',
+    );
+    console.log('      to use a different runner, create a new run with a new runId.');
+    console.log(`workflow: ${handle.workflowID}`);
+  } else {
+    console.log(`workflow: ${handle.workflowID}`);
+    if (options.stub) {
+      console.log('stub: --stub is active (zero-cost run via stub runner).');
+    }
+    if (options.live) {
+      console.log('live: --live is active (real Claude + real git/gh integrator).');
+    }
+  }
+
+  // 0004 §3.6: poll for parked or terminal state.
+  console.log('awaiting settled state (parked or terminal)…');
+  await deps.pollState(safeRunId);
+}
+
+/**
  * run start <id> [--stub]
  *
  * Host-requiring: enqueues the developTask DBOS workflow for the given runId.
@@ -114,41 +190,20 @@ async function runStart(
   }
 
   try {
-    // E12: pre-check the run exists in Revisium before enqueueing.
+    // Build live deps from the Nest app context and withRevisiumService.
     const { RunService: RunServiceClass } = await import('../../revisium/run.service.js');
-    const runRow = await withRevisiumService(RunServiceClass, (svc) => svc.getRun(safeRunId));
-    if (!runRow) {
-      console.error(`run not found: ${safeRunId}`);
-      process.exitCode = 1;
-      return;
-    }
-
-    // Check for an existing workflow before enqueueing (B10 duplicate-start detection).
     const { DbosService: DbosServiceClass } = await import('../../engine/dbos.service.js');
     const dbosService = app.get(DbosServiceClass);
-    const existingStatus = await dbosService.getWorkflowStatus(safeRunId);
-
     const pipeline = await resolvePipelineService(app);
-    const opts = options.stub ? { runnerOverride: 'script' as const } : undefined;
-    const handle = await pipeline.startDevelopTask(safeRunId, opts);
 
-    if (existingStatus !== null) {
-      console.log(
-        'note: this run was already started — the runner cannot be changed after the first start.',
-      );
-      console.log('      to use a different runner, create a new run with a new runId.');
-      console.log(`workflow: ${handle.workflowID}`);
-    } else {
-      console.log(`workflow: ${handle.workflowID}`);
-      if (options.stub) {
-        console.log('stub: --stub is active (zero-cost run via stub runner).');
-      }
-    }
+    const deps: RunStartDeps = {
+      getRun: (id) => withRevisiumService(RunServiceClass, (svc) => svc.getRun(id)),
+      getWorkflowStatus: (id) => dbosService.getWorkflowStatus(id),
+      startDevelopTask: (id, opts) => pipeline.startDevelopTask(id, opts),
+      pollState: (id) => runPollWorkflowState(id, dbosService),
+    };
 
-    // 0004 §3.6: poll for parked or terminal state. Does NOT block on getResult while parked.
-    // The workflow's DBOS checkpoint is durable; closing the host (DBOS.shutdown) while parked is safe.
-    console.log('awaiting settled state (parked or terminal)…');
-    await runPollWorkflowState(safeRunId, dbosService);
+    await runStartCore(safeRunId, options, deps);
   } catch (error) {
     if (error instanceof ControlPlaneError) {
       console.error(`Error: ${formatCause(error)}`);
@@ -357,6 +412,11 @@ export function registerRun(program: Command, app?: INestApplicationContext): vo
     .description('Start the pipeline workflow for a run (host-requiring)')
     .argument('<runId>', 'Run ID to start')
     .option('--stub', 'Use zero-cost stub runner (dev/test only)', false)
+    .option(
+      '--live',
+      'Use the REAL Claude runner AND the real git/gh integrator — THIS WILL CALL claude, INCUR COST, AND PUSH/OPEN A PR',
+      false,
+    )
     .action((runId: string, options: StartOptions) => runStart(runId, options, app));
 
   run

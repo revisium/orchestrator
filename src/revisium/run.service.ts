@@ -4,6 +4,7 @@ import { createControlPlaneDataAccessForTransport } from '../control-plane/data-
 import { ControlPlaneError } from '../control-plane/errors.js';
 import { fnv1a64Hex } from '../control-plane/steps.js';
 import type { Step } from '../control-plane/steps.js';
+import { makeResolveCwd, makeResolveTaskCwd } from '../control-plane/resolve-cwd.js';
 import { createRunWorkflow, type CreateRunInput, type CreateRunResult } from '../run/create-run.js';
 import { listRuns, showRun, listRunEvents, type RunSummary, type RunDetail, type EventSummary } from '../run/inspect-run.js';
 import { cancelRun, type CancelRunResult } from '../run/cancel-run.js';
@@ -99,6 +100,56 @@ export class RunService {
       deadReason: '',
     };
     return { da: this.da, step };
+  }
+
+  /**
+   * makeResolveCwd — STEP-level cwd resolver (M3).
+   * Returns (step: Step) => Promise<string>; reads tasks.repo_ref via the draft da.
+   * Used by ClaudeCodeService.
+   */
+  makeResolveCwd(base = process.cwd()): (step: Step) => Promise<string> {
+    return makeResolveCwd(this.da, base);
+  }
+
+  /**
+   * makeResolveTaskCwd — TASK-level cwd resolver (M3).
+   * Returns (taskId: string) => Promise<string>; reads tasks.repo_ref via the draft da.
+   * Used by IntegratorService + the live preflight (no Step available).
+   */
+  makeResolveTaskCwd(base = process.cwd()): (taskId: string) => Promise<string> {
+    return makeResolveTaskCwd(this.da, base);
+  }
+
+  /**
+   * loadRunTaskContext — B6: resolve { taskId, title, base, repoRef } from run input.
+   *
+   * Backed by showRun(da, runId). base is always 'master' (no base field in run input —
+   * verified: create-run.ts stores only repos/repo_ref). Throws a clear error if the run
+   * or its task is missing.
+   */
+  async loadRunTaskContext(runId: string): Promise<{
+    taskId: string;
+    title: string;
+    base: string;
+    repoRef: string;
+  }> {
+    const detail = await showRun(this.da, runId);
+    if (!detail) {
+      throw new ControlPlaneError('ROW_NOT_FOUND', `loadRunTaskContext: run ${runId} not found`);
+    }
+    const task = detail.tasks[0];
+    if (!task) {
+      throw new ControlPlaneError(
+        'ROW_NOT_FOUND',
+        `loadRunTaskContext: run ${runId} has no task`,
+      );
+    }
+    return {
+      taskId: task.taskId,
+      title: task.title,
+      base: 'master',
+      repoRef: detail.run.repos[0] ?? '',
+    };
   }
 
   /**
