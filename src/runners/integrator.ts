@@ -53,7 +53,9 @@ function slugify(title: string): string {
   return title
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
+    .split('-')
+    .filter((seg) => seg.length > 0)
+    .join('-')
     .slice(0, SLUG_MAX);
 }
 
