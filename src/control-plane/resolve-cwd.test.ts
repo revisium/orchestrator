@@ -3,7 +3,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmdirSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolveRepoCwdFromRef, makeResolveCwd, makeResolveTaskCwd } from './resolve-cwd.js';
@@ -128,6 +128,34 @@ test('resolveRepoCwdFromRef: relative non-existent under base → throws', async
     );
   } finally {
     rmdirSync(base);
+  }
+});
+
+test('resolveRepoCwdFromRef: symlink inside base pointing OUTSIDE → rejected (FIX 2 symlink hardening)', async () => {
+  // Create two separate temp dirs: one as the "base" (allowed root) and one as the "outside" target.
+  // A symlink inside base points to outside — the lexical check passes but the real check must catch it.
+  const base = makeTmpDir();
+  const outside = makeTmpDir();
+  const linkPath = join(base, 'escape-link');
+  let symlinkCreated = false;
+  try {
+    try {
+      symlinkSync(outside, linkPath);
+      symlinkCreated = true;
+    } catch {
+      // Symlink creation not permitted in this environment — skip gracefully.
+      return;
+    }
+    if (!symlinkCreated) return;
+    await assert.rejects(
+      () => resolveRepoCwdFromRef('escape-link', base),
+      /escapes the workspace base/,
+      'symlink pointing outside the allowed base must be rejected',
+    );
+  } finally {
+    try { unlinkSync(linkPath); } catch { /* ignore — link may not exist */ }
+    rmdirSync(outside);
+    rmdirSync(base, { recursive: true } as Parameters<typeof rmdirSync>[1]);
   }
 });
 

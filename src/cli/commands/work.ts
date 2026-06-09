@@ -65,6 +65,11 @@ export async function workCommand(options: WorkOptions): Promise<void> {
     process.exitCode = 1;
     return;
   }
+  if (options.live && runnerMode !== 'auto') {
+    console.error('Error: --live requires --runner auto');
+    process.exitCode = 1;
+    return;
+  }
   if (options.worktrees && runnerMode === 'stub') {
     console.warn('--worktrees has no effect with --runner stub');
   }

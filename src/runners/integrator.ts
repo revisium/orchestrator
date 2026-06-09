@@ -354,7 +354,7 @@ function branchExists(execGit: ExecFn, cwd: string, branch: string): boolean {
 function countAhead(execGit: ExecFn, cwd: string, branch: string, base: string): number {
   try {
     const raw = execGit(['rev-list', '--count', `origin/${base}..${branch}`], cwd).trim();
-    return parseInt(raw, 10) || 0;
+    return Number.parseInt(raw, 10) || 0;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     // Expected: branch or upstream not yet known to git (not a transient failure).

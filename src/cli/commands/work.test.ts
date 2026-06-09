@@ -59,6 +59,36 @@ test('makeResolveCwd: accepts absolute existing dir (the external target-repo ca
 
 // ─── workCommand ──────────────────────────────────────────────────────────────
 
+test('workCommand: --live without --runner auto → exitCode===1, error message, no runner/daemon invoked', async () => {
+  // FIX 1 regression: --live must be rejected when runnerMode is not 'auto'.
+  // Guard fires BEFORE runner construction and BEFORE daemon connection.
+  const errors: string[] = [];
+  const origError = console.error;
+  console.error = (...args: unknown[]) => { errors.push(String(args[0])); };
+  const origExitCode = process.exitCode;
+  process.exitCode = undefined;
+
+  try {
+    // Default runner is 'stub'; passing --live without --runner auto must fail immediately.
+    await workCommand({ live: true, once: true });
+  } finally {
+    console.error = origError;
+  }
+
+  try {
+    assert.equal(process.exitCode, 1, 'exitCode must be 1 when --live is given without --runner auto');
+    assert.ok(
+      errors.some((e) => e === 'Error: --live requires --runner auto'),
+      `error must be exactly 'Error: --live requires --runner auto'; got: ${JSON.stringify(errors)}`,
+    );
+    // No daemon connection attempted — no DAEMON_NOT_RUNNING error
+    const hasDaemonError = errors.some((e) => e.includes('DAEMON_NOT_RUNNING'));
+    assert.equal(hasDaemonError, false, 'guard must exit before any daemon connection attempt');
+  } finally {
+    process.exitCode = origExitCode as number | undefined;
+  }
+});
+
 test('workCommand: exits with code 1 and logs an error when --roles produces an empty list', async () => {
   const errors: string[] = [];
   const origConsoleError = console.error;

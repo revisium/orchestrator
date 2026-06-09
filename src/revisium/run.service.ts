@@ -147,7 +147,7 @@ export class RunService {
     return {
       taskId: task.taskId,
       title: task.title,
-      base: 'master',
+      base: 'master', // MVP: base branch pinned to 'master' (see plan 0005); dynamic default-branch detection is post-MVP.
       repoRef: detail.run.repos[0] ?? '',
     };
   }

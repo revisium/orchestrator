@@ -11,8 +11,8 @@
  *   • a relative '../…' escape   → traversal guard (only relative refs are guarded; an ABSOLUTE
  *                                   ref is taken as the literal target repo, existence-checked).
  */
-import { resolve, isAbsolute, sep } from 'node:path';
-import { existsSync, statSync } from 'node:fs';
+import { resolve, isAbsolute, relative, sep } from 'node:path';
+import { existsSync, realpathSync, statSync } from 'node:fs';
 import type { ControlPlaneDataAccess } from './data-access.js';
 import { toStr, type Step } from './steps.js';
 
@@ -31,6 +31,31 @@ export async function resolveRepoCwdFromRef(repoRef: string, base: string): Prom
       `resolveCwd: repo path ${JSON.stringify(resolved)} does not exist or is not a directory ` +
         `— refusing to launch claude`,
     );
+  }
+  // Symlink escape guard: canonicalize via realpathSync and re-check containment.
+  // This prevents a symlink inside the allowed base from pointing outside it.
+  // Only applied when the ref is relative (absolute refs designate an external target repo
+  // and are accepted as-is — their real path IS the intended target).
+  if (!isAbsolute(repoRef)) {
+    let realTarget: string;
+    let realBase: string;
+    try {
+      realTarget = realpathSync(resolved);
+      realBase = realpathSync(base);
+    } catch {
+      // realpathSync throws on non-existent paths — treat as non-existent (same as above check).
+      throw new Error(
+        `resolveCwd: repo path ${JSON.stringify(resolved)} does not exist or is not a directory ` +
+          `— refusing to launch claude`,
+      );
+    }
+    const rel = relative(realBase, realTarget);
+    if (rel.startsWith('..') || isAbsolute(rel)) {
+      throw new Error(
+        `resolveCwd: relative repo_ref ${JSON.stringify(repoRef)} escapes the workspace base ` +
+          `${JSON.stringify(base)} via symlink — refusing to launch`,
+      );
+    }
   }
   return resolved;
 }
