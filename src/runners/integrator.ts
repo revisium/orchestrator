@@ -8,12 +8,65 @@
  *   - stubIntegrate(input)       — STUB (script only); ZERO external effects; pure + deterministic.
  *   - preflightLive(taskId, base, deps) — LIVE PREFLIGHT; clean check + base invariant; one-shot.
  *   - IntegratorService          — @Injectable wrapper with bound arrow properties.
+ *   - resolveExecutable(name)    — resolve a bare executable name to an absolute PATH entry.
  */
 import { Injectable } from '@nestjs/common';
+import { existsSync, statSync } from 'node:fs';
+import { join, delimiter } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import type { ExecGhFn } from '../poller/pr-readiness.js';
 import { defaultExecGh } from '../poller/pr-readiness.js';
 import { RunService } from '../revisium/run.service.js';
+
+// ─── resolveExecutable ────────────────────────────────────────────────────────
+
+/**
+ * Resolve a bare executable name to its first absolute path on PATH.
+ * Uses only node:fs + node:path — no child_process, no spawning.
+ *
+ * @param name  - bare executable name, e.g. "git"
+ * @param pathEnv - override for PATH (defaults to process.env.PATH); injectable for tests
+ * @returns absolute path to the executable
+ * @throws Error if not found on PATH
+ */
+export function resolveExecutable(name: string, pathEnv = process.env['PATH'] ?? ''): string {
+  if (!pathEnv) {
+    throw new Error(`cannot resolve executable "${name}" on PATH: PATH is empty or unset`);
+  }
+
+  const dirs = pathEnv.split(delimiter);
+
+  // On win32 also check common executable extensions; on posix the plain name suffices.
+  const candidates =
+    process.platform === 'win32'
+      ? [name, `${name}.exe`, `${name}.cmd`, `${name}.bat`]
+      : [name];
+
+  for (const dir of dirs) {
+    if (!dir) continue;
+    for (const candidate of candidates) {
+      const full = join(dir, candidate);
+      try {
+        if (existsSync(full) && statSync(full).isFile()) {
+          return full;
+        }
+      } catch {
+        // dir may be unreadable — skip silently
+      }
+    }
+  }
+
+  throw new Error(`cannot resolve executable "${name}" on PATH`);
+}
+
+// Lazily resolved once per process — avoids resolving on module load (safe for tests).
+let _gitAbsPath: string | undefined;
+function gitAbsPath(): string {
+  if (_gitAbsPath === undefined) {
+    _gitAbsPath = resolveExecutable('git');
+  }
+  return _gitAbsPath;
+}
 
 // ─── types ────────────────────────────────────────────────────────────────────
 
@@ -387,9 +440,9 @@ export async function integrate(
 
 // ─── IntegratorService ─────────────────────────────────────────────────────────
 
-/** Default execGit implementation wrapping execFileSync. */
+/** Default execGit implementation wrapping execFileSync with a resolved absolute path. */
 function defaultExecGit(args: string[], cwd: string): string {
-  return execFileSync('git', args, { encoding: 'utf8', cwd, timeout: 60_000 });
+  return execFileSync(gitAbsPath(), args, { encoding: 'utf8', cwd, timeout: 60_000 });
 }
 
 /**

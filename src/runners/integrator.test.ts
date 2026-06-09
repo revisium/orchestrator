@@ -6,10 +6,12 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
 import {
   integrate,
   stubIntegrate,
   preflightLive,
+  resolveExecutable,
   type IntegratorInput,
   type IntegratorDeps,
   type ExecFn,
@@ -763,4 +765,70 @@ test('transient gh error (non-not-found) → throws for DBOS retry', async () =>
     /rate limit exceeded/,
     'transient gh error must propagate (not swallowed)',
   );
+});
+
+// ─── resolveExecutable ────────────────────────────────────────────────────────
+
+test('resolveExecutable: finds "node" on real PATH → returns absolute path', () => {
+  // node itself must be on PATH since we are running inside node
+  const resolved = resolveExecutable('node');
+  assert.ok(path.isAbsolute(resolved), `must be absolute, got: ${resolved}`);
+  assert.ok(resolved.includes('node'), `path must include "node": ${resolved}`);
+});
+
+test('resolveExecutable: injected PATH with a real directory → returns file in that dir', () => {
+  // Use the directory of the node binary; node is guaranteed to live there.
+  const nodeBin = process.execPath; // absolute path to current node binary
+  const nodeDir = path.dirname(nodeBin);
+  const nodeName = path.basename(nodeBin);
+  // Strip any version suffix so we match the bare name (e.g. "node" not "node24")
+  const baseName = nodeName.replace(/\d.*$/, '') || nodeName;
+
+  // Inject just that one directory
+  const resolved = resolveExecutable(baseName, nodeDir);
+  assert.ok(path.isAbsolute(resolved), `must be absolute: ${resolved}`);
+  assert.equal(path.dirname(resolved), nodeDir, 'resolved dir must match injected dir');
+});
+
+test('resolveExecutable: executable not found → throws with clear message', () => {
+  assert.throws(
+    () => resolveExecutable('__no_such_executable_xyz__', '/tmp'),
+    (err: unknown) => {
+      assert.ok(err instanceof Error);
+      assert.ok(
+        err.message.includes('cannot resolve executable'),
+        `message must mention resolution failure: ${err.message}`,
+      );
+      assert.ok(
+        err.message.includes('__no_such_executable_xyz__'),
+        `message must name the executable: ${err.message}`,
+      );
+      return true;
+    },
+  );
+});
+
+test('resolveExecutable: empty PATH → throws with clear message', () => {
+  assert.throws(
+    () => resolveExecutable('git', ''),
+    (err: unknown) => {
+      assert.ok(err instanceof Error);
+      assert.ok(
+        err.message.includes('cannot resolve executable'),
+        `message must mention resolution failure: ${err.message}`,
+      );
+      return true;
+    },
+  );
+});
+
+test('resolveExecutable: PATH with empty segments → skipped gracefully', () => {
+  // PATH with empty entries (e.g. ":/bin") — empty segment must be skipped without throwing.
+  const nodeBin = process.execPath;
+  const nodeDir = path.dirname(nodeBin);
+  const nodeName = path.basename(nodeBin).replace(/\d.*$/, '') || path.basename(nodeBin);
+  // Prepend two empty segments to test robustness
+  const paddedPath = `${path.delimiter}${path.delimiter}${nodeDir}`;
+  const resolved = resolveExecutable(nodeName, paddedPath);
+  assert.ok(path.isAbsolute(resolved), `must still resolve with empty PATH segments: ${resolved}`);
 });
