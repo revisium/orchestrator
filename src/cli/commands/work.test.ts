@@ -216,22 +216,24 @@ test('workCommand: --runner auto --live → warning emitted + live path attempte
   }
 
   try {
-    // Guard passed — no "requires --live" error
+    // Guard passed — no "requires --live" error. (Daemon-independent invariant.)
     const hasGuardError = errors.some((e) => e.includes('requires --live'));
     assert.equal(hasGuardError, false, 'guard must NOT fire when --live is provided');
 
-    // Warning was emitted before daemon connection (BEFORE assertReady throws)
+    // Warning was emitted on the live path BEFORE the daemon connection. This is the proof the
+    // live path was ENTERED — LIVE_COST_WARNING fires only after the guard passes and only on the
+    // live branch, before assertReady. (Daemon-independent invariant.)
     assert.ok(
       warns.some((w) => w === LIVE_COST_WARNING),
-      `LIVE_COST_WARNING must be emitted; got warns: ${JSON.stringify(warns)}`,
+      `LIVE_COST_WARNING must be emitted (proves the live path was entered past the guard); got warns: ${JSON.stringify(warns)}`,
     );
 
-    // Live path was entered: assertReady threw DAEMON_NOT_RUNNING → exitCode=1
-    assert.equal(process.exitCode, 1, 'exitCode must be 1 (from DAEMON_NOT_RUNNING, not guard)');
-    const hasDaemonError = errors.some(
-      (e) => e.includes('DAEMON_NOT_RUNNING') || e.includes('revisium start'),
-    );
-    assert.ok(hasDaemonError, `live path must have attempted assertReady; errors: ${JSON.stringify(errors)}`);
+    // NOTE: the downstream outcome after the warning depends on whether a local daemon happens to
+    // be reachable — no daemon → assertReady throws DAEMON_NOT_RUNNING (exitCode 1); daemon up →
+    // it proceeds. Asserting exitCode/DAEMON_NOT_RUNNING here made the test couple to ambient
+    // daemon state (it failed whenever a daemon was running, and could even drive a live work
+    // iteration). The guard-passed + warning-fired invariants above fully prove this test's intent
+    // ("warning emitted + live path attempted") without that ambient coupling (0008 dogfood lesson).
   } finally {
     process.exitCode = origExitCode as number | undefined;
   }
