@@ -12,6 +12,7 @@ import {
   stubIntegrate,
   preflightLive,
   resolveExecutable,
+  parseOwnerRepo,
   type IntegratorInput,
   type IntegratorDeps,
   type ExecFn,
@@ -831,4 +832,62 @@ test('resolveExecutable: PATH with empty segments → skipped gracefully', () =>
   const paddedPath = `${path.delimiter}${path.delimiter}${nodeDir}`;
   const resolved = resolveExecutable(nodeName, paddedPath);
   assert.ok(path.isAbsolute(resolved), `must still resolve with empty PATH segments: ${resolved}`);
+});
+
+// ─── parseOwnerRepo ───────────────────────────────────────────────────────────
+
+test('parseOwnerRepo: SSH plain → owner/repo', () => {
+  assert.equal(parseOwnerRepo('git@github.com:o/repo'), 'o/repo');
+});
+
+test('parseOwnerRepo: SSH .git suffix stripped', () => {
+  assert.equal(parseOwnerRepo('git@github.com:o/repo.git'), 'o/repo');
+});
+
+test('parseOwnerRepo: SSH dotted repo name preserved', () => {
+  assert.equal(parseOwnerRepo('git@github.com:o/my.repo'), 'o/my.repo');
+});
+
+test('parseOwnerRepo: SSH dashed/underscored/dotted owner and repo', () => {
+  assert.equal(parseOwnerRepo('git@github.com:my-org/my_repo.js'), 'my-org/my_repo.js');
+});
+
+test('parseOwnerRepo: HTTPS plain → owner/repo', () => {
+  assert.equal(parseOwnerRepo('https://github.com/o/repo'), 'o/repo');
+});
+
+test('parseOwnerRepo: HTTPS dotted repo .git suffix stripped', () => {
+  assert.equal(parseOwnerRepo('https://github.com/o/my.repo.git'), 'o/my.repo');
+});
+
+test('parseOwnerRepo: HTTP (non-TLS) accepted', () => {
+  assert.equal(parseOwnerRepo('http://github.com/o/repo'), 'o/repo');
+});
+
+test('parseOwnerRepo: leading/trailing whitespace trimmed', () => {
+  assert.equal(parseOwnerRepo('  git@github.com:o/repo\n'), 'o/repo');
+});
+
+test('parseOwnerRepo: empty string → null', () => {
+  assert.equal(parseOwnerRepo(''), null);
+});
+
+test('parseOwnerRepo: space inside repo segment → null', () => {
+  assert.equal(parseOwnerRepo('git@github.com:o/re po.git'), null);
+});
+
+test('parseOwnerRepo: HTTPS missing repo segment → null', () => {
+  assert.equal(parseOwnerRepo('https://github.com/o/'), null);
+});
+
+test('parseOwnerRepo: HTTPS trailing path after repo → null', () => {
+  assert.equal(parseOwnerRepo('https://github.com/o/repo/tree/main'), null);
+});
+
+test('parseOwnerRepo: non-github host → null', () => {
+  assert.equal(parseOwnerRepo('https://gitlab.com/o/repo'), null);
+});
+
+test('parseOwnerRepo: bare owner/repo (no scheme/host) → null', () => {
+  assert.equal(parseOwnerRepo('o/repo'), null);
 });

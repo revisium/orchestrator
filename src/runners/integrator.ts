@@ -125,7 +125,7 @@ function branchName(taskId: string, title: string): string {
 const GITHUB_SSH_RE = /^git@github\.com:([A-Za-z0-9._-]+\/[A-Za-z0-9._-]+?)(?:\.git)?$/;
 const GITHUB_HTTPS_RE = /^https?:\/\/github\.com\/([A-Za-z0-9._-]+\/[A-Za-z0-9._-]+?)(?:\.git)?$/;
 
-function parseOwnerRepo(remoteUrl: string): string | null {
+export function parseOwnerRepo(remoteUrl: string): string | null {
   const ssh = GITHUB_SSH_RE.exec(remoteUrl.trim());
   if (ssh?.[1]) return ssh[1];
   const https = GITHUB_HTTPS_RE.exec(remoteUrl.trim());
