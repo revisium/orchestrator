@@ -30,8 +30,6 @@ export type PlaybookInstallerDeps = {
   sourceResolverOptions?: SourceResolverOptions;
 };
 
-type RevisionLike = { id?: unknown };
-
 export class PlaybookInstaller {
   constructor(private readonly deps: PlaybookInstallerDeps) {}
 
@@ -60,9 +58,8 @@ export class PlaybookInstaller {
 
     let revisionId: string | undefined;
     if (options.commit && !options.dryRun) {
-      const revision = (await this.deps.access.commit(
-        `Install playbook ${manifest.name}@${options.version ?? source.version}`,
-      )) as RevisionLike | null;
+      const commitMessage = `Install playbook ${manifest.name}@${options.version ?? source.version}`;
+      const revision = await this.deps.access.commit(commitMessage);
       revisionId = typeof revision?.id === 'string' ? revision.id : undefined;
     }
 
