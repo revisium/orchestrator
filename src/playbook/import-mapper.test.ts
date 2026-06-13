@@ -3,13 +3,31 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { mapPlaybookRows, runtimeRoleName } from './import-mapper.js';
+import { mapPlaybookRows, runtimeRoleName, scopedImportRowId } from './import-mapper.js';
 import type { PlaybookManifest } from './manifest.js';
 import type { PlaybookCatalogs } from './catalog-loader.js';
 
 test('runtimeRoleName: maps watcher to current pr-watcher runtime name', () => {
   assert.equal(runtimeRoleName('watcher'), 'pr-watcher');
   assert.equal(runtimeRoleName('developer-backend'), 'developer-backend');
+});
+
+test('scopedImportRowId: returns Revisium-safe scoped row ids', () => {
+  assert.equal(scopedImportRowId('pb', 'developer-backend'), 'pb-developer-backend');
+
+  const rowId = scopedImportRowId('pb/name', 'developer/backend');
+  assert.match(rowId, /^pb-name-developer-backend-[a-f0-9]{12}$/);
+  assert.match(rowId, /^[A-Za-z0-9_-]+$/);
+
+  assert.notEqual(scopedImportRowId('pb', 'developer/backend'), scopedImportRowId('pb', 'developer-backend'));
+
+  const longRowId = scopedImportRowId(
+    'very-long-playbook-name-that-keeps-going',
+    'very-long-role-name-that-keeps-going',
+  );
+  assert.ok(longRowId.length <= 64);
+  assert.match(longRowId, /^[A-Za-z0-9_-]+$/);
+  assert.match(longRowId, /-[a-f0-9]{12}$/);
 });
 
 test('mapPlaybookRows: maps roles and pipelines into versioned rows', () => {
@@ -60,10 +78,10 @@ test('mapPlaybookRows: maps roles and pipelines into versioned rows', () => {
   });
 
   assert.equal(rows.playbook.rowId, 'pb');
-  assert.equal(rows.roles[0]?.rowId, 'pb/watcher');
+  assert.equal(rows.roles[0]?.rowId, 'pb-watcher');
   assert.equal(rows.roles[0]?.data.name, 'watcher');
   assert.equal(rows.roles[0]?.data.runner, 'claude-code');
   assert.match(String(rows.roles[0]?.data.scope_rules), /"runtime_role_id":"pr-watcher"/);
-  assert.equal(rows.pipelines[0]?.rowId, 'pb/feature-development');
+  assert.equal(rows.pipelines[0]?.rowId, 'pb-feature-development');
   assert.equal(rows.catalogHash.length, 64);
 });

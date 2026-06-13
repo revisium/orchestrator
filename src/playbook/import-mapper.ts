@@ -30,6 +30,9 @@ const RUNTIME_NAME_MAP: Record<string, string> = {
   'qa-frontend': 'qa-frontend',
 };
 
+const ROW_ID_MAX_LENGTH = 64;
+const ROW_ID_HASH_LENGTH = 12;
+
 const RIGHTS_MAP: Record<string, { allowedTools: string[]; runtimeRunner: 'claude-code' | 'script' }> = {
   'read-only': { allowedTools: ['Read', 'Grep', 'Glob'], runtimeRunner: 'claude-code' },
   'write-working-tree': {
@@ -68,6 +71,54 @@ function hash(value: unknown): string {
   return createHash('sha256').update(stableStringify(value)).digest('hex');
 }
 
+function isSafeRowIdChar(value: string): boolean {
+  const code = value.codePointAt(0) ?? 0;
+  return (
+    (code >= 48 && code <= 57) ||
+    (code >= 65 && code <= 90) ||
+    (code >= 97 && code <= 122) ||
+    value === '_' ||
+    value === '-'
+  );
+}
+
+function trimTrailingHyphens(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === '-') end -= 1;
+  return value.slice(0, end);
+}
+
+function safeRowIdPart(value: string): string {
+  let safe = '';
+  let pendingHyphen = false;
+  for (const char of value) {
+    if (!isSafeRowIdChar(char) || char === '-') {
+      pendingHyphen = safe.length > 0;
+      continue;
+    }
+    if (pendingHyphen) safe += '-';
+    safe += char;
+    pendingHyphen = false;
+  }
+  return safe || 'item';
+}
+
+export function scopedImportRowId(playbookId: string, itemId: string): string {
+  const safePlaybookId = safeRowIdPart(playbookId);
+  const safeItemId = safeRowIdPart(itemId);
+  const raw = `${safePlaybookId}-${safeItemId}`;
+  const needsHash =
+    raw.length > ROW_ID_MAX_LENGTH ||
+    safePlaybookId !== playbookId ||
+    safeItemId !== itemId;
+  if (!needsHash) return raw;
+
+  const digest = hash({ itemId, playbookId }).slice(0, ROW_ID_HASH_LENGTH);
+  const prefixLength = ROW_ID_MAX_LENGTH - ROW_ID_HASH_LENGTH - 1;
+  const prefix = trimTrailingHyphens(raw.slice(0, prefixLength)) || 'item';
+  return `${prefix}-${digest}`;
+}
+
 export function runtimeRoleName(roleId: string): string {
   return RUNTIME_NAME_MAP[roleId] ?? roleId;
 }
@@ -85,7 +136,7 @@ function mapRole(root: string, playbookId: string, role: RoleCatalogRecord, now:
   const requiredPrompt = rights.runtimeRunner !== 'script';
   const prompt = composeRolePrompt(root, role, requiredPrompt);
   const runtimeName = runtimeRoleName(role.id);
-  const importedRoleId = `${playbookId}/${role.id}`;
+  const importedRoleId = scopedImportRowId(playbookId, role.id);
   return {
     table: 'roles',
     rowId: importedRoleId,
@@ -117,11 +168,12 @@ function mapRole(root: string, playbookId: string, role: RoleCatalogRecord, now:
 }
 
 function mapPipeline(playbookId: string, pipeline: PipelineCatalogRecord, now: string): VersionedRow {
+  const importedPipelineId = scopedImportRowId(playbookId, pipeline.id);
   return {
     table: 'pipelines',
-    rowId: `${playbookId}/${pipeline.id}`,
+    rowId: importedPipelineId,
     data: {
-      id: `${playbookId}/${pipeline.id}`,
+      id: importedPipelineId,
       playbook_id: playbookId,
       pipeline_id: pipeline.id,
       path: pipeline.path,

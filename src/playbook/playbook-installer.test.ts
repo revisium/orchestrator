@@ -91,7 +91,10 @@ test('PlaybookInstaller: validates, maps, and writes playbook rows', async () =>
   assert.equal(result.pipelines, 1);
   assert.equal(result.committed, true);
   assert.equal(result.revisionId, 'rev-1');
-  assert.equal(fake.rows.map((row) => `${row.table}/${row.rowId}`).join(','), 'playbooks/pb,roles/pb/developer,pipelines/pb/feature-development');
+  assert.equal(
+    fake.rows.map((row) => `${row.table}/${row.rowId}`).join(','),
+    'playbooks/pb,roles/pb-developer,pipelines/pb-feature-development',
+  );
   assert.equal(fake.commitMessage, 'Install playbook PB@1.0.0');
 });
 
