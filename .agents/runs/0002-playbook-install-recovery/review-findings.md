@@ -67,3 +67,21 @@ Status: passed.
 The post-fix reviewer reported no blocking/high/medium findings. The run
 continues with the human-approved single-reviewer fallback plus PR watcher
 feedback because Claude Code remained unavailable in this session.
+
+## Watcher Finding: SonarCloud `typescript:S2871`
+
+Status: fixed.
+
+After draft PR publication, SonarCloud failed the quality gate on reliability
+for `src/playbook/import-mapper.ts` because `Array.prototype.sort()` did not use
+an explicit comparator. The stable stringifier now sorts object keys with
+`left.localeCompare(right)`.
+
+Verification after the fix:
+
+- `npx tsx --test src/playbook/import-mapper.test.ts src/playbook/playbook-installer.test.ts`
+- `npm run typecheck`
+- `npm run lint:ci`
+- `npm run verify`
+- `npm run build`
+- `./bin/revo.js playbook install ../agents --dry-run`
