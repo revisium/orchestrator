@@ -61,8 +61,6 @@ export type UnknownCheckNode = {
   state?: string;
 };
 
-export type CheckItem = UnknownCheckNode;
-
 export type ReviewEntry = {
   user: { login: string; type?: string } | null;
   state: string;
@@ -115,7 +113,7 @@ type PrViewData = {
   baseRefName?: string;
   headRefName?: string;
   headRefOid?: string;
-  statusCheckRollup: CheckItem[] | null;
+  statusCheckRollup: UnknownCheckNode[] | null;
   mergeStateStatus?: string;
   reviewDecision?: string;
   mergeable?: string;
@@ -333,24 +331,24 @@ function resolveOpenPr(input: PrReadinessInput, baseBranch: string, execGh: Exec
   return { kind: 'open', prNumber, prView };
 }
 
-function isTerminal(item: CheckItem): boolean {
+function isTerminal(item: UnknownCheckNode): boolean {
   if (item.__typename === 'CheckRun') return item.status === 'COMPLETED';
   return item.state !== 'PENDING';
 }
 
-function isPassed(item: CheckItem): boolean {
+function isPassed(item: UnknownCheckNode): boolean {
   if (item.__typename === 'CheckRun') {
     return ['SUCCESS', 'SKIPPED', 'NEUTRAL'].includes(item.conclusion ?? '');
   }
   return item.state === 'SUCCESS';
 }
 
-function checkName(item: CheckItem): string {
+function checkName(item: UnknownCheckNode): string {
   if (item.__typename === 'CheckRun') return item.name ?? 'unknown';
   return item.context ?? item.name ?? 'unknown';
 }
 
-function checkResult(item: CheckItem): string {
+function checkResult(item: UnknownCheckNode): string {
   if (item.__typename === 'CheckRun') {
     return item.status === 'COMPLETED' ? (item.conclusion ?? 'unknown') : (item.status ?? 'unknown');
   }
@@ -362,7 +360,7 @@ function isBot(user: { login: string; type?: string } | null | undefined): boole
 }
 
 export function collectCiChecks(
-  items: CheckItem[],
+  items: UnknownCheckNode[],
 ): { pending: boolean; ci_passed: boolean; checks: Array<{ name: string; result: string }>; pendingNames: string[] } {
   const pending = items.length === 0 || items.some((item) => !isTerminal(item));
   const ci_passed = !pending && items.every((item) => isPassed(item));
@@ -548,7 +546,7 @@ function locationOf(item: { component?: string; path?: string; line?: number }) 
 
 function providerWaitFeedback(state: ReturnType<typeof providerState>) {
   const codeRabbit = state.codeRabbit;
-  if (!codeRabbit || codeRabbit.state !== 'waiting') return [];
+  if (codeRabbit?.state !== 'waiting') return [];
   return [{ provider: 'CodeRabbit', reason: codeRabbit.reason, evidence: codeRabbit.evidence ?? codeRabbit.statusContext }];
 }
 
