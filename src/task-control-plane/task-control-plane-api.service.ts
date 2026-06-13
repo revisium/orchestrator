@@ -417,6 +417,15 @@ export class TaskControlPlaneApiService {
     await this.runs.appendEvent({ ...eventBase, type: 'gate_signal_pending' });
     await this.dbos.signal(item.runId, topic, answer, inboxId);
     await this.runs.appendEvent({ ...eventBase, type: 'gate_signaled' });
+    if (topic === 'merge') {
+      const decision = asRecord(answer)?.decision;
+      await this.runs.completeRun(item.runId, {
+        actor: 'mcp',
+        source: decision === 'reject' ? 'merge-gate-reject' : 'merge-gate-approve',
+        verdict: '',
+        iterations: 0,
+      });
+    }
   }
 
   async summarizeGateRisk(inboxId: string) {

@@ -46,6 +46,7 @@ import type { AppendEventInput, AppendCostInput, AppendAttemptInput } from '../r
 import type { Decision } from './await-human.js';
 import type { CancelRunResult } from '../run/cancel-run.js';
 import type { FailRunResult } from '../run/fail-run.js';
+import type { CompleteRunResult } from '../run/complete-run.js';
 import type { IntegratorInput, IntegratorOutput, IntegratorBlocked } from '../runners/integrator.js';
 import { stubIntegrate } from '../runners/integrator.js';
 
@@ -146,6 +147,10 @@ type Harness = {
   cancelRunArgs: string[];
   cancelRunOpts: Array<{ actor?: string; source?: string } | undefined>;
   failRunArgs: Array<{ runId: string; reason: string }>;
+  completeRunArgs: Array<{
+    runId: string;
+    opts?: { actor?: string; source?: string; verdict?: string; iterations?: number };
+  }>;
   integrateCallCount: number;
   stubCallCount: number;
   preflightCallCount: number;
@@ -186,6 +191,7 @@ function buildDeps(opts: {
     cancelRunArgs: [],
     cancelRunOpts: [],
     failRunArgs: [],
+    completeRunArgs: [],
     integrateCallCount: 0,
     stubCallCount: 0,
     preflightCallCount: 0,
@@ -285,6 +291,14 @@ function buildDeps(opts: {
     return { runId, previousStatus: 'running', status: 'failed' };
   };
 
+  const completeRun = async (
+    runId: string,
+    completeOpts?: { actor?: string; source?: string; verdict?: string; iterations?: number },
+  ): Promise<CompleteRunResult | null> => {
+    harness.completeRunArgs.push({ runId, opts: completeOpts });
+    return { runId, previousStatus: 'ready', status: 'completed' };
+  };
+
   // loadRunTaskContext fake — returns a minimal context.
   const loadRunTaskContext = async (_runId: string) => ({
     taskId: 'task-001',
@@ -332,6 +346,7 @@ function buildDeps(opts: {
     awaitHuman,
     cancelRun,
     failRun,
+    completeRun,
     loadRunTaskContext,
     loadPipelinePolicy,
     integrateFn,
@@ -923,6 +938,12 @@ test('A4: full chain plan-approve + merge-approve → all steps run, cancelled:f
   assert.ok(!harness.loadRoleArgs.includes('integrator'), 'integrator must NOT load role via runStepFn');
   // cancelRun was NOT called
   assert.equal(harness.cancelRunArgs.length, 0, 'cancelRun must not be called on approve');
+  assert.deepEqual(harness.completeRunArgs, [
+    {
+      runId,
+      opts: { actor: 'pipeline', source: 'merge-gate-approve', verdict: 'PASS', iterations: 0 },
+    },
+  ], 'successful merge approve must mark the run completed');
   // step_succeeded events for architect/developer/reviewer; integrate_succeeded for integrator
   const stepSucceeded = harness.appendEventArgs.filter((e) => e.type === 'step_succeeded');
   assert.equal(stepSucceeded.length, 3, 'three step_succeeded events expected (architect, developer, reviewer)');
@@ -977,6 +998,12 @@ test('A6: merge-reject → workflow ends normally (NOT cancelled), gate_rejected
   assert.equal(result.blocked, false);
   // cancelRun was NOT called
   assert.equal(harness.cancelRunArgs.length, 0, 'cancelRun must not be called on merge reject');
+  assert.deepEqual(harness.completeRunArgs, [
+    {
+      runId,
+      opts: { actor: 'pipeline', source: 'merge-gate-reject', verdict: 'PASS', iterations: 0 },
+    },
+  ], 'merge reject still finishes the workflow and must mark the run completed');
   // gate_rejected event for merge
   const mergeRejected = harness.appendEventArgs.filter(
     (e) => e.type === 'gate_rejected' && e.stepKey === 'gate:merge',
@@ -1271,6 +1298,7 @@ test('PipelineService wiring: REAL registered workflow drives script-mode and li
   let runIntegrateCalled = 0;
   let runStubCalled = 0;
   let runPreflightCalled = 0;
+  let completeRunCalled = 0;
 
   class FakeIntegratorService {
     private readonly _integrateResult: IntegratorOutput = {
@@ -1365,6 +1393,10 @@ test('PipelineService wiring: REAL registered workflow drives script-mode and li
     appendAttempt: async () => undefined,
     cancelRun: async () => null,
     failRun: async () => null,
+    completeRun: async () => {
+      completeRunCalled++;
+      return null;
+    },
     loadRunTaskContext: async (_rId: string) => ({
       taskId: 'task-w1',
       title: 'Wiring test',
@@ -1397,6 +1429,7 @@ test('PipelineService wiring: REAL registered workflow drives script-mode and li
   runStubCalled = 0;
   runIntegrateCalled = 0;
   runPreflightCalled = 0;
+  completeRunCalled = 0;
   appendedEvents.length = 0;
 
   const scriptRunId = 'run-wiring-script';
@@ -1405,6 +1438,7 @@ test('PipelineService wiring: REAL registered workflow drives script-mode and li
   assert.equal(runStubCalled, 1, 'production runStub must be called once in script mode');
   assert.equal(runIntegrateCalled, 0, 'production runIntegrate must NOT be called in script mode');
   assert.equal(runPreflightCalled, 0, 'production preflightFn must NOT be called in script mode');
+  assert.equal(completeRunCalled, 1, 'production completeRun must be called once in script mode');
 
   const scriptIntegrateEvt = appendedEvents.find((e) => e.type === 'integrate_succeeded');
   assert.ok(scriptIntegrateEvt, 'integrate_succeeded event must be emitted in script mode');
@@ -1438,6 +1472,7 @@ test('PipelineService wiring: REAL registered workflow drives script-mode and li
   runStubCalled = 0;
   runIntegrateCalled = 0;
   runPreflightCalled = 0;
+  completeRunCalled = 0;
   appendedEvents.length = 0;
 
   const liveRunId = 'run-wiring-live';
@@ -1446,6 +1481,7 @@ test('PipelineService wiring: REAL registered workflow drives script-mode and li
   assert.equal(runIntegrateCalled, 1, 'production runIntegrate must be called once in live mode');
   assert.equal(runStubCalled, 0, 'production runStub must NOT be called in live mode');
   assert.equal(runPreflightCalled, 1, 'production preflightFn must be called once in live mode');
+  assert.equal(completeRunCalled, 1, 'production completeRun must be called once in live mode');
 
   const liveIntegrateEvt = appendedEvents.find((e) => e.type === 'integrate_succeeded');
   assert.ok(liveIntegrateEvt, 'integrate_succeeded event must be emitted in live mode');

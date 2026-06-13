@@ -71,6 +71,9 @@ function makeApi(overrides: {
       return [];
     },
     async appendEvent() {},
+    async completeRun() {
+      return null;
+    },
     ...overrides.runService,
   };
   const inboxService: Partial<InboxService> = {
@@ -157,6 +160,67 @@ test('TaskControlPlaneApiService.approveGate records retryable signal state arou
       payload: { inboxId: 'inbox-1', topic: 'plan' },
     },
   ]);
+});
+
+test('TaskControlPlaneApiService.approveGate marks merge gates completed after signaling', async () => {
+  const completed: Array<{ runId: string; source?: string; actor?: string }> = [];
+  const api = makeApi({
+    inboxService: {
+      async getInbox() {
+        return makeInboxItem({ title: 'Merge approval', context: { topic: 'merge' } });
+      },
+    },
+    runService: {
+      async completeRun(runId, opts) {
+        completed.push({ runId, source: opts?.source, actor: opts?.actor });
+        return { runId, previousStatus: 'ready', status: 'completed' };
+      },
+    },
+  });
+
+  const result = await api.approveGate({ inboxId: 'inbox-1', resolvedBy: 'tester' });
+
+  assert.equal(result.topic, 'merge');
+  assert.deepEqual(completed, [{ runId: 'run-1', source: 'merge-gate-approve', actor: 'mcp' }]);
+});
+
+test('TaskControlPlaneApiService.rejectGate marks merge gates completed with merge-gate-reject source', async () => {
+  const completed: Array<{ runId: string; source?: string; actor?: string }> = [];
+  const api = makeApi({
+    inboxService: {
+      async getInbox() {
+        return makeInboxItem({ title: 'Merge rejection', context: { topic: 'merge' } });
+      },
+    },
+    runService: {
+      async completeRun(runId, opts) {
+        completed.push({ runId, source: opts?.source, actor: opts?.actor });
+        return { runId, previousStatus: 'ready', status: 'completed' };
+      },
+    },
+  });
+
+  const result = await api.rejectGate({ inboxId: 'inbox-1', resolvedBy: 'tester' });
+
+  assert.equal(result.topic, 'merge');
+  assert.deepEqual(completed, [{ runId: 'run-1', source: 'merge-gate-reject', actor: 'mcp' }]);
+});
+
+test('TaskControlPlaneApiService.approveGate does NOT call completeRun for plan gates', async () => {
+  let completeRunCalled = false;
+  const api = makeApi({
+    runService: {
+      async completeRun() {
+        completeRunCalled = true;
+        return null;
+      },
+    },
+  });
+
+  const result = await api.approveGate({ inboxId: 'inbox-1', resolvedBy: 'tester' });
+
+  assert.equal(result.topic, 'plan');
+  assert.equal(completeRunCalled, false, 'plan gates must not trigger completeRun');
 });
 
 test('TaskControlPlaneApiService.approveGate leaves pending signal state when DBOS signaling fails', async () => {
@@ -262,4 +326,69 @@ test('TaskControlPlaneApiService.getRepositoryContext ignores non-object package
   assert.equal(result.packageName, 'pkg');
   assert.deepEqual(result.scripts, []);
   assert.equal(result.packageError, '');
+});
+
+// ── resolveInboxItem smoke: merge gate completion ─────────────────────────────
+
+test('TaskControlPlaneApiService.resolveInboxItem: merge gate completes run when signalGate is true (default)', async () => {
+  const completed: Array<{ runId: string; source?: string; actor?: string }> = [];
+  const api = makeApi({
+    inboxService: {
+      async getInbox() {
+        return makeInboxItem({ title: 'Merge approval', context: { topic: 'merge' } });
+      },
+    },
+    runService: {
+      async completeRun(runId, opts) {
+        completed.push({ runId, source: opts?.source, actor: opts?.actor });
+        return { runId, previousStatus: 'ready', status: 'completed' };
+      },
+    },
+  });
+
+  const result = await api.resolveInboxItem({ inboxId: 'inbox-1', answer: { decision: 'approve' } });
+
+  assert.equal(result.topic, 'merge');
+  assert.equal(result.signaled, true);
+  assert.deepEqual(completed, [{ runId: 'run-1', source: 'merge-gate-approve', actor: 'mcp' }]);
+});
+
+test('TaskControlPlaneApiService.resolveInboxItem: merge gate skips completeRun when signalGate is false', async () => {
+  let completeRunCalled = false;
+  const api = makeApi({
+    inboxService: {
+      async getInbox() {
+        return makeInboxItem({ title: 'Merge approval', context: { topic: 'merge' } });
+      },
+    },
+    runService: {
+      async completeRun() {
+        completeRunCalled = true;
+        return null;
+      },
+    },
+  });
+
+  const result = await api.resolveInboxItem({ inboxId: 'inbox-1', answer: { decision: 'approve' }, signalGate: false });
+
+  assert.equal(result.signaled, false);
+  assert.equal(completeRunCalled, false, 'completeRun must not be called when signalGate is false');
+});
+
+test('TaskControlPlaneApiService.resolveInboxItem: plan gate does not call completeRun', async () => {
+  let completeRunCalled = false;
+  const api = makeApi({
+    runService: {
+      async completeRun() {
+        completeRunCalled = true;
+        return null;
+      },
+    },
+  });
+
+  const result = await api.resolveInboxItem({ inboxId: 'inbox-1', answer: { decision: 'approve' } });
+
+  assert.equal(result.topic, 'plan');
+  assert.equal(result.signaled, true);
+  assert.equal(completeRunCalled, false, 'plan gates must not trigger completeRun');
 });

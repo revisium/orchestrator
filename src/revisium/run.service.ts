@@ -9,6 +9,7 @@ import { createRunWorkflow, type CreateRunInput, type CreateRunResult } from '..
 import { listRuns, showRun, listRunEvents, listRunAttempts, getRunFailure, type RunSummary, type RunDetail, type EventSummary, type AttemptSummary } from '../run/inspect-run.js';
 import { cancelRun, type CancelRunResult } from '../run/cancel-run.js';
 import { failRun, type FailRunResult } from '../run/fail-run.js';
+import { completeRun, type CompleteRunResult } from '../run/complete-run.js';
 import { appendRunEvent, appendRunCost, appendRunAttempt, type AppendEventInput, type AppendCostInput, type AppendAttemptInput } from '../run/append-event.js';
 import { REVISIUM_TRANSPORT_DRAFT } from './tokens.js';
 
@@ -64,6 +65,17 @@ export class RunService {
    */
   failRun(id: string, reason: string, opts?: { now?: Date; actor?: string; source?: string }): Promise<FailRunResult | null> {
     return failRun(this.da, id, reason, opts);
+  }
+
+  /**
+   * completeRun — patch task_runs to `completed` + write a run_completed event.
+   * Called by the pipeline workflow body after the final merge gate resolves.
+   */
+  completeRun(
+    id: string,
+    opts?: { now?: Date; actor?: string; source?: string; verdict?: string; iterations?: number },
+  ): Promise<CompleteRunResult | null> {
+    return completeRun(this.da, id, opts);
   }
 
   /** Expose getRun for events pre-check (run not found guard in CLI). */

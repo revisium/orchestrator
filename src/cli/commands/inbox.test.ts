@@ -24,6 +24,10 @@ import type { PollOpts } from './poll-workflow-state.js';
 
 type SignalCall = { workflowId: string; topic: string; payload: unknown; idempotencyKey: string };
 type ResolveCall = { itemId: string; answer: unknown; resolvedBy: string };
+type CompleteCall = {
+  runId: string;
+  opts?: { actor?: string; source?: string; verdict?: string; iterations?: number };
+};
 type PollCall = { runId: string; pollOpts?: PollOpts };
 
 function makeGateRow(overrides: Partial<InboxItem> = {}): InboxItem {
@@ -69,9 +73,16 @@ function makeDeps(
   row: InboxItem | null,
   storedAnswer: unknown = { decision: 'approve' },
   alreadyResolved = false,
-): { deps: InboxResolveDeps; signalCalls: SignalCall[]; resolveCalls: ResolveCall[]; pollCalls: PollCall[] } {
+): {
+  deps: InboxResolveDeps;
+  signalCalls: SignalCall[];
+  resolveCalls: ResolveCall[];
+  completeCalls: CompleteCall[];
+  pollCalls: PollCall[];
+} {
   const signalCalls: SignalCall[] = [];
   const resolveCalls: ResolveCall[] = [];
+  const completeCalls: CompleteCall[] = [];
   const pollCalls: PollCall[] = [];
 
   const deps: InboxResolveDeps = {
@@ -83,12 +94,15 @@ function makeDeps(
     signal: async (workflowId, topic, payload, idempotencyKey) => {
       signalCalls.push({ workflowId, topic, payload, idempotencyKey });
     },
+    completeRun: async (runId, opts) => {
+      completeCalls.push({ runId, opts });
+    },
     pollRunState: async (runId, pollOpts) => {
       pollCalls.push({ runId, pollOpts });
     },
   };
 
-  return { deps, signalCalls, resolveCalls, pollCalls };
+  return { deps, signalCalls, resolveCalls, completeCalls, pollCalls };
 }
 
 // ─── (a) GATE row + --approve ────────────────────────────────────────────────
@@ -172,6 +186,30 @@ test('C4(a): gate row polls run state after signal', async () => {
     await resolveInboxCommand('inbox_gate_001', { approve: true, reject: false }, deps);
     assert.equal(pollCalls.length, 1, 'pollRunState must be called once after signal');
     assert.equal(pollCalls[0]?.runId, 'run-plan-1', 'pollRunState called with the runId');
+  } finally {
+    process.exitCode = origExitCode as number | undefined;
+  }
+});
+
+test('C4(a): merge gate completion marks the run completed before polling', async () => {
+  const gateRow = makeGateRow({
+    runId: 'run-merge-1',
+    title: 'Merge approval',
+    context: { topic: 'merge', summary: { prUrl: 'stub://pr/placeholder' } },
+  });
+  const { deps, completeCalls, pollCalls } = makeDeps(gateRow, { decision: 'approve' });
+  const origExitCode = process.exitCode;
+  process.exitCode = undefined;
+
+  try {
+    await resolveInboxCommand('inbox_gate_001', { approve: true, reject: false, wait: true }, deps);
+    assert.deepEqual(completeCalls, [
+      {
+        runId: 'run-merge-1',
+        opts: { actor: 'cli', source: 'merge-gate-approve', verdict: '', iterations: 0 },
+      },
+    ]);
+    assert.equal(pollCalls.length, 1, 'pollRunState still runs after completion write');
   } finally {
     process.exitCode = origExitCode as number | undefined;
   }

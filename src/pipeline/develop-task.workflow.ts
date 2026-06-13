@@ -37,6 +37,7 @@ import { makeAwaitHuman } from './await-human.js';
 import type { Decision } from './await-human.js';
 import type { CancelRunResult } from '../run/cancel-run.js';
 import type { FailRunResult } from '../run/fail-run.js';
+import type { CompleteRunResult } from '../run/complete-run.js';
 
 /** Queue name for the dev-tasks WorkflowQueue. */
 const DEV_TASKS_QUEUE = 'dev-tasks';
@@ -165,6 +166,14 @@ export type DevelopTaskDeps = {
    * (DBOS=progress, Revisium=meaning). 0008 #2 — closes the silent-failure gap from the dogfood.
    */
   failRun: (runId: string, reason: string) => Promise<FailRunResult | null>;
+  /**
+   * Mark a successful workflow terminal in Revisium after the final merge gate resolves.
+   * DBOS remains the progress source of truth; this keeps the run-row meaning from staying `ready`.
+   */
+  completeRun: (
+    runId: string,
+    opts?: { actor?: string; source?: string; verdict?: string; iterations?: number },
+  ) => Promise<CompleteRunResult | null>;
   /**
    * Load run task context once in the workflow body (B6).
    * Returns { taskId, title, base, repoRef } from showRun.tasks[0] + run.repos[0].
@@ -328,7 +337,7 @@ export function makeDevelopTask(
   ) => Promise<AttemptResult>,
   deps: DevelopTaskDeps,
 ) {
-  const { appendEvent, awaitHuman, cancelRun, failRun, loadRunTaskContext, loadPipelinePolicy, integrateFn, runStub, preflightFn } = deps;
+  const { appendEvent, awaitHuman, cancelRun, failRun, completeRun, loadRunTaskContext, loadPipelinePolicy, integrateFn, runStub, preflightFn } = deps;
 
   return async function developTaskImpl(
     runId: string,
@@ -542,11 +551,19 @@ export function makeDevelopTask(
     }
     // ── end MERGE GATE ─────────────────────────────────────────────────────────
 
+    const finalVerdict = verdictOf(reviewResult);
+    await completeRun(runId, {
+      actor: 'pipeline',
+      source: mergeDecision.decision === 'reject' ? 'merge-gate-reject' : 'merge-gate-approve',
+      verdict: finalVerdict,
+      iterations: iteration,
+    });
+
     return {
       runId,
       blocked: false,
       iterations: iteration,
-      verdict: verdictOf(reviewResult),
+      verdict: finalVerdict,
       cancelled: false,
     };
   };
@@ -623,6 +640,10 @@ export class PipelineService {
       cancelRun: (runId: string, cancelOpts?: { actor?: string; source?: string }) =>
         this.runService.cancelRun(runId, cancelOpts),
       failRun: (runId: string, reason: string) => this.runService.failRun(runId, reason),
+      completeRun: (
+        runId: string,
+        completeOpts?: { actor?: string; source?: string; verdict?: string; iterations?: number },
+      ) => this.runService.completeRun(runId, completeOpts),
       loadRunTaskContext: this.runService.loadRunTaskContext.bind(this.runService),
       loadPipelinePolicy: this.rolesService.loadPipelinePolicy.bind(this.rolesService),
       integrateFn,

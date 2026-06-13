@@ -1,10 +1,11 @@
 /**
  * terminal-run-status.ts — shared event-first terminal-status writer for a run.
  *
- * cancel-run.ts (run_cancelled → status 'cancelled') and fail-run.ts (run_failed → status 'failed')
- * are structurally identical: read the run, no-op if already in the terminal status, else write the
- * terminal event FIRST (deterministic id, ROW_CONFLICT-idempotent) then patch task_runs.status. This
- * one helper holds that logic ONCE (DRY — removes the cross-file duplication Sonar flags on new code).
+ * cancel-run.ts (run_cancelled → status 'cancelled'), fail-run.ts (run_failed → status 'failed'),
+ * and complete-run.ts (run_completed → status 'completed') are structurally identical: read the run,
+ * no-op if already in the terminal status, else write the terminal event FIRST (deterministic id,
+ * ROW_CONFLICT-idempotent) then patch task_runs.status. This one helper holds that logic ONCE
+ * (DRY — removes the cross-file duplication Sonar flags on new code).
  *
  * EVENT-FIRST + deterministic id + ROW_CONFLICT no-op give replay safety (0004 CR-A): on a workflow
  * replay the event id re-derives, createRow hits ROW_CONFLICT, and the status patch is still applied
@@ -14,7 +15,7 @@ import type { ControlPlaneDataAccess } from '../control-plane/index.js';
 import { ControlPlaneError } from '../control-plane/errors.js';
 import { fnv1a64Hex } from '../control-plane/steps.js';
 
-export type TerminalRunStatus = 'cancelled' | 'failed';
+export type TerminalRunStatus = 'cancelled' | 'failed' | 'completed';
 
 export type RecordTerminalParams = {
   /** Terminal status to set on task_runs. */
