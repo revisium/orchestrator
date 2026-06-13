@@ -1,13 +1,28 @@
 {
   "name": "@revisium/orchestrator",
   "version": "0.0.0",
+  "description": "Local orchestrator for software-development tasks driven by short-lived AI agents",
+  "keywords": [
+    "agents",
+    "orchestrator",
+    "ai",
+    "development",
+    "revisium",
+    "dbos"
+  ],
+  "license": "MIT",
+  "author": "Anton Kashirov",
   "type": "module",
   "engines": {
     "node": ">=24.11.1 <25"
   },
   "main": "./dist/cli/index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/revisium/orchestrator.git"
+  },
   "bin": {
-    "revo": "./bin/revo.js"
+    "revo": "bin/revo.js"
   },
   "files": [
     "dist/",
