@@ -1,7 +1,7 @@
 // MANUAL real-`claude -p` smoke — the hand-verification the runner-contract requires before the
 // runner is trusted. This is the ONLY place a real `claude -p` runs.
 //
-// It is deliberately NOT wired into `npm test`, `npm run verify`, or any smoke aggregate: it spends
+// It is deliberately NOT wired into `pnpm test`, `pnpm run verify`, or any smoke aggregate: it spends
 // tokens and needs auth.
 //
 //   - Auth: requires a logged-in / API-keyed `claude` CLI on PATH (the operator's machine).
@@ -10,7 +10,7 @@
 // Run (only when validating, not in CI):
 //   ./bin/revo.js revisium start
 //   ./bin/revo.js bootstrap --commit
-//   npm run smoke:claude-runner
+//   pnpm run smoke:claude-runner
 //
 // What it proves:
 //   - `claude -p` completes NON-INTERACTIVELY (clean exit 0, within the timeout — there is no TTY in

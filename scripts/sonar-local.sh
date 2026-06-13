@@ -21,7 +21,7 @@ SONAR_SCANNER_VERSION="${SONAR_SCANNER_VERSION:-12.1.0.3225_8.0.1}"
 SONAR_QUALITYGATE_TIMEOUT="${SONAR_QUALITYGATE_TIMEOUT:-300}"
 
 if [[ ! -f coverage/lcov.info ]]; then
-  echo "Coverage was not found. Run npm run test:cov or npm run ci:local:sonar first." >&2
+  echo "Coverage was not found. Run pnpm run test:cov or pnpm run ci:local:sonar first." >&2
   exit 1
 fi
 

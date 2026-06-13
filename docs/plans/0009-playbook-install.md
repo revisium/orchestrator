@@ -38,7 +38,7 @@ playbook roles use playbook-scoped row ids (`<playbook-id>/<role-id>`) so the ex
 Verify:
 
 ```bash
-npm run test -- src/control-plane/bootstrap-seed.test.ts
+pnpm run test -- src/control-plane/bootstrap-seed.test.ts
 ```
 
 ### 2. Versioned meaning access
@@ -49,7 +49,7 @@ Add an explicit versioned-meaning writer for `playbooks`, `roles`, and `pipeline
 Verify:
 
 ```bash
-npm run test -- src/control-plane/versioned-meaning.test.ts
+pnpm run test -- src/control-plane/versioned-meaning.test.ts
 ```
 
 ### 3. Source, manifest, and catalog validation
@@ -60,7 +60,7 @@ before any write. Validate `schema_version === 1`, catalog paths, duplicate ids,
 Verify:
 
 ```bash
-npm run test -- src/playbook/manifest.test.ts src/playbook/catalog-loader.test.ts src/playbook/source-resolver.test.ts
+pnpm run test -- src/playbook/manifest.test.ts src/playbook/catalog-loader.test.ts src/playbook/source-resolver.test.ts
 ```
 
 ### 4. Prompt and row mapping
@@ -72,7 +72,7 @@ new `pipelines` table.
 Verify:
 
 ```bash
-npm run test -- src/playbook/prompt-composer.test.ts src/playbook/import-mapper.test.ts
+pnpm run test -- src/playbook/prompt-composer.test.ts src/playbook/import-mapper.test.ts
 ```
 
 ### 5. Installer and CLI
@@ -82,7 +82,7 @@ Wire `PlaybooksService` through the host-free Revisium module and expose `revo p
 Verify:
 
 ```bash
-npm run test -- src/playbook/playbook-installer.test.ts src/cli/commands/playbook.test.ts src/cli/program.test.ts
+pnpm run test -- src/playbook/playbook-installer.test.ts src/cli/commands/playbook.test.ts src/cli/program.test.ts
 ```
 
 ### 6. Final gates
@@ -90,10 +90,10 @@ npm run test -- src/playbook/playbook-installer.test.ts src/cli/commands/playboo
 Run:
 
 ```bash
-npm run typecheck
-npm run lint:ci
-npm run test:cov
-npm run verify
+pnpm run typecheck
+pnpm run lint:ci
+pnpm run test:cov
+pnpm run verify
 ```
 
 Optional daemon smoke when standalone is available:

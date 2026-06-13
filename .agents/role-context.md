@@ -16,9 +16,9 @@ in a role prompt from this table before running that role.
 | `{{GH_REPO}}` | `revisium/agent-orchestrator` |
 | `{{BASE_BRANCH}}` | `master` |
 | `{{INVARIANTS_DOC}}` | `docs/architecture-overview.md` (the five invariants) |
-| `{{TYPECHECK_CMD}}` | `npm run typecheck` |
-| `{{TEST_CMD}}` | `npm test` |
-| `{{LINT_CMD_OR_NONE}}` | `npm run lint:ci` |
+| `{{TYPECHECK_CMD}}` | `pnpm run typecheck` |
+| `{{TEST_CMD}}` | `pnpm test` |
+| `{{LINT_CMD_OR_NONE}}` | `pnpm run lint:ci` |
 | `{{COMMIT_RULES}}` | single clean commit; **no** `Co-Authored-By`; **no** AI-attribution / summary footer |
 | `{{PR_TITLE}}` | `Implement Plan NNNN <short name>` (matches existing PR history) |
 | `{{BRANCH}}` | `feat/plan-NNNN-<slug>` |
@@ -51,8 +51,8 @@ The resolved port lives in the local `runtime.json`; never hardcode it.
 ## Local quality gates
 
 Before every PR, run:
-- `npm run verify` — typecheck + lint:ci + test (full local gate)
-- `npm run sonar:issues:local` — inspect unresolved SonarCloud issues for the current branch/PR
+- `pnpm run verify` — typecheck + lint:ci + test (full local gate)
+- `pnpm run sonar:issues:local` — inspect unresolved SonarCloud issues for the current branch/PR
   (requires SONAR_TOKEN in `.env.sonar`; copy `.env.sonar.example` to get started)
-- `npm run sonar:local` — full Sonar scan via Docker (needs Docker + SONAR_TOKEN)
-- `npm run ci:local:sonar` — full pipeline: verify → sonar:local → sonar:issues:local
+- `pnpm run sonar:local` — full Sonar scan via Docker (needs Docker + SONAR_TOKEN)
+- `pnpm run ci:local:sonar` — full pipeline: verify → sonar:local → sonar:issues:local

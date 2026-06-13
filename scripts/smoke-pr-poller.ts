@@ -1,8 +1,8 @@
 // MANUAL smoke for the PR readiness poller — requires `gh` auth and a real open PR.
-// This is NOT wired into `npm test` or CI — it needs a live GitHub auth session.
+// This is NOT wired into `pnpm test` or CI — it needs a live GitHub auth session.
 //
 // Usage:
-//   npm run smoke:pr-poller -- --pr <number> --repo <owner/repo> [--sonar <project-key>]
+//   pnpm run smoke:pr-poller -- --pr <number> --repo <owner/repo> [--sonar <project-key>]
 //
 // What it proves:
 //   - The poller correctly calls `gh pr view --json statusCheckRollup,...` and parses the response.
@@ -28,7 +28,7 @@ const repo = getArg('--repo') ?? process.env['SMOKE_REPO'] ?? '';
 const sonarProject = getArg('--sonar') ?? process.env['SMOKE_SONAR_PROJECT'];
 
 if (!prNumber || !repo) {
-  console.error('Usage: npm run smoke:pr-poller -- --pr <number> --repo <owner/repo> [--sonar <project-key>]');
+  console.error('Usage: pnpm run smoke:pr-poller -- --pr <number> --repo <owner/repo> [--sonar <project-key>]');
   console.error('  or set SMOKE_PR_NUMBER and SMOKE_REPO env vars');
   process.exit(1);
 }

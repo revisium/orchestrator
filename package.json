@@ -18,12 +18,10 @@
   "publishConfig": {
     "access": "public"
   },
-  "overrides": {
-    "@hono/node-server": "1.19.13"
-  },
+  "packageManager": "pnpm@11.5.2",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
-    "prepack": "npm run build",
+    "prepack": "pnpm run build",
     "revo": "tsx src/cli/index.ts",
     "smoke:control-plane": "tsx scripts/smoke-control-plane-data-access.ts",
     "smoke:create-run": "tsx scripts/smoke-create-run.ts",
@@ -41,7 +39,7 @@
     "sonar:local": "bash scripts/sonar-local.sh",
     "sonar:issues:local": "bash scripts/sonar-issues-local.sh",
     "ci:local:sonar": "bash scripts/ci-local-sonar.sh",
-    "verify": "npm run typecheck && npm run lint:ci && npm run test:cov"
+    "verify": "pnpm run typecheck && pnpm run lint:ci && pnpm run test:cov"
   },
   "dependencies": {
     "@dbos-inc/dbos-sdk": "4.19.8",
@@ -56,6 +54,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.4",
     "@types/node": "^24.0.0",
     "@types/pg": "^8.20.0",
     "eslint": "^9.39.4",

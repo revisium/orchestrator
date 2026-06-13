@@ -38,7 +38,7 @@ two regexes. This slice adds direct tests that assert the return value precisely
    `function parseOwnerRepo(remoteUrl: string): string | null {` to
    `export function parseOwnerRepo(remoteUrl: string): string | null {`. No other edit; `resolveOwnerRepo`
    (line 136, same file) keeps calling it unchanged.
-   **Verify:** `npx tsc --noEmit` exits 0.
+   **Verify:** `pnpm run typecheck` exits 0.
    **Stop if:** any other symbol named `parseOwnerRepo` already exists as an export elsewhere
    (`grep -rn 'export.*parseOwnerRepo' src` returns more than this one line) — pause, do not create a duplicate.
 
@@ -61,7 +61,7 @@ two regexes. This slice adds direct tests that assert the return value precisely
    - **Negative → `null`:** empty string `''`; `git@github.com:o/re po.git` (space); `https://github.com/o/`
      (missing repo segment); `https://github.com/o/repo/tree/main` (trailing path);
      `https://gitlab.com/o/repo` (non-github host); `o/repo` (bare, no scheme/host).
-   **Verify:** `npx tsx --test src/runners/integrator.test.ts` — all tests pass, including the new cases.
+   **Verify:** `pnpm exec tsx --test src/runners/integrator.test.ts` — all tests pass, including the new cases.
    **Stop if:** any new case fails because *actual* behavior differs from the expected value above — do NOT change
    the regex to make it pass; instead record the real behavior and flag it (the helper's current behavior is the
    spec for this slice).
@@ -69,7 +69,7 @@ two regexes. This slice adds direct tests that assert the return value precisely
 ## Acceptance
 
 - `parseOwnerRepo` is exported and directly imported by the test.
-- `npx tsx --test src/runners/integrator.test.ts` passes with the new direct cases asserting exact `owner/repo`
+- `pnpm exec tsx --test src/runners/integrator.test.ts` passes with the new direct cases asserting exact `owner/repo`
   strings and `null` rejections.
-- `npm test` (whole suite) still passes; `npx tsc --noEmit` clean.
+- `pnpm test` (whole suite) still passes; `pnpm run typecheck` clean.
 - No production parsing behavior changed; existing indirect tests untouched.

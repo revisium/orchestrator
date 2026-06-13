@@ -1,0 +1,21 @@
+name: Publish Package to npmjs
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish:
+    permissions:
+      contents: read
+      id-token: write
+    uses: revisium/revisium-actions/.github/workflows/npm-publish.yml@70181e04f5a944cde53f3f455813b6e6d4e8d9fd # v0.4.0
+    with:
+      node_version: 24.11.1
+      install_command: corepack enable && pnpm install --frozen-lockfile
+      npm_access: public
+      publish_auth: token
+      create_github_release: false
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}

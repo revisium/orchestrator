@@ -1,0 +1,13 @@
+allowBuilds:
+  sharp: true
+  bcrypt: true
+  prisma: true
+  '@prisma/engines': true
+  '@embedded-postgres/linux-x64': true
+  '@embedded-postgres/darwin-arm64': true
+  '@nestjs/core': false  # telemetry — intentionally blocked
+  '@scarf/scarf': false  # analytics — intentionally blocked
+  esbuild: false  # tsx/dev only, not in published dist/
+
+overrides:
+  '@hono/node-server': 1.19.13

@@ -5,7 +5,7 @@
  * Drives the REAL makeDevelopTask + makeRunStep production builders with injected fakes,
  * asserts the full script-mode event sequence + BOTH gate parks, deterministic throughout.
  *
- * Usage: npm run smoke:mvp
+ * Usage: pnpm run smoke:mvp
  *
  * What this proves:
  *   - Assertions 1–6: step order, integrate_succeeded payload, plan gate before developer,

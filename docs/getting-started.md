@@ -15,7 +15,7 @@ revo --version                          # prints 0.1.0-alpha.0 (from dist, not t
 > the daemon will fail to start.
 
 Installed users run `revo …` (global bin). In-repo development can use `./bin/revo.js …`
-(runs the built `dist/`, so `npm run build` must be run first) or `npm run revo -- <args>`
+(runs the built `dist/`, so `pnpm run build` must be run first) or `pnpm run revo -- <args>`
 (runs `tsx src/cli/index.ts` directly from source, no build step needed). Both invocation
 styles are shown below.
 
@@ -44,7 +44,7 @@ See [architecture-overview.md](./architecture-overview.md) and
 
 - **Node.js 24.11.x** (`>=24.11.1 <25`) — check with `node --version`. This range is imposed by
   the `@revisium/standalone` daemon dependency; a wider range is not supported.
-- For in-repo development: `npm install` in `agent-orchestrator/` and `npm run build`.
+- For in-repo development: `pnpm install` in `agent-orchestrator/` and `pnpm run build`.
 - `gh` auth + a clean target repo are needed only for the `--live` path (real Claude + real PR).
   The zero-cost stub path requires none of these.
 - `bootstrap` fetches `npx -y revisium@2.5.0-alpha.6` on first run — network access is required
