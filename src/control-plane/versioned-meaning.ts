@@ -1,5 +1,4 @@
 import { RevisiumClient } from '@revisium/client';
-import type { RevisionModel } from '@revisium/client';
 import { baseUrl, getConfig, isAlive, isHealthy, readRuntime } from '../config.js';
 import { ControlPlaneError } from './errors.js';
 
@@ -21,12 +20,12 @@ export type VersionedMeaningScope = {
   getRow(tableId: string, rowId: string): Promise<unknown>;
   createRow(tableId: string, rowId: string, data: object): Promise<unknown>;
   updateRow(tableId: string, rowId: string, data: object): Promise<unknown>;
-  commit(comment?: string): Promise<RevisionModel | unknown>;
+  commit(comment?: string): Promise<unknown>;
 };
 
 export type VersionedMeaningAccess = {
   upsertRow(row: VersionedMeaningRow): Promise<VersionedMeaningOperation>;
-  commit(message: string): Promise<RevisionModel | unknown | null>;
+  commit(message: string): Promise<unknown | null>;
 };
 
 export type VersionedMeaningAccessOptions = {

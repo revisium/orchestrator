@@ -9,3 +9,4 @@ coverage/
 
 # Private, machine/account-specific role-context overrides (never commit)
 .agents/*.local.md
+.agents/runs/

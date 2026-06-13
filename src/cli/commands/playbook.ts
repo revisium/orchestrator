@@ -28,10 +28,10 @@ function formatInstallResult(result: PlaybookInstallResult): string {
   if (result.dryRun) {
     lines.push('dry-run: no rows written');
   } else if (result.committed) {
-    lines.push(`committed: yes${result.revisionId ? ` (${result.revisionId})` : ''}`);
+    const revisionSuffix = result.revisionId ? ` (${result.revisionId})` : '';
+    lines.push(`committed: yes${revisionSuffix}`);
   } else {
-    lines.push('committed: no');
-    lines.push('warning: draft was written but is not live until committed');
+    lines.push('committed: no', 'warning: draft was written but is not live until committed');
   }
   return lines.join('\n');
 }

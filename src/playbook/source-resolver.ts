@@ -52,8 +52,16 @@ function looksLikeRemoteSource(source: string): boolean {
 }
 
 function localSourceIdentity(input: string, pkg: { name: string; version: string }): string {
-  if (pkg.name) return `local:${pkg.name}${pkg.version ? `@${pkg.version}` : ''}`;
+  if (pkg.name) {
+    const versionSuffix = pkg.version ? `@${pkg.version}` : '';
+    return `local:${pkg.name}${versionSuffix}`;
+  }
   return `local:${input}`;
+}
+
+function packageSourceIdentity(input: string, version: string): string {
+  const versionSuffix = version ? `@${version}` : '';
+  return `npm:${input}${versionSuffix}`;
 }
 
 function looksLikePath(source: string): boolean {
@@ -117,7 +125,7 @@ export function resolvePlaybookSource(
       type: 'package',
       input,
       root,
-      source: `npm:${input}${pkg.version ? `@${pkg.version}` : ''}`,
+      source: packageSourceIdentity(input, pkg.version),
       packageName: pkg.name || input,
       version: pkg.version,
     };
