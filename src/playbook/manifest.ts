@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { PlaybookError } from './errors.js';
 import { resolvePathInside } from './source-resolver.js';
 
-export const SUPPORTED_PLAYBOOK_SCHEMA_VERSION = 1;
+export const SUPPORTED_PLAYBOOK_SCHEMA_VERSION = 2;
 
 export type PlaybookManifest = {
   id: string;

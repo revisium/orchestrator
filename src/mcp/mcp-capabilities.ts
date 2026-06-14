@@ -14,6 +14,7 @@ export const MCP_TOOL_NAMES = [
   'get_run_events',
   'get_run_log',
   'get_run_digest',
+  'wait_for_run',
   'list_inbox',
   'get_inbox_item',
   'get_pending_decisions',

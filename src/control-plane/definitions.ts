@@ -6,7 +6,7 @@ export type Role = {
   systemPrompt: string;
   modelLevel: 'cheap' | 'standard' | 'deep';
   effort: string;
-  runner: 'claude-code' | 'codex' | 'script';
+  runner: string;
   allowedTools: string[];
   scopeRules: unknown;
   playbookId?: string;
@@ -109,7 +109,7 @@ export async function loadRole(name: string, transport?: ControlPlaneTransport):
     systemPrompt: toStr(d.system_prompt),
     modelLevel: toModelLevel(d.model_level),
     effort: toStr(d.effort),
-    runner: (toStr(d.runner) || 'claude-code') as Role['runner'],
+    runner: toStr(d.runner_id) || toStr(d.runner) || 'claude-code',
     allowedTools: Array.isArray(d.allowed_tools) ? (d.allowed_tools as unknown[]).map(toStr) : [],
     scopeRules: parseJsonField(d.scope_rules),
     playbookId: toStr(d.playbook_id) || undefined,

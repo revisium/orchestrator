@@ -126,6 +126,10 @@ test('writes the exact ready skeleton fields without stringifying JSON-ish value
     scope: 'plan 0003',
     repo: { input: 'agent-orchestrator', ref: 'agent-orchestrator', mode: 'name' },
     priority: 2,
+    playbook_id: '',
+    pipeline_id: '',
+    route_decision: {},
+    execution_profile: {},
     ids: { run_id: result.runId, task_id: result.taskId, step_id: result.stepId },
   });
 });
@@ -253,10 +257,10 @@ test('omitting role defaults both fields to architect', async () => {
   assert.equal(byTable(rows, 'steps').data.role, 'architect');
 });
 
-test('unknown role rejects before assertReady or writes', async () => {
+test('unsafe or unknown bare role rejects before assertReady or writes', async () => {
   const { access, calls, rows } = createFakeDataAccess();
 
-  await assert.rejects(() => createRunWorkflow(access, { ...baseInput, role: 'tester' }), /role must be one of/);
+  await assert.rejects(() => createRunWorkflow(access, { ...baseInput, role: 'tester' }), /role must be/);
   assert.deepEqual(calls, []);
   assert.deepEqual(rows, []);
 });
@@ -266,5 +270,23 @@ test('each known role is accepted and written to steps.role', async () => {
     const { access, rows } = createFakeDataAccess();
     await createRunWorkflow(access, { ...baseInput, role: knownRole });
     assert.equal(byTable(rows, 'steps').data.role, knownRole);
+  }
+});
+
+test('installed playbook role row ids are accepted and written to role fields', async () => {
+  const { access, rows } = createFakeDataAccess();
+
+  await createRunWorkflow(access, { ...baseInput, role: 'pb-developer' });
+
+  assert.equal(byTable(rows, 'tasks').data.role_hint, 'pb-developer');
+  assert.equal(byTable(rows, 'steps').data.role, 'pb-developer');
+});
+
+test('unsafe installed role row ids reject before assertReady or writes', async () => {
+  for (const role of ['pb/developer', 'pb developer', 'x'.repeat(65)]) {
+    const { access, calls, rows } = createFakeDataAccess();
+    await assert.rejects(() => createRunWorkflow(access, { ...baseInput, role }), /role must be/);
+    assert.deepEqual(calls, []);
+    assert.deepEqual(rows, []);
   }
 });

@@ -5,7 +5,7 @@
  *   - event-first ordering (run_failed event created BEFORE the status patch);
  *   - status patched to 'failed' with the true previous_status;
  *   - deterministic event id (no timestamp) + ROW_CONFLICT idempotency on replay;
- *   - already-failed is a no-op (no duplicate event, no fresh patch);
+ *   - already-failed skips duplicate event + run-row refresh;
  *   - the persisted reason is token-redacted (secrets never reach Revisium).
  */
 import test from 'node:test';
@@ -18,20 +18,30 @@ import { fnv1a64Hex } from '../control-plane/steps.js';
 
 function makeFake(
   runRows: ControlPlaneRow[],
-  opts: { throwConflictOnEvent?: boolean } = {},
+  opts: { throwConflictOnEvent?: boolean; taskRows?: ControlPlaneRow[]; stepRows?: ControlPlaneRow[] } = {},
 ) {
   const calls: string[] = [];
   const patches: Array<{ table: RuntimeTable; rowId: string; ops: PatchOperation[] }> = [];
   const creates: Array<{ table: RuntimeTable; rowId: string; data: Record<string, unknown> }> = [];
   const createdEventIds = new Set<string>();
   const store = new Map<string, Record<string, unknown>>(
-    runRows.map((r) => [`task_runs:${r.rowId}`, { ...r.data }]),
+    [
+      ...runRows.map((r) => [`task_runs:${r.rowId}`, { ...r.data }] as const),
+      ...(opts.taskRows ?? []).map((r) => [`tasks:${r.rowId}`, { ...r.data }] as const),
+      ...(opts.stepRows ?? []).map((r) => [`steps:${r.rowId}`, { ...r.data }] as const),
+    ],
   );
 
   const da: ControlPlaneDataAccess = {
     async assertReady() {},
-    async listRows() {
-      return [];
+    async listRows(table, options) {
+      let source: ControlPlaneRow[] = [];
+      if (table === 'tasks') source = opts.taskRows ?? [];
+      if (table === 'steps') source = opts.stepRows ?? [];
+      const start = options?.after
+        ? source.findIndex((row) => row.cursor === options.after) + 1
+        : 0;
+      return source.slice(start, start + (options?.first ?? source.length));
     },
     async getRow(table, rowId) {
       calls.push(`getRow:${table}:${rowId}`);
@@ -103,12 +113,51 @@ test('failRun: writes run_failed event FIRST, then patches status → failed', a
   assert.equal(statusOp?.value, 'failed');
 });
 
-test('failRun: already-failed is a no-op (no duplicate event, no fresh patch)', async () => {
+test('failRun: already-failed skips event and run patch when related rows are current', async () => {
   const { da, creates, patches } = makeFake([RUN('failed')]);
   const result = await failRun(da, 'run-a', 'again');
   assert.deepEqual(result, { runId: 'run-a', previousStatus: 'failed', status: 'failed' });
   assert.equal(creates.length, 0, 'no event written when already failed');
-  assert.equal(patches.length, 0, 'no patch written when already failed');
+  assert.equal(
+    patches.filter((patch) => patch.table === 'task_runs').length,
+    0,
+    'no run patch written when already failed',
+  );
+  assert.equal(patches.length, 0, 'no related patches when related rows are current');
+});
+
+test('failRun: already-failed replay reconciles stale related task and step rows to failed', async () => {
+  const taskRows: ControlPlaneRow[] = [
+    { rowId: 'task-stale', data: { id: 'task-stale', run_id: 'run-a', status: 'running' } },
+    { rowId: 'task-current', data: { id: 'task-current', run_id: 'run-a', status: 'failed' } },
+    { rowId: 'task-other-run', data: { id: 'task-other-run', run_id: 'run-b', status: 'running' } },
+  ];
+  const stepRows: ControlPlaneRow[] = [
+    { rowId: 'step-stale', data: { id: 'step-stale', run_id: 'run-a', status: 'running' } },
+    { rowId: 'step-current', data: { id: 'step-current', run_id: 'run-a', status: 'failed' } },
+  ];
+  const { da, creates, patches } = makeFake(
+    [RUN('failed')],
+    { taskRows, stepRows },
+  );
+
+  const result = await failRun(da, 'run-a', 'again', { now: new Date('2026-06-11T00:00:00Z') });
+
+  assert.deepEqual(result, { runId: 'run-a', previousStatus: 'failed', status: 'failed' });
+  assert.equal(creates.length, 0, 'already-terminal replay must not write another event');
+  assert.equal(
+    patches.filter((patch) => patch.table === 'task_runs').length,
+    0,
+    'already-terminal replay must not refresh the run row',
+  );
+  assert.deepEqual(
+    patches.map((patch) => `${patch.table}:${patch.rowId}`).sort(),
+    ['steps:step-stale', 'tasks:task-stale'],
+  );
+  for (const patch of patches) {
+    assert.ok(patch.ops.some((op) => op.op === 'replace' && op.path === 'status' && op.value === 'failed'));
+    assert.ok(patch.ops.some((op) => op.op === 'replace' && op.path === 'updated_at' && op.value === '2026-06-11T00:00:00.000Z'));
+  }
 });
 
 test('failRun: ROW_CONFLICT on replay still applies the status patch (idempotent)', async () => {

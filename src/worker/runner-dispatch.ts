@@ -11,6 +11,7 @@ export function createRunAgent(deps: { claudeCode: RunAgent; script?: RunAgent }
       case 'codex':
         throw new Error('RUNNER_NOT_IMPLEMENTED: codex runner is a later plan');
       case 'script':
+      case 'stub-agent':
         if (!deps.script) throw new Error('RUNNER_NOT_IMPLEMENTED: script runner not wired');
         return deps.script(args);
       default:

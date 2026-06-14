@@ -176,20 +176,8 @@ export type InboxResolveDeps = {
   getInbox: (id: string) => Promise<InboxItem | null>;
   resolveInbox: (itemId: string, answer: unknown, resolvedBy: string) => Promise<{ status: 'pending' | 'resolved'; answer: unknown }>;
   signal: (workflowId: string, topic: string, payload: unknown, idempotencyKey: string) => Promise<void>;
-  completeRun: (
-    runId: string,
-    opts?: { actor?: string; source?: string; verdict?: string; iterations?: number },
-  ) => Promise<unknown>;
   pollRunState: (runId: string, pollOpts?: PollOpts) => Promise<void>;
 };
-
-function decisionOf(answer: unknown): string {
-  if (answer !== null && typeof answer === 'object' && !Array.isArray(answer)) {
-    const decision = (answer as Record<string, unknown>).decision;
-    if (typeof decision === 'string') return decision;
-  }
-  return '';
-}
 
 /**
  * resolveGatePath — handle the gate-row branch of inbox resolve (G4).
@@ -233,16 +221,6 @@ async function resolveGatePath(
   const ctx = row.context as Record<string, unknown>;
   const topic = typeof ctx.topic === 'string' ? ctx.topic : '';
   await deps.signal(row.runId, topic, result.answer, id);
-
-  if (topic === 'merge') {
-    const decision = decisionOf(result.answer);
-    await deps.completeRun(row.runId, {
-      actor: 'cli',
-      source: decision === 'reject' ? 'merge-gate-reject' : 'merge-gate-approve',
-      verdict: '',
-      iterations: 0,
-    });
-  }
 
   console.log(`resolved  ${id}`);
   console.log(`decision: ${String((result.answer as Record<string, unknown> | null)?.decision ?? result.answer)}`);
@@ -341,10 +319,6 @@ async function inboxResolve(
     signal: (workflowId, topic, payload, idempotencyKey) => {
       if (!dbosService) throw new Error('signal requires host context');
       return dbosService.signal(workflowId, topic, payload, idempotencyKey);
-    },
-    completeRun: async (runId, completeOpts) => {
-      const { RunService } = await import('../../revisium/run.service.js');
-      return withRevisiumService(RunService, (svc) => svc.completeRun(runId, completeOpts));
     },
     pollRunState: (runId, pollOpts) =>
       withInboxService((svc) =>

@@ -177,6 +177,11 @@ test('seed (0009): playbook import schema is declared as versioned meaning', () 
   for (const field of ['playbook_id', 'playbook_role_id', 'source_path', 'source_hash', 'surface', 'rights']) {
     assert.ok(field in roles, `roles.${field} must be declared`);
   }
+  assert.ok('runner_id' in roles, 'roles.runner_id must be declared');
+  const taskRuns = tableProps('task_runs');
+  for (const field of ['playbook_id', 'pipeline_id', 'params', 'route_decision', 'execution_profile']) {
+    assert.ok(field in taskRuns, `task_runs.${field} must be declared`);
+  }
 });
 
 test('seed (0008 #5): loadRole surfaces per-role timeout_ms + permission_mode', async () => {

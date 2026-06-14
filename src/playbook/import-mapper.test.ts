@@ -38,7 +38,7 @@ test('mapPlaybookRows: maps roles and pipelines into versioned rows', () => {
   const manifest: PlaybookManifest = {
     id: 'pb',
     name: 'PB',
-    schemaVersion: 1,
+    schemaVersion: 2,
     packageName: '@x/pb',
     catalogs: { roles: 'catalog/roles.json', pipelines: 'catalog/pipelines.json' },
     supportedRuntimes: ['revo'],
@@ -51,6 +51,7 @@ test('mapPlaybookRows: maps roles and pipelines into versioned rows', () => {
         surface: 'repo',
         rights: 'read-only',
         defaultModelLevel: 'cheap',
+        runnerId: 'claude-code',
         wrappers: {},
       },
     ],
@@ -81,7 +82,135 @@ test('mapPlaybookRows: maps roles and pipelines into versioned rows', () => {
   assert.equal(rows.roles[0]?.rowId, 'pb-watcher');
   assert.equal(rows.roles[0]?.data.name, 'watcher');
   assert.equal(rows.roles[0]?.data.runner, 'claude-code');
+  assert.equal(rows.roles[0]?.data.runner_id, 'claude-code');
   assert.match(String(rows.roles[0]?.data.scope_rules), /"runtime_role_id":"pr-watcher"/);
   assert.equal(rows.pipelines[0]?.rowId, 'pb-feature-development');
+  assert.deepEqual(rows.pipelines[0]?.data.route_gates, []);
   assert.equal(rows.catalogHash.length, 64);
+});
+
+test('mapPlaybookRows: normalizes canonical gate labels to workflow gate ids', () => {
+  const root = mkdtempSync(join(tmpdir(), 'revo-playbook-map-'));
+  mkdirSync(join(root, 'roles', 'developer'), { recursive: true });
+  mkdirSync(join(root, 'pipelines', 'feature-development'), { recursive: true });
+  writeFileSync(join(root, 'roles', 'developer', 'ROLE.md'), '# Developer\n');
+  writeFileSync(join(root, 'pipelines', 'feature-development', 'PIPELINE.md'), '# Feature\n');
+  const manifest: PlaybookManifest = {
+    id: 'pb',
+    name: 'PB',
+    schemaVersion: 2,
+    packageName: '@x/pb',
+    catalogs: { roles: 'catalog/roles.json', pipelines: 'catalog/pipelines.json' },
+    supportedRuntimes: ['revo'],
+  };
+
+  const rows = mapPlaybookRows({
+    root,
+    source: { type: 'local', input: '.', root, source: `local:${root}`, packageName: '@x/pb', version: '1.0.0' },
+    manifest,
+    catalogs: {
+      roles: [
+        {
+          id: 'developer',
+          path: 'roles/developer/ROLE.md',
+          surface: 'any',
+          rights: 'write-working-tree',
+          defaultModelLevel: 'standard',
+          runnerId: 'claude-code',
+          wrappers: {},
+        },
+      ],
+      pipelines: [
+        {
+          id: 'feature-development',
+          path: 'pipelines/feature-development/PIPELINE.md',
+          triggers: ['new feature'],
+          requiredRoles: ['developer'],
+          alternativeRoles: [],
+          optionalRoles: [],
+          routeGates: ['task spec approval', 'merge approval', 'merge'],
+          platformInvocation: 'canonical-only',
+          executionPolicy: {},
+        },
+      ],
+    },
+    now: '2026-06-13T00:00:00.000Z',
+  });
+
+  assert.deepEqual(rows.pipelines[0]?.data.route_gates, ['plan', 'merge']);
+});
+
+test('mapPlaybookRows: runner_id, not rights, selects the runtime runner', () => {
+  const root = mkdtempSync(join(tmpdir(), 'revo-playbook-map-'));
+  mkdirSync(join(root, 'roles', 'integrator'), { recursive: true });
+  writeFileSync(join(root, 'roles', 'integrator', 'ROLE.md'), '# Integrator\n');
+  const manifest: PlaybookManifest = {
+    id: 'pb',
+    name: 'PB',
+    schemaVersion: 2,
+    packageName: '@x/pb',
+    catalogs: { roles: 'catalog/roles.json', pipelines: 'catalog/pipelines.json' },
+    supportedRuntimes: ['revo'],
+  };
+  const rows = mapPlaybookRows({
+    root,
+    source: { type: 'local', input: '.', root, source: `local:${root}`, packageName: '@x/pb', version: '1.0.0' },
+    manifest,
+    catalogs: {
+      roles: [
+        {
+          id: 'integrator',
+          path: 'roles/integrator/ROLE.md',
+          surface: 'repo',
+          rights: 'git-gh',
+          defaultModelLevel: 'standard',
+          runnerId: 'revo-integrator',
+          wrappers: {},
+        },
+      ],
+      pipelines: [],
+    },
+    now: '2026-06-13T00:00:00.000Z',
+  });
+
+  assert.equal(rows.roles[0]?.data.runner, 'revo-integrator');
+  assert.equal(rows.roles[0]?.data.runner_id, 'revo-integrator');
+});
+
+test('mapPlaybookRows: rejects production stub-agent role bindings', () => {
+  const root = mkdtempSync(join(tmpdir(), 'revo-playbook-map-'));
+  mkdirSync(join(root, 'roles', 'developer'), { recursive: true });
+  writeFileSync(join(root, 'roles', 'developer', 'ROLE.md'), '# Developer\n');
+  const manifest: PlaybookManifest = {
+    id: 'pb',
+    name: 'PB',
+    schemaVersion: 2,
+    packageName: '@x/pb',
+    catalogs: { roles: 'catalog/roles.json', pipelines: 'catalog/pipelines.json' },
+    supportedRuntimes: ['revo'],
+  };
+
+  assert.throws(
+    () => mapPlaybookRows({
+      root,
+      source: { type: 'local', input: '.', root, source: `local:${root}`, packageName: '@x/pb', version: '1.0.0' },
+      manifest,
+      catalogs: {
+        roles: [
+          {
+            id: 'developer',
+            path: 'roles/developer/ROLE.md',
+            surface: 'any',
+            rights: 'write-working-tree',
+            defaultModelLevel: 'standard',
+            runnerId: 'stub-agent',
+            wrappers: {},
+          },
+        ],
+        pipelines: [],
+      },
+      now: '2026-06-13T00:00:00.000Z',
+    }),
+    /stub-agent/,
+  );
 });

@@ -13,10 +13,10 @@ function json(value: unknown) {
   };
 }
 
-const runnerModeSchema = z.enum(['script', 'live']).optional().describe('script = zero-cost stub path; live = real Claude + git/GitHub effects');
 const runIdSchema = z.string().min(1).describe('Run ID');
 const inboxIdSchema = z.string().min(1).describe('Inbox item ID');
 const limitSchema = z.number().int().positive().max(500).optional();
+const paramsSchema = z.record(z.string(), z.unknown()).optional();
 const prReadinessInputSchema = {
   repo: z.string().min(1).describe('GitHub repository in owner/name form, for example revisium/agent-orchestrator'),
   prNumber: z.number().int().positive().optional(),
@@ -101,10 +101,11 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
         repo: z.string().min(1),
         description: z.string().optional(),
         scope: z.string().optional(),
+        playbookId: z.string().min(1).optional(),
+        pipelineId: z.string().min(1).optional(),
+        params: paramsSchema,
         priority: z.number().int().optional(),
-        role: z.string().optional().describe('Initial role hint; defaults to architect'),
         start: z.boolean().optional().describe('Start the workflow immediately after creating the run'),
-        runnerMode: runnerModeSchema,
       },
       annotations: { readOnlyHint: false },
     },
@@ -117,7 +118,6 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
       description: 'Start or reattach the durable pipeline workflow for an existing run.',
       inputSchema: {
         runId: runIdSchema,
-        runnerMode: runnerModeSchema,
       },
       annotations: { readOnlyHint: false },
     },
@@ -130,11 +130,24 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
       description: 'Alias for start_run; reattaches a durable workflow by run ID.',
       inputSchema: {
         runId: runIdSchema,
-        runnerMode: runnerModeSchema,
       },
       annotations: { readOnlyHint: false },
     },
     async (input) => json(await facade.resumeRun(input)),
+  );
+
+  server.registerTool(
+    'wait_for_run',
+    {
+      description: 'Resolve current run state and next action: pending_gate, question, running, blocked, failed, completed.',
+      inputSchema: {
+        runId: runIdSchema,
+        timeoutMs: z.number().int().nonnegative().max(120000).optional(),
+        intervalMs: z.number().int().positive().max(10000).optional(),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async (input) => json(await facade.waitForRun(input)),
   );
 
   server.registerTool(
@@ -398,11 +411,12 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
         title: z.string().min(1),
         repo: z.string().optional(),
         pipeline: z.string().optional(),
-        live: z.boolean().optional(),
+        playbookId: z.string().optional(),
+        params: paramsSchema,
       },
       annotations: { readOnlyHint: true },
     },
-    (input) => json(facade.simulateRoute(input)),
+    async (input) => json(await facade.simulateRoute(input)),
   );
 
   server.registerTool(

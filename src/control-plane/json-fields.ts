@@ -8,6 +8,7 @@ export type PatchOperation = {
 };
 
 const jsonFields: Partial<Record<RuntimeTable, readonly string[]>> = {
+  task_runs: ['params', 'route_decision', 'execution_profile'],
   steps: ['input', 'output'],
   events: ['payload'],
   inbox: ['context', 'answer'],

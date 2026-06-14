@@ -17,7 +17,7 @@ function makePlaybookRoot(): string {
     JSON.stringify({
       id: 'pb',
       name: 'PB',
-      schema_version: 1,
+      schema_version: 2,
       package: '@x/pb',
       catalogs: { roles: 'catalog/roles.json', pipelines: 'catalog/pipelines.json' },
       supported_runtimes: ['revo'],
@@ -35,6 +35,7 @@ function makePlaybookRoot(): string {
         surface: 'any',
         rights: 'write-working-tree',
         default_model_level: 'standard',
+        runner_id: 'claude-code',
       },
     ]),
   );

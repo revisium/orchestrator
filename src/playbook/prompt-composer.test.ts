@@ -21,6 +21,7 @@ test('composeRolePrompt: appends core reference and returns stable hash', () => 
     surface: 'any',
     rights: 'write-working-tree',
     defaultModelLevel: 'standard',
+    runnerId: 'claude-code',
     wrappers: {},
   });
 

@@ -4,6 +4,7 @@ import type { PlaybookManifest } from './manifest.js';
 import { PlaybookError } from './errors.js';
 import type { ResolvedPlaybookSource } from './source-resolver.js';
 import { composeRolePrompt } from './prompt-composer.js';
+import { normalizeRouteGates } from '../pipeline/route-contract.js';
 
 export type VersionedRow = {
   table: 'playbooks' | 'roles' | 'pipelines';
@@ -33,16 +34,15 @@ const RUNTIME_NAME_MAP: Record<string, string> = {
 const ROW_ID_MAX_LENGTH = 64;
 const ROW_ID_HASH_LENGTH = 12;
 
-const RIGHTS_MAP: Record<string, { allowedTools: string[]; runtimeRunner: 'claude-code' | 'script' }> = {
-  'read-only': { allowedTools: ['Read', 'Grep', 'Glob'], runtimeRunner: 'claude-code' },
+const RIGHTS_MAP: Record<string, { allowedTools: string[] }> = {
+  'read-only': { allowedTools: ['Read', 'Grep', 'Glob'] },
   'write-working-tree': {
     allowedTools: ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash'],
-    runtimeRunner: 'claude-code',
   },
-  'qa-live': { allowedTools: ['Read', 'Bash'], runtimeRunner: 'claude-code' },
-  'deploy-read': { allowedTools: ['Read', 'Bash'], runtimeRunner: 'claude-code' },
-  'git-gh': { allowedTools: ['Read', 'Bash'], runtimeRunner: 'script' },
-  'deterministic-script': { allowedTools: ['Read', 'Bash'], runtimeRunner: 'script' },
+  'qa-live': { allowedTools: ['Read', 'Bash'] },
+  'deploy-read': { allowedTools: ['Read', 'Bash'] },
+  'git-gh': { allowedTools: ['Read', 'Bash'] },
+  'deterministic-script': { allowedTools: ['Read', 'Bash'] },
 };
 
 export type MapPlaybookRowsOptions = {
@@ -123,17 +123,23 @@ export function runtimeRoleName(roleId: string): string {
   return RUNTIME_NAME_MAP[roleId] ?? roleId;
 }
 
-export function mapRights(rights: string): { allowedTools: string[]; runtimeRunner: 'claude-code' | 'script' } {
+export function mapRights(rights: string): { allowedTools: string[] } {
   const mapped = RIGHTS_MAP[rights];
   if (!mapped) {
     throw new PlaybookError('PLAYBOOK_INVALID_CATALOG', `Unsupported playbook role rights: ${rights}`);
   }
-  return { allowedTools: [...mapped.allowedTools], runtimeRunner: mapped.runtimeRunner };
+  return { allowedTools: [...mapped.allowedTools] };
 }
 
 function mapRole(root: string, playbookId: string, role: RoleCatalogRecord, now: string): VersionedRow {
+  if (role.runnerId === 'stub-agent') {
+    throw new PlaybookError(
+      'PLAYBOOK_INVALID_CATALOG',
+      `Production playbook role ${role.id} must not bind runner_id stub-agent; use an execution profile override for test stubs`,
+    );
+  }
   const rights = mapRights(role.rights);
-  const requiredPrompt = rights.runtimeRunner !== 'script';
+  const requiredPrompt = !role.runnerId.startsWith('revo-');
   const prompt = composeRolePrompt(root, role, requiredPrompt);
   const runtimeName = runtimeRoleName(role.id);
   const importedRoleId = scopedImportRowId(playbookId, role.id);
@@ -146,13 +152,15 @@ function mapRole(root: string, playbookId: string, role: RoleCatalogRecord, now:
       system_prompt: prompt.prompt || `Code-backed role imported from playbook role ${role.id}.`,
       model_level: role.defaultModelLevel,
       effort: role.defaultModelLevel === 'cheap' ? 'low' : 'high',
-      runner: rights.runtimeRunner,
+      runner: role.runnerId,
+      runner_id: role.runnerId,
       allowed_tools: rights.allowedTools,
       scope_rules: JSON.stringify({
         surface: role.surface,
         rights: role.rights,
         playbook_role_id: role.id,
         runtime_role_id: runtimeName,
+        runner_id: role.runnerId,
       }),
       playbook_id: playbookId,
       playbook_role_id: role.id,
@@ -181,7 +189,7 @@ function mapPipeline(playbookId: string, pipeline: PipelineCatalogRecord, now: s
       required_roles: pipeline.requiredRoles,
       alternative_roles_json: JSON.stringify(pipeline.alternativeRoles),
       optional_roles: pipeline.optionalRoles,
-      route_gates: pipeline.routeGates,
+      route_gates: normalizeRouteGates(pipeline.routeGates),
       platform_invocation: pipeline.platformInvocation,
       execution_policy_json: JSON.stringify(pipeline.executionPolicy),
       updated_at: now,

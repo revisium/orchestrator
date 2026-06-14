@@ -50,8 +50,10 @@ Schema compatibility notes from the verified bootstrap:
 ## Tables (fields from brief §5)
 
 ### `task_runs` — a run (may span several repos)
-`id, project_id, title, description, status, repos[], scope, priority, created_by, created_at, updated_at`
+`id, project_id, title, description, status, repos[], scope, priority, playbook_id, pipeline_id, params,
+route_decision, execution_profile, created_by, created_at, updated_at`
 Status: `pending → planning → ready → running → (completed | failed | awaiting_approval | paused | cancelled)`
+`params`, `route_decision`, and `execution_profile` store serialized JSON.
 
 ### `tasks` — a logical task inside a run
 `id, run_id, repo_ref, role_hint, title, status, depends_on[], scope, priority, created_at, updated_at`
@@ -79,12 +81,13 @@ status (pending|resolved), answer, resolved_by, created_at, resolved_at` · Glob
 
 ### `roles` — role definitions (VERSIONED)
 `id, name (architect|developer|reviewer|integrator|ci-poller|pr-watcher), system_prompt, model_level (cheap|standard|deep),
-effort, runner (claude-code|codex|script), allowed_tools[], scope_rules, playbook_id, playbook_role_id,
+effort, runner_id, runner (deprecated alias), allowed_tools[], scope_rules, playbook_id, playbook_role_id,
 source_path, source_hash, surface, rights, updated_at`
 `scope_rules` stores serialized JSON.
-Executable runtime roles keep their existing bare row ids. Imported playbook role snapshots use playbook-scoped row
-ids, for example `<playbook-id>/<role-id>`, so installing a playbook does not replace the current MVP execution
-prompts or tool permissions.
+`runner_id` is imported from playbook schema v2. `rights` maps access/tool policy only.
+Executable runtime roles keep their existing bare row ids. Imported playbook role snapshots use Revisium-safe,
+playbook-scoped row ids, for example `<playbook-id>-<role-id>`, so installing a playbook does not replace the
+current MVP execution prompts or tool permissions.
 
 ### `playbooks` — installed playbook metadata (VERSIONED)
 `id, name, package_name, source, version, schema_version, manifest_path, roles_catalog_path,

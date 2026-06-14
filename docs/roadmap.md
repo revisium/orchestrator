@@ -57,7 +57,7 @@ Slices 0001–0008 predate the ladder and are untagged. See [vision.md](./vision
 - **D0 — playbook-driven manual development** *(current)*. Tasks run manually via the canonical agent playbook
   (Claude Code / Codex as orchestrator). Architecture, process, and vision work lives here.
 - **D1 — revo runs satellite tasks on its own repo** *(enterable now)*. Small, low-risk, well-specified tasks —
-  docs fixes, small tests, single-file refactors — via `revo run create --start --wait --live`, both gates on. Goal: collect
+  docs fixes, small tests, single-file refactors — via `revo run create --pipeline-id local-change --start --wait`, both gates on. Goal: collect
   failures as requirements. Exit: ~10 merged PRs authored by revo.
 - **D2 — revo is the default for routine work.** All bugfix / small-feature tickets go through revo; the manual
   playbook process is reserved for architecture. Entry requires: PR-comment processing (the review-threads slice),

@@ -81,7 +81,13 @@ test('list rows passes options and maps response to ControlPlaneRow', async () =
   assert.equal(calls[0]?.method, 'listRows');
   assert.equal(calls[0]?.table, 'task_runs');
   assert.deepEqual(calls[0]?.options, { first: 1, where: { id: { equals: 'run-1' } } });
-  assert.deepEqual(rows[0]?.data, { id: 'run-1', title: 'Run' });
+  assert.deepEqual(rows[0]?.data, {
+    id: 'run-1',
+    title: 'Run',
+    params: null,
+    route_decision: null,
+    execution_profile: null,
+  });
 });
 
 test('list rows passes empty options when no options provided', async () => {

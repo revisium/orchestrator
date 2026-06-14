@@ -41,8 +41,8 @@ test('needsHost: run list → false', () => {
   assert.equal(needsHost(argv('run', 'list')), false);
 });
 
-test('needsHost: run create → false', () => {
-  assert.equal(needsHost(argv('run', 'create', '--title', 'X', '--repo', '.')), false);
+test('needsHost: run create → true', () => {
+  assert.equal(needsHost(argv('run', 'create', '--title', 'X', '--repo', '.')), true);
 });
 
 test('needsHost: run show → false', () => {
@@ -59,10 +59,6 @@ test('needsHost: run cancel → false', () => {
 
 test('needsHost: run start → true (host-requiring)', () => {
   assert.equal(needsHost(argv('run', 'start', 'run-id-1')), true);
-});
-
-test('needsHost: run start --stub → true', () => {
-  assert.equal(needsHost(argv('run', 'start', 'run-id-1', '--stub')), true);
 });
 
 test('needsHost: run start --help → false (help wins)', () => {
@@ -167,21 +163,14 @@ test('needsHost: inbox resolve --reject -h → false (help flag wins)', () => {
   assert.equal(needsHost(argv('inbox', 'resolve', 'inbox-1', '--reject', '-h')), false);
 });
 
-// ── 0006: run create --start routing ────────────────────────────────────────
+// ── run create routing ──────────────────────────────────────────────────────
 
 test('needsHost: run create --start → true (enqueues workflow, host-requiring)', () => {
   assert.equal(needsHost(argv('run', 'create', '--title', 'X', '--repo', '.', '--start')), true);
 });
 
-test('needsHost: run create --start --live → true (host-requiring with live flag)', () => {
-  assert.equal(
-    needsHost(argv('run', 'create', '--title', 'X', '--repo', '.', '--start', '--live')),
-    true,
-  );
-});
-
-test('needsHost: run create (no --start) → false (host-free, draft-only)', () => {
-  assert.equal(needsHost(argv('run', 'create', '--title', 'X', '--repo', '.')), false);
+test('needsHost: run create (no --start) → true (route validation needs host)', () => {
+  assert.equal(needsHost(argv('run', 'create', '--title', 'X', '--repo', '.')), true);
 });
 
 test('needsHost: run create --start --help → false (help wins over --start)', () => {

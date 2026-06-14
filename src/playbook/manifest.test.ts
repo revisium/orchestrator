@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import { parsePlaybookManifest } from './manifest.js';
 import { PlaybookError } from './errors.js';
 
-test('parsePlaybookManifest: accepts schema version 1 manifest', () => {
+test('parsePlaybookManifest: accepts schema version 2 manifest', () => {
   const manifest = parsePlaybookManifest({
     id: 'revisium-agent-playbook',
     name: 'Revisium Agent Playbook',
-    schema_version: 1,
+    schema_version: 2,
     package: '@revisium/agent-playbook',
     catalogs: { roles: 'catalog/roles.json', pipelines: 'catalog/pipelines.json' },
     supported_runtimes: ['codex', 'claude-code', 'revo'],

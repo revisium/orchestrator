@@ -6,9 +6,9 @@
  *
  * Registration happens in the constructor, BEFORE DBOS.launch() (mirroring dev:ping).
  *
- * 0005 changes:
- * - runnerMode (REQUIRED, durable): 'script' | 'live'. Replaces runnerOverride.
- *   Default/missing/invalid → 'script' (fail-safe). --live is the only path to real claude/git/gh.
+ * 0005/0009 changes:
+ * - Route role bindings are durable and authoritative for runner dispatch.
+ *   runnerMode remains only as a private route-less compatibility shim.
  * - ClaudeCodeService injected via RUN_AGENT token (replaces throwing stub dep).
  * - IntegratorService injected: runIntegrate (live) + runStub (script) + runPreflight (live).
  * - loadRunTaskContext called once in the workflow body (B6).
@@ -38,6 +38,15 @@ import type { Decision } from './await-human.js';
 import type { CancelRunResult } from '../run/cancel-run.js';
 import type { FailRunResult } from '../run/fail-run.js';
 import type { CompleteRunResult } from '../run/complete-run.js';
+import {
+  dispatchRunnerId,
+  type ExecutionProfile,
+  type RouteDecision,
+  type RouteRoleBinding,
+  normalizeRouteGates,
+  runnerNeedsLivePreflight,
+  runnerUsesRealIntegrator,
+} from './route-contract.js';
 
 /** Queue name for the dev-tasks WorkflowQueue. */
 const DEV_TASKS_QUEUE = 'dev-tasks';
@@ -58,9 +67,11 @@ export type DevelopResult = {
   cancelled: boolean;
 };
 
-/** Opts accepted by developTask — slot-1 of the PINNED arity (B11). runnerMode REQUIRED. */
+/** Opts accepted by developTask — slot-1 of the PINNED arity (B11). */
 export type DevelopTaskOpts = {
-  runnerMode: RunnerMode;
+  /** Deprecated private shim for legacy tests without a route. Public MCP/CLI uses route role bindings. */
+  runnerMode?: RunnerMode;
+  route?: RouteDecision;
 };
 
 /**
@@ -225,7 +236,8 @@ export function makeRunStep(deps: RunStepDeps) {
     role: string,
     stepKey: string,
     stepInput: unknown,
-    runnerMode: RunnerMode,
+    resolvedRunnerId?: string,
+    executionProfile?: ExecutionProfile,
   ): Promise<AttemptResult> {
     // 1. Load the canonical role (B1: role is NEVER mutated with #k).
     const loadedRole = await loadRole(role);
@@ -248,10 +260,9 @@ export function makeRunStep(deps: RunStepDeps) {
     // 5. Deterministic, bounded attemptId (B2).
     const attemptId = `attempt_${fnv1a64Hex(`${runId}|${stepKey}`)}`;
 
-    // 6. Apply durable runner mode (M1): live → use role.runner; script → force stub.
-    //    Missing/invalid mode coerces to 'script' (NEVER live) — fail-safe.
-    const effectiveRunner: typeof loadedRole.runner =
-      runnerMode === 'live' ? loadedRole.runner : 'script';
+    // 6. Dispatch through the resolved per-role runner binding. Legacy direct callers may still
+    //    pass runnerMode ('script'|'live') without a route; that fallback is intentionally private.
+    const effectiveRunner = dispatchRunnerId(resolveStepRunner(loadedRole.runner, resolvedRunnerId, executionProfile));
     const dispatchRole = { ...loadedRole, runner: effectiveRunner };
 
     // 7. Run the agent (timed for the attempt-row duration).
@@ -319,6 +330,17 @@ export function makeRunStep(deps: RunStepDeps) {
   };
 }
 
+function resolveStepRunner(
+  roleRunner: string,
+  resolvedRunnerId?: string,
+  executionProfile?: ExecutionProfile,
+): string {
+  if (resolvedRunnerId && resolvedRunnerId !== 'live') return resolvedRunnerId;
+  if (resolvedRunnerId === 'script') return 'script';
+  const profileResolved = executionProfile?.runnerOverrides[roleRunner];
+  return profileResolved || roleRunner;
+}
+
 /**
  * makeDevelopTask — DBOS-free factory for the developTask async function.
  *
@@ -333,7 +355,8 @@ export function makeDevelopTask(
     role: string,
     stepKey: string,
     stepInput: unknown,
-    runnerMode: RunnerMode,
+    resolvedRunnerId?: string,
+    executionProfile?: ExecutionProfile,
   ) => Promise<AttemptResult>,
   deps: DevelopTaskDeps,
 ) {
@@ -365,8 +388,9 @@ export function makeDevelopTask(
     runId: string,
     opts?: DevelopTaskOpts,
   ): Promise<DevelopResult> {
-    // Coerce mode: missing/invalid → 'script' (NEVER 'live' — fail-safe, M1).
-    const mode: RunnerMode = opts?.runnerMode === 'live' ? 'live' : 'script';
+    const route = opts?.route ?? legacyRouteDecision(opts?.runnerMode);
+    const executionProfile = route.executionProfile;
+    const routeGates = normalizeRouteGates(route.routeGates);
 
     // B6: resolve task context once at workflow start (deterministic pure read).
     const { taskId, title, base } = await loadRunTaskContext(runId);
@@ -407,15 +431,44 @@ export function makeDevelopTask(
       return { runId, blocked: true, iterations: iteration, verdict: 'BLOCKED', cancelled: false };
     };
     // runStep — wraps runStepFn to accrue cost so the budget guard sees every step's spend.
-    const runStep = async (role: string, stepKey: string, input: unknown): Promise<AttemptResult> => {
-      const r = await runStepFn(runId, role, stepKey, input, mode);
+    const runStep = async (binding: RouteRoleBinding, stepKey: string, input: unknown): Promise<AttemptResult> => {
+      const r = await runStepFn(runId, binding.rowId, stepKey, input, binding.resolvedRunnerId, executionProfile);
       accrue(r);
       return r;
     };
+    const runRolePass = async (
+      steps: RouteExecutionStep[],
+      from: unknown,
+      suffix: string,
+    ): Promise<{ result: AttemptResult; overBudget: boolean }> => {
+      let stepInput = from;
+      let lastResult: AttemptResult = { output: { verdict: 'PASS' }, nextSteps: [], costs: [] };
+      for (const step of steps) {
+        lastResult = await runStep(step.binding, `${step.stepKey}${suffix}`, {
+          phase: step.phase,
+          from: stepInput,
+        });
+        stepInput = lastResult.output;
+        if (overBudget()) return { result: lastResult, overBudget: true };
+      }
+      return { result: lastResult, overBudget: false };
+    };
+    const routePlan = planRouteExecution(route);
+    const hasIntegrator = Boolean(routePlan.integrator);
+    const executableBindings = [
+      ...routePlan.beforeDeveloper,
+      routePlan.developer,
+      ...routePlan.afterDeveloper,
+      routePlan.integrator,
+      ...routePlan.postIntegratorStatus,
+    ].flatMap((stepOrBinding) => {
+      if (!stepOrBinding) return [];
+      return 'binding' in stepOrBinding ? [stepOrBinding.binding] : [stepOrBinding];
+    });
 
     // B5/B7: live preflight — one memoized DBOS step, evaluated exactly once.
-    // Skipped entirely on script/stub runs (no git, no cost, no mutation beyond fetch).
-    if (mode === 'live') {
+    // Skipped entirely when every selected binding resolves to a stub/script runner.
+    if (executableBindings.some((binding) => runnerNeedsLivePreflight(binding.resolvedRunnerId))) {
       const pf = await preflightFn(taskId, base);
       if ('needsHuman' in pf) {
         await appendEvent({
@@ -430,54 +483,83 @@ export function makeDevelopTask(
       }
     }
 
-    // architect step
-    const architectResult = await runStep('architect', 'architect', { phase: 'plan' });
+    let planResult: AttemptResult | null = null;
+    for (const step of routePlan.beforeDeveloper) {
+      planResult = await runStep(step.binding, step.stepKey, {
+        phase: step.phase,
+        pipeline: route.pipelineId,
+        from: planResult?.output,
+      });
+      if (overBudget()) return await blockBudget();
+    }
+
+    const blockPipeline = async (payload: Record<string, unknown>): Promise<DevelopResult> => {
+      await appendEvent({
+        runId,
+        taskId,
+        stepId: '',
+        stepKey: 'pipeline',
+        type: 'pipeline_blocked',
+        payload,
+      });
+      return { runId, blocked: true, iterations: iteration, verdict: 'BLOCKED', cancelled: false };
+    };
+
+    const plannerOutput = planResult?.output ?? { pipeline: route.pipelineId };
     if (overBudget()) return await blockBudget();
 
     // ── PLAN GATE (after architect, before developer) ──────────────────────────
-    const planDecision = await awaitHuman(runId, 'plan', 'Plan approval', architectResult.output);
-    if (planDecision.decision === 'reject') {
-      await appendEvent({
-        runId,
-        taskId: '',
-        stepId: '',
-        stepKey: 'gate:plan',
-        type: 'gate_rejected',
-        payload: { topic: 'plan' },
-      });
-      await cancelRun(runId, { actor: 'pipeline', source: 'plan-gate-reject' });
-      return { runId, blocked: false, iterations: 0, verdict: 'CANCELLED', cancelled: true };
+    if (routePlan.developer && routeGates.includes('plan')) {
+      const planDecision = await awaitHuman(runId, 'plan', 'Plan approval', plannerOutput);
+      if (planDecision.decision === 'reject') {
+        await appendEvent({
+          runId,
+          taskId: '',
+          stepId: '',
+          stepKey: 'gate:plan',
+          type: 'gate_rejected',
+          payload: { topic: 'plan' },
+        });
+        await cancelRun(runId, { actor: 'pipeline', source: 'plan-gate-reject' });
+        return { runId, blocked: false, iterations: 0, verdict: 'CANCELLED', cancelled: true };
+      }
     }
     // ── end PLAN GATE ──────────────────────────────────────────────────────────
 
+    if (!routePlan.developer) {
+      return await blockPipeline({
+        reason: 'route',
+        message: `pipeline ${route.pipelineId} has no developer role`,
+      });
+    }
+
     // developer step (first pass)
-    let developerResult = await runStep('developer', 'developer', {
+    let developerResult = await runStep(routePlan.developer, routePlan.developer.roleId, {
       phase: 'implement',
-      from: architectResult.output,
+      from: plannerOutput,
     });
     if (overBudget()) return await blockBudget();
 
-    // reviewer step (first pass)
-    let reviewResult = await runStep('reviewer', 'reviewer', {
-      phase: 'review',
-      from: developerResult.output,
-    });
-    if (overBudget()) return await blockBudget();
+    // reviewer/watch steps (first pass), preserving route order for every required binding.
+    const firstReviewPass = routePlan.afterDeveloper.length > 0
+      ? await runRolePass(routePlan.afterDeveloper, developerResult.output, '')
+      : { result: { output: { verdict: 'PASS' }, nextSteps: [], costs: [] }, overBudget: false };
+    let reviewResult = firstReviewPass.result;
+    if (firstReviewPass.overBudget) return await blockBudget();
 
     // bounded reviewer→developer loop (E5, E6); iteration cap is DATA (0008 #5).
     // Budget is checked after EVERY step so a hard-stop fires before the NEXT agent call burns spend.
     while (isBlocking(verdictOf(reviewResult)) && iteration < policy.maxReviewIterations) {
       iteration++;
-      developerResult = await runStep('developer', `developer#${iteration}`, {
+      developerResult = await runStep(routePlan.developer, `${routePlan.developer.roleId}#${iteration}`, {
         phase: 'rework',
         feedback: reviewResult.output,
       });
       if (overBudget()) return await blockBudget();
-      reviewResult = await runStep('reviewer', `reviewer#${iteration}`, {
-        phase: 'review',
-        from: developerResult.output,
-      });
-      if (overBudget()) return await blockBudget();
+      if (routePlan.afterDeveloper.length === 0) break;
+      const reviewPass = await runRolePass(routePlan.afterDeveloper, developerResult.output, `#${iteration}`);
+      reviewResult = reviewPass.result;
+      if (reviewPass.overBudget) return await blockBudget();
     }
 
     // Cap exhausted — still blocking: write pipeline_blocked and stop (E6).
@@ -499,46 +581,78 @@ export function makeDevelopTask(
       };
     }
 
-    // B3 — mode-gated integrator step (core Round-4 fix).
-    // live → DBOS-registered integrateFn (real git/gh, resumable).
-    // script → runStub (pure, zero external effects — no git, no gh, no fs).
-    const integratorInput: IntegratorInput = { runId, taskId, title, base };
-    const integratorResult: IntegratorOutput | IntegratorBlocked =
-      mode === 'live'
+    const runIntegration = async (suffix: string): Promise<IntegratorOutput | IntegratorBlocked | null> => {
+      if (!hasIntegrator) return null;
+      // B3 — binding-gated integrator step.
+      // real integrator runner → DBOS-registered integrateFn (real git/gh, resumable).
+      // stub/script runner → runStub (pure, zero external effects — no git, no gh, no fs).
+      const integratorInput: IntegratorInput = { runId, taskId, title, base };
+      const result = runnerUsesRealIntegrator(routePlan.integrator!.resolvedRunnerId)
         ? await integrateFn(integratorInput)
         : runStub(integratorInput);
 
-    // On integrator blocked (live only — nothing to integrate / ambiguous PR / missing remote)
-    if ('needsHuman' in integratorResult) {
+      if ('needsHuman' in result) return result;
+
+      // Observability MINOR: integrate_succeeded event (mirrors step_succeeded at makeRunStep).
       await appendEvent({
         runId,
         taskId,
         stepId: '',
-        stepKey: 'pipeline',
-        type: 'pipeline_blocked',
-        payload: { reason: 'integrate', lesson: integratorResult.lesson },
+        stepKey: `integrator${suffix}`,
+        type: 'integrate_succeeded',
+        payload: {
+          prUrl: result.prUrl,
+          branch: result.branch,
+          prNumber: result.prNumber,
+        },
       });
-      return { runId, blocked: true, iterations: iteration, verdict: 'BLOCKED', cancelled: false };
+      return result;
+    };
+
+    let integratorResult = await runIntegration('');
+    if (integratorResult && 'needsHuman' in integratorResult) {
+      return await blockPipeline({ reason: 'integrate', lesson: integratorResult.lesson });
     }
 
-    // Observability MINOR: integrate_succeeded event (mirrors step_succeeded at makeRunStep).
-    await appendEvent({
-      runId,
-      taskId,
-      stepId: '',
-      stepKey: 'integrator',
-      type: 'integrate_succeeded',
-      payload: {
-        prUrl: integratorResult.prUrl,
-        branch: integratorResult.branch,
-        prNumber: integratorResult.prNumber,
-      },
-    });
+    if (integratorResult && routePlan.postIntegratorStatus.length > 0) {
+      const firstWatcherPass = await runRolePass(routePlan.postIntegratorStatus, integratorResult, '');
+      let watcherResult = firstWatcherPass.result;
+      if (firstWatcherPass.overBudget) return await blockBudget();
+
+      let watcherIteration = 0;
+      while (isBlocking(verdictOf(watcherResult)) && watcherIteration < policy.maxReviewIterations) {
+        watcherIteration++;
+        iteration++;
+        await runStep(routePlan.developer, `${routePlan.developer.roleId}:watch#${watcherIteration}`, {
+          phase: 'watcher-fix',
+          feedback: watcherResult.output,
+        });
+        if (overBudget()) return await blockBudget();
+
+        integratorResult = await runIntegration(`:watch#${watcherIteration}`);
+        if (integratorResult && 'needsHuman' in integratorResult) {
+          return await blockPipeline({ reason: 'integrate', lesson: integratorResult.lesson });
+        }
+        const watcherPass = await runRolePass(routePlan.postIntegratorStatus, integratorResult, `#${watcherIteration}`);
+        watcherResult = watcherPass.result;
+        if (watcherPass.overBudget) return await blockBudget();
+      }
+
+      if (isBlocking(verdictOf(watcherResult))) {
+        return await blockPipeline({
+          reason: 'watcher',
+          lastVerdict: verdictOf(watcherResult),
+          iterations: watcherIteration,
+        });
+      }
+    }
 
     // ── MERGE GATE (after integrator) ──────────────────────────────────────────
     // Real prUrl from the integrator (live) or 'stub://pr/placeholder' (script).
-    const prUrl = integratorResult.prUrl ?? 'stub://pr/placeholder';
-    const mergeDecision = await awaitHuman(runId, 'merge', 'Merge approval', { prUrl });
+    const prUrl = integratorResult?.prUrl ?? 'stub://pr/placeholder';
+    const mergeDecision = hasIntegrator && routeGates.includes('merge')
+      ? await awaitHuman(runId, 'merge', 'Merge approval', { prUrl })
+      : { decision: 'approve' as const };
     if (mergeDecision.decision === 'reject') {
       await appendEvent({
         runId,
@@ -567,6 +681,185 @@ export function makeDevelopTask(
       cancelled: false,
     };
   };
+
+}
+
+type RouteExecutionStep = {
+  binding: RouteRoleBinding;
+  stepKey: string;
+  phase: 'plan' | 'prepare' | 'review' | 'verify' | 'status';
+};
+
+type RouteExecutionPlan = {
+  beforeDeveloper: RouteExecutionStep[];
+  developer?: RouteRoleBinding;
+  afterDeveloper: RouteExecutionStep[];
+  integrator?: RouteRoleBinding;
+  postIntegratorStatus: RouteExecutionStep[];
+};
+
+const SUPPORTED_ROUTE_PIPELINES = new Set([
+  'legacy-develop-task',
+  'local-change',
+  'feature-development',
+  'bugfix',
+  'analysis-only',
+]);
+
+function planRouteExecution(route: RouteDecision): RouteExecutionPlan {
+  validateRouteBindings(route);
+  const executableBindings = route.roleBindings.filter((binding) => !isOrchestrationRole(binding));
+  const integratorIndex = singleRoleIndex(route, executableBindings, isIntegratorRole, 'integrator');
+  const afterIntegratorBindings = integratorIndex >= 0 ? executableBindings.slice(integratorIndex + 1) : [];
+  const postIntegratorStatus = afterIntegratorBindings.filter((binding) => isPostIntegratorStatusRole(binding));
+  validatePostIntegratorBindings(route, afterIntegratorBindings);
+  const nonIntegratorBindings = integratorIndex >= 0
+    ? executableBindings.slice(0, integratorIndex)
+    : executableBindings;
+  const developerIndex = singleRoleIndex(route, nonIntegratorBindings, isDeveloperRole, 'developer');
+  const beforeDeveloperBindings = developerIndex >= 0 ? nonIntegratorBindings.slice(0, developerIndex) : nonIntegratorBindings;
+  const afterDeveloperBindings = developerIndex >= 0 ? nonIntegratorBindings.slice(developerIndex + 1) : [];
+  const reviewerBindings = beforeDeveloperBindings.filter((binding) => isReviewRole(binding));
+  const canonicalFeatureDevelopmentCodeReview = route.pipelineId === 'feature-development' && afterDeveloperBindings.length === 0
+    ? reviewerBindings
+    : [];
+  validateFeatureDevelopmentRoute(route, canonicalFeatureDevelopmentCodeReview, postIntegratorStatus);
+
+  return {
+    beforeDeveloper: beforeDeveloperBindings.map((binding, index) => ({
+      binding,
+      stepKey: binding.roleId,
+      phase: beforeDeveloperPhase(binding, index),
+    })),
+    developer: developerIndex >= 0 ? nonIntegratorBindings[developerIndex] : undefined,
+    afterDeveloper: [
+      ...afterDeveloperBindings.map((binding) => ({
+        binding,
+        stepKey: binding.roleId,
+        phase: isReviewRole(binding) ? 'review' as const : 'verify' as const,
+      })),
+      ...canonicalFeatureDevelopmentCodeReview.map((binding) => ({
+        binding,
+        stepKey: `${binding.roleId}:code`,
+        phase: 'review' as const,
+      })),
+    ],
+    integrator: integratorIndex >= 0 ? executableBindings[integratorIndex] : undefined,
+    postIntegratorStatus: postIntegratorStatus.map((binding) => ({
+      binding,
+      stepKey: binding.roleId,
+      phase: 'status',
+    })),
+  };
+}
+
+function validateRouteBindings(route: RouteDecision): void {
+  if (!SUPPORTED_ROUTE_PIPELINES.has(route.pipelineId)) {
+    throw new Error(`ROUTE_UNSUPPORTED: pipeline ${route.pipelineId} is not supported by develop-task workflow`);
+  }
+  if (route.roleBindings.length === 0) {
+    throw new Error(`ROUTE_INVALID: pipeline ${route.pipelineId} has no selected roles`);
+  }
+
+  const roleIds = new Set<string>();
+  for (const binding of route.roleBindings) {
+    if (roleIds.has(binding.roleId)) {
+      throw new Error(`ROUTE_UNSUPPORTED: pipeline ${route.pipelineId} has duplicate role binding: ${binding.roleId}`);
+    }
+    roleIds.add(binding.roleId);
+  }
+  for (const requiredRole of route.requiredRoles) {
+    if (!roleIds.has(requiredRole)) {
+      throw new Error(`ROUTE_INVALID: pipeline ${route.pipelineId} required role is not bound: ${requiredRole}`);
+    }
+  }
+}
+
+function singleRoleIndex(
+  route: RouteDecision,
+  bindings: RouteRoleBinding[],
+  predicate: (binding: RouteRoleBinding) => boolean,
+  roleLabel: string,
+): number {
+  const indexes = bindings
+    .map((binding, index) => predicate(binding) ? index : -1)
+    .filter((index) => index >= 0);
+  if (indexes.length > 1) {
+    throw new Error(`ROUTE_UNSUPPORTED: pipeline ${route.pipelineId} has multiple ${roleLabel} roles`);
+  }
+  return indexes[0] ?? -1;
+}
+
+function validatePostIntegratorBindings(route: RouteDecision, bindings: RouteRoleBinding[]): void {
+  const unsupportedAfter = bindings.filter((binding) => !isPostIntegratorStatusRole(binding));
+  if (unsupportedAfter.length === 0) return;
+
+  const after = unsupportedAfter.map((binding) => binding.roleId).join(', ');
+  throw new Error(`ROUTE_UNSUPPORTED: pipeline ${route.pipelineId} has executable roles after integrator: ${after}`);
+}
+
+function validateFeatureDevelopmentRoute(
+  route: RouteDecision,
+  codeReviewBindings: RouteRoleBinding[],
+  postIntegratorStatus: RouteRoleBinding[],
+): void {
+  if (route.pipelineId !== 'feature-development') return;
+  if (codeReviewBindings.length === 0) {
+    throw new Error(`ROUTE_UNSUPPORTED: pipeline ${route.pipelineId} requires a post-developer reviewer`);
+  }
+  if (postIntegratorStatus.length === 0) {
+    throw new Error(`ROUTE_UNSUPPORTED: pipeline ${route.pipelineId} requires a post-integrator watcher`);
+  }
+}
+
+function beforeDeveloperPhase(binding: RouteRoleBinding, index: number): RouteExecutionStep['phase'] {
+  if (index === 0) return 'plan';
+  if (isReviewRole(binding)) return 'review';
+  return 'prepare';
+}
+
+function isDeveloperRole(binding: RouteRoleBinding): boolean {
+  return ['developer', 'developer-backend', 'developer-frontend', 'knowledge-engineer'].includes(binding.roleId);
+}
+
+function isOrchestrationRole(binding: RouteRoleBinding): boolean {
+  return binding.roleId === 'orchestrator';
+}
+
+function isReviewRole(binding: RouteRoleBinding): boolean {
+  return ['reviewer', 'watcher', 'pr-watcher'].includes(binding.roleId);
+}
+
+function isIntegratorRole(binding: RouteRoleBinding): boolean {
+  return binding.roleId === 'integrator' || runnerUsesRealIntegrator(binding.resolvedRunnerId);
+}
+
+function isPostIntegratorStatusRole(binding: RouteRoleBinding): boolean {
+  return binding.roleId === 'watcher' || binding.roleId === 'pr-watcher';
+}
+
+function legacyRouteDecision(runnerMode: RunnerMode = 'script'): RouteDecision {
+  const claudeRunner = runnerMode === 'live' ? 'live' : 'script';
+  const integratorRunner = runnerMode === 'live' ? 'revo-integrator' : 'stub-agent';
+  return {
+    playbookId: '',
+    pipelineId: 'legacy-develop-task',
+    pipelineRowId: '',
+    source: 'explicit',
+    roles: ['architect', 'developer', 'reviewer', 'integrator'],
+    requiredRoles: ['architect', 'developer', 'reviewer', 'integrator'],
+    optionalRoles: [],
+    routeGates: ['plan', 'merge'],
+    executionPolicy: {},
+    executionProfile: { id: 'legacy', runnerOverrides: {} },
+    roleBindings: [
+      { roleId: 'architect', rowId: 'architect', modelLevel: 'deep', runnerId: 'claude-code', resolvedRunnerId: claudeRunner, runnerSource: 'playbook' },
+      { roleId: 'developer', rowId: 'developer', modelLevel: 'standard', runnerId: 'claude-code', resolvedRunnerId: claudeRunner, runnerSource: 'playbook' },
+      { roleId: 'reviewer', rowId: 'reviewer', modelLevel: 'standard', runnerId: 'claude-code', resolvedRunnerId: claudeRunner, runnerSource: 'playbook' },
+      { roleId: 'integrator', rowId: 'integrator', modelLevel: 'standard', runnerId: 'revo-integrator', resolvedRunnerId: integratorRunner, runnerSource: 'playbook' },
+    ],
+    params: {},
+  };
 }
 
 @Injectable()
@@ -577,7 +870,8 @@ export class PipelineService {
     role: string,
     stepKey: string,
     stepInput: unknown,
-    runnerMode: RunnerMode,
+    resolvedRunnerId?: string,
+    executionProfile?: ExecutionProfile,
   ) => Promise<AttemptResult>;
 
   private readonly developTaskFn: (
@@ -665,8 +959,8 @@ export class PipelineService {
    * Enqueue the developTask workflow for the given runId.
    *
    * Idempotent by workflowID=runId: re-starting the same runId returns the existing handle.
-   * opts.runnerMode is required and forwarded as a durable workflow argument (M1/B11) —
-   * persisted in the DBOS workflow input row, re-supplied verbatim on crash recovery.
+   * Route role bindings are persisted in the DBOS workflow input row and are authoritative for
+   * runner dispatch on recovery. opts.runnerMode is a private legacy fallback for route-less tests.
    *
    * B10: mode only takes effect on the FIRST start (idempotent-by-runId);
    * a second `run start` on an already-started run returns the existing handle

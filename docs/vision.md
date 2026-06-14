@@ -77,7 +77,7 @@ Every surface is a thin client over the same state. This is the engine/session s
 [architecture-overview.md](./architecture-overview.md): the autonomous engine and the interactive human are
 indistinguishable by their effect — both just change state.
 
-Today's alpha: tasks start via CLI (`revo run create --start --wait --live`) and gates resolve via
+Today's alpha: tasks start via CLI (`revo run create --pipeline-id local-change --start --wait`) and gates resolve via
 `revo inbox resolve`.
 
 ## Capability map by stage

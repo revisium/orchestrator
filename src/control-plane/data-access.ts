@@ -18,6 +18,7 @@ export type ListRowsOptions = {
 export type ControlPlaneRow<TData extends object = Record<string, unknown>> = {
   rowId: string;
   data: TData;
+  cursor?: string;
   readonly?: boolean;
   createdAt?: string;
   updatedAt?: string;
@@ -44,10 +45,11 @@ function rowPath(table: RuntimeTable, rowId: string): string {
   return `${table}/${rowId}`;
 }
 
-function mapRow(table: RuntimeTable, row: TransportRow): ControlPlaneRow {
+function mapRow(table: RuntimeTable, row: TransportRow, cursor?: string): ControlPlaneRow {
   return {
     rowId: row.id,
     data: deserializeData(table, row.id, row.data ?? {}),
+    cursor,
     readonly: row.readonly,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -73,7 +75,7 @@ export function createControlPlaneDataAccessForTransport(
         if (!edge.node) {
           throw new ControlPlaneError('HTTP_ERROR', `Malformed list response for ${table}`, { details: result });
         }
-        return mapRow(table, edge.node);
+        return mapRow(table, edge.node, edge.cursor);
       });
     },
 

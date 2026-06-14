@@ -45,8 +45,8 @@ See [architecture-overview.md](./architecture-overview.md) and
 - **Node.js 24.11.x** (`>=24.11.1 <25`) — check with `node --version`. This range is imposed by
   the `@revisium/standalone` daemon dependency; a wider range is not supported.
 - For in-repo development: `pnpm install` in `agent-orchestrator/` and `pnpm run build`.
-- `gh` auth + a clean target repo are needed only for the `--live` path (real Claude + real PR).
-  The zero-cost stub path requires none of these.
+- `gh` auth + a clean target repo are needed when the selected playbook route uses real Claude and the real
+  integrator.
 - `bootstrap` fetches `npx -y revisium@2.5.0-alpha.6` on first run — network access is required
   for that one-time step; subsequent `revo` commands work offline.
 
@@ -83,20 +83,25 @@ re-run `bootstrap --commit`, it will conflict-throw on the drift and will NOT ov
 change. To evolve an already-committed seed row, first edit (or delete) that row in Revisium,
 then re-run `bootstrap --commit`.
 
-## Step 2 — create a run and start the pipeline (stub path, zero cost)
+## Step 2 — create a run and start the pipeline
 
 Point at a repo with `--repo <path>` (required) and name the task with `--title <text>` (required).
 There is no separate project-create step — a run is created and pointed at a repo directly via
 `--repo`; no project object to create in the alpha.
 
 ```bash
-./bin/revo.js run create --title "my task" --repo . --start --stub --wait
+./bin/revo.js run create \
+  --title "my task" \
+  --repo . \
+  --pipeline-id local-change \
+  --start \
+  --wait
 ```
 
 This single command:
 1. Creates the run in Revisium (mints a fresh `runId` — shown in the output).
 2. Boots the in-CLI NestJS/DBOS host (ensure-Revisium → ensure `dbos` db → DBOS launch → ready).
-3. Enqueues the durable `developTask` workflow (architect → developer → reviewer → integrator).
+3. Resolves the installed playbook/pipeline route and enqueues the durable workflow.
 4. Attaches a live viewer that polls until the run parks at the **plan gate**, then prints:
 
 ```text
@@ -130,18 +135,19 @@ note before the merge gate opens — re-attach with:
 ./bin/revo.js inbox resolve <gateId> --approve               # approve to finish
 ```
 
-Stub run: `prUrl = stub://pr/placeholder`.
-Live run: a real draft PR URL.
+Runs use the installed playbook role `runner_id` bindings and may create a real draft PR when those bindings point
+at live runners.
 
-## Live path (optional — costs money + makes real git changes)
+## Production runner path (optional — costs money + makes real git changes)
 
 ```bash
-./bin/revo.js run create --title "my task" --repo . --start --wait --live
+./bin/revo.js run create --title "my task" --repo . --pipeline-id local-change --start --wait
 ```
-> For installed users: `revo run create --title "my task" --repo /path/to/repo --start --wait --live`
 
-> WARNING: --live runs real Claude (claude -p) and incurs token cost on
-> architect/developer/reviewer, AND the real integrator will push a branch and open a draft PR.
+For installed users: `revo run create --title "my task" --repo /path/to/repo --pipeline-id local-change --start --wait`
+
+> WARNING: installed `runner_id` bindings such as `claude-code` may call real provider CLIs, and the real integrator
+> may push a branch and open a draft PR.
 
 Requires `gh` auth and a clean target repo (preflight blocks a dirty repo).
 

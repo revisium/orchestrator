@@ -13,8 +13,8 @@
  * M5 (TASK 0003): `registerRun(program, app?)` — lazy pipeline import like dev.ts (F10).
  *
  * 0006 (B+C): createRunCore exported for unit testing. Validates all start-mode
- * preconditions BEFORE writing any rows, so invalid combos (--stub --live, no app)
- * leave zero orphan drafts. Production createRun is a thin wrapper around it.
+ * preconditions BEFORE writing any rows, so invalid private runner-test combos
+ * leave zero orphan drafts. Production createRun routes through the task-control-plane API.
  */
 import { Command } from 'commander';
 import type { INestApplicationContext } from '@nestjs/common';
@@ -28,8 +28,6 @@ import { pollWorkflowState, type PollOpts } from './poll-workflow-state.js';
 import { assertNoStubLive, warnLiveCost } from '../live-guard.js';
 
 type StartOptions = {
-  stub: boolean;
-  live: boolean;
   wait: boolean;
 };
 
@@ -38,12 +36,18 @@ type CreateOptions = {
   repo: string;
   description?: string;
   scope?: string;
+  playbookId?: string;
+  pipelineId?: string;
+  params?: string;
   priority: string;
-  role: string;
+  /** Deprecated private test seam; no longer registered as a public CLI option. */
+  role?: string;
   start: boolean;
   wait: boolean;
-  stub: boolean;
-  live: boolean;
+  /** Deprecated private test seam; no longer registered as a public CLI option. */
+  stub?: boolean;
+  /** Deprecated private test seam; no longer registered as a public CLI option. */
+  live?: boolean;
 };
 
 type ListOptions = {
@@ -68,13 +72,9 @@ type LogOptions = {
   json: boolean;
 };
 
-/**
- * Lazily resolve PipelineService from the Nest app context (F10: no static pipeline import).
- * Dynamic import: only loads pipeline code on the host path.
- */
-async function resolvePipelineService(app: INestApplicationContext) {
-  const { PipelineService } = await import('../../pipeline/develop-task.workflow.js');
-  return app.get(PipelineService);
+async function resolveTaskControlPlaneApi(app: INestApplicationContext) {
+  const { TaskControlPlaneApiService } = await import('../../task-control-plane/task-control-plane-api.service.js');
+  return app.get(TaskControlPlaneApiService);
 }
 
 /**
@@ -123,16 +123,15 @@ export type RunStartDeps = {
 /**
  * runStartCore — testable core of `run start`.
  *
- * Exported for unit tests (C1 pattern): tests inject fake RunStartDeps and assert the
- * EXACT runnerMode forwarded to startDevelopTask without creating a NestJS context.
- * Production: called by runStart after building deps from the live app context.
+ * Deprecated private compatibility seam for older route-less unit tests.
+ * Production `run start` routes through TaskControlPlaneApiService.startRun.
  */
 export async function runStartCore(
   safeRunId: string,
   options: { stub: boolean; live: boolean; wait?: boolean },
   deps: RunStartDeps,
 ): Promise<void> {
-  // Validate flag combination: --stub + --live is an error
+  // Validate contradictory private runner-test options.
   if (!assertNoStubLive(options.stub ?? false, options.live ?? false)) return;
 
   // E12: pre-check the run exists in Revisium before enqueueing.
@@ -148,8 +147,7 @@ export async function runStartCore(
 
   const existingStatus = await deps.getWorkflowStatus(safeRunId);
 
-  // Map flags to runnerMode (M1):
-  //   --live → 'live'; default or --stub → 'script'
+  // Private legacy fallback: live test option → 'live'; default/stub test option → 'script'.
   const runnerMode = options.live ? ('live' as const) : ('script' as const);
   const handle = await deps.startDevelopTask(safeRunId, { runnerMode });
 
@@ -162,10 +160,10 @@ export async function runStartCore(
   } else {
     console.log(`workflow: ${handle.workflowID}`);
     if (options.stub) {
-      console.log('stub: --stub is active (zero-cost run via stub runner).');
+      console.log('stub: private compatibility stub option is active.');
     }
     if (options.live) {
-      console.log('live: --live is active (real Claude + real git/gh integrator).');
+      console.log('live: private compatibility live option is active.');
     }
   }
 
@@ -175,15 +173,9 @@ export async function runStartCore(
 }
 
 /**
- * run start <id> [--stub]
- *
  * Host-requiring: enqueues the developTask DBOS workflow for the given runId.
- * `--stub` forces zero-cost stub runner via the durable runnerOverride arg (B4).
- *
- * B10: start is idempotent by workflowID=runId. `--stub` only takes effect on the FIRST
- * start; a subsequent `run start --stub` on an already-started run returns the existing
- * handle and does NOT switch the runner (DBOS does not overwrite persisted args).
- * To switch, create a NEW run (new runId) and start that with --stub.
+ * B10: start is idempotent by workflowID=runId. A later start returns the existing
+ * handle and does NOT switch the persisted route.
  *
  * 0004 §3.6: no longer blocks on waitForWorkflowResult (the workflow parks at recv).
  * Instead, polls getWorkflowStatus (terminal) + listInbox (parked) and returns once settled.
@@ -211,20 +203,18 @@ async function runStart(
   }
 
   try {
-    // Build live deps from the Nest app context and withRevisiumService.
-    const { RunService: RunServiceClass } = await import('../../revisium/run.service.js');
     const { DbosService: DbosServiceClass } = await import('../../engine/dbos.service.js');
     const dbosService = app.get(DbosServiceClass);
-    const pipeline = await resolvePipelineService(app);
-
-    const deps: RunStartDeps = {
-      getRun: (id) => withRevisiumService(RunServiceClass, (svc) => svc.getRun(id)),
-      getWorkflowStatus: (id) => dbosService.getWorkflowStatus(id),
-      startDevelopTask: (id, opts) => pipeline.startDevelopTask(id, opts),
-      pollState: (id, pollOpts) => runPollWorkflowState(id, dbosService, pollOpts),
-    };
-
-    await runStartCore(safeRunId, options, deps);
+    const api = await resolveTaskControlPlaneApi(app);
+    const result = await api.startRun({ runId: safeRunId });
+    if (result.alreadyStarted) {
+      console.log(`workflow: ${result.workflowID} (already started)`);
+    } else {
+      console.log(`workflow: ${result.workflowID}`);
+    }
+    console.log(`pipeline: ${result.route.pipelineId}`);
+    console.log('awaiting settled state (parked or terminal)…');
+    await runPollWorkflowState(safeRunId, dbosService, { wait: options.wait ?? false });
   } catch (error) {
     reportRunCliError(error);
   }
@@ -273,6 +263,21 @@ function parsePriority(value: string): number {
   return priority;
 }
 
+function parseParams(value: string | undefined): Record<string, unknown> | undefined {
+  if (value === undefined) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new TypeError(`Invalid --params JSON: ${message}`);
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new TypeError('Invalid --params: expected a JSON object');
+  }
+  return parsed as Record<string, unknown>;
+}
+
 function parseLimit(value: string | undefined, flag: string): number | undefined {
   if (value === undefined) return undefined;
   const n = Number(value);
@@ -316,11 +321,10 @@ export type CreateRunDeps = {
  * Key invariant (B+C fix): ALL start-mode preconditions are validated BEFORE any write.
  * If validation fails, NO run is created and process.exitCode is set to 1.
  *   (a) --start without app → host-required error, return, zero writes.
- *   (b) --start --stub --live → contradiction error (via assertNoStubLive), return, zero writes.
+ *   (b) contradictory private runner-test options → return, zero writes.
  * Only after both checks pass is createRunFn called, then runStart exactly once.
  *
- * Cost-guard: live is only forwarded to runStart which maps it → 'live' runnerMode; the
- * throwing claudeCode runner is never reached without explicit --live (0005 guard intact).
+ * Cost-guard coverage remains here only for the private route-less compatibility seam.
  */
 export async function createRunCore(
   options: CreateOptions,
@@ -345,6 +349,9 @@ export async function createRunCore(
     repo: options.repo,
     description: options.description,
     scope: options.scope,
+    playbookId: options.playbookId,
+    pipelineId: options.pipelineId,
+    params: parseParams(options.params),
     priority: parsePriority(options.priority),
     role: options.role,
   });
@@ -358,8 +365,8 @@ export async function createRunCore(
   // --start: chain into runStart exactly once (no inline second enqueue).
   if (options.start) {
     await deps.runStart(result.runId, {
-      stub: options.stub,
-      live: options.live,
+      stub: options.stub ?? false,
+      live: options.live ?? false,
       wait: options.wait,
     });
   }
@@ -367,12 +374,34 @@ export async function createRunCore(
 
 async function createRun(options: CreateOptions, app?: INestApplicationContext): Promise<void> {
   try {
-    const deps: CreateRunDeps = {
-      createRunFn: (input) => withRunService((svc) => svc.createRun(input)),
-      runStart: (runId, startOpts) => runStart(runId, startOpts, app),
-      app,
-    };
-    await createRunCore(options, deps);
+    if (!app) {
+      console.error('run create requires the host context — invoke via the host path');
+      process.exitCode = 1;
+      return;
+    }
+    const api = await resolveTaskControlPlaneApi(app);
+    const result = await api.createRun({
+      title: options.title,
+      repo: options.repo,
+      description: options.description,
+      scope: options.scope,
+      priority: parsePriority(options.priority),
+      playbookId: options.playbookId,
+      pipelineId: options.pipelineId,
+      params: parseParams(options.params),
+      start: options.start,
+    });
+    console.log(`created run ${result.runId}`);
+    console.log(`task ${result.taskId}`);
+    console.log(`step ${result.stepId} ${result.status}`);
+    console.log(`event ${result.eventId}`);
+    const pipelineId = 'workflow' in result ? result.workflow.route.pipelineId : result.route.pipelineId;
+    console.log(`pipeline: ${pipelineId}`);
+    console.log('status: ready (draft only, not committed)');
+    if (options.start && options.wait) {
+      const { DbosService: DbosServiceClass } = await import('../../engine/dbos.service.js');
+      await runPollWorkflowState(result.runId, app.get(DbosServiceClass), { wait: true });
+    }
   } catch (error) {
     if (error instanceof CreateRunWorkflowError) {
       console.error(`Error: ${error.message}: ${formatCause(error.cause)}`);
@@ -498,12 +527,6 @@ export function registerRun(program: Command, app?: INestApplicationContext): vo
     .command('start')
     .description('Start the pipeline workflow for a run (host-requiring)')
     .argument('<runId>', 'Run ID to start')
-    .option('--stub', 'Use zero-cost stub runner (dev/test only)', false)
-    .option(
-      '--live',
-      'Use the REAL Claude runner AND the real git/gh integrator — THIS WILL CALL claude, INCUR COST, AND PUSH/OPEN A PR',
-      false,
-    )
     .option(
       '--wait',
       'Keep a live viewer attached through step transitions until the run parks at a gate or finishes',
@@ -517,18 +540,14 @@ export function registerRun(program: Command, app?: INestApplicationContext): vo
     .requiredOption('--repo <path-or-name>', 'Repository path or name')
     .option('--description <text>', 'Run description')
     .option('--scope <text>', 'Run scope')
+    .option('--playbook-id <id>', 'Installed playbook row id')
+    .option('--pipeline-id <id>', 'Installed pipeline row id or playbook pipeline id')
+    .option('--params <json>', 'Public route params as a JSON object')
     .option('--priority <n>', 'Run priority', '0')
-    .option('--role <name>', 'Initial step role (architect|developer|reviewer|integrator|pr-watcher)', 'architect')
     .option('--start', 'Immediately start the pipeline workflow after creating the run (host-requiring)', false)
     .option(
       '--wait',
       'After starting, keep a live viewer attached until the run parks at a gate or finishes',
-      false,
-    )
-    .option('--stub', 'With --start: use the zero-cost stub runner (default behavior)', false)
-    .option(
-      '--live',
-      'With --start: use the REAL Claude runner + real git/gh integrator (cost + PR)',
       false,
     )
     .action((options: CreateOptions) => createRun(options, app));

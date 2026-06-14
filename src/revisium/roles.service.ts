@@ -49,7 +49,7 @@ export class RolesService {
         id: node.id,
         name: str(data.name) || node.id,
         modelLevel: str(data.model_level),
-        runner: str(data.runner),
+        runner: str(data.runner_id) || str(data.runner),
         surface: str(data.surface),
         rights: str(data.rights),
         playbookId: str(data.playbook_id),

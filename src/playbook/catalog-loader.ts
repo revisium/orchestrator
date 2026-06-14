@@ -9,6 +9,7 @@ export type RoleCatalogRecord = {
   surface: string;
   rights: string;
   defaultModelLevel: 'cheap' | 'standard' | 'deep';
+  runnerId: string;
   wrappers: Record<string, string>;
 };
 
@@ -36,6 +37,7 @@ export type PlaybookCatalogs = {
 };
 
 const MODEL_LEVELS = new Set(['cheap', 'standard', 'deep']);
+const PRODUCTION_BLOCKED_RUNNERS = new Set(['stub-agent']);
 
 function asRecord(value: unknown, context: string): Record<string, unknown> {
   if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
@@ -46,6 +48,10 @@ function stringField(record: Record<string, unknown>, key: string, context: stri
   const value = record[key];
   if (typeof value === 'string' && value.trim() !== '') return value;
   throw new PlaybookError('PLAYBOOK_INVALID_CATALOG', `${context}.${key} must be a non-empty string`);
+}
+
+function normalizedStringField(record: Record<string, unknown>, key: string, context: string): string {
+  return stringField(record, key, context).trim();
 }
 
 function stringArrayField(record: Record<string, unknown>, key: string, context: string): string[] {
@@ -114,12 +120,20 @@ function parseRole(value: unknown, index: number, root: string): RoleCatalogReco
   if (!existsSync(resolvedPath)) {
     throw new PlaybookError('PLAYBOOK_INVALID_CATALOG', `${context}.path does not exist: ${path}`);
   }
+  const runnerId = normalizedStringField(record, 'runner_id', context);
+  if (PRODUCTION_BLOCKED_RUNNERS.has(runnerId)) {
+    throw new PlaybookError(
+      'PLAYBOOK_INVALID_CATALOG',
+      `${context}.runner_id must not be ${runnerId}; use an execution profile override for test stubs`,
+    );
+  }
   return {
     id: stringField(record, 'id', context),
     path,
     surface: stringField(record, 'surface', context),
     rights: stringField(record, 'rights', context),
     defaultModelLevel: modelLevel as RoleCatalogRecord['defaultModelLevel'],
+    runnerId,
     wrappers: optionalRecord(record, 'wrappers'),
   };
 }

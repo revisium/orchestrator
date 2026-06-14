@@ -92,7 +92,67 @@ function makeApi(overrides: {
     async loadPipelinePolicy() {
       return { maxReviewIterations: 3, maxAttempts: 3, budgetUsd: 0, budgetTokens: 0 };
     },
+    async listRoles() {
+      return [
+        {
+          id: 'pb-developer',
+          name: 'developer',
+          modelLevel: 'standard',
+          runner: 'claude-code',
+          surface: 'any',
+          rights: 'write-working-tree',
+          playbookId: 'pb',
+          playbookRoleId: 'developer',
+        },
+      ];
+    },
     ...overrides.rolesService,
+  };
+  const playbooksService: Partial<PlaybooksService> = {
+    async resolvePlaybook() {
+      return {
+        id: 'pb',
+        name: 'PB',
+        packageName: '@x/pb',
+        version: '1.0.0',
+        source: 'local:/pb',
+        schemaVersion: 2,
+      };
+    },
+    async listPipelines() {
+      return [
+        {
+          id: 'pb-local-change',
+          playbookId: 'pb',
+          pipelineId: 'local-change',
+          path: 'pipelines/local-change/PIPELINE.md',
+          triggers: ['small local edit'],
+          requiredRoles: ['developer'],
+          alternativeRoles: [],
+          optionalRoles: [],
+          routeGates: [],
+          executionPolicy: {},
+        },
+      ];
+    },
+    async resolvePipeline() {
+      return {
+        id: 'pb-local-change',
+        playbookId: 'pb',
+        pipelineId: 'local-change',
+        path: 'pipelines/local-change/PIPELINE.md',
+        triggers: ['small local edit'],
+        requiredRoles: ['developer'],
+        alternativeRoles: [],
+        optionalRoles: [],
+        routeGates: [],
+        executionPolicy: {},
+      };
+    },
+    async getPipeline() {
+      return null;
+    },
+    ...overrides.playbooksService,
   };
   const pipelineService: Partial<PipelineService> = {
     async startDevelopTask(runId) {
@@ -111,7 +171,7 @@ function makeApi(overrides: {
     runService as RunService,
     inboxService as InboxService,
     rolesService as RolesService,
-    (overrides.playbooksService ?? {}) as PlaybooksService,
+    playbooksService as PlaybooksService,
     pipelineService as PipelineService,
     dbosService as DbosService,
   );
@@ -162,7 +222,7 @@ test('TaskControlPlaneApiService.approveGate records retryable signal state arou
   ]);
 });
 
-test('TaskControlPlaneApiService.approveGate marks merge gates completed after signaling', async () => {
+test('TaskControlPlaneApiService.approveGate signals merge gates without completing the run', async () => {
   const completed: Array<{ runId: string; source?: string; actor?: string }> = [];
   const api = makeApi({
     inboxService: {
@@ -181,10 +241,10 @@ test('TaskControlPlaneApiService.approveGate marks merge gates completed after s
   const result = await api.approveGate({ inboxId: 'inbox-1', resolvedBy: 'tester' });
 
   assert.equal(result.topic, 'merge');
-  assert.deepEqual(completed, [{ runId: 'run-1', source: 'merge-gate-approve', actor: 'mcp' }]);
+  assert.deepEqual(completed, []);
 });
 
-test('TaskControlPlaneApiService.rejectGate marks merge gates completed with merge-gate-reject source', async () => {
+test('TaskControlPlaneApiService.rejectGate signals merge gates without completing the run', async () => {
   const completed: Array<{ runId: string; source?: string; actor?: string }> = [];
   const api = makeApi({
     inboxService: {
@@ -203,7 +263,7 @@ test('TaskControlPlaneApiService.rejectGate marks merge gates completed with mer
   const result = await api.rejectGate({ inboxId: 'inbox-1', resolvedBy: 'tester' });
 
   assert.equal(result.topic, 'merge');
-  assert.deepEqual(completed, [{ runId: 'run-1', source: 'merge-gate-reject', actor: 'mcp' }]);
+  assert.deepEqual(completed, []);
 });
 
 test('TaskControlPlaneApiService.approveGate does NOT call completeRun for plan gates', async () => {
@@ -272,11 +332,15 @@ test('TaskControlPlaneApiService.answerQuestion resolves non-gate questions with
 });
 
 test('TaskControlPlaneApiService.createRun can immediately start the workflow', async () => {
-  const starts: Array<{ runId: string; mode: string }> = [];
+  const starts: Array<{ runId: string; pipelineId?: string; override?: string }> = [];
   const api = makeApi({
     pipelineService: {
       async startDevelopTask(runId, opts) {
-        starts.push({ runId, mode: opts.runnerMode });
+        starts.push({
+          runId,
+          pipelineId: opts.route?.pipelineId,
+          override: opts.route?.executionProfile.runnerOverrides['claude-code'],
+        });
         return { workflowID: runId } as Awaited<ReturnType<PipelineService['startDevelopTask']>>;
       },
     },
@@ -285,12 +349,315 @@ test('TaskControlPlaneApiService.createRun can immediately start the workflow', 
   const result = await api.createRun({
     title: 'MCP task',
     repo: '.',
+    pipelineId: 'local-change',
+    executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent' } },
     start: true,
-    runnerMode: 'script',
   });
 
   assert.equal(result.started, true);
-  assert.deepEqual(starts, [{ runId: 'run-1', mode: 'script' }]);
+  assert.deepEqual(starts, [{ runId: 'run-1', pipelineId: 'local-change', override: 'stub-agent' }]);
+});
+
+test('TaskControlPlaneApiService.createRun persists canonical pipeline id', async () => {
+  let persistedPipelineId = '';
+  const api = makeApi({
+    runService: {
+      async createRun(input) {
+        persistedPipelineId = input.pipelineId ?? '';
+        return { runId: 'run-1', taskId: 'task-1', stepId: 'step-1', eventId: 'event-1', status: 'ready' };
+      },
+    },
+  });
+
+  await api.createRun({
+    title: 'MCP task',
+    repo: '.',
+    pipelineId: 'local-change',
+  });
+
+  assert.equal(persistedPipelineId, 'local-change');
+});
+
+test('TaskControlPlaneApiService.createRun ignores public params for runner profile selection', async () => {
+  const starts: Array<{ override?: string; params: Record<string, unknown> }> = [];
+  const api = makeApi({
+    pipelineService: {
+      async startDevelopTask(runId, opts) {
+        starts.push({
+          override: opts.route?.executionProfile.runnerOverrides['claude-code'],
+          params: opts.route?.params ?? {},
+        });
+        return { workflowID: runId } as Awaited<ReturnType<PipelineService['startDevelopTask']>>;
+      },
+    },
+  });
+
+  await api.createRun({
+    title: 'MCP task',
+    repo: '.',
+    pipelineId: 'local-change',
+    params: { executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent' } }, ticket: 'ABC-1' },
+    start: true,
+  });
+
+  assert.deepEqual(starts, [{ override: undefined, params: { ticket: 'ABC-1' } }]);
+});
+
+test('TaskControlPlaneApiService.simulateRoute rejects omitted pipelineId when no trigger matches', async () => {
+  const api = makeApi();
+
+  await assert.rejects(
+    () => api.simulateRoute({ title: 'unrelated request text' }),
+    (error: unknown) =>
+      error instanceof ControlPlaneError &&
+      error.code === 'VALIDATION_FAILURE' &&
+      error.message.includes('pipelineId'),
+  );
+});
+
+test('TaskControlPlaneApiService.simulateRoute rejects ambiguous positive auto-route decisions', async () => {
+  const api = makeApi({
+    playbooksService: {
+      async listPipelines() {
+        return [
+          {
+            id: 'pb-a',
+            playbookId: 'pb',
+            pipelineId: 'a',
+            path: 'pipelines/a/PIPELINE.md',
+            triggers: ['review task'],
+            requiredRoles: ['developer'],
+            alternativeRoles: [],
+            optionalRoles: [],
+            routeGates: [],
+            executionPolicy: {},
+          },
+          {
+            id: 'pb-b',
+            playbookId: 'pb',
+            pipelineId: 'b',
+            path: 'pipelines/b/PIPELINE.md',
+            triggers: ['review task'],
+            requiredRoles: ['developer'],
+            alternativeRoles: [],
+            optionalRoles: [],
+            routeGates: [],
+            executionPolicy: {},
+          },
+        ];
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => api.simulateRoute({ title: 'review task' }),
+    (error: unknown) =>
+      error instanceof ControlPlaneError &&
+      error.code === 'VALIDATION_FAILURE' &&
+      error.message.includes('pipelineId'),
+  );
+});
+
+test('TaskControlPlaneApiService.simulateRoute allows a positive confident installed route decision', async () => {
+  const api = makeApi();
+
+  const route = await api.simulateRoute({ title: 'small local edit' });
+
+  assert.equal(route.pipelineId, 'local-change');
+  assert.deepEqual(route.roles, ['developer']);
+});
+
+test('TaskControlPlaneApiService rejects stub-agent from production playbook role bindings', async () => {
+  const api = makeApi({
+    rolesService: {
+      async listRoles() {
+        return [
+          {
+            id: 'pb-developer',
+            name: 'developer',
+            modelLevel: 'standard',
+            runner: 'stub-agent',
+            surface: 'any',
+            rights: 'write-working-tree',
+            playbookId: 'pb',
+            playbookRoleId: 'developer',
+          },
+        ];
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => api.simulateRoute({ title: 'small local edit' }),
+    (error: unknown) =>
+      error instanceof ControlPlaneError &&
+      error.code === 'VALIDATION_FAILURE' &&
+      error.message.includes('stub-agent'),
+  );
+});
+
+test('TaskControlPlaneApiService.simulateRoute binds every required playbook role in order', async () => {
+  const api = makeApi({
+    rolesService: {
+      async listRoles() {
+        return [
+          {
+            id: 'pb-architect',
+            name: 'architect',
+            modelLevel: 'deep',
+            runner: 'claude-code',
+            surface: 'any',
+            rights: 'read-only',
+            playbookId: 'pb',
+            playbookRoleId: 'architect',
+          },
+          {
+            id: 'pb-analyst',
+            name: 'analyst',
+            modelLevel: 'standard',
+            runner: 'claude-code',
+            surface: 'any',
+            rights: 'read-only',
+            playbookId: 'pb',
+            playbookRoleId: 'analyst',
+          },
+          {
+            id: 'pb-watcher',
+            name: 'watcher',
+            modelLevel: 'cheap',
+            runner: 'claude-code',
+            surface: 'any',
+            rights: 'read-only',
+            playbookId: 'pb',
+            playbookRoleId: 'watcher',
+          },
+        ];
+      },
+    },
+    playbooksService: {
+      async resolvePipeline() {
+        return {
+          id: 'pb-analysis-only',
+          playbookId: 'pb',
+          pipelineId: 'analysis-only',
+          path: 'pipelines/analysis-only/PIPELINE.md',
+          triggers: ['analysis'],
+          requiredRoles: ['architect', 'analyst', 'watcher'],
+          alternativeRoles: [],
+          optionalRoles: [],
+          routeGates: [],
+          executionPolicy: {},
+        };
+      },
+    },
+  });
+
+  const route = await api.simulateRoute({ title: 'Analyze this', pipeline: 'analysis-only' });
+
+  assert.deepEqual(route.requiredRoles, ['architect', 'analyst', 'watcher']);
+  assert.deepEqual(route.roleBindings.map((item) => item.roleId), ['architect', 'analyst', 'watcher']);
+  assert.deepEqual(route.roleBindings.map((item) => item.rowId), ['pb-architect', 'pb-analyst', 'pb-watcher']);
+});
+
+test('TaskControlPlaneApiService.simulateRoute binds canonical feature-development roles and gates', async () => {
+  const api = makeApi({
+    rolesService: {
+      async listRoles() {
+        return [
+          {
+            id: 'pb-orchestrator',
+            name: 'orchestrator',
+            modelLevel: 'standard',
+            runner: 'claude-code',
+            surface: 'any',
+            rights: 'state and routing only',
+            playbookId: 'pb',
+            playbookRoleId: 'orchestrator',
+          },
+          {
+            id: 'pb-analyst',
+            name: 'analyst',
+            modelLevel: 'deep',
+            runner: 'claude-code',
+            surface: 'any',
+            rights: 'read-only',
+            playbookId: 'pb',
+            playbookRoleId: 'analyst',
+          },
+          {
+            id: 'pb-reviewer',
+            name: 'reviewer',
+            modelLevel: 'deep',
+            runner: 'claude-code',
+            surface: 'any',
+            rights: 'read-only',
+            playbookId: 'pb',
+            playbookRoleId: 'reviewer',
+          },
+          {
+            id: 'pb-developer',
+            name: 'developer',
+            modelLevel: 'standard',
+            runner: 'claude-code',
+            surface: 'any',
+            rights: 'write-working-tree',
+            playbookId: 'pb',
+            playbookRoleId: 'developer',
+          },
+          {
+            id: 'pb-integrator',
+            name: 'integrator',
+            modelLevel: 'standard',
+            runner: 'revo-integrator',
+            surface: 'repo',
+            rights: 'git and GitHub writes',
+            playbookId: 'pb',
+            playbookRoleId: 'integrator',
+          },
+          {
+            id: 'pb-watcher',
+            name: 'watcher',
+            modelLevel: 'cheap',
+            runner: 'claude-code',
+            surface: 'repo',
+            rights: 'read-only PR inspection',
+            playbookId: 'pb',
+            playbookRoleId: 'watcher',
+          },
+        ];
+      },
+    },
+    playbooksService: {
+      async resolvePipeline() {
+        return {
+          id: 'pb-feature-development',
+          playbookId: 'pb',
+          pipelineId: 'feature-development',
+          path: 'pipelines/feature-development/PIPELINE.md',
+          triggers: ['new feature'],
+          requiredRoles: ['orchestrator', 'analyst', 'reviewer', 'developer', 'integrator', 'watcher'],
+          alternativeRoles: [],
+          optionalRoles: [],
+          routeGates: ['task spec approval', 'merge approval'],
+          executionPolicy: {},
+        };
+      },
+    },
+  });
+
+  const route = await api.simulateRoute({ title: 'Build feature', pipeline: 'feature-development' });
+
+  assert.deepEqual(route.requiredRoles, ['orchestrator', 'analyst', 'reviewer', 'developer', 'integrator', 'watcher']);
+  assert.deepEqual(route.roleBindings.map((item) => item.roleId), [
+    'orchestrator',
+    'analyst',
+    'reviewer',
+    'developer',
+    'integrator',
+    'watcher',
+  ]);
+  assert.deepEqual(route.routeGates, ['plan', 'merge']);
+  assert.equal(route.roleBindings.find((item) => item.roleId === 'watcher')?.rowId, 'pb-watcher');
 });
 
 test('TaskControlPlaneApiService.validateRepository reports non-existent paths without throwing', async () => {
@@ -330,7 +697,7 @@ test('TaskControlPlaneApiService.getRepositoryContext ignores non-object package
 
 // ── resolveInboxItem smoke: merge gate completion ─────────────────────────────
 
-test('TaskControlPlaneApiService.resolveInboxItem: merge gate completes run when signalGate is true (default)', async () => {
+test('TaskControlPlaneApiService.resolveInboxItem: merge gate signals without completing run when signalGate is true', async () => {
   const completed: Array<{ runId: string; source?: string; actor?: string }> = [];
   const api = makeApi({
     inboxService: {
@@ -350,7 +717,7 @@ test('TaskControlPlaneApiService.resolveInboxItem: merge gate completes run when
 
   assert.equal(result.topic, 'merge');
   assert.equal(result.signaled, true);
-  assert.deepEqual(completed, [{ runId: 'run-1', source: 'merge-gate-approve', actor: 'mcp' }]);
+  assert.deepEqual(completed, []);
 });
 
 test('TaskControlPlaneApiService.resolveInboxItem: merge gate skips completeRun when signalGate is false', async () => {

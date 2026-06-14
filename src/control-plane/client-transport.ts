@@ -17,7 +17,7 @@ export type TransportRow = {
 };
 
 export type TransportList = {
-  edges?: Array<{ node?: TransportRow }>;
+  edges?: Array<{ cursor?: string; node?: TransportRow }>;
 };
 
 export type ControlPlaneTransport = {
@@ -67,6 +67,21 @@ function toTransportRow(row: {
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
+}
+
+type SdkListEdge = {
+  cursor?: string;
+  node?: {
+    id: string;
+    data: Record<string, unknown>;
+    readonly?: boolean;
+    createdAt?: string;
+    updatedAt?: string;
+  };
+};
+
+export function mapTransportListEdges(edges: SdkListEdge[]): TransportList['edges'] {
+  return edges.flatMap((edge) => edge.node ? [{ cursor: edge.cursor, node: toTransportRow(edge.node) }] : []);
 }
 
 export function extractMutationRow(result: {
@@ -131,7 +146,9 @@ export function createClientTransport(mode: RevisionMode): ControlPlaneTransport
       }
       throw mapApiError(result.error, '/tables');
     }
-    const tableIds = new Set((result.data?.edges ?? []).map((e: { node: { id: string } }) => e.node.id));
+    const tableIds = new Set(
+      (result.data?.edges ?? []).flatMap((edge: { node?: { id: string } }) => edge.node ? [edge.node.id] : []),
+    );
     const missing = runtimeTables.filter((t) => !tableIds.has(t));
     if (missing.length > 0) {
       throw new ControlPlaneError('BOOTSTRAP_NOT_APPLIED', 'Control-plane bootstrap is missing runtime tables', {
@@ -150,7 +167,7 @@ export function createClientTransport(mode: RevisionMode): ControlPlaneTransport
     };
     const result = await sdk.rows({ client, path: { revisionId, tableId: table }, body });
     if (result.error) throw mapApiError(result.error, `${table}/rows`);
-    const edges = (result.data?.edges ?? []).map((e: { node: { id: string; data: Record<string, unknown>; readonly?: boolean; createdAt?: string; updatedAt?: string } }) => ({ node: toTransportRow(e.node) }));
+    const edges = mapTransportListEdges((result.data?.edges ?? []) as SdkListEdge[]);
     return { edges };
   }
 

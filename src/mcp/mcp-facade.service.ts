@@ -3,11 +3,10 @@ import {
   TaskControlPlaneApiService,
   type RepositoryContext,
   type RepositoryValidation,
-  type RunnerModeInput,
 } from '../task-control-plane/task-control-plane-api.service.js';
 import { MCP_TOOL_NAMES } from './mcp-capabilities.js';
 
-export type { RepositoryContext, RepositoryValidation, RunnerModeInput };
+export type { RepositoryContext, RepositoryValidation };
 
 @Injectable()
 export class McpFacadeService {
@@ -18,11 +17,10 @@ export class McpFacadeService {
       transport: 'stdio',
       auth: 'none',
       tools: [...MCP_TOOL_NAMES],
-      runnerModes: ['script', 'live'],
       notes: [
         'Local stdio MCP server; no remote HTTP listener.',
         'Tools expose product operations, not generic Revisium row CRUD.',
-        'Live runs use the real Claude runner and git/GitHub integrator.',
+        'Runs are driven by installed playbooks, pipeline catalogs, and execution profiles.',
       ],
     };
   }
@@ -52,19 +50,20 @@ export class McpFacadeService {
     repo: string;
     description?: string;
     scope?: string;
+    playbookId?: string;
+    pipelineId?: string;
+    params?: Record<string, unknown>;
     priority?: number;
-    role?: string;
     start?: boolean;
-    runnerMode?: RunnerModeInput;
   }) {
     return this.api.createRun(input);
   }
 
-  startRun(input: { runId: string; runnerMode?: RunnerModeInput }) {
+  startRun(input: { runId: string }) {
     return this.api.startRun(input);
   }
 
-  resumeRun(input: { runId: string; runnerMode?: RunnerModeInput }) {
+  resumeRun(input: { runId: string }) {
     return this.api.resumeRun(input);
   }
 
@@ -90,6 +89,10 @@ export class McpFacadeService {
 
   getRunDigest(runId: string) {
     return this.api.getRunDigest(runId);
+  }
+
+  waitForRun(input: { runId: string; timeoutMs?: number; intervalMs?: number }) {
+    return this.api.waitForRun(input);
   }
 
   listInbox(filter?: { status?: 'pending' | 'resolved'; runId?: string; limit?: number }) {
@@ -159,7 +162,7 @@ export class McpFacadeService {
     return this.api.getPipeline(pipelineId);
   }
 
-  simulateRoute(input: { title: string; repo?: string; pipeline?: string; live?: boolean }) {
+  simulateRoute(input: { title: string; repo?: string; pipeline?: string; playbookId?: string; params?: unknown }) {
     return this.api.simulateRoute(input);
   }
 

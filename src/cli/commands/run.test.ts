@@ -4,25 +4,26 @@
  * Uses runStartCore (C1 pattern) and createRunCore with fake deps so no NestJS context
  * or real database is needed. Covers the EXACT production code paths for:
  *
- * runStartCore:
- *   - default (no flags)  → runnerMode='script'
- *   - --stub              → runnerMode='script'
- *   - --live              → runnerMode='live' AND LIVE_COST_WARNING emitted
- *   - --stub --live       → exitCode=1, startDevelopTask NOT called
+ * runStartCore private compatibility seam:
+ *   - default options     → runnerMode='script'
+ *   - test stub option    → runnerMode='script'
+ *   - test live option    → runnerMode='live' AND LIVE_COST_WARNING emitted
+ *   - contradictory test options → exitCode=1, startDevelopTask NOT called
  *   - run not found       → exitCode=1, startDevelopTask NOT called
- *   - --live warning ordering
+ *   - live warning ordering
  *   - --wait / no --wait  → wait threaded to pollState
  *
  * createRunCore:
  *   - --start without app → exitCode=1, createRunFn NOT called, runStart NOT called
- *   - --start --stub --live → exitCode=1, createRunFn NOT called, runStart NOT called
+ *   - contradictory test options → exitCode=1, createRunFn NOT called, runStart NOT called
  *   - --start + app (valid) → run created once, runStart called exactly once with {stub,live,wait}
  *   - --start --wait      → wait:true threaded into runStart
  *   - non-start create    → run created, runStart NOT called
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { runStartCore, type RunStartDeps, createRunCore, type CreateRunDeps } from './run.js';
+import { Command } from 'commander';
+import { runStartCore, type RunStartDeps, createRunCore, type CreateRunDeps, registerRun } from './run.js';
 import { LIVE_COST_WARNING } from '../live-guard.js';
 import type { PollOpts } from './poll-workflow-state.js';
 import type { INestApplicationContext } from '@nestjs/common';
@@ -37,6 +38,22 @@ type CallRecord = {
   startDevelopTaskCalls: Array<{ runId: string; opts: { runnerMode: 'script' | 'live' } }>;
   pollStateCalls: Array<{ runId: string; pollOpts?: PollOpts }>;
 };
+
+test('public run CLI help exposes create-run params without runner override flags', () => {
+  const program = new Command();
+  registerRun(program);
+  const run = program.commands.find((command) => command.name() === 'run');
+  assert.ok(run);
+  const start = run.commands.find((command) => command.name() === 'start');
+  const create = run.commands.find((command) => command.name() === 'create');
+  assert.ok(start);
+  assert.ok(create);
+  const help = `${start.helpInformation()}\n${create.helpInformation()}`;
+  assert.equal(help.includes('--stub'), false);
+  assert.equal(help.includes('--live'), false);
+  assert.equal(help.includes('--params'), true);
+  assert.equal(help.includes('--pipeline-id'), true);
+});
 
 /**
  * Build fake deps for runStartCore. Returns the deps + a call record for assertions.
@@ -91,7 +108,7 @@ async function withConsoleSpy<T>(fn: () => Promise<T>): Promise<{ result: T; war
 
 // ─── option-mapping tests ──────────────────────────────────────────────────────
 
-test('run start default (no flags) → runnerMode=script forwarded to startDevelopTask', async () => {
+test('runStartCore private compatibility: default options forward runnerMode=script', async () => {
   const { deps, record } = buildFakeDeps({});
   const origExitCode = process.exitCode;
   process.exitCode = undefined;
@@ -108,20 +125,20 @@ test('run start default (no flags) → runnerMode=script forwarded to startDevel
   }
 });
 
-test('run start --stub → runnerMode=script forwarded to startDevelopTask', async () => {
+test('runStartCore private compatibility: stub option forwards runnerMode=script', async () => {
   const { deps, record } = buildFakeDeps({});
   const origExitCode = process.exitCode;
   process.exitCode = undefined;
   try {
     await runStartCore(FAKE_RUN_ID, { stub: true, live: false }, deps);
     assert.equal(record.startDevelopTaskCalls.length, 1, 'startDevelopTask must be called once');
-    assert.equal(record.startDevelopTaskCalls[0]?.opts.runnerMode, 'script', '--stub → script');
+    assert.equal(record.startDevelopTaskCalls[0]?.opts.runnerMode, 'script', 'stub test option → script');
   } finally {
     process.exitCode = origExitCode as number | undefined;
   }
 });
 
-test('run start --live → runnerMode=live AND LIVE_COST_WARNING emitted before startDevelopTask', async () => {
+test('runStartCore private compatibility: live option forwards runnerMode=live and warns before startDevelopTask', async () => {
   const { deps, record } = buildFakeDeps({});
   const origExitCode = process.exitCode;
   process.exitCode = undefined;
@@ -130,7 +147,7 @@ test('run start --live → runnerMode=live AND LIVE_COST_WARNING emitted before 
       await runStartCore(FAKE_RUN_ID, { stub: false, live: true }, deps);
     });
     assert.equal(record.startDevelopTaskCalls.length, 1, 'startDevelopTask must be called once');
-    assert.equal(record.startDevelopTaskCalls[0]?.opts.runnerMode, 'live', '--live → live');
+    assert.equal(record.startDevelopTaskCalls[0]?.opts.runnerMode, 'live', 'live test option → live');
     assert.ok(
       warns.some((w) => w === LIVE_COST_WARNING),
       `LIVE_COST_WARNING must be emitted; got: ${JSON.stringify(warns)}`,
@@ -142,7 +159,7 @@ test('run start --live → runnerMode=live AND LIVE_COST_WARNING emitted before 
 
 // ─── guard tests ──────────────────────────────────────────────────────────────
 
-test('run start --stub --live → process.exitCode===1, startDevelopTask NOT called', async () => {
+test('runStartCore private compatibility: contradictory runner options set exitCode and do not start', async () => {
   const { deps, record } = buildFakeDeps({});
   const origExitCode = process.exitCode;
   process.exitCode = undefined;
@@ -150,7 +167,7 @@ test('run start --stub --live → process.exitCode===1, startDevelopTask NOT cal
     await runStartCore(FAKE_RUN_ID, { stub: true, live: true }, deps);
   });
   try {
-    assert.equal(process.exitCode, 1, 'exitCode must be 1 on --stub --live contradiction');
+    assert.equal(process.exitCode, 1, 'exitCode must be 1 on contradictory runner test options');
     assert.equal(record.startDevelopTaskCalls.length, 0, 'startDevelopTask must NOT be called');
     assert.ok(
       errors.some((e) => e.toLowerCase().includes('either')),
@@ -180,7 +197,7 @@ test('run start: run not found → process.exitCode===1, startDevelopTask NOT ca
   }
 });
 
-test('run start --live: WARNING emitted BEFORE startDevelopTask (ordering)', async () => {
+test('runStartCore private compatibility: live warning emitted before startDevelopTask', async () => {
   // Ensure warnLiveCost fires before startDevelopTask is called.
   const callOrder: string[] = [];
   const origWarn = console.warn;
@@ -260,6 +277,7 @@ const FAKE_APP = {} as unknown as INestApplicationContext;
 
 type CreateRecord = {
   createRunCalls: number;
+  createRunInputs: unknown[];
   runStartCalls: Array<{ runId: string; opts: { stub: boolean; live: boolean; wait: boolean } }>;
 };
 
@@ -267,12 +285,13 @@ function buildCreateDeps(opts: {
   app?: INestApplicationContext;
   runId?: string;
 }): { deps: CreateRunDeps; record: CreateRecord } {
-  const record: CreateRecord = { createRunCalls: 0, runStartCalls: [] };
+  const record: CreateRecord = { createRunCalls: 0, createRunInputs: [], runStartCalls: [] };
   const resolvedRunId = opts.runId ?? 'run-create-test-001';
 
   const deps: CreateRunDeps = {
-    createRunFn: async (_input) => {
+    createRunFn: async (input) => {
       record.createRunCalls++;
+      record.createRunInputs.push(input);
       return {
         runId: resolvedRunId,
         taskId: 'task-create-001',
@@ -292,11 +311,15 @@ function buildCreateDeps(opts: {
 
 function buildCreateOptions(overrides: Partial<{
   title: string; repo: string; description?: string; scope?: string;
+  playbookId: string; pipelineId: string; params: string;
   priority: string; role: string; start: boolean; wait: boolean; stub: boolean; live: boolean;
 }>): Parameters<typeof createRunCore>[0] {
   return {
     title: 'Test run',
     repo: 'test/repo',
+    playbookId: undefined,
+    pipelineId: undefined,
+    params: undefined,
     priority: '0',
     role: 'architect',
     start: false,
@@ -329,7 +352,49 @@ test('run create --start without app → host-required error + exitCode=1 + crea
   }
 });
 
-test('run create --start --stub --live → exitCode=1 + createRunFn NOT called (no orphan draft) + runStart NOT called', async () => {
+test('createRunCore forwards public route fields and parsed params to createRunFn', async () => {
+  const { deps, record } = buildCreateDeps({ app: undefined });
+  const origExitCode = process.exitCode;
+  process.exitCode = undefined;
+  const origLog = console.log;
+  console.log = () => undefined;
+  try {
+    await createRunCore(buildCreateOptions({
+      start: false,
+      playbookId: 'pb',
+      pipelineId: 'feature-development',
+      params: '{"ticket":"ABC-1","count":2}',
+    }), deps);
+
+    assert.equal(record.createRunCalls, 1);
+    assert.deepEqual(record.createRunInputs[0], {
+      title: 'Test run',
+      repo: 'test/repo',
+      description: undefined,
+      scope: undefined,
+      playbookId: 'pb',
+      pipelineId: 'feature-development',
+      params: { ticket: 'ABC-1', count: 2 },
+      priority: 0,
+      role: 'architect',
+    });
+  } finally {
+    console.log = origLog;
+    process.exitCode = origExitCode as number | undefined;
+  }
+});
+
+test('createRunCore rejects non-object params before creating a draft', async () => {
+  const { deps, record } = buildCreateDeps({ app: undefined });
+
+  await assert.rejects(
+    () => createRunCore(buildCreateOptions({ params: '["not","object"]' }), deps),
+    /Invalid --params: expected a JSON object/,
+  );
+  assert.equal(record.createRunCalls, 0, 'invalid params must not create a run');
+});
+
+test('createRunCore private compatibility: contradictory runner options do not create an orphan draft', async () => {
   const { deps, record } = buildCreateDeps({ app: FAKE_APP });
   const origExitCode = process.exitCode;
   process.exitCode = undefined;
@@ -338,7 +403,7 @@ test('run create --start --stub --live → exitCode=1 + createRunFn NOT called (
   console.error = (...args: unknown[]) => { errors.push(String(args[0])); };
   try {
     await createRunCore(buildCreateOptions({ start: true, stub: true, live: true }), deps);
-    assert.equal(process.exitCode, 1, 'exitCode must be 1 on --stub --live contradiction');
+    assert.equal(process.exitCode, 1, 'exitCode must be 1 on contradictory runner test options');
     assert.equal(record.createRunCalls, 0, 'createRunFn must NOT be called — no orphan draft');
     assert.equal(record.runStartCalls.length, 0, 'runStart must NOT be called');
     assert.ok(
@@ -351,7 +416,7 @@ test('run create --start --stub --live → exitCode=1 + createRunFn NOT called (
   }
 });
 
-test('run create --start + app (valid) → run created once, runStart called exactly once with {stub,live,wait}', async () => {
+test('run create --start + app (valid) → run created once, runStart called exactly once with private compatibility opts', async () => {
   const { deps, record } = buildCreateDeps({ app: FAKE_APP });
   const origExitCode = process.exitCode;
   process.exitCode = undefined;

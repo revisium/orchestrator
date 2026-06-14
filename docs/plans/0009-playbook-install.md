@@ -55,7 +55,7 @@ pnpm run test -- src/control-plane/versioned-meaning.test.ts
 ### 3. Source, manifest, and catalog validation
 
 Support a local playbook checkout path and an already-resolvable npm package. Reject unsupported remote sources
-before any write. Validate `schema_version === 1`, catalog paths, duplicate ids, and required fields.
+before any write. Validate the supported `schema_version` (currently `2`), catalog paths, duplicate ids, and required fields.
 
 Verify:
 

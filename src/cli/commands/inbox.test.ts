@@ -24,10 +24,6 @@ import type { PollOpts } from './poll-workflow-state.js';
 
 type SignalCall = { workflowId: string; topic: string; payload: unknown; idempotencyKey: string };
 type ResolveCall = { itemId: string; answer: unknown; resolvedBy: string };
-type CompleteCall = {
-  runId: string;
-  opts?: { actor?: string; source?: string; verdict?: string; iterations?: number };
-};
 type PollCall = { runId: string; pollOpts?: PollOpts };
 
 function makeGateRow(overrides: Partial<InboxItem> = {}): InboxItem {
@@ -77,12 +73,10 @@ function makeDeps(
   deps: InboxResolveDeps;
   signalCalls: SignalCall[];
   resolveCalls: ResolveCall[];
-  completeCalls: CompleteCall[];
   pollCalls: PollCall[];
 } {
   const signalCalls: SignalCall[] = [];
   const resolveCalls: ResolveCall[] = [];
-  const completeCalls: CompleteCall[] = [];
   const pollCalls: PollCall[] = [];
 
   const deps: InboxResolveDeps = {
@@ -94,15 +88,12 @@ function makeDeps(
     signal: async (workflowId, topic, payload, idempotencyKey) => {
       signalCalls.push({ workflowId, topic, payload, idempotencyKey });
     },
-    completeRun: async (runId, opts) => {
-      completeCalls.push({ runId, opts });
-    },
     pollRunState: async (runId, pollOpts) => {
       pollCalls.push({ runId, pollOpts });
     },
   };
 
-  return { deps, signalCalls, resolveCalls, completeCalls, pollCalls };
+  return { deps, signalCalls, resolveCalls, pollCalls };
 }
 
 // ─── (a) GATE row + --approve ────────────────────────────────────────────────
@@ -191,25 +182,20 @@ test('C4(a): gate row polls run state after signal', async () => {
   }
 });
 
-test('C4(a): merge gate completion marks the run completed before polling', async () => {
+test('C4(a): merge gate signals only and lets the workflow own completion', async () => {
   const gateRow = makeGateRow({
     runId: 'run-merge-1',
     title: 'Merge approval',
     context: { topic: 'merge', summary: { prUrl: 'stub://pr/placeholder' } },
   });
-  const { deps, completeCalls, pollCalls } = makeDeps(gateRow, { decision: 'approve' });
+  const { deps, signalCalls, pollCalls } = makeDeps(gateRow, { decision: 'approve' });
   const origExitCode = process.exitCode;
   process.exitCode = undefined;
 
   try {
     await resolveInboxCommand('inbox_gate_001', { approve: true, reject: false, wait: true }, deps);
-    assert.deepEqual(completeCalls, [
-      {
-        runId: 'run-merge-1',
-        opts: { actor: 'cli', source: 'merge-gate-approve', verdict: '', iterations: 0 },
-      },
-    ]);
-    assert.equal(pollCalls.length, 1, 'pollRunState still runs after completion write');
+    assert.deepEqual(signalCalls.map((call) => [call.workflowId, call.topic]), [['run-merge-1', 'merge']]);
+    assert.equal(pollCalls.length, 1, 'pollRunState still runs after gate signal');
   } finally {
     process.exitCode = origExitCode as number | undefined;
   }

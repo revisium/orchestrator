@@ -8,14 +8,25 @@ import { ControlPlaneError } from '../control-plane/errors.js';
 import type { InboxItem } from '../control-plane/inbox.js';
 import { DbosService } from '../engine/dbos.service.js';
 import { PipelineService, type RunnerMode } from '../pipeline/develop-task.workflow.js';
+import {
+  normalizeExecutionProfile,
+  normalizeParams,
+  normalizeRouteGates,
+  resolveRunnerForProfile,
+  type ExecutionProfile,
+  type RouteDecision,
+  type RouteRoleBinding,
+} from '../pipeline/route-contract.js';
 import { InboxService } from '../revisium/inbox.service.js';
 import { PlaybooksService } from '../revisium/playbooks.service.js';
-import { RolesService } from '../revisium/roles.service.js';
+import type { PipelineSummary } from '../revisium/playbooks.service.js';
+import { RolesService, type RoleSummary } from '../revisium/roles.service.js';
 import { RunService } from '../revisium/run.service.js';
 import { PrReadinessService, type GetPrReadinessInput } from './pr-readiness.service.js';
 
 const execFileAsync = promisify(execFile);
 const GATE_TOPICS = new Set<string>(['plan', 'merge']);
+const BUILTIN_RUNNERS = new Set(['claude-code', 'codex', 'script', 'stub-agent', 'revo-integrator', 'revo-merger', 'revo-deterministic']);
 
 export type RunnerModeInput = RunnerMode;
 
@@ -118,6 +129,50 @@ function summarizeAttempts(attempts: Array<{ inputTokens: number; outputTokens: 
       costAmount: acc.costAmount + attempt.costAmount,
     }),
     { inputTokens: 0, outputTokens: 0, costAmount: 0 },
+  );
+}
+
+function words(value: string): Set<string> {
+  return new Set(value.toLowerCase().split(/[^a-z0-9]+/).filter((part) => part.length > 2));
+}
+
+function routeScore(pipeline: PipelineSummary, text: string): number {
+  const input = words(text);
+  let score = 0;
+  for (const trigger of pipeline.triggers) {
+    for (const word of words(trigger)) {
+      if (input.has(word)) score += 1;
+    }
+  }
+  return score;
+}
+
+function isRouteDecision(value: unknown): value is RouteDecision {
+  const record = asRecord(value);
+  return Boolean(record?.playbookId && record?.pipelineRowId && Array.isArray(record.roleBindings));
+}
+
+function assertRunnerAvailable(runnerId: string, profile: ExecutionProfile, roleId: string): void {
+  const available = profile.availableRunners;
+  if (available && !available.includes(runnerId)) {
+    throw new ControlPlaneError(
+      'VALIDATION_FAILURE',
+      `runner unavailable for role ${roleId}: ${runnerId}`,
+    );
+  }
+  if (!available && !BUILTIN_RUNNERS.has(runnerId)) {
+    throw new ControlPlaneError(
+      'VALIDATION_FAILURE',
+      `runner implementation is not registered for role ${roleId}: ${runnerId}`,
+    );
+  }
+}
+
+function assertProductionRunnerBinding(runnerId: string, runnerSource: RouteRoleBinding['runnerSource'], roleId: string): void {
+  if (runnerId !== 'stub-agent' || runnerSource === 'execution-profile') return;
+  throw new ControlPlaneError(
+    'VALIDATION_FAILURE',
+    `role ${roleId} binds production runner stub-agent; use an execution profile override for test stubs`,
   );
 }
 
@@ -240,38 +295,63 @@ export class TaskControlPlaneApiService {
     description?: string;
     scope?: string;
     priority?: number;
+    playbookId?: string;
+    pipelineId?: string;
+    params?: unknown;
+    /** Private test/service seam; public MCP/CLI do not expose runner profile selection. */
+    executionProfile?: unknown;
     role?: string;
     start?: boolean;
+    /** Deprecated private shim for route-less compatibility tests. */
     runnerMode?: RunnerModeInput;
   }) {
+    const route = await this.resolveRouteDecision({
+      title: input.title,
+      repo: input.repo,
+      description: input.description,
+      scope: input.scope,
+      playbookId: input.playbookId,
+      pipelineId: input.pipelineId,
+      params: input.params,
+      executionProfile: input.executionProfile,
+      source: input.pipelineId ? 'explicit' : 'deterministic-installed-playbook',
+    });
     const result = await this.runs.createRun({
       title: input.title,
       repo: input.repo,
       description: input.description,
       scope: input.scope,
       priority: input.priority ?? 0,
-      role: input.role ?? 'architect',
+      role: route.roleBindings[0]?.rowId ?? input.role ?? 'architect',
+      playbookId: route.playbookId,
+      pipelineId: route.pipelineId,
+      params: route.params,
+      routeDecision: route,
+      executionProfile: route.executionProfile,
     });
-    if (!input.start) return { ...result, started: false };
+    if (!input.start) return { ...result, started: false, route };
     const started = await this.startRun({
       runId: result.runId,
-      runnerMode: input.runnerMode ?? 'script',
+      runnerMode: input.runnerMode,
+      route,
     });
     return { ...result, started: true, workflow: started };
   }
 
-  async startRun(input: { runId: string; runnerMode?: RunnerModeInput }) {
+  async startRun(input: { runId: string; runnerMode?: RunnerModeInput; route?: RouteDecision }) {
     const run = await this.runs.getRun(input.runId);
     if (!run) throw new ControlPlaneError('ROW_NOT_FOUND', `run not found: ${input.runId}`);
+    const route = input.route ?? await this.routeForRun(run);
     const existingStatus = await this.dbos.getWorkflowStatus(input.runId);
     const handle = await this.pipeline.startDevelopTask(input.runId, {
-      runnerMode: input.runnerMode ?? 'script',
+      runnerMode: input.runnerMode,
+      route,
     });
     return {
       runId: input.runId,
       workflowID: handle.workflowID,
       alreadyStarted: existingStatus !== null,
-      runnerMode: input.runnerMode ?? 'script',
+      route,
     };
   }
 
@@ -321,6 +401,90 @@ export class TaskControlPlaneApiService {
       pendingInbox: inbox,
       latestEvents: events.slice(-10),
       usage: summarizeAttempts(attempts),
+    };
+  }
+
+  async waitForRun(input: { runId: string; timeoutMs?: number; intervalMs?: number }) {
+    const timeoutMs = input.timeoutMs ?? 0;
+    const intervalMs = input.intervalMs ?? 1000;
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      const state = await this.resolveRunState(input.runId);
+      if (state.state !== 'running' || Date.now() >= deadline) return state;
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+  }
+
+  private async resolveRunState(runId: string): Promise<{
+    runId: string;
+    state: 'pending_gate' | 'question' | 'running' | 'blocked' | 'failed' | 'completed';
+    nextAction: string;
+    runStatus: string;
+    workflowStatus: string;
+    inbox?: InboxItem;
+    latestBlockingEvent?: unknown;
+  }> {
+    const detail = await this.runs.showRun(runId);
+    if (!detail) throw new ControlPlaneError('ROW_NOT_FOUND', `run not found: ${runId}`);
+    const [inbox, events, workflow] = await Promise.all([
+      this.inbox.listInbox({ runId, status: 'pending', limit: 20 }),
+      this.runs.listRunEvents(runId, { limit: 20 }),
+      this.dbos.getWorkflowStatus(runId),
+    ]);
+    const gate = inbox.find((item) => item.kind === 'approval');
+    if (gate) {
+      return {
+        runId,
+        state: 'pending_gate',
+        nextAction: 'resolve approval with approve_gate or reject_gate',
+        runStatus: detail.run.status,
+        workflowStatus: workflow?.status ?? '',
+        inbox: gate,
+      };
+    }
+    const question = inbox.find((item) => item.kind === 'question');
+    if (question) {
+      return {
+        runId,
+        state: 'question',
+        nextAction: 'answer question with answer_question',
+        runStatus: detail.run.status,
+        workflowStatus: workflow?.status ?? '',
+        inbox: question,
+      };
+    }
+    if (detail.run.status === 'completed') {
+      return { runId, state: 'completed', nextAction: 'none', runStatus: detail.run.status, workflowStatus: workflow?.status ?? '' };
+    }
+    if (detail.run.status === 'failed') {
+      return { runId, state: 'failed', nextAction: 'inspect get_run_events/get_run_log', runStatus: detail.run.status, workflowStatus: workflow?.status ?? '' };
+    }
+    if (detail.run.status === 'cancelled') {
+      return { runId, state: 'blocked', nextAction: 'run was cancelled; create or resume a different run', runStatus: detail.run.status, workflowStatus: workflow?.status ?? '' };
+    }
+    const blocked = [...events].reverse().find((event) => event.type === 'pipeline_blocked');
+    if (blocked) {
+      return {
+        runId,
+        state: 'blocked',
+        nextAction: 'inspect blocking event and decide whether to create a follow-up run',
+        runStatus: detail.run.status,
+        workflowStatus: workflow?.status ?? '',
+        latestBlockingEvent: blocked,
+      };
+    }
+    if (workflow?.status === 'ERROR') {
+      return { runId, state: 'failed', nextAction: 'inspect get_run_events/get_run_log', runStatus: detail.run.status, workflowStatus: workflow.status };
+    }
+    if (workflow?.status === 'SUCCESS') {
+      return { runId, state: 'completed', nextAction: 'none', runStatus: detail.run.status, workflowStatus: workflow.status };
+    }
+    return {
+      runId,
+      state: 'running',
+      nextAction: 'wait_for_run again or inspect get_run_digest',
+      runStatus: detail.run.status,
+      workflowStatus: workflow?.status ?? '',
     };
   }
 
@@ -417,15 +581,6 @@ export class TaskControlPlaneApiService {
     await this.runs.appendEvent({ ...eventBase, type: 'gate_signal_pending' });
     await this.dbos.signal(item.runId, topic, answer, inboxId);
     await this.runs.appendEvent({ ...eventBase, type: 'gate_signaled' });
-    if (topic === 'merge') {
-      const decision = asRecord(answer)?.decision;
-      await this.runs.completeRun(item.runId, {
-        actor: 'mcp',
-        source: decision === 'reject' ? 'merge-gate-reject' : 'merge-gate-approve',
-        verdict: '',
-        iterations: 0,
-      });
-    }
   }
 
   async summarizeGateRisk(inboxId: string) {
@@ -473,22 +628,133 @@ export class TaskControlPlaneApiService {
     return result;
   }
 
-  simulateRoute(input: { title: string; repo?: string; pipeline?: string; live?: boolean }) {
-    const pipeline = input.pipeline ?? 'feature-development';
-    return {
+  simulateRoute(input: { title: string; repo?: string; pipeline?: string; playbookId?: string; params?: unknown }) {
+    return this.resolveRouteDecision({
       title: input.title,
       repo: input.repo ?? '',
-      pipeline,
-      executionMode: 'agent-method-compatible',
-      runnerMode: input.live ? 'live' : 'script',
-      roles: ['architect', 'developer', 'reviewer', 'integrator'],
-      gates: ['plan', 'merge'],
-      reviewLoop: { maxIterationsSource: 'routing_policy.pipeline' },
-      notes: [
-        'MCP route simulation is advisory; workflow-as-data route proposal is a later slice.',
-        'Use create_run then start_run to execute the current DBOS developTask workflow.',
-      ],
+      playbookId: input.playbookId,
+      pipelineId: input.pipeline,
+      params: input.params,
+      source: input.pipeline ? 'explicit' : 'deterministic-installed-playbook',
+    });
+  }
+
+  private async routeForRun(run: { data: Record<string, unknown> }): Promise<RouteDecision> {
+    if (isRouteDecision(run.data.route_decision)) return run.data.route_decision;
+    return this.resolveRouteDecision({
+      title: typeof run.data.title === 'string' ? run.data.title : 'Run',
+      repo: Array.isArray(run.data.repos) && typeof run.data.repos[0] === 'string' ? run.data.repos[0] : '',
+      description: typeof run.data.description === 'string' ? run.data.description : '',
+      scope: typeof run.data.scope === 'string' ? run.data.scope : '',
+      playbookId: typeof run.data.playbook_id === 'string' ? run.data.playbook_id : undefined,
+      pipelineId: typeof run.data.pipeline_id === 'string' ? run.data.pipeline_id : undefined,
+      params: run.data.params,
+      source: run.data.pipeline_id ? 'explicit' : 'deterministic-installed-playbook',
+    });
+  }
+
+  private async resolveRouteDecision(input: {
+    title: string;
+    repo: string;
+    description?: string;
+    scope?: string;
+    playbookId?: string;
+    pipelineId?: string;
+    params?: unknown;
+    executionProfile?: unknown;
+    source: RouteDecision['source'];
+  }): Promise<RouteDecision> {
+    const params = normalizeParams(input.params);
+    const executionProfile = normalizeExecutionProfile(input.executionProfile);
+    const playbook = await this.playbooks.resolvePlaybook(input.playbookId);
+    const pipeline = input.pipelineId
+      ? await this.playbooks.resolvePipeline({ playbookId: playbook.id, pipelineId: input.pipelineId })
+      : await this.resolveAutoPipeline(playbook.id, [input.title, input.description, input.scope].join(' '));
+    const roleBindings = await this.resolveRouteRoles(playbook.id, pipeline, executionProfile);
+    return {
+      playbookId: playbook.id,
+      pipelineId: pipeline.pipelineId,
+      pipelineRowId: pipeline.id,
+      source: input.source,
+      roles: roleBindings.map((binding) => binding.roleId),
+      requiredRoles: pipeline.requiredRoles,
+      optionalRoles: pipeline.optionalRoles,
+      routeGates: normalizeRouteGates(pipeline.routeGates),
+      executionPolicy: pipeline.executionPolicy,
+      executionProfile,
+      roleBindings,
+      params,
     };
+  }
+
+  private async resolveAutoPipeline(playbookId: string, text: string): Promise<PipelineSummary> {
+    const pipelines = (await this.playbooks.listPipelines())
+      .filter((pipeline) => pipeline.playbookId === playbookId)
+      .sort((left, right) => left.id.localeCompare(right.id));
+    if (pipelines.length === 0) {
+      throw new ControlPlaneError('ROW_NOT_FOUND', `no installed pipelines found for playbook ${playbookId}`);
+    }
+    const scored = pipelines
+      .map((pipeline) => ({ pipeline, score: routeScore(pipeline, text) }))
+      .sort((left, right) => right.score - left.score || left.pipeline.id.localeCompare(right.pipeline.id));
+    const best = scored[0];
+    const second = scored[1];
+    if (!best || best.score <= 0) {
+      throw new ControlPlaneError(
+        'VALIDATION_FAILURE',
+        `unable to choose a pipeline confidently; provide pipelineId`,
+      );
+    }
+    if (second?.score === best.score) {
+      throw new ControlPlaneError(
+        'VALIDATION_FAILURE',
+        `ambiguous pipeline route; provide pipelineId`,
+      );
+    }
+    return best.pipeline;
+  }
+
+  private async resolveRouteRoles(
+    playbookId: string,
+    pipeline: PipelineSummary,
+    executionProfile: ExecutionProfile,
+  ): Promise<RouteRoleBinding[]> {
+    const roles = (await this.roles.listRoles()).filter((role) => role.playbookId === playbookId);
+    const byPlaybookRole = new Map(roles.map((role) => [role.playbookRoleId || role.name, role]));
+    const selected = new Set<string>(pipeline.requiredRoles);
+    for (const group of pipeline.alternativeRoles) {
+      const match = group.roles.find((roleId) => byPlaybookRole.has(roleId));
+      if (!match) {
+        throw new ControlPlaneError(
+          'VALIDATION_FAILURE',
+          `pipeline ${pipeline.pipelineId} alternative group ${group.group_id} has no installed role`,
+        );
+      }
+      selected.add(match);
+    }
+    for (const roleId of selected) {
+      if (!byPlaybookRole.has(roleId)) {
+        throw new ControlPlaneError(
+          'VALIDATION_FAILURE',
+          `pipeline ${pipeline.pipelineId} references missing installed role: ${roleId}`,
+        );
+      }
+    }
+    return [...selected].map((roleId): RouteRoleBinding => {
+      const role = byPlaybookRole.get(roleId) as RoleSummary;
+      assertProductionRunnerBinding(role.runner, 'playbook', roleId);
+      const resolved = resolveRunnerForProfile(role.runner, executionProfile);
+      assertProductionRunnerBinding(resolved.runnerId, resolved.source, roleId);
+      assertRunnerAvailable(resolved.runnerId, executionProfile, roleId);
+      return {
+        roleId,
+        rowId: role.id,
+        modelLevel: role.modelLevel,
+        runnerId: role.runner,
+        resolvedRunnerId: resolved.runnerId,
+        runnerSource: resolved.source,
+      };
+    });
   }
 
   getPrReadiness(input: GetPrReadinessInput) {

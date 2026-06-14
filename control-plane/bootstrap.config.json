@@ -47,6 +47,31 @@
             "type": "number",
             "default": 0
           },
+          "playbook_id": {
+            "type": "string",
+            "default": "",
+            "description": "Installed playbook selected for this run"
+          },
+          "pipeline_id": {
+            "type": "string",
+            "default": "",
+            "description": "Installed pipeline row id selected for this run"
+          },
+          "params": {
+            "type": "string",
+            "default": "",
+            "description": "Serialized JSON run params"
+          },
+          "route_decision": {
+            "type": "string",
+            "default": "",
+            "description": "Serialized JSON structured route decision"
+          },
+          "execution_profile": {
+            "type": "string",
+            "default": "",
+            "description": "Serialized JSON resolved execution profile"
+          },
           "created_by": {
             "type": "string",
             "default": ""
@@ -452,7 +477,12 @@
           "runner": {
             "type": "string",
             "default": "claude-code",
-            "description": "claude-code|codex|script"
+            "description": "Deprecated alias for runner_id"
+          },
+          "runner_id": {
+            "type": "string",
+            "default": "",
+            "description": "Portable playbook runner binding, for example claude-code or revo-integrator"
           },
           "allowed_tools": {
             "type": "array",
