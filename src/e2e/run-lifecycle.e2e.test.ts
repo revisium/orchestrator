@@ -58,7 +58,9 @@ test('local-change: developer-only run completes and reattaches', { skip: e2eSki
 
   const waited = await waitState(h.api, run.runId);
   assert.equal(waited.state, 'completed');
-  assert.equal(waited.workflowStatus, 'SUCCESS');
+  // Not asserting waited.workflowStatus: the DBOS workflow status (PENDING→SUCCESS) lags the run row,
+  // so a snapshot taken the instant the run goes terminal can still read PENDING. run.status
+  // (asserted via assertCompleted) is the reliable success signal.
 
   await assertCompleted(h.api, run.runId);
   await assertAttemptVerdicts(h.api, run.runId, ['PASS']); // local-change executes developer only
