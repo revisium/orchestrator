@@ -20,8 +20,11 @@ export type RunHarnessOptions = {
    * into the same `agentCalls`/`developerWrites`). Default: {@link deterministicAgent} (all-PASS).
    */
   agent?: (sink: AgentSink) => RunAgent;
-  /** gh behaviour (see {@link GhScenario}) or a ready `ExecGhFn`. Default: `'happy'` recording into `ghCalls`. */
-  gh?: GhScenario | ExecGhFn;
+  /**
+   * gh behaviour: a {@link GhScenario} string, or a factory that receives the harness `ghCalls`
+   * recorder (e.g. `routedGhEmulator` for per-run scenarios). Default: `'happy'`.
+   */
+  gh?: GhScenario | ((ghCalls: string[][]) => ExecGhFn);
 };
 
 export type RunHarness = {
@@ -60,7 +63,7 @@ export async function createRunHarness(opts: RunHarnessOptions = {}): Promise<Ru
   const developerWrites: DeveloperWrites = new Map();
 
   const execGh: ExecGhFn =
-    typeof opts.gh === 'function' ? opts.gh : createGhEmulator(ghCalls, opts.gh);
+    typeof opts.gh === 'function' ? opts.gh(ghCalls) : createGhEmulator(ghCalls, opts.gh);
   const integrator = createFakeIntegrator(runs, execGh);
   const agent = opts.agent
     ? opts.agent({ agentCalls, developerWrites })

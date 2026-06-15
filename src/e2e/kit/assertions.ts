@@ -43,6 +43,23 @@ export async function assertUsage(
   assert.equal(digest.usage.costAmount, usage.costAmount);
 }
 
+/** Assert the run did not complete and emitted a `pipeline_blocked` event (preflight/integrate/etc.). */
+export async function assertBlocked(api: Api, runId: string): Promise<void> {
+  const events = await api.getRunEvents({ runId, limit: 50 });
+  assert.ok(events.some((e) => e.type === 'pipeline_blocked'), 'a blocked run must emit pipeline_blocked');
+  const detail = await api.getRun({ runId });
+  assert.notEqual(detail.run.status, 'completed', 'a blocked run must not be completed');
+}
+
+/** Assert a gh subcommand was NOT invoked for this run's branch (e.g. `pr create` when reusing a PR). */
+export function assertGhNotCalled(h: RunHarness, taskId: string, sub: [string, string]): void {
+  const branchPrefix = `feat/${taskId}-`;
+  assert.ok(
+    !h.ghCalls.some((c) => c[0] === sub[0] && c[1] === sub[1] && c.some((a) => a.startsWith(branchPrefix))),
+    `gh ${sub.join(' ')} must not be called for ${taskId}`,
+  );
+}
+
 /** Roles + runners that actually executed for a run (from the deterministic agent's recorded calls). */
 export function executedRoles(h: RunHarness, runId: string): Array<[string, string]> {
   return h.agentCalls.filter((c) => c.runId === runId).map((c): [string, string] => [c.role, c.runner]);
