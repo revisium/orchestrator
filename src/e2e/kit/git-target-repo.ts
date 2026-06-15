@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ExecFn } from '../../runners/integrator.js';
@@ -14,13 +14,27 @@ export function git(cwd: string, args: string[]): string {
   });
 }
 
+// worktree → URL reported for `git remote get-url origin`. Default: a synthetic GitHub URL (so the
+// integrator derives a parseable owner/repo without a real github remote). A target repo can register
+// a non-github URL to exercise the "no parseable github remote" path (D8).
+const reportedRemote = new Map<string, string>();
+
+function setReportedRemote(worktree: string, url: string): void {
+  reportedRemote.set(worktree, url);
+  try {
+    reportedRemote.set(realpathSync(worktree), url); // cwd may arrive realpath-canonicalized
+  } catch {
+    /* worktree exists here; ignore */
+  }
+}
+
 /**
- * `ExecFn` for the integrator: real git, except `remote get-url origin` returns a synthetic GitHub
- * URL so the integrator can derive a parseable owner/repo without a real remote being configured.
+ * `ExecFn` for the integrator: real git, except `remote get-url origin` returns the URL registered
+ * for the cwd (default: a synthetic GitHub URL) so owner/repo parsing works without a real remote.
  */
 export const execGit: ExecFn = (args, cwd) => {
   if (args[0] === 'remote' && args[1] === 'get-url' && args[2] === 'origin') {
-    return 'git@github.com:e2e/repo.git\n';
+    return `${reportedRemote.get(cwd) ?? 'git@github.com:e2e/repo.git'}\n`;
   }
   return execFileSync('git', args, {
     encoding: 'utf8',
@@ -37,7 +51,7 @@ export type TargetRepo = {
   cleanup: () => void;
 };
 
-/** Negative preflight states (each makes `preflightLive` return needsHuman). At most one applies. */
+/** Negative integrator states (each makes preflight or integrate return needsHuman). At most one applies. */
 export type TargetRepoState = {
   /** Leave an uncommitted file so `git status --porcelain` is non-empty (preflight: "not clean"). */
   dirty?: boolean;
@@ -45,6 +59,10 @@ export type TargetRepoState = {
   baseAhead?: boolean;
   /** Sit on a feature branch that predates an advanced origin/master (preflight: not based on origin). */
   staleBranch?: boolean;
+  /** Never push master, so `git fetch origin master` fails (preflight: base branch may not exist). */
+  baseMissing?: boolean;
+  /** Report a non-github origin URL, so the integrator can't parse owner/repo (integrate: needsHuman). */
+  nonGithubRemote?: boolean;
 };
 
 /**
@@ -63,8 +81,13 @@ export function createTargetRepo(state: TargetRepoState = {}): TargetRepo {
   git(worktree, ['add', 'README.md']);
   git(worktree, ['commit', '-m', 'init']);
   git(worktree, ['remote', 'add', 'origin', origin]);
-  git(worktree, ['push', '-u', 'origin', 'master']);
+  if (!state.baseMissing) {
+    git(worktree, ['push', '-u', 'origin', 'master']); // origin/master exists for the happy path
+  }
 
+  if (state.nonGithubRemote) {
+    setReportedRemote(worktree, 'https://gitlab.example.test/owner/repo.git');
+  }
   if (state.staleBranch) {
     git(worktree, ['switch', '-c', 'stale-feature']); // branch at the initial commit
     git(worktree, ['switch', 'master']);

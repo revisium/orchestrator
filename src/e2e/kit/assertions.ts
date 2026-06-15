@@ -51,6 +51,30 @@ export async function assertBlocked(api: Api, runId: string): Promise<void> {
   assert.notEqual(detail.run.status, 'completed', 'a blocked run must not be completed');
 }
 
+/** Assert no persisted event for the run carries the raw token (serialized scan over all events). */
+export async function assertNoRawTokenInEvents(api: Api, runId: string, rawToken: string): Promise<void> {
+  const events = await api.getRunEvents({ runId, limit: 50 });
+  assert.ok(
+    !JSON.stringify(events).includes(rawToken),
+    `a raw token must never reach persisted events: ${rawToken}`,
+  );
+}
+
+/**
+ * Assert a raw GitHub token never reaches the run's persisted events, and that the blocking
+ * `pipeline_blocked` lesson was redacted to `[REDACTED]`. Drives the token through a needsHuman
+ * integrator lesson; the persist boundary (appendRunEvent → redactEventPayload) must mask it.
+ */
+export async function assertLessonRedacted(api: Api, runId: string, rawToken: string): Promise<void> {
+  const events = await api.getRunEvents({ runId, limit: 50 });
+  const serialized = JSON.stringify(events);
+  assert.ok(!serialized.includes(rawToken), `a raw token must never reach persisted events: ${rawToken}`);
+  const blocked = events.find((e) => e.type === 'pipeline_blocked');
+  assert.ok(blocked, 'a redaction case must still block (pipeline_blocked emitted)');
+  const lesson = String((blocked.payload as { lesson?: unknown } | undefined)?.lesson ?? '');
+  assert.ok(lesson.includes('[REDACTED]'), 'the surfaced lesson must show the redaction marker');
+}
+
 /** Assert a gh subcommand was NOT invoked for this run's branch (e.g. `pr create` when reusing a PR). */
 export function assertGhNotCalled(h: RunHarness, taskId: string, sub: [string, string]): void {
   const branchPrefix = `feat/${taskId}-`;
