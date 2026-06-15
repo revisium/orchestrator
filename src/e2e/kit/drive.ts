@@ -8,6 +8,11 @@ export function allSteps(detail: RunDetail) {
   return detail.tasks.flatMap((task) => task.steps);
 }
 
+/** Poll until the run settles (terminal or parked at a gate). Returns the wait state. */
+export function waitState(api: TaskControlPlaneApiService, runId: string, timeoutMs = 60_000) {
+  return api.waitForRun({ runId, timeoutMs, intervalMs: 500 });
+}
+
 /**
  * Drive a gated run to a terminal state by approving each gate as it opens.
  * Returns the terminal `state` plus the ordered list of approved gate topics (e.g. `['plan','merge']`).

@@ -2,8 +2,8 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AttemptResult, RunAgent } from '../../worker/runner.js';
 
-/** One recorded agent invocation — lets tests assert who ran with which runner. */
-export type AgentCall = { role: string; runner: string; attemptId: string };
+/** One recorded agent invocation — lets tests assert who ran with which runner (scoped by runId). */
+export type AgentCall = { role: string; runner: string; attemptId: string; runId: string };
 
 /** runId → worktree path where the `developer` role should write a change file. */
 export type DeveloperWrites = Map<string, string>;
@@ -22,7 +22,7 @@ export function deterministicAgent(
 ): RunAgent {
   return async ({ role, profile, attemptId, step }): Promise<AttemptResult> => {
     const logicalRole = role.playbookRoleId ?? role.name;
-    agentCalls.push({ role: logicalRole, runner: role.runner, attemptId });
+    agentCalls.push({ role: logicalRole, runner: role.runner, attemptId, runId: step.runId });
     const writeRepo = logicalRole === 'developer' ? developerWrites.get(step.runId) : undefined;
     if (writeRepo) {
       writeFileSync(join(writeRepo, `developer-${attemptId}.txt`), `change from ${attemptId}\n`);
