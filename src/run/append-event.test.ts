@@ -9,7 +9,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { appendRunEvent, appendRunCost, appendRunAttempt } from './append-event.js';
+import { appendRunEvent, appendRunCost, appendRunAttempt, redactEventPayload } from './append-event.js';
 import type { ControlPlaneDataAccess } from '../control-plane/data-access.js';
 import { ControlPlaneError } from '../control-plane/errors.js';
 
@@ -130,6 +130,47 @@ test('appendRunEvent: non-ROW_CONFLICT errors are rethrown', async () => {
       return true;
     },
   );
+});
+
+const LEAK = 'gho_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345'; // gho_ + 32 alnum → matches the token shape
+
+test('appendRunEvent: redacts token shapes in the persisted payload (e.g. a pipeline_blocked lesson)', async () => {
+  const { da, rows } = makeFakeDa();
+  await appendRunEvent(da, {
+    runId: 'run-1',
+    taskId: 'task-1',
+    stepId: '',
+    stepKey: 'pipeline',
+    type: 'pipeline_blocked',
+    payload: { reason: 'integrate', lesson: `gh push failed: bad credentials using token ${LEAK}` },
+  });
+  const persisted = JSON.stringify(rows[0]?.data.payload);
+  assert.ok(!persisted.includes(LEAK), 'a token in an event payload lesson must not be persisted raw');
+  assert.ok(persisted.includes('[REDACTED]'), 'the token shape must be redacted');
+  assert.ok(persisted.includes('integrate'), 'non-secret payload fields are preserved');
+});
+
+test('redactEventPayload: walks strings, nested objects, and arrays; leaves scalars untouched', () => {
+  const out = redactEventPayload({
+    reason: 'integrate',
+    lesson: `token ${LEAK} rejected`,
+    count: 3,
+    flag: true,
+    nested: { inner: `nested ${LEAK}` },
+    list: [`item ${LEAK}`, 'clean', 7],
+  }) as Record<string, unknown>;
+  assert.equal(out.reason, 'integrate');
+  assert.equal(out.lesson, 'token [REDACTED] rejected');
+  assert.equal(out.count, 3); // scalar untouched
+  assert.equal(out.flag, true); // scalar untouched
+  assert.equal((out.nested as Record<string, unknown>).inner, 'nested [REDACTED]');
+  assert.deepEqual(out.list, ['item [REDACTED]', 'clean', 7]);
+});
+
+test('redactEventPayload: passes through null and primitive top-level values', () => {
+  assert.equal(redactEventPayload(null), null);
+  assert.equal(redactEventPayload(42), 42);
+  assert.equal(redactEventPayload(`bare ${LEAK}`), 'bare [REDACTED]');
 });
 
 // ─── appendRunCost ───────────────────────────────────────────────────────────

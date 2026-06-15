@@ -9,6 +9,7 @@ import { PlaybooksService } from '../../revisium/playbooks.service.js';
 import { PipelineService } from '../../pipeline/develop-task.workflow.js';
 import { TaskControlPlaneApiService } from '../../task-control-plane/task-control-plane-api.service.js';
 import type { RunAgent } from '../../worker/runner.js';
+import type { IntegratorService } from '../../runners/integrator.js';
 import type { ExecGhFn } from '../../poller/pr-readiness.js';
 import { deterministicAgent, type AgentCall, type AgentSink, type DeveloperWrites } from './agents.js';
 import { createGhEmulator, type GhScenario } from './gh-emulator.js';
@@ -25,6 +26,8 @@ export type RunHarnessOptions = {
    * recorder (e.g. `routedGhEmulator` for per-run scenarios). Default: `'happy'`.
    */
   gh?: GhScenario | ((ghCalls: string[][]) => ExecGhFn);
+  /** Wrap the (fake) integrator — e.g. `routedIntegrator` for per-run mocked integrate outcomes. */
+  integrator?: (base: IntegratorService) => IntegratorService;
 };
 
 export type RunHarness = {
@@ -64,7 +67,8 @@ export async function createRunHarness(opts: RunHarnessOptions = {}): Promise<Ru
 
   const execGh: ExecGhFn =
     typeof opts.gh === 'function' ? opts.gh(ghCalls) : createGhEmulator(ghCalls, opts.gh);
-  const integrator = createFakeIntegrator(runs, execGh);
+  const baseIntegrator = createFakeIntegrator(runs, execGh);
+  const integrator = opts.integrator ? opts.integrator(baseIntegrator) : baseIntegrator;
   const agent = opts.agent
     ? opts.agent({ agentCalls, developerWrites })
     : deterministicAgent(agentCalls, developerWrites);
