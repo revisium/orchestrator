@@ -8,6 +8,100 @@ export type AgentCall = { role: string; runner: string; attemptId: string; runId
 /** runId → worktree path where the `developer` role should write a change file. */
 export type DeveloperWrites = Map<string, string>;
 
+/** Mutable recorders a harness exposes; passed to an agent factory so a custom agent records too. */
+export type AgentSink = { agentCalls: AgentCall[]; developerWrites: DeveloperWrites };
+
+/** Per-role behaviour for {@link scriptedAgent}/{@link routedScriptedAgent}. */
+export type RoleBehavior =
+  | { kind: 'pass' } //                                       output { verdict: 'PASS' }
+  | { kind: 'verdict'; verdict: 'PASS' | 'MINOR' | 'MAJOR' | 'BLOCKER' } // structured verdict
+  | { kind: 'throw'; message?: string } //                    runner throws → step_failed, BLOCKER, needsHuman
+  | { kind: 'needsHuman'; lesson?: string } //                parks the step (awaiting_approval)
+  | { kind: 'cost'; inputTokens: number; outputTokens: number; costAmount: number }; // PASS + custom cost
+
+/** A scripted plan: behaviour per logical role; arrays are consumed one entry per call (clamped). */
+export type AgentSpec = {
+  byRole?: Record<string, RoleBehavior | RoleBehavior[]>;
+  default?: RoleBehavior;
+};
+
+function pickBehavior(spec: AgentSpec, role: string, callIndex: number): RoleBehavior {
+  const entry = spec.byRole?.[role];
+  if (Array.isArray(entry)) return entry[Math.min(callIndex, entry.length - 1)] ?? { kind: 'pass' };
+  return entry ?? spec.default ?? { kind: 'pass' };
+}
+
+function runBehavior(
+  behavior: RoleBehavior,
+  ctx: { logicalRole: string; runner: string; attemptId: string; runId: string; level: string },
+  sink: AgentSink,
+): AttemptResult {
+  if (behavior.kind === 'throw') {
+    throw new Error(behavior.message ?? `scripted failure from ${ctx.logicalRole}`);
+  }
+  const writeRepo = ctx.logicalRole === 'developer' ? sink.developerWrites.get(ctx.runId) : undefined;
+  if (writeRepo && behavior.kind !== 'needsHuman') {
+    writeFileSync(join(writeRepo, `developer-${ctx.attemptId}.txt`), `change from ${ctx.attemptId}\n`);
+  }
+  const verdict = behavior.kind === 'verdict' ? behavior.verdict : 'PASS';
+  const cost =
+    behavior.kind === 'cost'
+      ? { inputTokens: behavior.inputTokens, outputTokens: behavior.outputTokens, costAmount: behavior.costAmount }
+      : { inputTokens: 10, outputTokens: 5, costAmount: 0.001 };
+  return {
+    output: { verdict, role: ctx.logicalRole, runner: ctx.runner },
+    artifacts: {
+      process: { ref: `test-artifacts/${ctx.attemptId}`, stdoutTail: `stdout from ${ctx.logicalRole}`, stderrTail: '' },
+    },
+    nextSteps: [],
+    costs: [{ modelProfile: ctx.level, currency: 'USD', ...cost }],
+    needsHuman: behavior.kind === 'needsHuman',
+    lesson: behavior.kind === 'needsHuman' ? behavior.lesson : undefined,
+  };
+}
+
+/** Agent driven by a single {@link AgentSpec} (same plan for every run). Records into `sink`. */
+export function scriptedAgent(spec: AgentSpec, sink: AgentSink): RunAgent {
+  const counts = new Map<string, number>();
+  return async ({ role, profile, attemptId, step }): Promise<AttemptResult> => {
+    const logicalRole = role.playbookRoleId ?? role.name;
+    sink.agentCalls.push({ role: logicalRole, runner: role.runner, attemptId, runId: step.runId });
+    const n = counts.get(logicalRole) ?? 0;
+    counts.set(logicalRole, n + 1);
+    return runBehavior(pickBehavior(spec, logicalRole, n), {
+      logicalRole,
+      runner: role.runner,
+      attemptId,
+      runId: step.runId,
+      level: profile.level,
+    }, sink);
+  };
+}
+
+/**
+ * Agent that dispatches to a per-run {@link AgentSpec} from `specs` (keyed by runId), so one harness
+ * can drive many runs with different failure scripts. Create the run with `start:false`, register its
+ * spec in `specs`, then `startRun` — the workflow then reads this run's plan. Defaults to all-PASS.
+ */
+export function routedScriptedAgent(specs: Map<string, AgentSpec>, sink: AgentSink): RunAgent {
+  const counts = new Map<string, number>();
+  return async ({ role, profile, attemptId, step }): Promise<AttemptResult> => {
+    const logicalRole = role.playbookRoleId ?? role.name;
+    sink.agentCalls.push({ role: logicalRole, runner: role.runner, attemptId, runId: step.runId });
+    const key = `${step.runId}::${logicalRole}`;
+    const n = counts.get(key) ?? 0;
+    counts.set(key, n + 1);
+    const spec = specs.get(step.runId) ?? {};
+    return runBehavior(pickBehavior(spec, logicalRole, n), {
+      logicalRole,
+      runner: role.runner,
+      attemptId,
+      runId: step.runId,
+      level: profile.level,
+    }, sink);
+  };
+}
+
 /**
  * Deterministic test agent: records every call, returns a PASS verdict with fixed costs and a
  * process artifact. When the logical role is `developer` and a worktree is registered for the run,

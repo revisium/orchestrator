@@ -3,14 +3,19 @@ import type { TaskControlPlaneApiService } from '../../task-control-plane/task-c
 
 type RunDetail = Awaited<ReturnType<TaskControlPlaneApiService['getRun']>>;
 
+// Local control-plane is fast; poll tightly so gate/terminal waits don't dominate suite time.
+// A real run settles in a few seconds — if a wait needs >10s the run is stuck (a bug), so fail fast.
+const POLL_MS = 100;
+const WAIT_TIMEOUT_MS = 10_000;
+
 /** Flatten every step across a run's tasks. */
 export function allSteps(detail: RunDetail) {
   return detail.tasks.flatMap((task) => task.steps);
 }
 
 /** Poll until the run settles (terminal or parked at a gate). Returns the wait state. */
-export function waitState(api: TaskControlPlaneApiService, runId: string, timeoutMs = 60_000) {
-  return api.waitForRun({ runId, timeoutMs, intervalMs: 500 });
+export function waitState(api: TaskControlPlaneApiService, runId: string, timeoutMs = WAIT_TIMEOUT_MS) {
+  return api.waitForRun({ runId, timeoutMs, intervalMs: POLL_MS });
 }
 
 /** Wait until the run parks at a gate; assert it is a gate (optionally a specific topic). */
@@ -19,7 +24,7 @@ export async function waitForGate(
   runId: string,
   expectedTopic?: 'plan' | 'merge',
 ): Promise<{ inboxId: string; topic: string }> {
-  const state = await api.waitForRun({ runId, timeoutMs: 60_000, intervalMs: 500 });
+  const state = await api.waitForRun({ runId, timeoutMs: WAIT_TIMEOUT_MS, intervalMs: POLL_MS });
   assert.equal(state.state, 'pending_gate', `expected pending_gate, got ${state.state}`);
   const inbox = state.inbox;
   assert.ok(inbox, 'pending_gate must include the inbox item to resolve');
@@ -41,7 +46,7 @@ export async function approveUntilTerminal(
 ): Promise<{ state: string; approvedTopics: string[] }> {
   const approvedTopics: string[] = [];
   for (;;) {
-    const state = await api.waitForRun({ runId, timeoutMs: 60_000, intervalMs: 500 });
+    const state = await api.waitForRun({ runId, timeoutMs: WAIT_TIMEOUT_MS, intervalMs: POLL_MS });
     if (state.state !== 'pending_gate') return { state: state.state, approvedTopics };
     const inbox = state.inbox;
     assert.ok(inbox, 'pending_gate must include the inbox item to resolve');
