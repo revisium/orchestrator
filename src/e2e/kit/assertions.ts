@@ -7,7 +7,15 @@ type Api = TaskControlPlaneApiService;
 
 /** Assert the run reached `completed` and left no claimable (`ready`) steps. Returns the detail. */
 export async function assertCompleted(api: Api, runId: string) {
-  const detail = await api.getRun({ runId, includeEvents: true, includeLog: true });
+  // The step-status cascade lags the run-row status patch (recordTerminalRunStatus patches step rows
+  // AFTER the run row), so under load a run can read `completed` with a step still `ready` for a beat.
+  // Poll briefly for the steps to settle rather than reading once — a step genuinely stuck `ready`
+  // still fails after the window (a real bug), but the propagation lag no longer flakes the suite.
+  let detail = await api.getRun({ runId, includeEvents: true, includeLog: true });
+  for (let waited = 0; waited < 5_000 && allSteps(detail).some((s) => s.status === 'ready'); waited += 250) {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    detail = await api.getRun({ runId, includeEvents: true, includeLog: true });
+  }
   assert.equal(detail.run.status, 'completed');
   assert.ok(allSteps(detail).every((s) => s.status !== 'ready'), 'terminal run must not leave ready steps');
   return detail;
@@ -73,6 +81,21 @@ export async function assertLessonRedacted(api: Api, runId: string, rawToken: st
   assert.ok(blocked, 'a redaction case must still block (pipeline_blocked emitted)');
   const lesson = String((blocked.payload as { lesson?: unknown } | undefined)?.lesson ?? '');
   assert.ok(lesson.includes('[REDACTED]'), 'the surfaced lesson must show the redaction marker');
+}
+
+/**
+ * Assert a recovered run's durable record is exactly-once — replay after crash recovery must not
+ * duplicate terminal or step events (deterministic ids + ROW_CONFLICT). Guards the idempotency the
+ * engine relies on so DBOS workflow replays are side-effect-free.
+ */
+export async function assertReplayIdempotent(api: Api, runId: string): Promise<void> {
+  const events = await api.getRunEvents({ runId, limit: 100 });
+  const completed = events.filter((e) => e.type === 'run_completed');
+  assert.equal(completed.length, 1, 'run_completed must appear exactly once after recovery');
+  const stepKeys = events
+    .filter((e) => e.type === 'step_succeeded')
+    .map((e) => String((e.payload as { stepKey?: unknown } | undefined)?.stepKey ?? ''));
+  assert.equal(stepKeys.length, new Set(stepKeys).size, 'a replayed step must not emit a duplicate step_succeeded');
 }
 
 /** Assert a gh subcommand was NOT invoked for this run's branch (e.g. `pr create` when reusing a PR). */
