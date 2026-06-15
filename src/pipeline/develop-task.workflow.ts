@@ -124,7 +124,9 @@ function mapVerdictToken(raw: unknown): string | null {
  * not an incidental match. Returns null when the string does not start with a known verdict.
  */
 function verdictFromText(text: string): string | null {
-  const m = /^(APPROVE|REQUEST_CHANGES|BLOCKER|MAJOR|MINOR|PASS)\b/.exec(text.trimStart().toUpperCase());
+  const m = /^(APPROVE|REQUEST_CHANGES|BLOCKER|MAJOR|MINOR|PASS|PASSED|READY|VERIFIED|DEPLOYED_READY)\b/.exec(
+    text.trimStart().toUpperCase(),
+  );
   return m ? mapVerdictToken(m[1]) : null;
 }
 

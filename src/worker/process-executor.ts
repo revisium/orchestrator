@@ -62,13 +62,24 @@ export const spawnExecutor: ProcessExecutor = (req) =>
 
     child.stdout?.setEncoding('utf8');
     child.stderr?.setEncoding('utf8');
+    // Guard the sink callbacks: a throw here (e.g. a failed artifact write) would otherwise
+    // escape the stream 'data' handler as an uncaughtException and crash the worker. The
+    // in-memory capture above is unaffected, so the result envelope is still collected.
     child.stdout?.on('data', (chunk: string) => {
       stdout += chunk;
-      req.onStdoutChunk?.(chunk);
+      try {
+        req.onStdoutChunk?.(chunk);
+      } catch (err) {
+        console.warn(`Warning: onStdoutChunk sink failed: ${String(err)}`);
+      }
     });
     child.stderr?.on('data', (chunk: string) => {
       stderr += chunk;
-      req.onStderrChunk?.(chunk);
+      try {
+        req.onStderrChunk?.(chunk);
+      } catch (err) {
+        console.warn(`Warning: onStderrChunk sink failed: ${String(err)}`);
+      }
     });
 
     const timer = setTimeout(() => {
