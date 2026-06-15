@@ -37,8 +37,21 @@ export type TargetRepo = {
   cleanup: () => void;
 };
 
-/** Create a throwaway bare+worktree git repo with one initial commit pushed to `origin/master`. */
-export function createTargetRepo(): TargetRepo {
+/** Negative preflight states (each makes `preflightLive` return needsHuman). At most one applies. */
+export type TargetRepoState = {
+  /** Leave an uncommitted file so `git status --porcelain` is non-empty (preflight: "not clean"). */
+  dirty?: boolean;
+  /** Commit locally without pushing so HEAD != origin/master (preflight: base not on fresh origin). */
+  baseAhead?: boolean;
+  /** Sit on a feature branch that predates an advanced origin/master (preflight: not based on origin). */
+  staleBranch?: boolean;
+};
+
+/**
+ * Create a throwaway bare+worktree git repo with one initial commit pushed to `origin/master`.
+ * Pass a {@link TargetRepoState} to leave it in a state that fails the integrator's live preflight.
+ */
+export function createTargetRepo(state: TargetRepoState = {}): TargetRepo {
   const root = mkdtempSync(join(tmpdir(), 'revo-e2e-target-'));
   const origin = join(root, 'origin.git');
   const worktree = join(root, 'worktree');
@@ -51,5 +64,23 @@ export function createTargetRepo(): TargetRepo {
   git(worktree, ['commit', '-m', 'init']);
   git(worktree, ['remote', 'add', 'origin', origin]);
   git(worktree, ['push', '-u', 'origin', 'master']);
+
+  if (state.staleBranch) {
+    git(worktree, ['switch', '-c', 'stale-feature']); // branch at the initial commit
+    git(worktree, ['switch', 'master']);
+    writeFileSync(join(worktree, 'moved.txt'), 'master advanced\n');
+    git(worktree, ['add', 'moved.txt']);
+    git(worktree, ['commit', '-m', 'advance master']);
+    git(worktree, ['push', 'origin', 'master']); // origin/master now ahead of stale-feature
+    git(worktree, ['switch', 'stale-feature']); // worktree sits on the stale branch
+  } else if (state.baseAhead) {
+    writeFileSync(join(worktree, 'ahead.txt'), 'local-only\n');
+    git(worktree, ['add', 'ahead.txt']);
+    git(worktree, ['commit', '-m', 'local-only commit (not pushed)']); // local master ahead of origin
+  }
+  if (state.dirty) {
+    writeFileSync(join(worktree, 'dirty.txt'), 'uncommitted change\n'); // untracked → porcelain dirty
+  }
+
   return { root, worktree, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
