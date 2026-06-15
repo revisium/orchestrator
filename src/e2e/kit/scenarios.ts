@@ -10,20 +10,23 @@ export const PLAYBOOK_ID = 'revisium-agent-playbook';
 const STUB_OVERRIDE = { runnerOverrides: { 'claude-code': 'stub-agent' } };
 
 /**
- * Install the agent playbook into the control-plane (roles + pipelines), idempotently.
- * The control-plane is shared across e2e files; skip the (commit-ing) install when the playbook
- * is already present, so a second file does not race/duplicate the draft commit.
+ * Install the agent playbook into the control-plane (roles + pipelines).
+ *
+ * The control-plane is shared across e2e files (and persists between local runs). On a fresh
+ * control-plane the first caller installs + commits it; a later caller re-committing the same
+ * playbook fails with "revision is not a draft" (a benign no-op), which we swallow. Any other
+ * failure is re-thrown. NB: a seeded pipeline is NOT proof the playbook is installed (bootstrap
+ * seeds pipeline rows), so we must not gate on getPipeline — we install and tolerate re-install.
  */
 export async function givenInstalledPlaybook(h: RunHarness): Promise<void> {
-  const alreadyInstalled = await h.api.getPipeline('feature-development').then(
-    () => true,
-    () => false,
-  );
-  if (alreadyInstalled) return;
-  const install = await h.api.installPlaybook({ source: PLAYBOOK_SOURCE, name: PLAYBOOK_ID, commit: true });
-  assert.equal(install.playbookId, PLAYBOOK_ID);
-  assert.ok(install.roles > 0, 'playbook install must load roles');
-  assert.ok(install.pipelines > 0, 'playbook install must load pipelines');
+  try {
+    const install = await h.api.installPlaybook({ source: PLAYBOOK_SOURCE, name: PLAYBOOK_ID, commit: true });
+    assert.equal(install.playbookId, PLAYBOOK_ID);
+    assert.ok(install.roles > 0, 'playbook install must load roles');
+    assert.ok(install.pipelines > 0, 'playbook install must load pipelines');
+  } catch (err) {
+    if (!/not a draft|already|nothing to commit|ROW_CONFLICT/i.test(String(err))) throw err;
+  }
 }
 
 /** Create + start a `local-change` run (developer-only, stub agent). Returns the started run. */
