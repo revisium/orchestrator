@@ -13,6 +13,24 @@ export function waitState(api: TaskControlPlaneApiService, runId: string, timeou
   return api.waitForRun({ runId, timeoutMs, intervalMs: 500 });
 }
 
+/** Wait until the run parks at a gate; assert it is a gate (optionally a specific topic). */
+export async function waitForGate(
+  api: TaskControlPlaneApiService,
+  runId: string,
+  expectedTopic?: 'plan' | 'merge',
+): Promise<{ inboxId: string; topic: string }> {
+  const state = await api.waitForRun({ runId, timeoutMs: 60_000, intervalMs: 500 });
+  assert.equal(state.state, 'pending_gate', `expected pending_gate, got ${state.state}`);
+  const inbox = state.inbox;
+  assert.ok(inbox, 'pending_gate must include the inbox item to resolve');
+  const context = inbox.context;
+  assert.ok(context !== null && typeof context === 'object' && !Array.isArray(context));
+  const topic = (context as Record<string, unknown>)['topic'];
+  assert.equal(typeof topic, 'string');
+  if (expectedTopic) assert.equal(topic, expectedTopic, `expected ${expectedTopic} gate, got ${String(topic)}`);
+  return { inboxId: inbox.id, topic: topic as string };
+}
+
 /**
  * Drive a gated run to a terminal state by approving each gate as it opens.
  * Returns the terminal `state` plus the ordered list of approved gate topics (e.g. `['plan','merge']`).
