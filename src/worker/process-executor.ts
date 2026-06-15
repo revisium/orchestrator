@@ -11,6 +11,9 @@ export type ExecRequest = {
   timeoutMs: number; // kill after this
   input?: string; // prompt piped on stdin (avoids argv length limits for large context)
   env?: Record<string, string>;
+  onSpawn?: (pid: number) => void;
+  onStdoutChunk?: (chunk: string) => void;
+  onStderrChunk?: (chunk: string) => void;
 };
 
 export type ExecResult = {
@@ -55,10 +58,18 @@ export const spawnExecutor: ProcessExecutor = (req) =>
     let timedOut = false;
     let settled = false;
 
+    if (child.pid !== undefined) req.onSpawn?.(child.pid);
+
     child.stdout?.setEncoding('utf8');
     child.stderr?.setEncoding('utf8');
-    child.stdout?.on('data', (chunk: string) => { stdout += chunk; });
-    child.stderr?.on('data', (chunk: string) => { stderr += chunk; });
+    child.stdout?.on('data', (chunk: string) => {
+      stdout += chunk;
+      req.onStdoutChunk?.(chunk);
+    });
+    child.stderr?.on('data', (chunk: string) => {
+      stderr += chunk;
+      req.onStderrChunk?.(chunk);
+    });
 
     const timer = setTimeout(() => {
       timedOut = true;

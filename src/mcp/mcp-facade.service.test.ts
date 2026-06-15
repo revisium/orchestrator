@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { McpFacadeService } from './mcp-facade.service.js';
 import { MCP_TOOL_NAMES } from './mcp-capabilities.js';
 import type { TaskControlPlaneApiService } from '../task-control-plane/task-control-plane-api.service.js';
+import { ControlPlaneError } from '../control-plane/errors.js';
+import { CreateRunWorkflowError } from '../run/create-run.js';
 
 test('McpFacadeService.getCapabilities exposes the MCP transport surface', () => {
   const facade = new McpFacadeService({} as TaskControlPlaneApiService);
@@ -32,6 +34,24 @@ test('McpFacadeService delegates product operations to TaskControlPlaneApiServic
 
   assert.deepEqual(received, { title: 'Task', repo: '.', start: false });
   assert.deepEqual(result, { runId: 'run-1', started: false });
+});
+
+test('McpFacadeService.createRun exposes workflow row failure cause for MCP debugging', async () => {
+  const api = {
+    async createRun() {
+      throw new CreateRunWorkflowError(
+        'Failed to create run workflow rows',
+        { runId: 'run-1' },
+        new ControlPlaneError('VALIDATION_FAILURE', 'Validation failure: task_runs/run-1', { status: 422 }),
+      );
+    },
+  } as unknown as TaskControlPlaneApiService;
+  const facade = new McpFacadeService(api);
+
+  await assert.rejects(
+    () => facade.createRun({ title: 'Task', repo: '.', start: false }),
+    /Failed to create run workflow rows: VALIDATION_FAILURE status=422: Validation failure: task_runs\/run-1; createdBeforeFailure=\{"runId":"run-1"\}/,
+  );
 });
 
 test('McpFacadeService delegates PR readiness tools to TaskControlPlaneApiService', async () => {

@@ -176,6 +176,21 @@ function assertProductionRunnerBinding(runnerId: string, runnerSource: RouteRole
   );
 }
 
+function isPreDeveloperAnalysisRole(roleId: string): boolean {
+  return ['analyst', 'architect', 'reviewer', 'knowledge-engineer'].includes(roleId);
+}
+
+function insertBeforeFirstDeveloperRole(selected: string[], roleId: string): void {
+  const developerIndex = selected.findIndex((selectedRole) =>
+    ['developer', 'developer-backend', 'developer-frontend', 'knowledge-engineer'].includes(selectedRole)
+  );
+  if (developerIndex < 0) {
+    selected.push(roleId);
+    return;
+  }
+  selected.splice(developerIndex, 0, roleId);
+}
+
 @Injectable()
 export class TaskControlPlaneApiService {
   constructor(
@@ -462,6 +477,9 @@ export class TaskControlPlaneApiService {
     if (detail.run.status === 'cancelled') {
       return { runId, state: 'blocked', nextAction: 'run was cancelled; create or resume a different run', runStatus: detail.run.status, workflowStatus: workflow?.status ?? '' };
     }
+    if (detail.run.status === 'paused') {
+      return { runId, state: 'blocked', nextAction: 'inspect blocking event and decide whether to create a follow-up run', runStatus: detail.run.status, workflowStatus: workflow?.status ?? '' };
+    }
     const blocked = [...events].reverse().find((event) => event.type === 'pipeline_blocked');
     if (blocked) {
       return {
@@ -721,7 +739,7 @@ export class TaskControlPlaneApiService {
   ): Promise<RouteRoleBinding[]> {
     const roles = (await this.roles.listRoles()).filter((role) => role.playbookId === playbookId);
     const byPlaybookRole = new Map(roles.map((role) => [role.playbookRoleId || role.name, role]));
-    const selected = new Set<string>(pipeline.requiredRoles);
+    const selected = [...pipeline.requiredRoles];
     for (const group of pipeline.alternativeRoles) {
       const match = group.roles.find((roleId) => byPlaybookRole.has(roleId));
       if (!match) {
@@ -730,7 +748,10 @@ export class TaskControlPlaneApiService {
           `pipeline ${pipeline.pipelineId} alternative group ${group.group_id} has no installed role`,
         );
       }
-      selected.add(match);
+      if (!selected.includes(match)) {
+        if (isPreDeveloperAnalysisRole(match)) insertBeforeFirstDeveloperRole(selected, match);
+        else selected.push(match);
+      }
     }
     for (const roleId of selected) {
       if (!byPlaybookRole.has(roleId)) {
@@ -740,7 +761,7 @@ export class TaskControlPlaneApiService {
         );
       }
     }
-    return [...selected].map((roleId): RouteRoleBinding => {
+    return selected.map((roleId): RouteRoleBinding => {
       const role = byPlaybookRole.get(roleId) as RoleSummary;
       assertProductionRunnerBinding(role.runner, 'playbook', roleId);
       const resolved = resolveRunnerForProfile(role.runner, executionProfile);

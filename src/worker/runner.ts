@@ -19,3 +19,17 @@ export type RunAgent = (args: {
   attemptId: string;
   step: Step;
 }) => Promise<AttemptResult>;
+
+export class RunAgentError extends Error {
+  readonly artifacts?: unknown;
+
+  constructor(message: string, artifacts?: unknown) {
+    super(message);
+    this.name = 'RunAgentError';
+    this.artifacts = artifacts;
+  }
+}
+
+export function artifactsFromRunAgentError(err: unknown): unknown | undefined {
+  return err instanceof RunAgentError ? err.artifacts : undefined;
+}

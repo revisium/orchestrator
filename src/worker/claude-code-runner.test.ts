@@ -1,8 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createClaudeCodeRunner } from './claude-code-runner.js';
 import type { ExecRequest, ExecResult, ProcessExecutor } from './process-executor.js';
 import type { WorktreeManager } from './worktree-manager.js';
+import { createArtifactStore } from './artifact-store.js';
+import { RunAgentError } from './runner.js';
 import { makeRole, BASE_STEP } from './test-fixtures.js';
 import type { ModelProfile } from '../control-plane/definitions.js';
 
@@ -207,6 +212,49 @@ test('claude-code runner: parses the envelope into output/artifacts/nextSteps/co
   assert.equal(result.costs[0]?.modelProfile, BASE_STEP.modelProfile);
 });
 
+test('claude-code runner: writes process artifacts and returns a stable process ref/tails', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'revo-runner-artifacts-'));
+  try {
+    const stdout = transport(
+      agentBlock({
+        output: { summary: 'planned' },
+        artifacts: { planPath: 'docs/plans/0099.md' },
+        nextSteps: [],
+        needsHuman: false,
+      }),
+    );
+    const runner = createClaudeCodeRunner({
+      executor: async (req) => {
+        req.onStdoutChunk?.('transport stdout tail');
+        req.onStderrChunk?.('debug stderr tail');
+        return ok(stdout, { stderr: 'debug stderr tail' });
+      },
+      resolveCwd: async () => '/workspace/repo',
+      timeoutMs: 5_000,
+      artifactStore: createArtifactStore(root),
+    });
+
+    const result = await runner({
+      role: makeRole('architect'),
+      profile: PROFILE,
+      context: 'ctx',
+      attemptId: ATTEMPT_ID,
+      step: BASE_STEP,
+    });
+
+    assert.deepEqual(result.artifacts, {
+      planPath: 'docs/plans/0099.md',
+      process: {
+        ref: `${BASE_STEP.runId}/${ATTEMPT_ID}`,
+        stdoutTail: 'transport stdout tail',
+        stderrTail: 'debug stderr tail',
+      },
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('claude-code runner: reported total_cost_usd of 0 with non-zero tokens yields cost 0 (not token-computed)', async () => {
   const stdout = transport(agentBlock({ output: 'ok', nextSteps: [], needsHuman: false }), {
     total_cost_usd: 0,
@@ -255,6 +303,46 @@ test('claude-code runner: non-zero exit throws with stderr as the lesson', async
     () => run(fakeExecutor({ code: 1, stdout: '', stderr: 'auth required', timedOut: false }, [])),
     /auth required/,
   );
+});
+
+test('claude-code runner: non-zero exit error carries process artifact refs/tails', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'revo-runner-artifacts-'));
+  try {
+    const runner = createClaudeCodeRunner({
+      executor: async (req) => {
+        req.onStderrChunk?.('auth required');
+        return { code: 1, stdout: '', stderr: 'auth required', timedOut: false };
+      },
+      resolveCwd: async () => '/workspace/repo',
+      timeoutMs: 5_000,
+      artifactStore: createArtifactStore(root),
+    });
+
+    await assert.rejects(
+      () =>
+        runner({
+          role: makeRole('architect'),
+          profile: PROFILE,
+          context: 'ctx',
+          attemptId: ATTEMPT_ID,
+          step: BASE_STEP,
+        }),
+      (err) => {
+        assert.ok(err instanceof RunAgentError);
+        assert.deepEqual(err.artifacts, {
+          agent: null,
+          process: {
+            ref: `${BASE_STEP.runId}/${ATTEMPT_ID}`,
+            stdoutTail: '',
+            stderrTail: 'auth required',
+          },
+        });
+        return true;
+      },
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('claude-code runner: is_error transport throws with the text as the lesson', async () => {

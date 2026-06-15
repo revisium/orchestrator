@@ -4,9 +4,20 @@ import {
   type RepositoryContext,
   type RepositoryValidation,
 } from '../task-control-plane/task-control-plane-api.service.js';
+import { ControlPlaneError } from '../control-plane/errors.js';
+import { CreateRunWorkflowError } from '../run/create-run.js';
 import { MCP_TOOL_NAMES } from './mcp-capabilities.js';
 
 export type { RepositoryContext, RepositoryValidation };
+
+function formatCause(error: unknown): string {
+  if (error instanceof ControlPlaneError) {
+    const status = error.status === undefined ? '' : ` status=${error.status}`;
+    return `${error.code}${status}: ${error.message}`;
+  }
+  if (error instanceof Error) return error.message;
+  return String(error);
+}
 
 @Injectable()
 export class McpFacadeService {
@@ -56,7 +67,15 @@ export class McpFacadeService {
     priority?: number;
     start?: boolean;
   }) {
-    return this.api.createRun(input);
+    return this.api.createRun(input).catch((error: unknown) => {
+      if (error instanceof CreateRunWorkflowError) {
+        const created = Object.keys(error.createdIds).length > 0
+          ? `; createdBeforeFailure=${JSON.stringify(error.createdIds)}`
+          : '';
+        throw new Error(`${error.message}: ${formatCause(error.cause)}${created}`);
+      }
+      throw error;
+    });
   }
 
   startRun(input: { runId: string }) {

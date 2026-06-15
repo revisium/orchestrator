@@ -206,7 +206,16 @@ test('seed (0008 #5): loadPipelinePolicy falls back to defaults when the row is 
 
 test('seed (0008 #4): attempts schema declares the observability fields', () => {
   const props = tableProps('attempts');
-  for (const field of ['iteration', 'verdict', 'cost_amount', 'duration_ms', 'output_summary']) {
+  for (const field of [
+    'iteration',
+    'verdict',
+    'cost_amount',
+    'duration_ms',
+    'output_summary',
+    'artifact_ref',
+    'stdout_tail',
+    'stderr_tail',
+  ]) {
     assert.ok(field in props, `attempts.${field} must be declared for observability`);
   }
 });
