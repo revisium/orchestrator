@@ -69,6 +69,27 @@ export async function startFeatureRun(h: RunHarness, target: TargetRepo) {
   return created;
 }
 
+/**
+ * Create + start a feature run with BOTH the agent and the integrator stubbed (script mode — no git
+ * or gh). Used by the durability/recovery suite where integration is irrelevant and the run must
+ * reach plan + merge gates and complete without external effects. `target` is only a valid repo path
+ * (the stub integrator never touches it). Does NOT register a developer write (stub integrate ignores it).
+ */
+export async function startStubbedFeatureRun(h: RunHarness, target: TargetRepo) {
+  const created = await h.api.createRun({
+    repo: target.worktree,
+    title: 'E2E recovery feature run',
+    description: 'Group F — durability/crash-recovery (stubbed agent + integrator).',
+    scope: 'recovery e2e',
+    playbookId: PLAYBOOK_ID,
+    pipelineId: 'feature-development',
+    executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent', 'revo-integrator': 'stub-agent' } },
+    start: true,
+  });
+  if (!('workflow' in created)) throw new Error('start:true must return workflow metadata');
+  return { runId: created.runId, taskId: created.taskId };
+}
+
 /** Feature run driven to the `plan` gate (parked, awaiting decision). */
 export async function givenFeatureRunAtPlanGate(h: RunHarness, target: TargetRepo) {
   const run = await startFeatureRun(h, target);

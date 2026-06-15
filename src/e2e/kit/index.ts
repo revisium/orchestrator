@@ -10,3 +10,4 @@ export * from './harness.js';
 export * from './drive.js';
 export * from './scenarios.js';
 export * from './assertions.js';
+export * from './crash.js';

@@ -18,7 +18,20 @@
  */
 import pg from 'pg';
 
-const DBOS_DB_NAME = 'dbos';
+/**
+ * DBOS system-database name. Overridable via `REVO_DBOS_DB` so the e2e/CI daemon keeps its DBOS
+ * progress fully separate from the dev one. Validated to a safe identifier because the name is
+ * interpolated into a non-parameterizable `CREATE DATABASE` (CREATE DATABASE cannot bind params).
+ */
+function resolveDbosDbName(): string {
+  const name = process.env['REVO_DBOS_DB'] ?? 'dbos';
+  if (!/^[a-z_][a-z0-9_]*$/i.test(name)) {
+    throw new Error(`Invalid REVO_DBOS_DB '${name}': must be a SQL identifier (/^[a-z_][a-z0-9_]*$/i)`);
+  }
+  return name;
+}
+
+const DBOS_DB_NAME = resolveDbosDbName();
 const MAINTENANCE_DB = 'postgres';
 
 /** PostgreSQL SQLSTATE for "database already exists" (duplicate_database). */
