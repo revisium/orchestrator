@@ -3,9 +3,10 @@ import type { TaskControlPlaneApiService } from '../../task-control-plane/task-c
 
 type RunDetail = Awaited<ReturnType<TaskControlPlaneApiService['getRun']>>;
 
-// Local control-plane is fast; poll tightly so gate/terminal waits don't dominate suite time.
+// Poll at 500ms: tighter intervals can observe a run as terminal before its DBOS workflow status /
+// step-status cascade settle, flaking `workflowStatus`/`no ready steps` assertions on slower CI.
 // A real run settles in a few seconds — if a wait needs >10s the run is stuck (a bug), so fail fast.
-const POLL_MS = 100;
+const POLL_MS = 500;
 const WAIT_TIMEOUT_MS = 10_000;
 
 /** Flatten every step across a run's tasks. */
