@@ -10,13 +10,16 @@ import { PipelineService } from '../../pipeline/develop-task.workflow.js';
 import { TaskControlPlaneApiService } from '../../task-control-plane/task-control-plane-api.service.js';
 import type { RunAgent } from '../../worker/runner.js';
 import type { ExecGhFn } from '../../poller/pr-readiness.js';
-import { deterministicAgent, type AgentCall, type DeveloperWrites } from './agents.js';
+import { deterministicAgent, type AgentCall, type AgentSink, type DeveloperWrites } from './agents.js';
 import { createGhEmulator, type GhScenario } from './gh-emulator.js';
 import { createFakeIntegrator } from './fake-integrator.js';
 
 export type RunHarnessOptions = {
-  /** Override the agent. Default: {@link deterministicAgent} recording into `agentCalls`/`developerWrites`. */
-  agent?: RunAgent;
+  /**
+   * Override the agent via a factory that receives the harness recorders (so a custom agent records
+   * into the same `agentCalls`/`developerWrites`). Default: {@link deterministicAgent} (all-PASS).
+   */
+  agent?: (sink: AgentSink) => RunAgent;
   /** gh behaviour (see {@link GhScenario}) or a ready `ExecGhFn`. Default: `'happy'` recording into `ghCalls`. */
   gh?: GhScenario | ExecGhFn;
 };
@@ -59,7 +62,9 @@ export async function createRunHarness(opts: RunHarnessOptions = {}): Promise<Ru
   const execGh: ExecGhFn =
     typeof opts.gh === 'function' ? opts.gh : createGhEmulator(ghCalls, opts.gh);
   const integrator = createFakeIntegrator(runs, execGh);
-  const agent = opts.agent ?? deterministicAgent(agentCalls, developerWrites);
+  const agent = opts.agent
+    ? opts.agent({ agentCalls, developerWrites })
+    : deterministicAgent(agentCalls, developerWrites);
 
   const pipeline = new PipelineService(dbos, roles, runs, inbox, integrator, agent);
   const api = new TaskControlPlaneApiService(runs, inbox, roles, playbooks, pipeline, dbos);

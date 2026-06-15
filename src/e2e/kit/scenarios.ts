@@ -19,12 +19,19 @@ const STUB_OVERRIDE = { runnerOverrides: { 'claude-code': 'stub-agent' } };
  * seeds pipeline rows), so we must not gate on getPipeline — we install and tolerate re-install.
  */
 export async function givenInstalledPlaybook(h: RunHarness): Promise<void> {
+  // `listPlaybooks` is the accurate presence signal: bootstrap seeds pipeline/role rows but NOT a
+  // playbook record, so this is empty until installed. Shared control-plane + sequential files →
+  // the first run installs once, the rest skip (no redundant commit, no race).
+  const installed = await h.api.listPlaybooks();
+  if (installed.some((p) => p.id === PLAYBOOK_ID)) return;
   try {
     const install = await h.api.installPlaybook({ source: PLAYBOOK_SOURCE, name: PLAYBOOK_ID, commit: true });
     assert.equal(install.playbookId, PLAYBOOK_ID);
     assert.ok(install.roles > 0, 'playbook install must load roles');
     assert.ok(install.pipelines > 0, 'playbook install must load pipelines');
   } catch (err) {
+    // Belt-and-suspenders: tolerate a concurrent/duplicate commit ("revision is not a draft");
+    // re-throw anything that is not an already-installed signal.
     if (!/not a draft|already|nothing to commit|ROW_CONFLICT/i.test(String(err))) throw err;
   }
 }
