@@ -44,6 +44,22 @@ export type AppendCostInput = {
 };
 
 /**
+ * Deep-redact GitHub token shapes from every string leaf of an event payload before it is persisted
+ * to the Revisium draft. The attempts row redacts `lesson`/`error` explicitly (appendRunAttempt); an
+ * event payload carries the same free text (e.g. an integrator `pipeline_blocked` lesson) and must
+ * not leak a raw token. Redacting at this persist boundary covers every payload field, including ones
+ * added by future event types.
+ */
+export function redactEventPayload(value: unknown): unknown {
+  if (typeof value === 'string') return redactTokens(value);
+  if (Array.isArray(value)) return value.map(redactEventPayload);
+  if (value !== null && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, redactEventPayload(v)]));
+  }
+  return value;
+}
+
+/**
  * Write a single event row to the `events` table.
  *
  * eventId = `event_${fnv1a64Hex(`${runId}|${stepKey}|${type}`)}` → 22 chars ≤ 64
@@ -64,7 +80,7 @@ export async function appendRunEvent(
       task_id: taskId,
       step_id: stepId,
       type,
-      payload,
+      payload: redactEventPayload(payload),
       actor: actor ?? 'orchestrator',
       created_at: createdAtIso,
     });
