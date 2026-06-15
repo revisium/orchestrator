@@ -2,18 +2,31 @@ import assert from 'node:assert/strict';
 import { PLAYBOOK_SOURCE } from './env.js';
 import type { RunHarness } from './harness.js';
 import type { TargetRepo } from './git-target-repo.js';
+import { waitForGate } from './drive.js';
 
 /** Playbook id installed by {@link givenInstalledPlaybook}. */
 export const PLAYBOOK_ID = 'revisium-agent-playbook';
 
 const STUB_OVERRIDE = { runnerOverrides: { 'claude-code': 'stub-agent' } };
 
-/** Install the agent playbook into the control-plane (roles + pipelines). Run once per harness. */
+/**
+ * Install the agent playbook into the control-plane (roles + pipelines).
+ *
+ * The control-plane is shared across e2e files (and persists between local runs). On a fresh
+ * control-plane the first caller installs + commits it; a later caller re-committing the same
+ * playbook fails with "revision is not a draft" (a benign no-op), which we swallow. Any other
+ * failure is re-thrown. NB: a seeded pipeline is NOT proof the playbook is installed (bootstrap
+ * seeds pipeline rows), so we must not gate on getPipeline — we install and tolerate re-install.
+ */
 export async function givenInstalledPlaybook(h: RunHarness): Promise<void> {
-  const install = await h.api.installPlaybook({ source: PLAYBOOK_SOURCE, name: PLAYBOOK_ID, commit: true });
-  assert.equal(install.playbookId, PLAYBOOK_ID);
-  assert.ok(install.roles > 0, 'playbook install must load roles');
-  assert.ok(install.pipelines > 0, 'playbook install must load pipelines');
+  try {
+    const install = await h.api.installPlaybook({ source: PLAYBOOK_SOURCE, name: PLAYBOOK_ID, commit: true });
+    assert.equal(install.playbookId, PLAYBOOK_ID);
+    assert.ok(install.roles > 0, 'playbook install must load roles');
+    assert.ok(install.pipelines > 0, 'playbook install must load pipelines');
+  } catch (err) {
+    if (!/not a draft|already|nothing to commit|ROW_CONFLICT/i.test(String(err))) throw err;
+  }
 }
 
 /** Create + start a `local-change` run (developer-only, stub agent). Returns the started run. */
@@ -47,4 +60,20 @@ export async function startFeatureRun(h: RunHarness, target: TargetRepo) {
   if (!('workflow' in created)) throw new Error('start:true must return workflow metadata');
   h.developerWrites.set(created.runId, target.worktree);
   return created;
+}
+
+/** Feature run driven to the `plan` gate (parked, awaiting decision). */
+export async function givenFeatureRunAtPlanGate(h: RunHarness, target: TargetRepo) {
+  const run = await startFeatureRun(h, target);
+  const gate = await waitForGate(h.api, run.runId, 'plan');
+  return { runId: run.runId, taskId: run.taskId, inboxId: gate.inboxId };
+}
+
+/** Feature run with `plan` approved, driven to the `merge` gate (parked, awaiting decision). */
+export async function givenFeatureRunAtMergeGate(h: RunHarness, target: TargetRepo) {
+  const run = await startFeatureRun(h, target);
+  const plan = await waitForGate(h.api, run.runId, 'plan');
+  await h.api.approveGate({ inboxId: plan.inboxId, resolvedBy: 'e2e' });
+  const merge = await waitForGate(h.api, run.runId, 'merge');
+  return { runId: run.runId, taskId: run.taskId, inboxId: merge.inboxId };
 }
