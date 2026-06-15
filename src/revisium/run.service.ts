@@ -10,6 +10,7 @@ import { listRuns, showRun, listRunEvents, listRunAttempts, getRunFailure, type 
 import { cancelRun, type CancelRunResult } from '../run/cancel-run.js';
 import { failRun, type FailRunResult } from '../run/fail-run.js';
 import { completeRun, type CompleteRunResult } from '../run/complete-run.js';
+import { blockRun, type BlockRunResult } from '../run/block-run.js';
 import { appendRunEvent, appendRunCost, appendRunAttempt, type AppendEventInput, type AppendCostInput, type AppendAttemptInput } from '../run/append-event.js';
 import { REVISIUM_TRANSPORT_DRAFT } from './tokens.js';
 
@@ -76,6 +77,17 @@ export class RunService {
     opts?: { now?: Date; actor?: string; source?: string; verdict?: string; iterations?: number },
   ): Promise<CompleteRunResult | null> {
     return completeRun(this.da, id, opts);
+  }
+
+  /**
+   * blockRun — patch task_runs to `paused` + write a run_blocked event.
+   * Called when the workflow intentionally stops with blocked:true while DBOS completes.
+   */
+  blockRun(
+    id: string,
+    opts?: { now?: Date; actor?: string; source?: string; reason?: string },
+  ): Promise<BlockRunResult | null> {
+    return blockRun(this.da, id, opts);
   }
 
   /** Expose getRun for events pre-check (run not found guard in CLI). */

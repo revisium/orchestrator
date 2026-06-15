@@ -46,6 +46,28 @@ test('spawnExecutor: pipes input on stdin', async () => {
   assert.equal(result.code, 0);
 });
 
+test('spawnExecutor: reports pid and stdout/stderr chunks to callbacks', async () => {
+  const stdoutChunks: string[] = [];
+  const stderrChunks: string[] = [];
+  let pid = 0;
+
+  const result = await spawnExecutor({
+    command: process.execPath,
+    args: ['-e', "process.stdout.write('out');process.stderr.write('err')"],
+    cwd: process.cwd(),
+    timeoutMs: 10_000,
+    onSpawn: (childPid) => { pid = childPid; },
+    onStdoutChunk: (chunk) => { stdoutChunks.push(chunk); },
+    onStderrChunk: (chunk) => { stderrChunks.push(chunk); },
+  });
+
+  assert.equal(result.stdout, 'out');
+  assert.equal(result.stderr, 'err');
+  assert.ok(pid > 0, 'spawn callback receives the child pid');
+  assert.equal(stdoutChunks.join(''), 'out');
+  assert.equal(stderrChunks.join(''), 'err');
+});
+
 test('spawnExecutor: kills a process that exceeds timeoutMs', async () => {
   const result = await spawnExecutor({
     command: process.execPath,

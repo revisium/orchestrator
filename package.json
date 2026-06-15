@@ -48,6 +48,7 @@
     "smoke:pr-poller": "tsx scripts/smoke-pr-poller.ts",
     "smoke:mvp": "tsx scripts/smoke-mvp.ts",
     "test": "tsx --test $(find src -name '*.test.ts' | sort)",
+    "test:e2e": "REVO_E2E_REAL=1 tsx --test src/e2e/*.e2e.test.ts",
     "test:cov": "mkdir -p coverage && node --import tsx --test --experimental-test-coverage --test-reporter=spec --test-reporter=lcov --test-reporter-destination=stdout --test-reporter-destination=coverage/lcov.info $(find src -name '*.test.ts' | sort)",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint:ci": "eslint . --max-warnings 0",

@@ -47,6 +47,7 @@ import type { Decision } from './await-human.js';
 import type { CancelRunResult } from '../run/cancel-run.js';
 import type { FailRunResult } from '../run/fail-run.js';
 import type { CompleteRunResult } from '../run/complete-run.js';
+import type { BlockRunResult } from '../run/block-run.js';
 import type { IntegratorInput, IntegratorOutput, IntegratorBlocked } from '../runners/integrator.js';
 import { stubIntegrate } from '../runners/integrator.js';
 import type { RouteDecision, RouteRoleBinding } from './route-contract.js';
@@ -148,6 +149,10 @@ type Harness = {
   cancelRunArgs: string[];
   cancelRunOpts: Array<{ actor?: string; source?: string } | undefined>;
   failRunArgs: Array<{ runId: string; reason: string }>;
+  blockRunArgs: Array<{
+    runId: string;
+    opts?: { actor?: string; source?: string; reason?: string };
+  }>;
   completeRunArgs: Array<{
     runId: string;
     opts?: { actor?: string; source?: string; verdict?: string; iterations?: number };
@@ -192,6 +197,7 @@ function buildDeps(opts: {
     cancelRunArgs: [],
     cancelRunOpts: [],
     failRunArgs: [],
+    blockRunArgs: [],
     completeRunArgs: [],
     integrateCallCount: 0,
     stubCallCount: 0,
@@ -242,7 +248,7 @@ function buildDeps(opts: {
 
   const runAgent: RunAgent = reviewerResults
     ? async (args) => {
-        if (['reviewer', 'watcher', 'pr-watcher'].includes(args.role.name)) {
+        if (['reviewer', 'watcher', 'pr-watcher', 'deploy-watcher', 'qa-backend', 'qa-frontend'].includes(args.role.name)) {
           const idx =
             reviewerCallCount < reviewerResults.length ? reviewerCallCount : reviewerResults.length - 1;
           reviewerCallCount++;
@@ -300,6 +306,14 @@ function buildDeps(opts: {
     return { runId, previousStatus: 'ready', status: 'completed' };
   };
 
+  const blockRun = async (
+    runId: string,
+    blockOpts?: { actor?: string; source?: string; reason?: string },
+  ): Promise<BlockRunResult | null> => {
+    harness.blockRunArgs.push({ runId, opts: blockOpts });
+    return { runId, previousStatus: 'ready', status: 'paused' };
+  };
+
   // loadRunTaskContext fake — returns a minimal context.
   const loadRunTaskContext = async (_runId: string) => ({
     taskId: 'task-001',
@@ -348,6 +362,7 @@ function buildDeps(opts: {
     cancelRun,
     failRun,
     completeRun,
+    blockRun,
     loadRunTaskContext,
     loadPipelinePolicy,
     integrateFn,
@@ -425,6 +440,70 @@ test('verdictOf: missing verdict → BLOCKER (fail-closed, E14)', () => {
 
 test('verdictOf: unknown verdict string → BLOCKER (fail-closed)', () => {
   const r: AttemptResult = { output: { verdict: 'WIBBLE' }, nextSteps: [], costs: [] };
+  assert.equal(verdictOf(r), 'BLOCKER');
+});
+
+test('verdictOf: nested deploy watcher result with deployed-ready and no blockers → PASS', () => {
+  const r: AttemptResult = {
+    output: {
+      deploy_watcher_result: {
+        verdict: 'deployed-ready',
+        blockers: [],
+        next_route_action: 'continue',
+      },
+    },
+    nextSteps: [],
+    costs: [],
+  };
+  assert.equal(verdictOf(r), 'PASS');
+});
+
+test('verdictOf: nested QA scenarios all pass/skipped → PASS', () => {
+  const r: AttemptResult = {
+    output: {
+      qa_backend_result: {
+        scenarios: [
+          { name: 'capabilities', status: 'pass' },
+          { name: 'daemon-only smoke', status: 'skipped' },
+        ],
+        summary: { passed: 1, failed: 0, skipped: 1, total: 2 },
+        blockers: [],
+        next_route_action: 'continue',
+      },
+    },
+    nextSteps: [],
+    costs: [],
+  };
+  assert.equal(verdictOf(r), 'PASS');
+});
+
+test('verdictOf: nested role result with blockers stays BLOCKER', () => {
+  const r: AttemptResult = {
+    output: {
+      deploy_watcher_result: {
+        verdict: 'deployed-ready',
+        blockers: ['daemon unavailable'],
+        next_route_action: 'continue',
+      },
+    },
+    nextSteps: [],
+    costs: [],
+  };
+  assert.equal(verdictOf(r), 'BLOCKER');
+});
+
+test('verdictOf: nested QA scenario failure stays BLOCKER', () => {
+  const r: AttemptResult = {
+    output: {
+      qa_backend_result: {
+        scenarios: [{ name: 'create_run', status: 'fail' }],
+        summary: { passed: 0, failed: 1, skipped: 0, total: 1 },
+        blockers: [],
+      },
+    },
+    nextSteps: [],
+    costs: [],
+  };
   assert.equal(verdictOf(r), 'BLOCKER');
 });
 
@@ -662,7 +741,7 @@ test('T4a: runnerOverride=script with claude-code seeded roles → stub runs (ne
   assert.equal(integSucceeded.length, 1);
 });
 
-test('T4b (B9): private live compatibility mode + claude-code seeded roles throws when claude runner is not wired', async () => {
+test('T4b (B9): private live compatibility mode + claude-code runner failure records step_failed', async () => {
   const runId = 'run-t4b';
   const seededRoles = new Map<string, Role>([
     ['architect', makeRole('architect', 'claude-code')],
@@ -671,24 +750,20 @@ test('T4b (B9): private live compatibility mode + claude-code seeded roles throw
     ['integrator', makeRole('integrator', 'claude-code')],
   ]);
 
-  const { deps, throwingClaudeCode } = buildDeps({ runId, roles: seededRoles });
+  const { deps, harness, throwingClaudeCode } = buildDeps({ runId, roles: seededRoles });
   // Ensure the runAgent in deps is the throwing one (not real ClaudeCodeService)
   // by verifying that throwing when mode=live and role.runner=claude-code
   deps.runAgent = throwingClaudeCode;
   const runStepImpl = makeRunStep(deps);
 
-  // private live compatibility mode → seeded claude-code → throwing dep → RUNNER_NOT_IMPLEMENTED
-  await assert.rejects(
-    () => runStepImpl(runId, 'architect', 'architect', { phase: 'plan' }, 'live'),
-    (err: unknown) => {
-      assert.ok(err instanceof Error);
-      assert.ok(
-        err.message.includes('RUNNER_NOT_IMPLEMENTED'),
-        `error message should contain RUNNER_NOT_IMPLEMENTED: ${err.message}`,
-      );
-      return true;
-    },
-  );
+  // private live compatibility mode → seeded claude-code → runner failure becomes a domain
+  // BLOCKER result, not a DBOS step exception that can strand task_runs.status='ready'.
+  const result = await runStepImpl(runId, 'architect', 'architect', { phase: 'plan' }, 'live');
+  assert.equal(verdictOf(result), 'BLOCKER');
+  assert.equal(result.needsHuman, true);
+  assert.match(result.lesson ?? '', /RUNNER_NOT_IMPLEMENTED/);
+  assert.equal(harness.appendEventArgs.at(-1)?.type, 'step_failed');
+  assert.equal(harness.appendAttemptInputs.at(-1)?.status, 'failed');
 });
 
 test('route dispatch uses each resolved role runner without globally forcing script mode', async () => {
@@ -744,8 +819,8 @@ test('route dispatch uses each resolved role runner without globally forcing scr
   assert.equal(harness.stubCallCount, 0, 'global script mode must not force the integrator to runStub');
 });
 
-test('developer-less route records terminal blocked state after route roles execute', async () => {
-  const runId = 'run-route-analysis-required';
+test('developer-less route completes as a generic linear pipeline when verdict passes', async () => {
+  const runId = 'run-route-linear';
   const route = makeRoute([
     binding('architect'),
     binding('analyst'),
@@ -765,20 +840,49 @@ test('developer-less route records terminal blocked state after route roles exec
   const developTaskImpl = makeDevelopTask(makeRunStep(deps), workflowDeps);
   const result = await developTaskImpl(runId, { route });
 
-  assert.equal(result.blocked, true);
-  assert.equal(result.verdict, 'BLOCKED');
+  assert.equal(result.blocked, false);
+  assert.equal(result.verdict, 'PASS');
   assert.deepEqual(harness.loadRoleArgs, ['pb-architect', 'pb-analyst', 'pb-watcher']);
   const stepSucceeded = harness.appendEventArgs
     .filter((event) => event.type === 'step_succeeded')
     .map((event) => event.stepKey);
   assert.deepEqual(stepSucceeded, ['architect', 'analyst', 'watcher']);
   assert.equal(harness.stubCallCount, 0, 'analysis-only route must not synthesize an integrator');
-  assert.deepEqual(harness.completeRunArgs, []);
-  const blocked = harness.appendEventInputs.find((event) => event.type === 'pipeline_blocked');
-  assert.deepEqual(blocked?.payload, {
-    reason: 'route',
-    message: 'pipeline local-change has no developer role',
+  assert.equal(harness.completeRunArgs.length, 1);
+  assert.deepEqual(harness.blockRunArgs, []);
+});
+
+test('installed QA-style route without developer executes generically', async () => {
+  const runId = 'run-route-post-merge-qa';
+  const route = makeRoute([
+    binding('orchestrator'),
+    binding('deploy-watcher'),
+    binding('qa-backend'),
+  ]);
+  route.pipelineId = 'post-merge-qa';
+  route.pipelineRowId = 'pb-post-merge-qa';
+  route.requiredRoles = ['orchestrator', 'deploy-watcher'];
+  const roles = new Map<string, Role>([
+    ['pb-deploy-watcher', makeRole('deploy-watcher', 'claude-code')],
+    ['pb-qa-backend', makeRole('qa-backend', 'claude-code')],
+  ]);
+  const { deps, workflowDeps, harness } = buildDeps({
+    runId,
+    roles,
+    reviewerResults: [{ verdict: 'PASS' }, { verdict: 'PASS' }],
   });
+
+  const developTaskImpl = makeDevelopTask(makeRunStep(deps), workflowDeps);
+  const result = await developTaskImpl(runId, { route });
+
+  assert.equal(result.blocked, false);
+  assert.equal(result.verdict, 'PASS');
+  assert.deepEqual(harness.loadRoleArgs, ['pb-deploy-watcher', 'pb-qa-backend']);
+  const stepSucceeded = harness.appendEventArgs
+    .filter((event) => event.type === 'step_succeeded')
+    .map((event) => event.stepKey);
+  assert.deepEqual(stepSucceeded, ['deploy-watcher', 'qa-backend']);
+  assert.equal(harness.completeRunArgs.length, 1);
 });
 
 test('canonical local-change route starts at developer, not orchestrator', async () => {
@@ -958,14 +1062,14 @@ test('unsupported route shape fails before preflight or agent steps', async () =
   const route = makeRoute([
     binding('developer'),
     binding('integrator', 'pb-integrator', 'revo-integrator'),
-    binding('reviewer'),
+    binding('developer-backend'),
   ]);
   const { deps, workflowDeps, harness } = buildDeps({ runId });
   const developTaskImpl = makeDevelopTask(makeRunStep(deps), workflowDeps);
 
   await assert.rejects(
     () => developTaskImpl(runId, { route }),
-    /ROUTE_UNSUPPORTED: pipeline local-change has executable roles after integrator: reviewer/,
+    /ROUTE_UNSUPPORTED: pipeline local-change has executable roles after integrator: developer-backend/,
   );
   assert.deepEqual(harness.loadRoleArgs, [], 'no role may run before an unsupported route fails');
   assert.equal(harness.preflightCallCount, 0, 'preflight must not run before route-shape validation');
@@ -999,6 +1103,32 @@ test('0008 #4: every step writes a per-attempt row with verdict + iteration + st
     assert.ok(a.verdict.length > 0, 'verdict must be extracted');
     assert.ok(a.durationMs >= 0, 'durationMs must be non-negative');
   }
+});
+
+test('0008 #4: attempt row includes process artifact ref and stdout/stderr tails', async () => {
+  const runId = 'run-attempt-artifact';
+  const { deps, harness } = buildDeps({ runId });
+  deps.runAgent = async () => ({
+    output: { verdict: 'PASS' },
+    artifacts: {
+      process: {
+        ref: `${runId}/attempt_test`,
+        stdoutTail: 'stdout tail',
+        stderrTail: 'stderr tail',
+      },
+    },
+    nextSteps: [],
+    costs: [],
+    needsHuman: false,
+  });
+
+  const runStepImpl = makeRunStep(deps);
+  await runStepImpl(runId, 'architect', 'architect', { phase: 'plan' }, 'script' as RunnerMode);
+
+  const attempt = harness.appendAttemptInputs[0];
+  assert.equal(attempt?.artifactRef, `${runId}/attempt_test`);
+  assert.equal(attempt?.stdoutTail, 'stdout tail');
+  assert.equal(attempt?.stderrTail, 'stderr tail');
 });
 
 // ─── 0008 #5: pipeline limits + budget as DATA ───────────────────────────────
@@ -1104,11 +1234,11 @@ test('0008 #4: a failing attempt-row write does NOT fail the step (observability
   }
 });
 
-// ─── 0008 #2: terminal step failure → failRun + rethrow ──────────────────────
+// ─── 0008 #2: runner failure → BLOCKER result + terminal blocked row ─────────
 
-test('0008 #2: a step throw marks the run failed (failRun) AND re-throws so DBOS records ERROR', async () => {
+test('0008 #2: a runner failure blocks the run without leaving DBOS ERROR + ready row', async () => {
   const runId = 'run-fail';
-  // Live mode + claude-code roles → the architect step calls throwingClaudeCode → throws.
+  // Live mode + claude-code roles → the architect step calls throwingClaudeCode.
   const seededRoles = new Map<string, Role>([
     ['architect', makeRole('architect', 'claude-code')],
     ['developer', makeRole('developer', 'claude-code')],
@@ -1118,15 +1248,13 @@ test('0008 #2: a step throw marks the run failed (failRun) AND re-throws so DBOS
   const { deps, workflowDeps, harness } = buildDeps({ runId, roles: seededRoles });
   const developTaskImpl = makeDevelopTask(makeRunStep(deps), workflowDeps);
 
-  // Must re-throw (DBOS=progress: the workflow is still ERROR) ...
-  await assert.rejects(
-    () => developTaskImpl(runId, { runnerMode: 'live' as RunnerMode }),
-    /RUNNER_NOT_IMPLEMENTED/,
-  );
-  // ... but FIRST mark the Revisium run-row failed with the reason (run-row stops lying).
-  assert.equal(harness.failRunArgs.length, 1, 'failRun must be called exactly once');
-  assert.equal(harness.failRunArgs[0]?.runId, runId);
-  assert.match(harness.failRunArgs[0]?.reason ?? '', /RUNNER_NOT_IMPLEMENTED/);
+  const result = await developTaskImpl(runId, { runnerMode: 'live' as RunnerMode });
+  assert.equal(result.blocked, true);
+  assert.equal(result.verdict, 'BLOCKED');
+  assert.equal(harness.failRunArgs.length, 0, 'runner failures are parked, not DBOS-failed');
+  assert.equal(harness.blockRunArgs.length, 1, 'blocked runner verdict must terminally pause the run');
+  assert.equal(harness.appendEventArgs.some((e) => e.type === 'step_failed'), true);
+  assert.equal(harness.appendEventArgs.some((e) => e.type === 'pipeline_blocked'), true);
 });
 
 test('0008 #2: a successful run does NOT call failRun', async () => {

@@ -442,6 +442,9 @@ test('formatAttemptList renders per-attempt verdict/model/tokens/cost/duration',
       costAmount: 0.0123,
       durationMs: 4567,
       outputSummary: '{"verdict":"PASS"}',
+      artifactRef: 'run-a/attempt_abc',
+      stdoutTail: 'stdout tail',
+      stderrTail: 'stderr tail',
       lesson: '',
       error: '',
       startedAt: '2026-06-11T00:00:00.000Z',
@@ -454,6 +457,9 @@ test('formatAttemptList renders per-attempt verdict/model/tokens/cost/duration',
   assert.ok(out.includes('1200in/340out'), 'has tokens');
   assert.ok(out.includes('4567ms'), 'has duration');
   assert.ok(out.includes('iter=1'), 'has iteration');
+  assert.ok(out.includes('artifact run-a/attempt_abc'), 'has artifact ref');
+  assert.ok(out.includes('stdout tail'), 'has stdout tail');
+  assert.ok(out.includes('stderr tail'), 'has stderr tail');
   assert.ok(out.includes('(1 attempt)'), 'has summary');
 });
 
