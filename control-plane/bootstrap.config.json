@@ -310,6 +310,21 @@
             "default": "",
             "description": "Serialized JSON, secret-redacted, capped"
           },
+          "artifact_ref": {
+            "type": "string",
+            "default": "",
+            "description": "Stable run artifact reference, e.g. run_id/attempt_id"
+          },
+          "stdout_tail": {
+            "type": "string",
+            "default": "",
+            "description": "Secret-redacted process stdout tail, capped"
+          },
+          "stderr_tail": {
+            "type": "string",
+            "default": "",
+            "description": "Secret-redacted process stderr tail, capped"
+          },
           "lesson": {
             "type": "string",
             "default": ""

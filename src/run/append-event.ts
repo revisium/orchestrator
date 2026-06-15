@@ -93,6 +93,9 @@ export type AppendAttemptInput = {
   output: unknown;
   lesson?: string;
   error?: string;
+  artifactRef?: string;
+  stdoutTail?: string;
+  stderrTail?: string;
   startedAt?: Date;
   finishedAt?: Date;
 };
@@ -118,6 +121,9 @@ export async function appendRunAttempt(
 ): Promise<void> {
   const summaryRaw = JSON.stringify(redactSecrets(input.output) ?? null);
   const outputSummary = redactTokens(summaryRaw).slice(0, OUTPUT_SUMMARY_MAX);
+  const artifactRef = input.artifactRef ? redactTokens(input.artifactRef).slice(0, OUTPUT_SUMMARY_MAX) : '';
+  const stdoutTail = input.stdoutTail ? redactTokens(input.stdoutTail).slice(0, OUTPUT_SUMMARY_MAX) : '';
+  const stderrTail = input.stderrTail ? redactTokens(input.stderrTail).slice(0, OUTPUT_SUMMARY_MAX) : '';
   try {
     await da.createRow('attempts', input.attemptId, {
       id: input.attemptId,
@@ -136,6 +142,9 @@ export async function appendRunAttempt(
       currency: input.currency ?? 'USD',
       duration_ms: input.durationMs,
       output_summary: outputSummary,
+      artifact_ref: artifactRef,
+      stdout_tail: stdoutTail,
+      stderr_tail: stderrTail,
       lesson: input.lesson ? redactTokens(input.lesson).slice(0, OUTPUT_SUMMARY_MAX) : '',
       error: input.error ? redactTokens(input.error).slice(0, OUTPUT_SUMMARY_MAX) : '',
       started_at: (input.startedAt ?? new Date()).toISOString(),

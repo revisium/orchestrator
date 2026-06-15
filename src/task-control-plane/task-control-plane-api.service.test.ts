@@ -222,6 +222,44 @@ test('TaskControlPlaneApiService.approveGate records retryable signal state arou
   ]);
 });
 
+test('TaskControlPlaneApiService.waitForRun reports paused runs as blocked', async () => {
+  const api = makeApi({
+    runService: {
+      async showRun() {
+        return {
+          run: {
+            runId: 'run-1',
+            title: 'Run',
+            status: 'paused',
+            priority: 0,
+            createdAt: '2026-06-13T00:00:00.000Z',
+            description: '',
+            scope: '',
+            repos: [],
+          },
+          tasks: [],
+        };
+      },
+    },
+    inboxService: {
+      async listInbox() {
+        return [];
+      },
+    },
+    dbosService: {
+      async getWorkflowStatus() {
+        return { status: 'SUCCESS' } as Awaited<ReturnType<DbosService['getWorkflowStatus']>>;
+      },
+    },
+  });
+
+  const state = await api.waitForRun({ runId: 'run-1' });
+
+  assert.equal(state.state, 'blocked');
+  assert.equal(state.runStatus, 'paused');
+  assert.equal(state.workflowStatus, 'SUCCESS');
+});
+
 test('TaskControlPlaneApiService.approveGate signals merge gates without completing the run', async () => {
   const completed: Array<{ runId: string; source?: string; actor?: string }> = [];
   const api = makeApi({
@@ -658,6 +696,94 @@ test('TaskControlPlaneApiService.simulateRoute binds canonical feature-developme
   ]);
   assert.deepEqual(route.routeGates, ['plan', 'merge']);
   assert.equal(route.roleBindings.find((item) => item.roleId === 'watcher')?.rowId, 'pb-watcher');
+});
+
+test('TaskControlPlaneApiService.simulateRoute inserts bugfix defect-analysis role before developer', async () => {
+  const api = makeApi({
+    rolesService: {
+      async listRoles() {
+        return [
+          {
+            id: 'pb-orchestrator',
+            name: 'orchestrator',
+            modelLevel: 'standard',
+            runner: 'claude-code',
+            surface: 'any',
+            rights: 'state and routing only',
+            playbookId: 'pb',
+            playbookRoleId: 'orchestrator',
+          },
+          {
+            id: 'pb-analyst',
+            name: 'analyst',
+            modelLevel: 'deep',
+            runner: 'claude-code',
+            surface: 'any',
+            rights: 'read-only',
+            playbookId: 'pb',
+            playbookRoleId: 'analyst',
+          },
+          {
+            id: 'pb-developer',
+            name: 'developer',
+            modelLevel: 'standard',
+            runner: 'claude-code',
+            surface: 'any',
+            rights: 'write-working-tree',
+            playbookId: 'pb',
+            playbookRoleId: 'developer',
+          },
+          {
+            id: 'pb-integrator',
+            name: 'integrator',
+            modelLevel: 'standard',
+            runner: 'revo-integrator',
+            surface: 'repo',
+            rights: 'git and GitHub writes',
+            playbookId: 'pb',
+            playbookRoleId: 'integrator',
+          },
+          {
+            id: 'pb-watcher',
+            name: 'watcher',
+            modelLevel: 'cheap',
+            runner: 'claude-code',
+            surface: 'repo',
+            rights: 'read-only PR inspection',
+            playbookId: 'pb',
+            playbookRoleId: 'watcher',
+          },
+        ];
+      },
+    },
+    playbooksService: {
+      async resolvePipeline() {
+        return {
+          id: 'pb-bugfix',
+          playbookId: 'pb',
+          pipelineId: 'bugfix',
+          path: 'pipelines/bugfix/PIPELINE.md',
+          triggers: ['known defect'],
+          requiredRoles: ['orchestrator', 'developer', 'integrator', 'watcher'],
+          alternativeRoles: [{ group_id: 'defect-analysis', roles: ['analyst', 'reviewer'], resolution: 'at_least_one' }],
+          optionalRoles: [],
+          routeGates: ['merge'],
+          executionPolicy: {},
+        };
+      },
+    },
+  });
+
+  const route = await api.simulateRoute({ title: 'Fix bug', pipeline: 'bugfix' });
+
+  assert.deepEqual(route.requiredRoles, ['orchestrator', 'developer', 'integrator', 'watcher']);
+  assert.deepEqual(route.roleBindings.map((item) => item.roleId), [
+    'orchestrator',
+    'analyst',
+    'developer',
+    'integrator',
+    'watcher',
+  ]);
 });
 
 test('TaskControlPlaneApiService.validateRepository reports non-existent paths without throwing', async () => {

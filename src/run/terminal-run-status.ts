@@ -2,7 +2,8 @@
  * terminal-run-status.ts — shared event-first terminal-status writer for a run.
  *
  * cancel-run.ts (run_cancelled → status 'cancelled'), fail-run.ts (run_failed → status 'failed'),
- * and complete-run.ts (run_completed → status 'completed') are structurally identical: read the run,
+ * complete-run.ts (run_completed → status 'completed'), and block-run.ts
+ * (run_blocked -> status 'paused') are structurally identical: read the run,
  * write the terminal event FIRST (deterministic id, ROW_CONFLICT-idempotent) then patch
  * task_runs.status. This one helper holds that logic ONCE
  * (DRY — removes the cross-file duplication Sonar flags on new code).
@@ -18,7 +19,7 @@ import { fnv1a64Hex } from '../control-plane/steps.js';
 const RELATED_ROW_PAGE_SIZE = 500;
 const RELATED_ROW_PATCH_CONCURRENCY = 20;
 
-export type TerminalRunStatus = 'cancelled' | 'failed' | 'completed';
+export type TerminalRunStatus = 'cancelled' | 'failed' | 'completed' | 'paused';
 type TerminalStepStatus = 'skipped' | 'failed' | 'succeeded';
 const TERMINAL_STEP_STATUSES = new Set(['succeeded', 'failed', 'skipped', 'dead']);
 
@@ -38,7 +39,7 @@ export type RecordTerminalParams = {
 function terminalStepStatusForRunStatus(status: TerminalRunStatus): TerminalStepStatus {
   if (status === 'completed') return 'succeeded';
   if (status === 'failed') return 'failed';
-  // A cancelled run stops remaining work without claiming execution failure.
+  // A cancelled/paused run stops remaining work without claiming execution failure.
   return 'skipped';
 }
 

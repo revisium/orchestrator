@@ -6,7 +6,7 @@
  * Exposes:
  *   - integrate(input, deps)     — REAL integrator (live only); git/gh side effects; resumable.
  *   - stubIntegrate(input)       — STUB (script only); ZERO external effects; pure + deterministic.
- *   - preflightLive(taskId, base, deps) — LIVE PREFLIGHT; clean check + base invariant; one-shot.
+ *   - preflightLive(taskId, base, deps) — LIVE PREFLIGHT; clean check + base freshness; one-shot.
  *   - IntegratorService          — @Injectable wrapper with bound arrow properties.
  *   - resolveExecutable(name)    — resolve a bare executable name to an absolute PATH entry.
  */
@@ -253,14 +253,15 @@ function findOrCreatePr(
 // ─── Preflight (B5+B7) ────────────────────────────────────────────────────────
 
 /**
- * preflightLive — clean check + base invariant, evaluated ONCE as a memoized DBOS step.
+ * preflightLive — clean check + base freshness, evaluated ONCE as a memoized DBOS step.
  * Only called on live runs; script/stub runs skip this entirely.
  *
  * 1. git fetch origin <base>   (idempotent — the only mutation)
  * 2. git status --porcelain    → non-empty → block (repo not clean)
- * 3. Verify HEAD === <base> AND HEAD sha === origin/<base> sha → mismatch → block
+ * 3. Verify base branch runs are exactly on origin/<base>, while feature branch runs
+ *    are based on origin/<base> → mismatch → block
  *
- * Returns { ok: true } when the repo is clean and on fresh origin/<base>.
+ * Returns { ok: true } when the repo is clean and based on fresh origin/<base>.
  * Returns IntegratorBlocked on ANY failure — no throw, so DBOS does NOT retry.
  */
 export async function preflightLive(
@@ -291,7 +292,9 @@ export async function preflightLive(
     };
   }
 
-  // 3. Base invariant: HEAD branch name === base AND HEAD sha === origin/<base> sha
+  // 3. Base freshness:
+  //    - base branch itself must exactly match origin/<base>
+  //    - feature branches are valid when origin/<base> is an ancestor of HEAD
   let headBranch: string;
   let headSha: string;
   let originSha: string;
@@ -303,18 +306,32 @@ export async function preflightLive(
   } catch (err) {
     return {
       needsHuman: true,
-      lesson: `live preflight: cannot verify base invariant — ${String(err)}`,
+      lesson: `live preflight: cannot verify base freshness — ${String(err)}`,
     };
   }
 
-  if (headBranch !== base || headSha !== originSha) {
+  if (headBranch === base && headSha !== originSha) {
     return {
       needsHuman: true,
       lesson:
-        `target repo is not on a fresh origin/${base} ` +
+        `target repo base branch is not on fresh origin/${base} ` +
         `(HEAD=${headBranch}@${headSha.slice(0, 8)}, expected ${base}@${originSha.slice(0, 8)}); ` +
-        `checkout ${base} and pull, then retry --live`,
+        `pull ${base}, then retry --live`,
     };
+  }
+
+  if (headBranch !== base) {
+    try {
+      execGit(['merge-base', '--is-ancestor', `origin/${base}`, 'HEAD'], cwd);
+    } catch {
+      return {
+        needsHuman: true,
+        lesson:
+          `target repo branch is not based on fresh origin/${base} ` +
+          `(HEAD=${headBranch}@${headSha.slice(0, 8)}, expected origin/${base}@${originSha.slice(0, 8)} as ancestor); ` +
+          `rebase or merge origin/${base}, then retry --live`,
+      };
+    }
   }
 
   return { ok: true };

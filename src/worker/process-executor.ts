@@ -11,6 +11,9 @@ export type ExecRequest = {
   timeoutMs: number; // kill after this
   input?: string; // prompt piped on stdin (avoids argv length limits for large context)
   env?: Record<string, string>;
+  onSpawn?: (pid: number) => void;
+  onStdoutChunk?: (chunk: string) => void;
+  onStderrChunk?: (chunk: string) => void;
 };
 
 export type ExecResult = {
@@ -55,10 +58,29 @@ export const spawnExecutor: ProcessExecutor = (req) =>
     let timedOut = false;
     let settled = false;
 
+    if (child.pid !== undefined) req.onSpawn?.(child.pid);
+
     child.stdout?.setEncoding('utf8');
     child.stderr?.setEncoding('utf8');
-    child.stdout?.on('data', (chunk: string) => { stdout += chunk; });
-    child.stderr?.on('data', (chunk: string) => { stderr += chunk; });
+    // Guard the sink callbacks: a throw here (e.g. a failed artifact write) would otherwise
+    // escape the stream 'data' handler as an uncaughtException and crash the worker. The
+    // in-memory capture above is unaffected, so the result envelope is still collected.
+    child.stdout?.on('data', (chunk: string) => {
+      stdout += chunk;
+      try {
+        req.onStdoutChunk?.(chunk);
+      } catch (err) {
+        console.warn(`Warning: onStdoutChunk sink failed: ${String(err)}`);
+      }
+    });
+    child.stderr?.on('data', (chunk: string) => {
+      stderr += chunk;
+      try {
+        req.onStderrChunk?.(chunk);
+      } catch (err) {
+        console.warn(`Warning: onStderrChunk sink failed: ${String(err)}`);
+      }
+    });
 
     const timer = setTimeout(() => {
       timedOut = true;

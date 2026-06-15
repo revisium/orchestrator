@@ -54,6 +54,9 @@ export type AttemptSummary = {
   costAmount: number;
   durationMs: number;
   outputSummary: string;
+  artifactRef: string;
+  stdoutTail: string;
+  stderrTail: string;
   lesson: string;
   error: string;
   startedAt: string;
@@ -138,6 +141,9 @@ function toAttemptSummary(row: ControlPlaneRow): AttemptSummary {
     costAmount: num(row.data.cost_amount),
     durationMs: num(row.data.duration_ms),
     outputSummary: str(row.data.output_summary),
+    artifactRef: str(row.data.artifact_ref),
+    stdoutTail: str(row.data.stdout_tail),
+    stderrTail: str(row.data.stderr_tail),
     lesson: str(row.data.lesson),
     error: str(row.data.error),
     startedAt: str(row.data.started_at ?? row.createdAt),
@@ -380,7 +386,10 @@ export function formatAttemptList(attempts: AttemptSummary[]): string {
       `  iter=${a.iteration}  status=${a.status}  verdict=${a.verdict || '-'}  model=${a.modelProfile || '-'}`,
       `  tokens=${a.inputTokens}in/${a.outputTokens}out  cost=${fmtUsd(a.costAmount)}  duration=${a.durationMs}ms`,
     ];
+    if (a.artifactRef) lines.push(`  artifact ${a.artifactRef}`);
     if (a.outputSummary) lines.push(`  output   ${a.outputSummary}`);
+    if (a.stdoutTail) lines.push(`  stdout   ${a.stdoutTail}`);
+    if (a.stderrTail) lines.push(`  stderr   ${a.stderrTail}`);
     if (a.lesson) lines.push(`  lesson   ${a.lesson}`);
     if (a.error) lines.push(`  error    ${a.error}`);
     return lines.join('\n');

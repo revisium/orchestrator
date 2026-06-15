@@ -28,9 +28,11 @@ import { RolesService } from '../revisium/roles.service.js';
 import { RunService } from '../revisium/run.service.js';
 import { InboxService } from '../revisium/inbox.service.js';
 import { IntegratorService, type IntegratorInput, type IntegratorOutput, type IntegratorBlocked } from '../runners/integrator.js';
+import { redactTokens } from '../runners/gh-identity.js';
 import { RUN_AGENT } from '../runners/tokens.js';
 import { buildContext } from '../worker/build-context.js';
 import type { RunAgent, AttemptResult } from '../worker/runner.js';
+import { artifactsFromRunAgentError } from '../worker/runner.js';
 import { fnv1a64Hex } from '../control-plane/steps.js';
 import type { AppendEventInput } from '../run/append-event.js';
 import { makeAwaitHuman } from './await-human.js';
@@ -38,6 +40,7 @@ import type { Decision } from './await-human.js';
 import type { CancelRunResult } from '../run/cancel-run.js';
 import type { FailRunResult } from '../run/fail-run.js';
 import type { CompleteRunResult } from '../run/complete-run.js';
+import type { BlockRunResult } from '../run/block-run.js';
 import {
   dispatchRunnerId,
   type ExecutionProfile,
@@ -53,6 +56,8 @@ const DEV_TASKS_QUEUE = 'dev-tasks';
 
 /** Concurrency limit for the dev-tasks queue. */
 const DEV_TASKS_CONCURRENCY = 2;
+
+const RUNNER_FAILURE_REASON_MAX = 2_000;
 
 /** Durable mode controlling whether real or stub runners + integrator are used. */
 export type RunnerMode = 'script' | 'live';
@@ -90,9 +95,15 @@ export type DevelopTaskOpts = {
  * recognized LEADING token, still returns BLOCKER (don't integrate ambiguously-reviewed code).
  */
 function mapVerdictToken(raw: unknown): string | null {
-  switch (raw) {
+  if (typeof raw !== 'string') return null;
+  const token = raw.trim().toUpperCase().replace(/[\s-]+/g, '_');
+  switch (token) {
     case 'PASS':
+    case 'PASSED':
     case 'APPROVE': // seeded reviewer prompt vocabulary mapping
+    case 'DEPLOYED_READY':
+    case 'READY':
+    case 'VERIFIED':
       return 'PASS';
     case 'MINOR':
       return 'MINOR';
@@ -113,15 +124,87 @@ function mapVerdictToken(raw: unknown): string | null {
  * not an incidental match. Returns null when the string does not start with a known verdict.
  */
 function verdictFromText(text: string): string | null {
-  const m = /^(APPROVE|REQUEST_CHANGES|BLOCKER|MAJOR|MINOR|PASS)\b/.exec(text.trimStart().toUpperCase());
+  const m = /^(APPROVE|REQUEST_CHANGES|BLOCKER|MAJOR|MINOR|PASS|PASSED|READY|VERIFIED|DEPLOYED_READY)\b/.exec(
+    text.trimStart().toUpperCase(),
+  );
   return m ? mapVerdictToken(m[1]) : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function hasBlockingSignals(output: Record<string, unknown>): boolean {
+  const blockers = output.blockers;
+  if (Array.isArray(blockers) && blockers.length > 0) return true;
+
+  const summary = output.summary;
+  if (isRecord(summary) && Number(summary.failed ?? 0) > 0) return true;
+
+  const scenarios = output.scenarios;
+  if (!Array.isArray(scenarios)) return false;
+  return scenarios.some((scenario) => {
+    if (!isRecord(scenario)) return true;
+    const rawStatus = scenario.status;
+    if (typeof rawStatus !== 'string') return true;
+    const status = rawStatus.trim().toLowerCase();
+    return !['pass', 'passed', 'skipped'].includes(status);
+  });
+}
+
+function verdictFromRouteAction(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const action = raw.trim().toLowerCase().replace(/[\s_-]+/g, '-');
+  if (action === 'continue' || action === 'complete') return 'PASS';
+  if (['block', 'blocked', 'stop', 'needs-human', 'needs-human-review', 'route-back'].includes(action)) {
+    return 'BLOCKER';
+  }
+  return null;
+}
+
+function verdictFromScenarios(raw: unknown): string | null {
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  if (raw.some((scenario) => {
+    if (!isRecord(scenario)) return true;
+    const status = scenario.status;
+    if (typeof status !== 'string') return true;
+    return !['pass', 'passed', 'skipped'].includes(status.trim().toLowerCase());
+  })) {
+    return 'BLOCKER';
+  }
+  return 'PASS';
+}
+
+function verdictFromObject(output: Record<string, unknown>, depth = 0): string | null {
+  if (hasBlockingSignals(output)) return 'BLOCKER';
+
+  if ('verdict' in output) {
+    return mapVerdictToken(output.verdict) ?? 'BLOCKER';
+  }
+
+  const routeActionVerdict = verdictFromRouteAction(output.next_route_action);
+  if (routeActionVerdict) return routeActionVerdict;
+
+  const scenarioVerdict = verdictFromScenarios(output.scenarios);
+  if (scenarioVerdict) return scenarioVerdict;
+
+  if (depth >= 3) return null;
+  for (const [key, value] of Object.entries(output)) {
+    if (!isRecord(value)) continue;
+    if (!key.endsWith('_result') && !('verdict' in value) && !('blockers' in value) && !('scenarios' in value) && !('next_route_action' in value)) {
+      continue;
+    }
+    const nestedVerdict = verdictFromObject(value, depth + 1);
+    if (nestedVerdict) return nestedVerdict;
+  }
+  return null;
 }
 
 export function verdictOf(result: AttemptResult): string {
   const output = result.output;
   // Structured form: { verdict: "…" }.
-  if (output !== null && typeof output === 'object') {
-    return mapVerdictToken((output as Record<string, unknown>).verdict) ?? 'BLOCKER';
+  if (isRecord(output)) {
+    return verdictFromObject(output) ?? 'BLOCKER';
   }
   // Free-text form: reviewer emitted a string whose leading token is the verdict.
   if (typeof output === 'string') {
@@ -186,6 +269,14 @@ export type DevelopTaskDeps = {
     opts?: { actor?: string; source?: string; verdict?: string; iterations?: number },
   ) => Promise<CompleteRunResult | null>;
   /**
+   * Mark an intentionally blocked workflow in Revisium. DBOS can finish SUCCESS for a blocked
+   * pipeline, so the run row must still leave the claimable `ready` state.
+   */
+  blockRun: (
+    runId: string,
+    opts?: { actor?: string; source?: string; reason?: string },
+  ) => Promise<BlockRunResult | null>;
+  /**
    * Load run task context once in the workflow body (B6).
    * Returns { taskId, title, base, repoRef } from showRun.tasks[0] + run.repos[0].
    */
@@ -227,6 +318,24 @@ function iterationOf(stepKey: string): number {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
+function runnerFailureReason(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  return redactTokens(message).slice(0, RUNNER_FAILURE_REASON_MAX);
+}
+
+function processArtifactFields(artifacts: unknown): { artifactRef?: string; stdoutTail?: string; stderrTail?: string } {
+  const processArtifact = isRecord(artifacts) && isRecord(artifacts.process) ? artifacts.process : artifacts;
+  if (!isRecord(processArtifact)) return {};
+  const ref = processArtifact.ref;
+  const stdoutTail = processArtifact.stdoutTail;
+  const stderrTail = processArtifact.stderrTail;
+  return {
+    artifactRef: typeof ref === 'string' ? ref : undefined,
+    stdoutTail: typeof stdoutTail === 'string' ? stdoutTail : undefined,
+    stderrTail: typeof stderrTail === 'string' ? stderrTail : undefined,
+  };
+}
+
 export function makeRunStep(deps: RunStepDeps) {
   const { loadRole, loadModelProfile, loadPipelineContext, appendEvent, appendCost, appendAttempt, runAgent } = deps;
   const clock = deps.now ?? (() => Date.now());
@@ -265,10 +374,61 @@ export function makeRunStep(deps: RunStepDeps) {
     const effectiveRunner = dispatchRunnerId(resolveStepRunner(loadedRole.runner, resolvedRunnerId, executionProfile));
     const dispatchRole = { ...loadedRole, runner: effectiveRunner };
 
-    // 7. Run the agent (timed for the attempt-row duration).
+    // 7. Run the agent (timed for the attempt-row duration). Runner-process failures are domain
+    // failures, not DBOS step failures: convert them to a blocking attempt so the workflow can
+    // park/fail the run row instead of leaving DBOS=ERROR with task_runs.status='ready'.
     const startedAt = clock();
-    const result = await runAgent({ role: dispatchRole, profile, context, attemptId, step });
+    let result: AttemptResult;
+    try {
+      result = await runAgent({ role: dispatchRole, profile, context, attemptId, step });
+    } catch (err) {
+      const durationMs = Math.max(0, clock() - startedAt);
+      const reason = runnerFailureReason(err);
+      const artifactFields = processArtifactFields(artifactsFromRunAgentError(err));
+      const output = {
+        verdict: 'BLOCKER',
+        error: 'runner_failed',
+        role,
+        stepKey,
+        reason,
+      };
+      await appendEvent({
+        runId,
+        taskId: step.taskId,
+        stepId: step.id,
+        stepKey,
+        type: 'step_failed',
+        payload: { output, role, stepKey, attemptId },
+      });
+      try {
+        await appendAttempt({
+          runId,
+          stepId: step.id,
+          attemptId,
+          attemptNo: iterationOf(stepKey) + 1,
+          iteration: iterationOf(stepKey),
+          status: 'failed',
+          modelProfile: step.modelProfile,
+          verdict: 'BLOCKER',
+          inputTokens: 0,
+          outputTokens: 0,
+          costAmount: 0,
+          durationMs,
+          output,
+          lesson: reason,
+          error: reason,
+          ...artifactFields,
+        });
+      } catch (attemptErr) {
+        console.warn(
+          `[pipeline] failed-attempt row write failed for ${stepKey} (${attemptId}) — observability only. ` +
+            `${String(attemptErr)}`,
+        );
+      }
+      return { output, nextSteps: [], costs: [], needsHuman: true, lesson: reason };
+    }
     const durationMs = Math.max(0, clock() - startedAt);
+    const artifactFields = processArtifactFields(result.artifacts);
 
     // 8. Persist event to Revisium draft (idempotent — ROW_CONFLICT = no-op on replay).
     await appendEvent({
@@ -318,6 +478,7 @@ export function makeRunStep(deps: RunStepDeps) {
         durationMs,
         output: result.output,
         lesson: result.lesson,
+        ...artifactFields,
       });
     } catch (err) {
       console.warn(
@@ -360,7 +521,7 @@ export function makeDevelopTask(
   ) => Promise<AttemptResult>,
   deps: DevelopTaskDeps,
 ) {
-  const { appendEvent, awaitHuman, cancelRun, failRun, completeRun, loadRunTaskContext, loadPipelinePolicy, integrateFn, runStub, preflightFn } = deps;
+  const { appendEvent, awaitHuman, cancelRun, failRun, completeRun, blockRun, loadRunTaskContext, loadPipelinePolicy, integrateFn, runStub, preflightFn } = deps;
 
   return async function developTaskImpl(
     runId: string,
@@ -413,23 +574,29 @@ export function makeDevelopTask(
     const overBudget = (): boolean =>
       (policy.budgetUsd > 0 && spentUsd > policy.budgetUsd) ||
       (policy.budgetTokens > 0 && spentTokens > policy.budgetTokens);
-    const blockBudget = async (): Promise<DevelopResult> => {
+    const blockPipeline = async (payload: Record<string, unknown>): Promise<DevelopResult> => {
       await appendEvent({
         runId,
         taskId,
         stepId: '',
         stepKey: 'pipeline',
         type: 'pipeline_blocked',
-        payload: {
-          reason: 'budget',
-          spentUsd,
-          spentTokens,
-          budgetUsd: policy.budgetUsd,
-          budgetTokens: policy.budgetTokens,
-        },
+        payload,
+      });
+      await blockRun(runId, {
+        actor: 'pipeline',
+        source: 'pipeline-blocked',
+        reason: typeof payload.reason === 'string' ? payload.reason : '',
       });
       return { runId, blocked: true, iterations: iteration, verdict: 'BLOCKED', cancelled: false };
     };
+    const blockBudget = async (): Promise<DevelopResult> => blockPipeline({
+      reason: 'budget',
+      spentUsd,
+      spentTokens,
+      budgetUsd: policy.budgetUsd,
+      budgetTokens: policy.budgetTokens,
+    });
     // runStep — wraps runStepFn to accrue cost so the budget guard sees every step's spend.
     const runStep = async (binding: RouteRoleBinding, stepKey: string, input: unknown): Promise<AttemptResult> => {
       const r = await runStepFn(runId, binding.rowId, stepKey, input, binding.resolvedRunnerId, executionProfile);
@@ -471,15 +638,7 @@ export function makeDevelopTask(
     if (executableBindings.some((binding) => runnerNeedsLivePreflight(binding.resolvedRunnerId))) {
       const pf = await preflightFn(taskId, base);
       if ('needsHuman' in pf) {
-        await appendEvent({
-          runId,
-          taskId,
-          stepId: '',
-          stepKey: 'pipeline',
-          type: 'pipeline_blocked',
-          payload: { reason: 'preflight', lesson: pf.lesson },
-        });
-        return { runId, blocked: true, iterations: 0, verdict: 'BLOCKED', cancelled: false };
+        return await blockPipeline({ reason: 'preflight', lesson: pf.lesson });
       }
     }
 
@@ -492,18 +651,6 @@ export function makeDevelopTask(
       });
       if (overBudget()) return await blockBudget();
     }
-
-    const blockPipeline = async (payload: Record<string, unknown>): Promise<DevelopResult> => {
-      await appendEvent({
-        runId,
-        taskId,
-        stepId: '',
-        stepKey: 'pipeline',
-        type: 'pipeline_blocked',
-        payload,
-      });
-      return { runId, blocked: true, iterations: iteration, verdict: 'BLOCKED', cancelled: false };
-    };
 
     const plannerOutput = planResult?.output ?? { pipeline: route.pipelineId };
     if (overBudget()) return await blockBudget();
@@ -527,10 +674,21 @@ export function makeDevelopTask(
     // ── end PLAN GATE ──────────────────────────────────────────────────────────
 
     if (!routePlan.developer) {
-      return await blockPipeline({
-        reason: 'route',
-        message: `pipeline ${route.pipelineId} has no developer role`,
+      const finalVerdict = verdictOf(planResult ?? { output: { verdict: 'PASS' }, nextSteps: [], costs: [] });
+      if (isBlocking(finalVerdict)) {
+        return await blockPipeline({
+          reason: 'route-verdict',
+          lastVerdict: finalVerdict,
+          message: `pipeline ${route.pipelineId} finished linear roles with a blocking verdict`,
+        });
+      }
+      await completeRun(runId, {
+        actor: 'pipeline',
+        source: 'linear-pipeline-complete',
+        verdict: finalVerdict,
+        iterations: iteration,
       });
+      return { runId, blocked: false, iterations: iteration, verdict: finalVerdict, cancelled: false };
     }
 
     // developer step (first pass)
@@ -564,21 +722,7 @@ export function makeDevelopTask(
 
     // Cap exhausted — still blocking: write pipeline_blocked and stop (E6).
     if (isBlocking(verdictOf(reviewResult))) {
-      await appendEvent({
-        runId,
-        taskId: '',
-        stepId: '',
-        stepKey: 'pipeline',
-        type: 'pipeline_blocked',
-        payload: { lastVerdict: verdictOf(reviewResult), iterations: iteration },
-      });
-      return {
-        runId,
-        blocked: true,
-        iterations: iteration,
-        verdict: verdictOf(reviewResult),
-        cancelled: false,
-      };
+      return await blockPipeline({ lastVerdict: verdictOf(reviewResult), iterations: iteration });
     }
 
     const runIntegration = async (suffix: string): Promise<IntegratorOutput | IntegratorBlocked | null> => {
@@ -698,14 +842,6 @@ type RouteExecutionPlan = {
   postIntegratorStatus: RouteExecutionStep[];
 };
 
-const SUPPORTED_ROUTE_PIPELINES = new Set([
-  'legacy-develop-task',
-  'local-change',
-  'feature-development',
-  'bugfix',
-  'analysis-only',
-]);
-
 function planRouteExecution(route: RouteDecision): RouteExecutionPlan {
   validateRouteBindings(route);
   const executableBindings = route.roleBindings.filter((binding) => !isOrchestrationRole(binding));
@@ -720,10 +856,9 @@ function planRouteExecution(route: RouteDecision): RouteExecutionPlan {
   const beforeDeveloperBindings = developerIndex >= 0 ? nonIntegratorBindings.slice(0, developerIndex) : nonIntegratorBindings;
   const afterDeveloperBindings = developerIndex >= 0 ? nonIntegratorBindings.slice(developerIndex + 1) : [];
   const reviewerBindings = beforeDeveloperBindings.filter((binding) => isReviewRole(binding));
-  const canonicalFeatureDevelopmentCodeReview = route.pipelineId === 'feature-development' && afterDeveloperBindings.length === 0
+  const reusedPlanningReviewers = developerIndex >= 0 && afterDeveloperBindings.length === 0
     ? reviewerBindings
     : [];
-  validateFeatureDevelopmentRoute(route, canonicalFeatureDevelopmentCodeReview, postIntegratorStatus);
 
   return {
     beforeDeveloper: beforeDeveloperBindings.map((binding, index) => ({
@@ -738,7 +873,7 @@ function planRouteExecution(route: RouteDecision): RouteExecutionPlan {
         stepKey: binding.roleId,
         phase: isReviewRole(binding) ? 'review' as const : 'verify' as const,
       })),
-      ...canonicalFeatureDevelopmentCodeReview.map((binding) => ({
+      ...reusedPlanningReviewers.map((binding) => ({
         binding,
         stepKey: `${binding.roleId}:code`,
         phase: 'review' as const,
@@ -754,9 +889,6 @@ function planRouteExecution(route: RouteDecision): RouteExecutionPlan {
 }
 
 function validateRouteBindings(route: RouteDecision): void {
-  if (!SUPPORTED_ROUTE_PIPELINES.has(route.pipelineId)) {
-    throw new Error(`ROUTE_UNSUPPORTED: pipeline ${route.pipelineId} is not supported by develop-task workflow`);
-  }
   if (route.roleBindings.length === 0) {
     throw new Error(`ROUTE_INVALID: pipeline ${route.pipelineId} has no selected roles`);
   }
@@ -798,20 +930,6 @@ function validatePostIntegratorBindings(route: RouteDecision, bindings: RouteRol
   throw new Error(`ROUTE_UNSUPPORTED: pipeline ${route.pipelineId} has executable roles after integrator: ${after}`);
 }
 
-function validateFeatureDevelopmentRoute(
-  route: RouteDecision,
-  codeReviewBindings: RouteRoleBinding[],
-  postIntegratorStatus: RouteRoleBinding[],
-): void {
-  if (route.pipelineId !== 'feature-development') return;
-  if (codeReviewBindings.length === 0) {
-    throw new Error(`ROUTE_UNSUPPORTED: pipeline ${route.pipelineId} requires a post-developer reviewer`);
-  }
-  if (postIntegratorStatus.length === 0) {
-    throw new Error(`ROUTE_UNSUPPORTED: pipeline ${route.pipelineId} requires a post-integrator watcher`);
-  }
-}
-
 function beforeDeveloperPhase(binding: RouteRoleBinding, index: number): RouteExecutionStep['phase'] {
   if (index === 0) return 'plan';
   if (isReviewRole(binding)) return 'review';
@@ -827,7 +945,7 @@ function isOrchestrationRole(binding: RouteRoleBinding): boolean {
 }
 
 function isReviewRole(binding: RouteRoleBinding): boolean {
-  return ['reviewer', 'watcher', 'pr-watcher'].includes(binding.roleId);
+  return ['reviewer', 'watcher', 'pr-watcher', 'deploy-watcher', 'qa-backend', 'qa-frontend'].includes(binding.roleId);
 }
 
 function isIntegratorRole(binding: RouteRoleBinding): boolean {
@@ -835,7 +953,7 @@ function isIntegratorRole(binding: RouteRoleBinding): boolean {
 }
 
 function isPostIntegratorStatusRole(binding: RouteRoleBinding): boolean {
-  return binding.roleId === 'watcher' || binding.roleId === 'pr-watcher';
+  return isReviewRole(binding);
 }
 
 function legacyRouteDecision(runnerMode: RunnerMode = 'script'): RouteDecision {
@@ -938,6 +1056,10 @@ export class PipelineService {
         runId: string,
         completeOpts?: { actor?: string; source?: string; verdict?: string; iterations?: number },
       ) => this.runService.completeRun(runId, completeOpts),
+      blockRun: (
+        runId: string,
+        blockOpts?: { actor?: string; source?: string; reason?: string },
+      ) => this.runService.blockRun(runId, blockOpts),
       loadRunTaskContext: this.runService.loadRunTaskContext.bind(this.runService),
       loadPipelinePolicy: this.rolesService.loadPipelinePolicy.bind(this.rolesService),
       integrateFn,

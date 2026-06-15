@@ -1,5 +1,7 @@
 import type { ProcessExecutor, ExecRequest } from './process-executor.js';
 import type { RunAgent, AttemptResult } from './runner.js';
+import { RunAgentError } from './runner.js';
+import type { ArtifactStore, ProcessArtifactSnapshot } from './artifact-store.js';
 import type { Step, CostRecord } from '../control-plane/steps.js';
 import type { ModelProfile } from '../control-plane/definitions.js';
 import { noopWorktreeManager, type WorktreeManager } from './worktree-manager.js';
@@ -21,6 +23,7 @@ export type ClaudeCodeRunnerDeps = {
   worktreeManager?: WorktreeManager; // default no isolation; opt-in wiring lives in revo work
   timeoutMs?: number; // default 10 min
   command?: string; // default 'claude'
+  artifactStore?: ArtifactStore;
 };
 
 const DEFAULT_TIMEOUT_MS = 600_000;
@@ -92,6 +95,23 @@ function buildCosts(step: Step, profile: ModelProfile, env: TransportEnvelope): 
   ];
 }
 
+function withProcessArtifact(agentArtifacts: unknown, process: ProcessArtifactSnapshot | undefined): unknown {
+  if (!process) return agentArtifacts;
+  const processEntry = {
+    ref: process.ref,
+    stdoutTail: process.stdoutTail,
+    stderrTail: process.stderrTail,
+  };
+  if (agentArtifacts && typeof agentArtifacts === 'object' && !Array.isArray(agentArtifacts)) {
+    return { ...agentArtifacts, process: processEntry };
+  }
+  return { agent: agentArtifacts ?? null, process: processEntry };
+}
+
+function runnerError(message: string, process: ProcessArtifactSnapshot | undefined): RunAgentError {
+  return new RunAgentError(message, withProcessArtifact(undefined, process));
+}
+
 export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
   const fallbackTimeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const command = deps.command ?? DEFAULT_COMMAND;
@@ -104,31 +124,47 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
     // 0008 #5: per-role data overrides the hardcoded defaults (timeout + permission mode).
     const timeoutMs = role.timeoutMs ?? fallbackTimeoutMs;
     const permissionMode = role.permissionMode ?? 'default';
+    let processArtifact: ReturnType<ArtifactStore['startProcess']> | undefined;
     try {
+      const args = buildArgs(profile.modelId, role.allowedTools, permissionMode, profile.params);
+      processArtifact = deps.artifactStore?.startProcess({
+        runId: step.runId,
+        attemptId,
+        stepId: step.id,
+        role: role.name,
+        command,
+        args,
+        cwd,
+        timeoutMs,
+      });
       const req: ExecRequest = {
         command,
-        args: buildArgs(profile.modelId, role.allowedTools, permissionMode, profile.params),
+        args,
         cwd,
         timeoutMs,
         input: buildPrompt(context, attemptId),
+        onStdoutChunk: (chunk) => processArtifact?.appendStdout(chunk),
+        onStderrChunk: (chunk) => processArtifact?.appendStderr(chunk),
       };
 
       const result = await deps.executor(req);
+      const processSnapshot = processArtifact?.finish({ code: result.code, timedOut: result.timedOut });
 
       // Timeout / process failure → throw; the loop's catch → failStep returns the step to ready
       // (backoff) or dead at the attempt cap. No loop change needed.
       if (result.timedOut) {
-        throw new Error(`claude-code runner exceeded ${timeoutMs}ms`);
+        throw runnerError(`claude-code runner exceeded ${timeoutMs}ms`, processSnapshot);
       }
       if (result.code !== 0) {
-        throw new Error(
+        throw runnerError(
           `claude-code runner exited with code ${String(result.code)}: ${tail(result.stderr || result.stdout)}`,
+          processSnapshot,
         );
       }
 
       const transport = parseTransportEnvelope(result.stdout);
       if (transport.isError) {
-        throw new Error(`claude-code runner reported is_error: ${tail(transport.text)}`);
+        throw runnerError(`claude-code runner reported is_error: ${tail(transport.text)}`, processSnapshot);
       }
 
       const agent = extractAgentResult(transport.text);
@@ -138,6 +174,7 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
       if (agent.needsHuman) {
         const parked: AttemptResult = {
           output: agent.output,
+          artifacts: withProcessArtifact(agent.artifacts, processSnapshot),
           nextSteps: [],
           costs,
           needsHuman: true,
@@ -148,13 +185,17 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
 
       const success: AttemptResult = {
         output: agent.output,
-        artifacts: agent.artifacts,
+        artifacts: withProcessArtifact(agent.artifacts, processSnapshot),
         nextSteps: normalizeNextSteps(agent.nextSteps, step),
         costs,
         needsHuman: false,
         lesson: agent.lesson,
       };
       return success;
+    } catch (err) {
+      if (err instanceof RunAgentError) throw err;
+      const processSnapshot = processArtifact?.finish({ error: String(err) });
+      throw runnerError(String(err), processSnapshot);
     } finally {
       try {
         await manager.release(cwd);

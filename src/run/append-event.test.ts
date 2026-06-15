@@ -211,6 +211,9 @@ test('appendRunAttempt: persists the attempt with attemptId as the row id (deter
     costAmount: 0.01,
     durationMs: 1234,
     output: { verdict: 'PASS' },
+    artifactRef: 'run-1/attempt_deadbeef',
+    stdoutTail: 'stdout tail',
+    stderrTail: 'stderr tail',
   });
   assert.equal(rows.length, 1);
   assert.equal(rows[0]?.rowId, 'attempt_deadbeef');
@@ -218,6 +221,9 @@ test('appendRunAttempt: persists the attempt with attemptId as the row id (deter
   assert.equal(rows[0]?.data.iteration, 1);
   assert.equal(rows[0]?.data.duration_ms, 1234);
   assert.equal(rows[0]?.data.output_summary, '{"verdict":"PASS"}');
+  assert.equal(rows[0]?.data.artifact_ref, 'run-1/attempt_deadbeef');
+  assert.equal(rows[0]?.data.stdout_tail, 'stdout tail');
+  assert.equal(rows[0]?.data.stderr_tail, 'stderr tail');
 });
 
 test('appendRunAttempt: redacts secret-shaped output keys + token shapes before persisting', async () => {
@@ -237,11 +243,15 @@ test('appendRunAttempt: redacts secret-shaped output keys + token shapes before 
     durationMs: 1,
     output: { token: 'gho_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345', note: 'ok' },
     error: 'leaked gho_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345',
+    stdoutTail: 'stdout gho_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345',
+    stderrTail: 'stderr gho_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345',
   });
   const summary = String(rows[0]?.data.output_summary);
   assert.ok(!summary.includes('gho_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345'), 'token-shaped value must be redacted');
   assert.ok(summary.includes('[REDACTED]'), 'secret key redacted');
   assert.ok(!String(rows[0]?.data.error).includes('gho_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345'), 'error token redacted');
+  assert.ok(!String(rows[0]?.data.stdout_tail).includes('gho_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345'), 'stdout tail token redacted');
+  assert.ok(!String(rows[0]?.data.stderr_tail).includes('gho_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345'), 'stderr tail token redacted');
 });
 
 test('appendRunAttempt: ROW_CONFLICT on replay is a silent no-op', async () => {

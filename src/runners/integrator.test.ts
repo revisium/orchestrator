@@ -108,14 +108,24 @@ test('preflightLive: dirty repo → needsHuman (not clean)', async () => {
   );
 });
 
-test('preflightLive: clean but HEAD on wrong branch → needsHuman (base mismatch)', async () => {
+test('preflightLive: clean feature branch based on origin/base → { ok: true }', async () => {
+  const calls: string[] = [];
   const deps: IntegratorDeps = {
     execGit: (args, _cwd) => {
+      calls.push(args.join(' '));
       if (args[0] === 'fetch') return '';
       if (args[0] === 'status' && args[1] === '--porcelain') return '';
       if (args[0] === 'rev-parse' && args[1] === '--abbrev-ref') return 'feature-branch\n';
       if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'aaa111\n';
       if (args[0] === 'rev-parse' && args[1] === 'origin/master') return 'bbb222\n';
+      if (
+        args[0] === 'merge-base' &&
+        args[1] === '--is-ancestor' &&
+        args[2] === 'origin/master' &&
+        args[3] === 'HEAD'
+      ) {
+        return '';
+      }
       throw new Error(`unexpected: ${args.join(' ')}`);
     },
     execGh: neverGh,
@@ -123,11 +133,41 @@ test('preflightLive: clean but HEAD on wrong branch → needsHuman (base mismatc
   };
 
   const result = await preflightLive('task-001', 'master', deps);
-  assert.ok('needsHuman' in result, 'wrong branch must block');
-  assert.ok(result.lesson.includes('not on a fresh origin/master'), `lesson: ${result.lesson}`);
+  assert.ok('ok' in result && result.ok === true, 'fresh feature branch → ok');
+  assert.ok(
+    calls.includes('merge-base --is-ancestor origin/master HEAD'),
+    'feature branch must verify origin/base ancestry',
+  );
 });
 
-test('preflightLive: clean but HEAD sha differs from origin/master → needsHuman', async () => {
+test('preflightLive: clean feature branch not based on origin/base → needsHuman', async () => {
+  const deps: IntegratorDeps = {
+    execGit: (args, _cwd) => {
+      if (args[0] === 'fetch') return '';
+      if (args[0] === 'status' && args[1] === '--porcelain') return '';
+      if (args[0] === 'rev-parse' && args[1] === '--abbrev-ref') return 'feature-branch\n';
+      if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'aaa111\n';
+      if (args[0] === 'rev-parse' && args[1] === 'origin/master') return 'bbb222\n';
+      if (
+        args[0] === 'merge-base' &&
+        args[1] === '--is-ancestor' &&
+        args[2] === 'origin/master' &&
+        args[3] === 'HEAD'
+      ) {
+        throw new Error('not ancestor');
+      }
+      throw new Error(`unexpected: ${args.join(' ')}`);
+    },
+    execGh: neverGh,
+    resolveTaskCwd: makeResolveTaskCwd(),
+  };
+
+  const result = await preflightLive('task-001', 'master', deps);
+  assert.ok('needsHuman' in result, 'stale feature branch must block');
+  assert.ok(result.lesson.includes('not based on fresh origin/master'), `lesson: ${result.lesson}`);
+});
+
+test('preflightLive: clean base branch but HEAD sha differs from origin/master → needsHuman', async () => {
   const deps: IntegratorDeps = {
     execGit: (args, _cwd) => {
       if (args[0] === 'fetch') return '';
