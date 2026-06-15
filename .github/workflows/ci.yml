@@ -97,16 +97,10 @@ jobs:
         if: steps.node-modules-cache.outputs.cache-hit != 'true'
         run: corepack enable && pnpm install --frozen-lockfile
 
-      # Cold-start the standalone daemon (initializes embedded Postgres) and bootstrap the
-      # control-plane project/schema/seed (admin/control-plane/master). Without bootstrap the
-      # run fails with "Project not found". `bootstrap` requires a running daemon and does not
-      # start one itself, so the two steps are ordered. Mirrors docs/getting-started.md.
-      - name: Start Revisium standalone (embedded Postgres)
-        run: pnpm exec tsx src/cli/index.ts revisium start
-
-      - name: Bootstrap control-plane (project + schema + seed)
-        run: pnpm exec tsx src/cli/index.ts bootstrap --commit
-
+      # `test:e2e` is self-contained: scripts/e2e-setup.ts cold-starts an ISOLATED test daemon
+      # (REVO_DATA_DIR/REVO_PORT/REVO_PG_PORT → its own embedded Postgres + DBOS db, set in the npm
+      # script), bootstraps the control-plane, and installs the playbook — then the test files run.
+      # No separate start/bootstrap steps, and no collision with a developer's dogfooding daemon.
       - name: Run E2E (REVO_E2E_REAL=1)
         env:
           REVO_PLAYBOOK_SOURCE: ${{ github.workspace }}/.agent-playbook

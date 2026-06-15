@@ -46,16 +46,33 @@ function loadConfig(): ConfigFile {
 
 let cachedConfig: RevoConfig | null = null;
 
+/** Parse a positive-integer env var, or undefined if unset/invalid. */
+function numEnv(name: string): number | undefined {
+  const raw = process.env[name];
+  if (raw === undefined) return undefined;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+/**
+ * Test/CI isolation: env overrides keep a throwaway daemon (and its embedded Postgres + DBOS db)
+ * fully separate from the developer's dogfooding control-plane. `REVO_DATA_DIR` redirects the data
+ * directory (so runtime.json, the embedded PG, and the DBOS connection all key off it); `REVO_PORT`
+ * / `REVO_PG_PORT` give the test daemon distinct preferred ports so it never collides with a live
+ * dev daemon. Unset in normal use → the committed `revisium.config.json` values apply.
+ */
 export function getConfig(): RevoConfig {
   if (cachedConfig) return cachedConfig;
 
   const rawConfig = loadConfig();
-  const dataDir = expandHome(rawConfig.dataDir);
+  const dataDir = expandHome(process.env['REVO_DATA_DIR'] ?? rawConfig.dataDir);
   mkdirSync(dataDir, { recursive: true });
 
   cachedConfig = {
     ...rawConfig,
     dataDir,
+    preferredPort: numEnv('REVO_PORT') ?? rawConfig.preferredPort,
+    preferredPgPort: numEnv('REVO_PG_PORT') ?? rawConfig.preferredPgPort,
     logFile: join(dataDir, 'standalone.log'),
     runtimeFile: join(dataDir, 'runtime.json'),
   };

@@ -54,8 +54,15 @@ import {
 /** Queue name for the dev-tasks WorkflowQueue. */
 const DEV_TASKS_QUEUE = 'dev-tasks';
 
-/** Concurrency limit for the dev-tasks queue. */
-const DEV_TASKS_CONCURRENCY = 2;
+/**
+ * Concurrency limit for the dev-tasks queue. Default 2; overridable via `REVO_DEV_TASKS_CONCURRENCY`
+ * (a deployment throughput knob, and what lets the e2e crash-recovery suite hold several PENDING
+ * runs at once — each parked run occupies a slot until recovered).
+ */
+const DEV_TASKS_CONCURRENCY = ((): number => {
+  const raw = Number.parseInt(process.env['REVO_DEV_TASKS_CONCURRENCY'] ?? '', 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : 2;
+})();
 
 const RUNNER_FAILURE_REASON_MAX = 2_000;
 
