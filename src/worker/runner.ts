@@ -30,6 +30,6 @@ export class RunAgentError extends Error {
   }
 }
 
-export function artifactsFromRunAgentError(err: unknown): unknown | undefined {
+export function artifactsFromRunAgentError(err: unknown): unknown {
   return err instanceof RunAgentError ? err.artifacts : undefined;
 }

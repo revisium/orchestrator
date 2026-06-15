@@ -118,7 +118,9 @@ export function createArtifactStore(rootDir: string, opts: { tailBytes?: number 
         },
         finish(info): ProcessArtifactSnapshot {
           const finishedAt = info.finishedAt ?? new Date();
-          const status = info.error ? 'error' : info.timedOut ? 'timed_out' : 'finished';
+          let status = 'finished';
+          if (info.error) status = 'error';
+          else if (info.timedOut) status = 'timed_out';
           const safeError = info.error ? sanitizeText(info.error) : '';
           writeJson(metaPath, {
             ref,

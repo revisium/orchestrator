@@ -14,7 +14,7 @@ function isRecord(value: unknown): value is JsonRecord {
 }
 
 function escapePointer(segment: string): string {
-  return segment.replace(/~/g, '~0').replace(/\//g, '~1');
+  return segment.replaceAll('~', '~0').replaceAll('/', '~1');
 }
 
 function schemaProperties(schema: unknown): JsonRecord {
@@ -25,7 +25,10 @@ function schemaProperties(schema: unknown): JsonRecord {
 function stableJson(value: unknown): string {
   if (!isRecord(value) && !Array.isArray(value)) return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
-  return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`;
+  const entries = Object.keys(value)
+    .sort((a, b) => a.localeCompare(b))
+    .map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`);
+  return `{${entries.join(',')}}`;
 }
 
 export function computeAdditiveSchemaPatches(currentSchema: unknown, desiredSchema: unknown): JsonRecord[] {
