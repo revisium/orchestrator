@@ -53,12 +53,26 @@ export function executedRoles(h: RunHarness, runId: string): Array<[string, stri
  * scoped by `taskId` so it is robust to other runs' gh calls. Returns the head branch name.
  */
 export function assertPrOpened(h: RunHarness, taskId: string, repo = 'e2e/repo'): string {
-  const list = h.ghCalls.find((c) => c[0] === 'pr' && c[1] === 'list');
-  assert.ok(list, 'fake gh must list existing PRs before creating');
-  assert.equal(list[list.indexOf('--repo') + 1], repo);
-  const branch = list[list.indexOf('--head') + 1];
-  assert.ok(branch?.startsWith(`feat/${taskId}-`), `unexpected PR head branch: ${branch}`);
-  assert.ok(h.ghCalls.some((c) => c[0] === 'pr' && c[1] === 'create'), 'fake gh must create a draft PR');
-  assert.ok(h.ghCalls.some((c) => c[0] === 'pr' && c[1] === 'view'), 'fake gh must read back created PR metadata');
+  const branchPrefix = `feat/${taskId}-`;
+  // Scope to THIS run's gh calls via the feature branch (robust if other runs share the harness).
+  const list = h.ghCalls.find(
+    (c) => c[0] === 'pr' && c[1] === 'list' && c.some((arg) => arg.startsWith(branchPrefix)),
+  );
+  assert.ok(list, 'fake gh must list existing PRs for this branch before creating');
+  const repoIdx = list.indexOf('--repo');
+  assert.ok(repoIdx >= 0 && list[repoIdx + 1] === repo, `--repo ${repo} not found in pr list`);
+  const headIdx = list.indexOf('--head');
+  assert.ok(headIdx >= 0, '--head flag not found in pr list');
+  const branch = list[headIdx + 1];
+  assert.ok(branch, '--head value missing in pr list');
+  assert.ok(branch.startsWith(branchPrefix), `unexpected PR head branch: ${branch}`);
+  assert.ok(
+    h.ghCalls.some((c) => c[0] === 'pr' && c[1] === 'create' && c.includes(branch)),
+    'fake gh must create a draft PR for this branch',
+  );
+  assert.ok(
+    h.ghCalls.some((c) => c[0] === 'pr' && c[1] === 'view' && c.includes(branch)),
+    'fake gh must read back created PR metadata for this branch',
+  );
   return branch;
 }
