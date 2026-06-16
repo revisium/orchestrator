@@ -1,0 +1,413 @@
+[
+  {
+    "id": "analysis-only",
+    "path": "stub.md",
+    "triggers": [
+      "architecture review",
+      "feasibility analysis",
+      "source-backed explanation",
+      "plan-map"
+    ],
+    "required_roles": [
+      "orchestrator",
+      "analyst"
+    ],
+    "alternative_roles": [],
+    "optional_roles": [
+      "architect",
+      "reviewer",
+      "knowledge-engineer"
+    ],
+    "route_gates": [
+      "converting analysis into edits",
+      "promoting best-practice proposals into hard rules"
+    ],
+    "platform_invocation": "canonical-only",
+    "execution_policy": {
+      "recommended_model_levels": {
+        "analyst": "deep",
+        "architect": "deep",
+        "reviewer": "standard"
+      },
+      "consensus_defaults": [
+        {
+          "scope": "default",
+          "value": "none"
+        }
+      ],
+      "consensus_escalations": [
+        {
+          "value": "single-reviewer",
+          "when": "the answer cites source paths, line numbers, or irreversible architecture recommendations"
+        }
+      ],
+      "iteration_cap": "1 review/fix loop for produced artifacts",
+      "raw": [
+        "Recommended model levels: analyst `deep`; architect `deep` when selected; reviewer `standard` or `deep` when factual or architectural risk is high.",
+        "Default consensus: `none`.",
+        "Escalate to `single-reviewer` when the answer cites source paths, line numbers, or irreversible architecture recommendations.",
+        "Default iteration cap: 1 review/fix loop for produced artifacts."
+      ]
+    }
+  },
+  {
+    "id": "bugfix",
+    "path": "stub.md",
+    "triggers": [
+      "known defect",
+      "QA finding",
+      "watcher finding",
+      "CI or review defect"
+    ],
+    "required_roles": [
+      "orchestrator",
+      "developer",
+      "integrator",
+      "watcher"
+    ],
+    "alternative_roles": [
+      {
+        "group_id": "defect-analysis",
+        "roles": [
+          "analyst",
+          "reviewer"
+        ],
+        "resolution": "at_least_one"
+      }
+    ],
+    "optional_roles": [
+      "architect",
+      "qa-backend",
+      "qa-frontend"
+    ],
+    "route_gates": [
+      "risky missing reproduction",
+      "behavior/product decision",
+      "merge approval"
+    ],
+    "platform_invocation": "canonical-only",
+    "execution_policy": {
+      "recommended_model_levels": {
+        "developer": "standard",
+        "reviewer": "standard",
+        "watcher": "cheap",
+        "architect": "deep"
+      },
+      "consensus_defaults": [
+        {
+          "scope": "default",
+          "value": "single-reviewer"
+        }
+      ],
+      "consensus_escalations": [
+        {
+          "value": "dual-model",
+          "when": "root cause, data loss, security, concurrency, migration, or architecture boundary risk is unclear"
+        }
+      ],
+      "iteration_cap": "3 developer/reviewer or developer/watcher loops",
+      "raw": [
+        "Recommended model levels: developer `standard`; reviewer `standard`; watcher `cheap`; architect `deep` when selected.",
+        "Default consensus: `single-reviewer`.",
+        "Escalate to `dual-model` when root cause, data loss, security, concurrency, migration, or architecture boundary risk is unclear.",
+        "Default iteration cap: 3 developer/reviewer or developer/watcher loops."
+      ]
+    }
+  },
+  {
+    "id": "feature-development",
+    "path": "stub.md",
+    "triggers": [
+      "new feature",
+      "multi-repo change",
+      "task-to-PR work"
+    ],
+    "required_roles": [
+      "orchestrator",
+      "analyst",
+      "reviewer",
+      "developer",
+      "integrator",
+      "watcher"
+    ],
+    "alternative_roles": [],
+    "optional_roles": [
+      "architect",
+      "merger",
+      "deploy-watcher",
+      "qa-backend",
+      "qa-frontend"
+    ],
+    "route_gates": [
+      "task spec approval",
+      "human-action items",
+      "merge approval",
+      "ambiguous architecture/product/security decisions"
+    ],
+    "platform_invocation": "canonical-only",
+    "execution_policy": {
+      "recommended_model_levels": {
+        "analyst": "deep",
+        "architect": "deep",
+        "developer": "standard",
+        "reviewer": "deep",
+        "integrator": "standard",
+        "watcher": "cheap",
+        "deploy-watcher": "standard",
+        "qa-backend": "standard",
+        "qa-frontend": "standard"
+      },
+      "consensus_defaults": [
+        {
+          "scope": "task-spec review",
+          "value": "dual-model"
+        },
+        {
+          "scope": "architecture review",
+          "value": "single-reviewer"
+        },
+        {
+          "scope": "code review",
+          "value": "dual-model"
+        }
+      ],
+      "consensus_escalations": [],
+      "iteration_cap": "3 developer/reviewer or developer/watcher loops before `needs_human`",
+      "raw": [
+        "Recommended model levels: analyst `deep`; architect `deep` when selected; developer `standard`; reviewer `deep`; integrator `standard`; watcher `cheap`; deploy and QA roles `standard`.",
+        "Default task-spec review consensus: `dual-model`.",
+        "Default architecture review consensus: `single-reviewer`; use `dual-model` for cross-module, data, auth, security, migration, or public API decisions.",
+        "Default code review consensus: `dual-model`.",
+        "Default iteration cap: 3 developer/reviewer or developer/watcher loops before `needs_human`."
+      ]
+    }
+  },
+  {
+    "id": "local-change",
+    "path": "stub.md",
+    "triggers": [
+      "small local edit",
+      "obvious fix",
+      "repo-local maintenance"
+    ],
+    "required_roles": [
+      "orchestrator",
+      "developer"
+    ],
+    "alternative_roles": [],
+    "optional_roles": [
+      "reviewer",
+      "integrator",
+      "watcher"
+    ],
+    "route_gates": [
+      "unclear requirements",
+      "architecture boundary",
+      "skipped required verification",
+      "publication approval",
+      "merge approval"
+    ],
+    "platform_invocation": "canonical-only",
+    "execution_policy": {
+      "recommended_model_levels": {
+        "developer": "standard",
+        "reviewer": "standard",
+        "integrator": "standard",
+        "watcher": "cheap"
+      },
+      "consensus_defaults": [
+        {
+          "scope": "default",
+          "value": "none"
+        }
+      ],
+      "consensus_escalations": [
+        {
+          "value": "single-reviewer",
+          "when": "the change touches behavior, contracts, security, persistence, generated artifacts, or required verification gates"
+        }
+      ],
+      "iteration_cap": "1 developer/reviewer or developer/watcher loop before `needs_human`",
+      "raw": [
+        "Recommended model levels: developer `standard`; reviewer `standard` when selected; integrator `standard`; watcher `cheap`.",
+        "Default consensus: `none`.",
+        "Escalate to `single-reviewer` when the change touches behavior, contracts, security, persistence, generated artifacts, or required verification gates.",
+        "Default iteration cap: 1 developer/reviewer or developer/watcher loop before `needs_human`."
+      ]
+    }
+  },
+  {
+    "id": "method-development",
+    "path": "stub.md",
+    "triggers": [
+      "method change",
+      "missing capability",
+      "role or pipeline improvement",
+      "new stack or adapter"
+    ],
+    "required_roles": [
+      "orchestrator",
+      "knowledge-engineer"
+    ],
+    "alternative_roles": [],
+    "optional_roles": [
+      "architect",
+      "reviewer",
+      "integrator",
+      "watcher"
+    ],
+    "route_gates": [
+      "approved hard-rule changes",
+      "merge approval"
+    ],
+    "platform_invocation": "canonical-only",
+    "execution_policy": {
+      "recommended_model_levels": {
+        "knowledge-engineer": "deep",
+        "architect": "deep",
+        "reviewer": "standard"
+      },
+      "consensus_defaults": [
+        {
+          "scope": "default",
+          "value": "single-reviewer"
+        }
+      ],
+      "consensus_escalations": [
+        {
+          "value": "dual-model",
+          "when": "adding routable roles, changing human gates, changing materialization behavior, or changing result/usage contracts"
+        }
+      ],
+      "iteration_cap": "2 knowledge-engineer/reviewer loops",
+      "raw": [
+        "Recommended model levels: knowledge-engineer `deep`; architect `deep` when selected; reviewer `standard` by default and `deep` for role, pipeline, or adapter boundary changes.",
+        "Default consensus: `single-reviewer`.",
+        "Use `dual-model` when adding routable roles, changing human gates, changing materialization behavior, or changing result/usage contracts.",
+        "Default iteration cap: 2 knowledge-engineer/reviewer loops."
+      ]
+    }
+  },
+  {
+    "id": "post-merge-qa",
+    "path": "stub.md",
+    "triggers": [
+      "merged PR",
+      "deployed behavior verification",
+      "runtime-only confirmation"
+    ],
+    "required_roles": [
+      "orchestrator",
+      "deploy-watcher"
+    ],
+    "alternative_roles": [
+      {
+        "group_id": "live-qa",
+        "roles": [
+          "qa-backend",
+          "qa-frontend"
+        ],
+        "resolution": "at_least_one"
+      }
+    ],
+    "optional_roles": [
+      "developer",
+      "integrator",
+      "watcher",
+      "merger"
+    ],
+    "route_gates": [
+      "extra live-system access",
+      "infra mutation",
+      "follow-up PR merge approval"
+    ],
+    "platform_invocation": "canonical-only",
+    "execution_policy": {
+      "recommended_model_levels": {
+        "deploy-watcher": "cheap",
+        "watcher": "cheap",
+        "qa-backend": "standard",
+        "qa-frontend": "standard",
+        "developer": "standard"
+      },
+      "consensus_defaults": [
+        {
+          "scope": "default",
+          "value": "none"
+        }
+      ],
+      "consensus_escalations": [
+        {
+          "value": "single-reviewer",
+          "when": "QA findings require code-risk classification or accepted-risk judgment"
+        }
+      ],
+      "iteration_cap": "1 QA/follow-up classification loop before route back to bugfix or feature-development",
+      "raw": [
+        "Recommended model levels: deploy-watcher `cheap`; watcher `cheap`; qa-backend `standard`; qa-frontend `standard`; developer `standard` when follow-up fixes are needed.",
+        "Default consensus: `none`.",
+        "Escalate to `single-reviewer` when QA findings require code-risk classification or accepted-risk judgment.",
+        "Default iteration cap: 1 QA/follow-up classification loop before route back to bugfix or feature-development."
+      ]
+    }
+  },
+  {
+    "id": "feature-pr-watch",
+    "path": "stub.md",
+    "triggers": [
+      "pr readiness gate",
+      "automated pr watch loop"
+    ],
+    "required_roles": [
+      "orchestrator",
+      "analyst",
+      "reviewer",
+      "developer",
+      "integrator",
+      "pr-watcher"
+    ],
+    "alternative_roles": [],
+    "optional_roles": [],
+    "route_gates": [
+      "task spec approval",
+      "merge approval"
+    ],
+    "platform_invocation": "canonical-only",
+    "execution_policy": {
+      "recommended_model_levels": {
+        "analyst": "deep",
+        "architect": "deep",
+        "developer": "standard",
+        "reviewer": "deep",
+        "integrator": "standard",
+        "watcher": "cheap",
+        "deploy-watcher": "standard",
+        "qa-backend": "standard",
+        "qa-frontend": "standard"
+      },
+      "consensus_defaults": [
+        {
+          "scope": "task-spec review",
+          "value": "dual-model"
+        },
+        {
+          "scope": "architecture review",
+          "value": "single-reviewer"
+        },
+        {
+          "scope": "code review",
+          "value": "dual-model"
+        }
+      ],
+      "consensus_escalations": [],
+      "iteration_cap": "3 developer/reviewer or developer/watcher loops before `needs_human`",
+      "raw": [
+        "Recommended model levels: analyst `deep`; architect `deep` when selected; developer `standard`; reviewer `deep`; integrator `standard`; watcher `cheap`; deploy and QA roles `standard`.",
+        "Default task-spec review consensus: `dual-model`.",
+        "Default architecture review consensus: `single-reviewer`; use `dual-model` for cross-module, data, auth, security, migration, or public API decisions.",
+        "Default code review consensus: `dual-model`.",
+        "Default iteration cap: 3 developer/reviewer or developer/watcher loops before `needs_human`."
+      ]
+    }
+  }
+]

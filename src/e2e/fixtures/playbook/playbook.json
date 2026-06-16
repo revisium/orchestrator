@@ -1,0 +1,13 @@
+{
+  "id": "revisium-agent-playbook",
+  "name": "Revisium Agent Playbook (e2e fixture)",
+  "schema_version": 2,
+  "package": "@revisium/agent-playbook-e2e-fixture",
+  "catalogs": {
+    "roles": "catalog/roles.json",
+    "pipelines": "catalog/pipelines.json"
+  },
+  "supported_runtimes": [
+    "revo"
+  ]
+}

@@ -1,0 +1,5 @@
+{
+  "name": "@revisium/agent-playbook-e2e-fixture",
+  "version": "0.0.0",
+  "description": "Self-contained e2e playbook fixture (roles + pipelines catalog) — see src/e2e/fixtures/playbook."
+}
