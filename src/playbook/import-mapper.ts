@@ -154,6 +154,10 @@ function mapRole(root: string, playbookId: string, role: RoleCatalogRecord, now:
       effort: role.defaultModelLevel === 'cheap' ? 'low' : 'high',
       runner: role.runnerId,
       runner_id: role.runnerId,
+      // Classification axis (routing), persisted top-level only — deliberately NOT mirrored into
+      // scope_rules (which feeds the catalog hash). Omitted entirely when unset so kind-less rows keep
+      // their existing serialized shape/hash (D6).
+      ...(role.kind ? { kind: role.kind } : {}),
       allowed_tools: rights.allowedTools,
       scope_rules: JSON.stringify({
         surface: role.surface,

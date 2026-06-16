@@ -27,6 +27,7 @@ import {
 // One shared host; the agent is scripted per-run so we can choose the embedded role's verdict.
 
 const PIPELINE = 'feature-pr-watch'; // fixture pipeline: orchestrator, analyst, reviewer, developer, integrator, pr-watcher
+const PIPELINE_POLL = 'feature-pr-poll'; // mirrors feature-pr-watch but with an UNKNOWN-id pr-poller (kind:status) post-integrator
 const STUB_INTEGRATOR = { runnerOverrides: { 'revo-integrator': 'stub-agent' } }; // integrate w/o git/gh
 
 let h: RunHarness;
@@ -54,6 +55,23 @@ async function startPrWatchRun(spec?: AgentSpec): Promise<{ runId: string; taskI
     scope: 'extensibility e2e',
     playbookId: PLAYBOOK_ID,
     pipelineId: PIPELINE,
+    executionProfile: STUB_INTEGRATOR,
+    start: false,
+  });
+  if (spec) specs.set(created.runId, spec);
+  await h.api.startRun({ runId: created.runId });
+  return { runId: created.runId, taskId: created.taskId };
+}
+
+/** Create + start the pr-poll pipeline (stub integrator) — the UNKNOWN-id, kind:status embedded role. */
+async function startPrPollRun(spec?: AgentSpec): Promise<{ runId: string; taskId: string }> {
+  const created = await h.api.createRun({
+    repo: target.worktree,
+    title: 'E2E embedded pr-poller',
+    description: 'Group K — unknown-id role classified post-integrator via kind, from playbook data.',
+    scope: 'extensibility e2e',
+    playbookId: PLAYBOOK_ID,
+    pipelineId: PIPELINE_POLL,
     executionProfile: STUB_INTEGRATOR,
     start: false,
   });
@@ -93,5 +111,44 @@ test('K3: routing composes the pipeline from data — the embedded role appears 
   assert.ok(
     route.roles.indexOf('pr-watcher') > route.roles.indexOf('integrator'),
     'the embedded role is ordered after the integrator (post-integrator phase)',
+  );
+});
+
+// K4/K5 — the NEW capability (0014): a role whose id is UNKNOWN to every hardcoded classifier is
+// CLASSIFIED as a post-integrator status role purely from its `kind: 'status'` in playbook data — with
+// zero change to any code id-list. (K1/K3 above only prove a RECOGNIZED id, pr-watcher.)
+
+test('K4: an UNRECOGNIZED-id role (pr-poller) classified post-integrator via kind runs and completes', { skip: e2eSkip }, async () => {
+  const run = await startPrPollRun(); // default: every role PASS, incl the unknown-id pr-poller
+  const terminal = await approveUntilTerminal(h.api, run.runId); // approve plan + merge
+  assert.equal(terminal.state, 'completed');
+  // The run reaching completion proves validatePostIntegratorBindings ACCEPTED pr-poller via its kind —
+  // an unknown id without kind would throw ROUTE_UNSUPPORTED before the run could complete.
+  await assertEventsPresent(h.api, run.runId, ['integrate_succeeded', 'run_completed']);
+  const roles = executedRoles(h, run.runId).map(([role]) => role);
+  assert.ok(roles.includes('pr-poller'), 'the unknown-id pr-poller executed (classified from kind, no code change)');
+
+  // Runtime ordering: integrate_succeeded must precede pr-poller's post-integrator step (not merely both present).
+  const events = await h.api.getRunEvents({ runId: run.runId, limit: 50 });
+  const integrateIdx = events.findIndex((e) => e.type === 'integrate_succeeded');
+  const pollerStepIdx = events.findIndex(
+    (e) => e.type === 'step_succeeded' && (e.payload as { stepKey?: unknown } | undefined)?.stepKey === 'pr-poller',
+  );
+  assert.ok(integrateIdx >= 0, 'integrate_succeeded was emitted');
+  assert.ok(pollerStepIdx >= 0, "pr-poller's step_succeeded was emitted");
+  assert.ok(integrateIdx < pollerStepIdx, 'the status role ran AFTER the integrator at runtime');
+});
+
+test('K5: routing threads kind to the binding — pr-poller binds kind:status, ordered after integrator', { skip: e2eSkip }, async () => {
+  const route = (await h.api.simulateRoute({ title: 'route', pipeline: PIPELINE_POLL })) as unknown as {
+    pipelineId: string;
+    roles: string[];
+    roleBindings: Array<{ roleId: string; kind?: string }>;
+  };
+  assert.equal(route.pipelineId, PIPELINE_POLL);
+  assert.equal(route.roleBindings.find((b) => b.roleId === 'pr-poller')?.kind, 'status'); // kind threaded to binding
+  assert.ok(
+    route.roles.indexOf('pr-poller') > route.roles.indexOf('integrator'),
+    'pr-poller is still ordered after the integrator (post-integrator phase)',
   );
 });

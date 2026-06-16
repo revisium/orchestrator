@@ -174,5 +174,14 @@
     "rights": "read-only",
     "default_model_level": "cheap",
     "runner_id": "claude-code"
+  },
+  {
+    "id": "pr-poller",
+    "path": "stub.md",
+    "surface": "any",
+    "rights": "read-only",
+    "default_model_level": "cheap",
+    "runner_id": "claude-code",
+    "kind": "status"
   }
 ]

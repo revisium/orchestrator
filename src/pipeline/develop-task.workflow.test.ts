@@ -179,6 +179,7 @@ function buildDeps(opts: {
   runId: string;
   roles?: Map<string, Role>;
   reviewerResults?: Array<{ verdict: string }>;
+  passRoles?: string[];
   awaitHumanResults?: Partial<Record<'plan' | 'merge', Decision>>;
   preflightResult?: { ok: true } | { needsHuman: true; lesson: string };
   integrateResult?: IntegratorOutput | IntegratorBlocked;
@@ -243,12 +244,23 @@ function buildDeps(opts: {
   // If reviewerResults are provided, wrap the runAgent to inject controlled verdicts for `reviewer` role.
   let reviewerCallCount = 0;
   const reviewerResults = opts.reviewerResults;
+  const passRoles = new Set(opts.passRoles ?? []);
 
   const baseRunAgent = createRunAgent({ claudeCode: throwingClaudeCode, script: stubRunAgent });
 
-  const runAgent: RunAgent = reviewerResults
+  const runAgent: RunAgent = reviewerResults || passRoles.size > 0
     ? async (args) => {
-        if (['reviewer', 'watcher', 'pr-watcher', 'deploy-watcher', 'qa-backend', 'qa-frontend'].includes(args.role.name)) {
+        // Force a PASS verdict for explicitly named roles (e.g. an unknown-id kind:status/review role
+        // the stub would otherwise fail-close on) without touching the production review-id matcher below.
+        if (passRoles.has(args.role.name)) {
+          return {
+            output: { echo: `[fake] ${args.role.name}`, verdict: 'PASS', phase: 'review' },
+            nextSteps: [],
+            costs: [],
+            needsHuman: false,
+          };
+        }
+        if (reviewerResults && ['reviewer', 'watcher', 'pr-watcher', 'deploy-watcher', 'qa-backend', 'qa-frontend'].includes(args.role.name)) {
           const idx =
             reviewerCallCount < reviewerResults.length ? reviewerCallCount : reviewerResults.length - 1;
           reviewerCallCount++;
@@ -390,7 +402,12 @@ function makeRoute(roleBindings: RouteRoleBinding[]): RouteDecision {
   };
 }
 
-function binding(roleId: string, rowId = `pb-${roleId}`, runnerId = 'claude-code'): RouteRoleBinding {
+function binding(
+  roleId: string,
+  rowId = `pb-${roleId}`,
+  runnerId = 'claude-code',
+  kind?: RouteRoleBinding['kind'],
+): RouteRoleBinding {
   return {
     roleId,
     rowId,
@@ -398,6 +415,7 @@ function binding(roleId: string, rowId = `pb-${roleId}`, runnerId = 'claude-code
     runnerId,
     resolvedRunnerId: runnerId === 'revo-integrator' ? 'revo-integrator' : 'stub-agent',
     runnerSource: runnerId === 'claude-code' ? 'execution-profile' : 'playbook',
+    ...(kind ? { kind } : {}),
   };
 }
 
@@ -1074,6 +1092,109 @@ test('unsupported route shape fails before preflight or agent steps', async () =
   assert.deepEqual(harness.loadRoleArgs, [], 'no role may run before an unsupported route fails');
   assert.equal(harness.preflightCallCount, 0, 'preflight must not run before route-shape validation');
   assert.equal(harness.failRunArgs.length, 1, 'workflow failure must still mark the run failed');
+});
+
+// ─── 0014: kind-first classification (id-fallback intact) ────────────────────
+
+test('kind-first: an UNKNOWN-id role with kind:status after the integrator is classified as a status role and runs', async () => {
+  const runId = 'run-route-kind-status-poller';
+  const route = makeRoute([
+    binding('orchestrator'),
+    binding('developer'),
+    binding('integrator', 'pb-integrator', 'revo-integrator'),
+    binding('pr-poller', 'pb-pr-poller', 'claude-code', 'status'),
+  ]);
+  route.pipelineId = 'feature-pr-poll';
+  route.requiredRoles = ['orchestrator', 'developer', 'integrator', 'pr-poller'];
+  route.routeGates = ['task spec approval', 'merge approval'];
+  const roles = new Map<string, Role>([
+    ['pb-developer', makeRole('developer', 'claude-code')],
+    ['pb-pr-poller', makeRole('pr-poller', 'claude-code')],
+  ]);
+  const { deps, workflowDeps, harness } = buildDeps({ runId, roles, passRoles: ['pr-poller'] });
+
+  const developTaskImpl = makeDevelopTask(makeRunStep(deps), workflowDeps);
+  const result = await developTaskImpl(runId, { route });
+
+  assert.equal(result.blocked, false, 'an unknown-id kind:status role after the integrator must not be rejected');
+  assert.equal(harness.integrateCallCount, 1, 'the integrator still runs');
+  const stepSucceeded = harness.appendEventArgs
+    .filter((event) => event.type === 'step_succeeded')
+    .map((event) => event.stepKey);
+  assert.ok(stepSucceeded.includes('pr-poller'), 'the post-integrator status role executed (classified via kind)');
+});
+
+test('kind-first: the same UNKNOWN-id role WITHOUT kind after the integrator still throws ROUTE_UNSUPPORTED', async () => {
+  const runId = 'run-route-kind-poller-no-kind';
+  const route = makeRoute([
+    binding('developer'),
+    binding('integrator', 'pb-integrator', 'revo-integrator'),
+    binding('pr-poller'), // unknown id, no kind → id-fallback rejects it post-integrator
+  ]);
+  const { deps, workflowDeps, harness } = buildDeps({ runId });
+  const developTaskImpl = makeDevelopTask(makeRunStep(deps), workflowDeps);
+
+  await assert.rejects(
+    () => developTaskImpl(runId, { route }),
+    /ROUTE_UNSUPPORTED: pipeline local-change has executable roles after integrator: pr-poller/,
+  );
+  assert.equal(harness.preflightCallCount, 0, 'preflight must not run before route-shape validation');
+});
+
+test('kind-first (D7): a real-integrator runner is the integrator regardless of a non-integrator kind', async () => {
+  const runId = 'run-route-kind-d7-runner-wins';
+  // A status-kind binding whose resolved runner mechanically merges occupies the integrator slot (runner-wins).
+  const route = makeRoute([
+    binding('developer'),
+    binding('pr-poller', 'pb-pr-poller', 'revo-integrator', 'status'),
+  ]);
+  route.requiredRoles = ['developer', 'pr-poller'];
+  const roles = new Map<string, Role>([['pb-developer', makeRole('developer', 'claude-code')]]);
+  const { deps, workflowDeps, harness } = buildDeps({ runId, roles });
+
+  const developTaskImpl = makeDevelopTask(makeRunStep(deps), workflowDeps);
+  const result = await developTaskImpl(runId, { route });
+
+  assert.equal(result.blocked, false, 'the runner-integrator role is treated as the integrator, not a stray status role');
+  assert.equal(harness.integrateCallCount, 1, 'integration runs through the real-integrator runner regardless of kind');
+});
+
+// NOTE: the conflicting built-in-id case (e.g. developer + kind:'review') cannot reach this classifier
+// from a real install — the loader rejects it at install (Step 2 / D4). This case pins only the raw
+// kind-first behaviour of the classifier on an arbitrary binding.
+test('kind-first: an explicit kind:review binding is classified as review', async () => {
+  const runId = 'run-route-kind-review';
+  // An unknown-id role carrying kind:'review', placed before the developer, lands in the review phase.
+  const route = makeRoute([
+    binding('orchestrator'),
+    binding('gatekeeper', 'pb-gatekeeper', 'claude-code', 'review'),
+    binding('developer'),
+    binding('integrator', 'pb-integrator', 'revo-integrator'),
+  ]);
+  route.pipelineId = 'feature-development';
+  route.requiredRoles = ['orchestrator', 'gatekeeper', 'developer', 'integrator'];
+  route.routeGates = ['task spec approval', 'merge approval'];
+  const roles = new Map<string, Role>([
+    ['pb-gatekeeper', makeRole('gatekeeper', 'claude-code')],
+    ['pb-developer', makeRole('developer', 'claude-code')],
+  ]);
+  const { deps, workflowDeps, harness } = buildDeps({
+    runId,
+    roles,
+    passRoles: ['gatekeeper'],
+  });
+
+  const developTaskImpl = makeDevelopTask(makeRunStep(deps), workflowDeps);
+  const result = await developTaskImpl(runId, { route });
+
+  assert.equal(result.blocked, false);
+  // A review-kind role reused as a post-developer code reviewer emits a `:code` step (review phase),
+  // proving the classifier honoured the explicit kind for an unknown id.
+  const stepSucceeded = harness.appendEventArgs
+    .filter((event) => event.type === 'step_succeeded')
+    .map((event) => event.stepKey);
+  assert.ok(stepSucceeded.includes('gatekeeper'), 'the review-kind role ran in the planning phase');
+  assert.ok(stepSucceeded.includes('gatekeeper:code'), 'the review-kind role was reused as a code reviewer (review classification)');
 });
 
 // ─── 0008 #4: per-attempt observability rows ─────────────────────────────────

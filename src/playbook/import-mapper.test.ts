@@ -89,6 +89,58 @@ test('mapPlaybookRows: maps roles and pipelines into versioned rows', () => {
   assert.equal(rows.catalogHash.length, 64);
 });
 
+test('mapPlaybookRows: persists role kind top-level only when set, omits it otherwise', () => {
+  const root = mkdtempSync(join(tmpdir(), 'revo-playbook-map-'));
+  mkdirSync(join(root, 'roles', 'pr-poller'), { recursive: true });
+  mkdirSync(join(root, 'roles', 'developer'), { recursive: true });
+  writeFileSync(join(root, 'roles', 'pr-poller', 'ROLE.md'), '# Poller\n');
+  writeFileSync(join(root, 'roles', 'developer', 'ROLE.md'), '# Developer\n');
+  const manifest: PlaybookManifest = {
+    id: 'pb',
+    name: 'PB',
+    schemaVersion: 2,
+    packageName: '@x/pb',
+    catalogs: { roles: 'catalog/roles.json', pipelines: 'catalog/pipelines.json' },
+    supportedRuntimes: ['revo'],
+  };
+
+  const rows = mapPlaybookRows({
+    root,
+    source: { type: 'local', input: '.', root, source: `local:${root}`, packageName: '@x/pb', version: '1.0.0' },
+    manifest,
+    catalogs: {
+      roles: [
+        {
+          id: 'pr-poller',
+          path: 'roles/pr-poller/ROLE.md',
+          surface: 'any',
+          rights: 'read-only',
+          defaultModelLevel: 'cheap',
+          runnerId: 'claude-code',
+          wrappers: {},
+          kind: 'status',
+        },
+        {
+          id: 'developer',
+          path: 'roles/developer/ROLE.md',
+          surface: 'any',
+          rights: 'write-working-tree',
+          defaultModelLevel: 'standard',
+          runnerId: 'claude-code',
+          wrappers: {},
+        },
+      ],
+      pipelines: [],
+    },
+    now: '2026-06-13T00:00:00.000Z',
+  });
+
+  assert.equal(rows.roles[0]?.data.kind, 'status');
+  assert.equal('kind' in (rows.roles[1]?.data ?? {}), false);
+  // kind is a top-level routing axis only — never duplicated into scope_rules (D6).
+  assert.doesNotMatch(String(rows.roles[0]?.data.scope_rules), /"kind"/);
+});
+
 test('mapPlaybookRows: normalizes canonical gate labels to workflow gate ids', () => {
   const root = mkdtempSync(join(tmpdir(), 'revo-playbook-map-'));
   mkdirSync(join(root, 'roles', 'developer'), { recursive: true });

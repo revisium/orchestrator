@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { PlaybookError } from './errors.js';
 import type { PlaybookManifest } from './manifest.js';
 import { resolvePathInside } from './source-resolver.js';
+import { ROLE_KINDS, type RoleKind } from '../pipeline/route-contract.js';
 
 export type RoleCatalogRecord = {
   id: string;
@@ -11,6 +12,7 @@ export type RoleCatalogRecord = {
   defaultModelLevel: 'cheap' | 'standard' | 'deep';
   runnerId: string;
   wrappers: Record<string, string>;
+  kind?: RoleKind;
 };
 
 export type AlternativeRoleGroup = {
@@ -38,6 +40,26 @@ export type PlaybookCatalogs = {
 
 const MODEL_LEVELS = new Set(['cheap', 'standard', 'deep']);
 const PRODUCTION_BLOCKED_RUNNERS = new Set(['stub-agent']);
+const ROLE_KIND_SET = new Set<string>(ROLE_KINDS);
+
+// Built-in role id → its historical classification, character-identical to the workflow classifiers
+// (develop-task.workflow.ts isDeveloperRole/isOrchestrationRole/isReviewRole/isIntegratorRole). A
+// built-in id carrying a `kind` that disagrees with this class is rejected at load (D4); `orchestrator`
+// is filtered out of execution entirely, so any routing `kind` on it conflicts (sentinel value).
+const BUILTIN_ROLE_KIND: Record<string, RoleKind | 'orchestration'> = {
+  orchestrator: 'orchestration',
+  developer: 'developer',
+  'developer-backend': 'developer',
+  'developer-frontend': 'developer',
+  'knowledge-engineer': 'developer',
+  reviewer: 'review',
+  watcher: 'review',
+  'pr-watcher': 'review',
+  'deploy-watcher': 'review',
+  'qa-backend': 'review',
+  'qa-frontend': 'review',
+  integrator: 'integrator',
+};
 
 function asRecord(value: unknown, context: string): Record<string, unknown> {
   if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
@@ -108,6 +130,23 @@ function assertPipelineRoleReferences(roles: RoleCatalogRecord[], pipelines: Pip
   }
 }
 
+function parseRoleKind(record: Record<string, unknown>, id: string, context: string): RoleKind | undefined {
+  const raw = record.kind;
+  if (raw === undefined) return undefined;
+  if (typeof raw !== 'string' || !ROLE_KIND_SET.has(raw)) {
+    throw new PlaybookError('PLAYBOOK_INVALID_CATALOG', `${context}.kind is invalid: ${String(raw)}`);
+  }
+  const kind = raw as RoleKind;
+  const builtin = BUILTIN_ROLE_KIND[id];
+  if (builtin !== undefined && builtin !== kind) {
+    throw new PlaybookError(
+      'PLAYBOOK_INVALID_CATALOG',
+      `${context}.kind ${kind} conflicts with built-in role id ${id}`,
+    );
+  }
+  return kind;
+}
+
 function parseRole(value: unknown, index: number, root: string): RoleCatalogRecord {
   const context = `roles[${index}]`;
   const record = asRecord(value, context);
@@ -127,14 +166,17 @@ function parseRole(value: unknown, index: number, root: string): RoleCatalogReco
       `${context}.runner_id must not be ${runnerId}; use an execution profile override for test stubs`,
     );
   }
+  const id = stringField(record, 'id', context);
+  const kind = parseRoleKind(record, id, context);
   return {
-    id: stringField(record, 'id', context),
+    id,
     path,
     surface: stringField(record, 'surface', context),
     rights: stringField(record, 'rights', context),
     defaultModelLevel: modelLevel as RoleCatalogRecord['defaultModelLevel'],
     runnerId,
     wrappers: optionalRecord(record, 'wrappers'),
+    ...(kind ? { kind } : {}),
   };
 }
 
