@@ -15,6 +15,7 @@ export type AgentSink = { agentCalls: AgentCall[]; developerWrites: DeveloperWri
 export type RoleBehavior =
   | { kind: 'pass' } //                                       output { verdict: 'PASS' }
   | { kind: 'verdict'; verdict: 'PASS' | 'MINOR' | 'MAJOR' | 'BLOCKER' } // structured verdict
+  | { kind: 'domainVerdict'; verdict: string } //             arbitrary DOMAIN verdict label (0015 data-driven)
   | { kind: 'throw'; message?: string } //                    runner throws → step_failed, BLOCKER, needsHuman
   | { kind: 'needsHuman'; lesson?: string } //                parks the step (awaiting_approval)
   | { kind: 'cost'; inputTokens: number; outputTokens: number; costAmount: number }; // PASS + custom cost
@@ -43,7 +44,8 @@ function runBehavior(
   if (writeRepo && behavior.kind !== 'needsHuman') {
     writeFileSync(join(writeRepo, `developer-${ctx.attemptId}.txt`), `change from ${ctx.attemptId}\n`);
   }
-  const verdict = behavior.kind === 'verdict' ? behavior.verdict : 'PASS';
+  const verdict =
+    behavior.kind === 'verdict' || behavior.kind === 'domainVerdict' ? behavior.verdict : 'PASS';
   const cost =
     behavior.kind === 'cost'
       ? { inputTokens: behavior.inputTokens, outputTokens: behavior.outputTokens, costAmount: behavior.costAmount }
