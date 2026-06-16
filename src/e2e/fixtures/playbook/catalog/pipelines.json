@@ -448,5 +448,234 @@
         "Default iteration cap: 3 developer/reviewer loops before `needs_human`."
       ]
     }
+  },
+  {
+    "id": "feature-development-dd",
+    "path": "stub.md",
+    "triggers": [
+      "data-driven feature",
+      "state-machine pipeline"
+    ],
+    "required_roles": [
+      "analyst",
+      "developer",
+      "reviewer",
+      "integrator",
+      "watcher"
+    ],
+    "alternative_roles": [],
+    "optional_roles": [],
+    "route_gates": [
+      "task spec approval",
+      "merge approval"
+    ],
+    "platform_invocation": "canonical-only",
+    "execution_policy": {
+      "template_json": {
+        "specVersion": "1.0",
+        "pipelineId": "feature-development-dd",
+        "entry": "analyst",
+        "verdicts": {
+          "domain": [
+            "approved",
+            "changes_requested",
+            "blocker",
+            "clean",
+            "dirty"
+          ]
+        },
+        "nodes": {
+          "analyst": {
+            "id": "analyst",
+            "kind": "agent",
+            "roleRef": "role:analyst",
+            "next": "planGate",
+            "onFailure": "abort",
+            "resultSchema": "schema:plan"
+          },
+          "planGate": {
+            "id": "planGate",
+            "kind": "humanGate",
+            "reason": "plan-review",
+            "outcomes": [
+              "approved",
+              "changes_requested"
+            ],
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "approved"
+                },
+                "goto": "developer"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "changes_requested"
+                },
+                "goto": "analyst"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ]
+          },
+          "developer": {
+            "id": "developer",
+            "kind": "agent",
+            "roleRef": "role:developer",
+            "next": "codeReview",
+            "onFailure": "abort",
+            "resultSchema": "schema:change"
+          },
+          "codeReview": {
+            "id": "codeReview",
+            "kind": "agent",
+            "roleRef": "role:reviewer",
+            "next": "codeReviewRouter",
+            "onFailure": "abort",
+            "resultSchema": "schema:reviewVerdict"
+          },
+          "codeReviewRouter": {
+            "id": "codeReviewRouter",
+            "kind": "choice",
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "approved"
+                },
+                "goto": "integrator"
+              },
+              {
+                "when": {
+                  "op": "all",
+                  "of": [
+                    {
+                      "op": "verdict.eq",
+                      "value": "blocker"
+                    },
+                    {
+                      "op": "counter.lt",
+                      "scope": "codeReviewLoop",
+                      "value": 3
+                    }
+                  ]
+                },
+                "goto": "reworkDeveloper"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ]
+          },
+          "reworkDeveloper": {
+            "id": "reworkDeveloper",
+            "kind": "agent",
+            "roleRef": "role:developer",
+            "next": "codeReview",
+            "onFailure": "abort",
+            "resultSchema": "schema:change",
+            "incrementCounters": [
+              "codeReviewLoop"
+            ]
+          },
+          "integrator": {
+            "id": "integrator",
+            "kind": "script",
+            "scriptRef": "script:integrator",
+            "next": "watcherPost",
+            "catch": [
+              {
+                "onError": "revo.ScriptFailed",
+                "goto": "failedEnd"
+              }
+            ],
+            "onFailure": "route",
+            "resultSchema": "schema:integration"
+          },
+          "watcherPost": {
+            "id": "watcherPost",
+            "kind": "agent",
+            "roleRef": "role:watcher",
+            "next": "watcherRouter",
+            "onFailure": "abort",
+            "resultSchema": "schema:watchVerdict"
+          },
+          "watcherRouter": {
+            "id": "watcherRouter",
+            "kind": "choice",
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "clean"
+                },
+                "goto": "mergeGate"
+              },
+              {
+                "default": "failedEnd"
+              }
+            ]
+          },
+          "mergeGate": {
+            "id": "mergeGate",
+            "kind": "humanGate",
+            "reason": "merge-review",
+            "outcomes": [
+              "approved",
+              "changes_requested"
+            ],
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "approved"
+                },
+                "goto": "mergedEnd"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ]
+          },
+          "mergedEnd": {
+            "id": "mergedEnd",
+            "kind": "terminal",
+            "status": "succeeded"
+          },
+          "failedEnd": {
+            "id": "failedEnd",
+            "kind": "terminal",
+            "status": "failed"
+          },
+          "blockedEnd": {
+            "id": "blockedEnd",
+            "kind": "terminal",
+            "status": "blocked"
+          }
+        },
+        "title": "Feature development with plan + merge gates and bounded rework",
+        "policy": {
+          "conflicts": [
+            [
+              "developer",
+              "reviewer"
+            ]
+          ],
+          "enforcement": "strict"
+        },
+        "scopes": {
+          "codeReviewLoop": {
+            "cap": 3,
+            "parent": null
+          }
+        }
+      },
+      "raw": [
+        "Data-driven (0015): the pipeline graph is DATA — see template_json (pipeline-core spec)."
+      ]
+    }
   }
 ]
