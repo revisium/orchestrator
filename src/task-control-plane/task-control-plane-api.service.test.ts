@@ -597,6 +597,61 @@ test('TaskControlPlaneApiService.simulateRoute binds every required playbook rol
   assert.deepEqual(route.roleBindings.map((item) => item.rowId), ['pb-architect', 'pb-analyst', 'pb-watcher']);
 });
 
+test('TaskControlPlaneApiService.simulateRoute threads role kind onto the binding', async () => {
+  const api = makeApi({
+    rolesService: {
+      async listRoles() {
+        return [
+          {
+            id: 'pb-developer',
+            name: 'developer',
+            modelLevel: 'standard',
+            runner: 'claude-code',
+            surface: 'any',
+            rights: 'write-working-tree',
+            playbookId: 'pb',
+            playbookRoleId: 'developer',
+          },
+          {
+            id: 'pb-pr-poller',
+            name: 'pr-poller',
+            modelLevel: 'cheap',
+            runner: 'claude-code',
+            surface: 'any',
+            rights: 'read-only',
+            playbookId: 'pb',
+            playbookRoleId: 'pr-poller',
+            kind: 'status' as const,
+          },
+        ];
+      },
+    },
+    playbooksService: {
+      async resolvePipeline() {
+        return {
+          id: 'pb-poll',
+          playbookId: 'pb',
+          pipelineId: 'poll',
+          path: 'pipelines/poll/PIPELINE.md',
+          triggers: ['poll'],
+          requiredRoles: ['developer', 'pr-poller'],
+          alternativeRoles: [],
+          optionalRoles: [],
+          routeGates: [],
+          executionPolicy: {},
+        };
+      },
+    },
+  });
+
+  const route = await api.simulateRoute({ title: 'route kind', pipeline: 'poll' });
+
+  const pollerBinding = route.roleBindings.find((item) => item.roleId === 'pr-poller');
+  const developerBinding = route.roleBindings.find((item) => item.roleId === 'developer');
+  assert.equal(pollerBinding?.kind, 'status');
+  assert.equal(developerBinding?.kind, undefined);
+});
+
 test('TaskControlPlaneApiService.simulateRoute binds canonical feature-development roles and gates', async () => {
   const api = makeApi({
     rolesService: {

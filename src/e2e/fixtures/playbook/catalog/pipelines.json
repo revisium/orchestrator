@@ -409,5 +409,44 @@
         "Default iteration cap: 3 developer/reviewer or developer/watcher loops before `needs_human`."
       ]
     }
+  },
+  {
+    "id": "feature-pr-poll",
+    "path": "stub.md",
+    "triggers": [
+      "pr readiness poll gate",
+      "automated pr poll loop"
+    ],
+    "required_roles": [
+      "orchestrator",
+      "analyst",
+      "reviewer",
+      "developer",
+      "integrator",
+      "pr-poller"
+    ],
+    "alternative_roles": [],
+    "optional_roles": [],
+    "route_gates": [
+      "task spec approval",
+      "merge approval"
+    ],
+    "platform_invocation": "canonical-only",
+    "execution_policy": {
+      "recommended_model_levels": {
+        "analyst": "deep",
+        "developer": "standard",
+        "reviewer": "deep",
+        "integrator": "standard",
+        "pr-poller": "cheap"
+      },
+      "consensus_defaults": [],
+      "consensus_escalations": [],
+      "iteration_cap": "3 developer/reviewer loops before `needs_human`",
+      "raw": [
+        "An unknown-id role (pr-poller) is classified as a post-integrator status role purely via its `kind`.",
+        "Default iteration cap: 3 developer/reviewer loops before `needs_human`."
+      ]
+    }
   }
 ]
