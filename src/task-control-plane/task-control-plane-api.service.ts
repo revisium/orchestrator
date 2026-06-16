@@ -8,6 +8,7 @@ import { ControlPlaneError } from '../control-plane/errors.js';
 import type { InboxItem } from '../control-plane/inbox.js';
 import { DbosService } from '../engine/dbos.service.js';
 import { PipelineService, type RunnerMode } from '../pipeline/develop-task.workflow.js';
+import { templateFromExecutionPolicy } from '../pipeline/data-driven-template.js';
 import {
   normalizeExecutionProfile,
   normalizeParams,
@@ -358,6 +359,22 @@ export class TaskControlPlaneApiService {
     if (!run) throw new ControlPlaneError('ROW_NOT_FOUND', `run not found: ${input.runId}`);
     const route = input.route ?? await this.routeForRun(run);
     const existingStatus = await this.dbos.getWorkflowStatus(input.runId);
+
+    // PARALLEL SELECTION (0015 slice 2): a pipeline carrying a state-machine template (specVersion +
+    // nodes in its execution_policy) routes to the DATA-DRIVEN workflow; everything else keeps the
+    // existing hardcoded developTask path UNCHANGED. A present-but-invalid template throws (fail-loud).
+    const template = templateFromExecutionPolicy(route.executionPolicy);
+    if (template) {
+      const handle = await this.pipeline.startDataDrivenTask(input.runId, { route, template });
+      return {
+        runId: input.runId,
+        workflowID: handle.workflowID,
+        alreadyStarted: existingStatus !== null,
+        route,
+        engine: 'data-driven' as const,
+      };
+    }
+
     const handle = await this.pipeline.startDevelopTask(input.runId, {
       runnerMode: input.runnerMode,
       route,

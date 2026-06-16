@@ -90,6 +90,40 @@ export async function startStubbedFeatureRun(h: RunHarness, target: TargetRepo) 
   return { runId: created.runId, taskId: created.taskId };
 }
 
+/** Pipeline id of the DATA-DRIVEN feature pipeline (0015 slice 2) — embeds a state-machine template. */
+export const DATA_DRIVEN_PIPELINE = 'feature-development-dd';
+
+/**
+ * Create + start a DATA-DRIVEN feature run (0015 slice 2) against `target`. Routes to the
+ * data-driven DBOS adapter (the pipeline carries a template_json), with the agent + integrator stubbed
+ * so the run reaches the plan + merge gates without real git/gh. `spec` is registered (when provided)
+ * BEFORE start so the scripted agent reads this run's per-node verdicts (needs a routedScriptedAgent
+ * harness). The data-driven watcher node routes on a `clean` DOMAIN verdict — the caller scripts it.
+ */
+export async function startDataDrivenRun(
+  h: RunHarness,
+  target: TargetRepo,
+  specs?: Map<string, AgentSpecLike>,
+  spec?: AgentSpecLike,
+) {
+  const created = await h.api.createRun({
+    repo: target.worktree,
+    title: 'E2E data-driven feature run',
+    description: 'Group L — data-driven pipeline (pipeline-core graph) on real DBOS.',
+    scope: 'data-driven e2e',
+    playbookId: PLAYBOOK_ID,
+    pipelineId: DATA_DRIVEN_PIPELINE,
+    executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent', 'revo-integrator': 'stub-agent' } },
+    start: false,
+  });
+  if (specs && spec) specs.set(created.runId, spec);
+  const started = await h.api.startRun({ runId: created.runId });
+  return { runId: created.runId, taskId: created.taskId, started };
+}
+
+/** Minimal structural alias so scenarios can take an AgentSpec without importing the concrete type here. */
+export type AgentSpecLike = { byRole?: Record<string, unknown>; default?: unknown };
+
 /** Feature run driven to the `plan` gate (parked, awaiting decision). */
 export async function givenFeatureRunAtPlanGate(h: RunHarness, target: TargetRepo) {
   const run = await startFeatureRun(h, target);

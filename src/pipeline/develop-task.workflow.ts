@@ -37,6 +37,12 @@ import { fnv1a64Hex } from '../control-plane/steps.js';
 import type { AppendEventInput } from '../run/append-event.js';
 import { makeAwaitHuman } from './await-human.js';
 import type { Decision } from './await-human.js';
+import {
+  makeDataDrivenTask,
+  type DataDrivenResult,
+  type DataDrivenTaskDeps,
+  type DataDrivenTaskOpts,
+} from './data-driven-task.workflow.js';
 import type { CancelRunResult } from '../run/cancel-run.js';
 import type { FailRunResult } from '../run/fail-run.js';
 import type { CompleteRunResult } from '../run/complete-run.js';
@@ -1031,6 +1037,16 @@ export class PipelineService {
     opts?: DevelopTaskOpts,
   ) => Promise<DevelopResult>;
 
+  /**
+   * The DATA-DRIVEN workflow (plan 0015 slice 2) — registered ALONGSIDE developTask, parallel + additive.
+   * Selection routes a pipeline carrying a state-machine template here; everything else stays on
+   * developTask. Reuses the SAME runStep DBOS step + awaitHuman + integrator deps.
+   */
+  private readonly dataDrivenTaskFn: (
+    runId: string,
+    opts: DataDrivenTaskOpts,
+  ) => Promise<DataDrivenResult>;
+
   /** The single run-agent used by all steps. */
   private readonly runAgent: RunAgent;
 
@@ -1107,6 +1123,24 @@ export class PipelineService {
       makeDevelopTask(this.runStepFn, workflowDeps),
     );
 
+    // Register the DATA-DRIVEN workflow (0015 slice 2) — additive, parallel to developTask. Reuses the
+    // SAME DBOS-wrapped runStep + awaitHuman + integrator deps so capabilities resolve through the
+    // existing runner machinery (no duplicate dispatch logic, no role-ids in the engine).
+    const dataDrivenDeps: DataDrivenTaskDeps = {
+      appendEvent: stepDeps.appendEvent,
+      awaitHuman,
+      completeRun: workflowDeps.completeRun,
+      failRun: workflowDeps.failRun,
+      blockRun: workflowDeps.blockRun,
+      loadRunTaskContext: workflowDeps.loadRunTaskContext,
+      integrateFn,
+      runStub: this.integratorService.runStub,
+    };
+    this.dataDrivenTaskFn = this.dbos.registerWorkflow(
+      'PipelineService.dataDrivenTask',
+      makeDataDrivenTask(this.runStepFn, dataDrivenDeps),
+    );
+
     // Register the WorkflowQueue (idempotent — Map-guarded in DbosService).
     this.dbos.registerQueue(DEV_TASKS_QUEUE, { concurrency: DEV_TASKS_CONCURRENCY });
   }
@@ -1127,5 +1161,19 @@ export class PipelineService {
     opts: DevelopTaskOpts,
   ): Promise<WorkflowHandle<DevelopResult>> {
     return this.dbos.startWorkflowOn(this.developTaskFn, runId, DEV_TASKS_QUEUE, runId, opts);
+  }
+
+  /**
+   * Enqueue the DATA-DRIVEN workflow for the given runId (0015 slice 2).
+   *
+   * Same idempotency + queue + recovery contract as startDevelopTask (workflowID=runId). The pinned,
+   * validated template is passed as a DBOS workflow ARGUMENT, so it is durable and replayed verbatim on
+   * recovery (the MVP pin — a Revisium-revision pin is a later upgrade per §11/§14 Q4).
+   */
+  startDataDrivenTask(
+    runId: string,
+    opts: DataDrivenTaskOpts,
+  ): Promise<WorkflowHandle<DataDrivenResult>> {
+    return this.dbos.startWorkflowOn(this.dataDrivenTaskFn, runId, DEV_TASKS_QUEUE, runId, opts);
   }
 }
