@@ -313,7 +313,7 @@ export function makeDataDrivenTask(
         const node = resolveNode(template, decision.nodeId);
         const result = await invokeRole(runId, decision, node, bindingByRef, executionProfile);
         if (result.failed) {
-          return { lastResult: { outcome: 'failed', errorCode: result.errorCode }, lastVerdict: 'FAILED', stepDelta: 1 };
+          return { lastResult: { outcome: 'failed', errorCode: result.errorCode }, lastVerdict: 'failed', stepDelta: 1 };
         }
         const verdict = result.verdict;
         return {
@@ -325,7 +325,7 @@ export function makeDataDrivenTask(
       case 'invokeScript': {
         const scriptResult = await invokeScript(runId, decision, { taskId, title, base }, bindingByRef);
         if (scriptResult.failed) {
-          return { lastResult: { outcome: 'failed', errorCode: REVO_SCRIPT_FAILED }, lastVerdict: 'FAILED', stepDelta: 1 };
+          return { lastResult: { outcome: 'failed', errorCode: REVO_SCRIPT_FAILED }, lastVerdict: 'failed', stepDelta: 1 };
         }
         return { lastResult: { outcome: 'succeeded' }, stepDelta: 1 };
       }
