@@ -50,6 +50,16 @@ jobs:
       - name: Verify (typecheck + lint + unit coverage)
         run: pnpm run verify
 
+      # `pnpm run verify` ends with `test:cov`, which writes coverage/lcov.info — hand it to the sonar job.
+      - name: Upload coverage (lcov) for Sonar
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-lcov
+          path: coverage/lcov.info
+          if-no-files-found: warn
+          retention-days: 7
+
   e2e:
     name: E2E (real DBOS/Revisium + embedded Postgres)
     runs-on: ubuntu-latest
@@ -95,6 +105,43 @@ jobs:
       # No separate start/bootstrap steps, and no collision with a developer's dogfooding daemon.
       - name: Run E2E (REVO_E2E_REAL=1)
         run: pnpm run test:e2e
+
+  # SonarCloud analysis. Automatic Analysis is DISABLED in the SonarCloud project, so this CI scan is the
+  # sole analysis path (it uploads the lcov from `verify`). Non-required (not in `checks`): the SonarCloud
+  # quality-gate is reported on the PR by SonarCloud itself; a scan hiccup must not block merge.
+  sonar:
+    name: SonarQube
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    needs: verify
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+        with:
+          fetch-depth: 0 # Sonar needs full history for new-code detection / blame
+          persist-credentials: false
+
+      - name: Download coverage (lcov)
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        continue-on-error: true # scan still runs (without coverage) if verify failed before test:cov
+        with:
+          name: coverage-lcov
+          path: coverage
+
+      - name: Cache SonarQube packages
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar
+          restore-keys: ${{ runner.os }}-sonar
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@299e4b793aaa83bf2aba7c9c14bedbb485688ec4 # v7.1.0
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
   checks:
     name: Required checks
