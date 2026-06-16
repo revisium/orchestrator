@@ -44,6 +44,7 @@ const MAX_STEPS = 1000; // a VALID template always terminates; this guards a tes
  */
 export function drive(template: Template, script: DriveScript = {}): DriveResult {
   const visits = new Map<string, number>();
+  const joinVisits = new Map<string, number>();
   const trace: Trace[] = [];
   const path: string[] = [];
 
@@ -69,7 +70,7 @@ export function drive(template: Template, script: DriveScript = {}): DriveResult
       // live race. We model that by jumping the cursor to the JOIN and feeding the arrivals scripted
       // on the join node, so the next step aggregates a recorded result. A missing join script with
       // mode `all` synthesizes one arrival per branch (verdict undefined) so the barrier is satisfied.
-      const arrivals = joinArrivalsFor(script, decision.joinId, decision.branches.map((b) => b.id));
+      const arrivals = joinArrivalsFor(script, decision.joinId, decision.branches.map((b) => b.id), joinVisits);
       state = { ...state, activeNodeIds: new Set([decision.joinId]) };
       lastResult = { joinArrivals: arrivals };
       continue;
@@ -85,10 +86,22 @@ function soleActive(state: { activeNodeIds: ReadonlySet<string> }): string {
   return [...state.activeNodeIds][0] ?? '<none>';
 }
 
-/** Recorded arrivals for a join: from the script entry on the join node, else one per branch. */
-function joinArrivalsFor(script: DriveScript, joinId: string, branchIds: string[]): JoinArrival[] {
+/**
+ * Recorded arrivals for a join: from the script entry on the join node, else one per branch. Like
+ * `resultFor`, an ARRAY entry is consumed one-per-visit (clamped) so a join hit repeatedly in a loop can
+ * yield a different recorded aggregation each pass; a single entry is reused every visit.
+ */
+function joinArrivalsFor(
+  script: DriveScript,
+  joinId: string,
+  branchIds: string[],
+  joinVisits: Map<string, number>,
+): JoinArrival[] {
+  const n = joinVisits.get(joinId) ?? 0;
+  joinVisits.set(joinId, n + 1);
   const entry = script[joinId];
-  if (entry && typeof entry === 'object' && 'joinArrivals' in entry) return entry.joinArrivals;
+  const picked = Array.isArray(entry) ? entry[Math.min(n, entry.length - 1)] : entry;
+  if (picked && typeof picked === 'object' && 'joinArrivals' in picked) return picked.joinArrivals;
   return branchIds.map((branchId, i) => ({ branchId, seq: i + 1 }));
 }
 

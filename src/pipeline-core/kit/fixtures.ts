@@ -295,7 +295,7 @@ export const invalidCrossBranchGoto = (): Template =>
       node.parallel('fanout', [{ id: 'a', entry: 'aWork' }, { id: 'b', entry: 'bWork' }], 'j'),
       node.agent('aWork', 'role:x', 'bWork'), // crosses into branch b
       node.agent('bWork', 'role:y', 'j'),
-      node.join('j', joinAll(), 'end'),
+      node.join('j', joinAll(), 'end', { merge: { f: 'overwrite' } }), // merge present → only BRANCH_CROSS_GOTO trips
       node.terminal('end', 'succeeded'),
     )
     .build();
