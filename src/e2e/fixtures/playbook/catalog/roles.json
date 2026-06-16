@@ -1,0 +1,178 @@
+[
+  {
+    "id": "analyst",
+    "path": "stub.md",
+    "surface": "any",
+    "rights": "read-only",
+    "default_model_level": "deep",
+    "runner_id": "claude-code",
+    "wrappers": {
+      "codex": "adapters/codex/materialized/agents/analyst.toml",
+      "claude_code": "adapters/claude-code/materialized/agents/analyst.md"
+    }
+  },
+  {
+    "id": "architect",
+    "path": "stub.md",
+    "surface": "any",
+    "rights": "read-only",
+    "default_model_level": "deep",
+    "runner_id": "claude-code",
+    "wrappers": {
+      "codex": "adapters/codex/materialized/agents/architect.toml",
+      "claude_code": "adapters/claude-code/materialized/agents/architect.md"
+    }
+  },
+  {
+    "id": "deploy-watcher",
+    "path": "stub.md",
+    "surface": "deployment",
+    "rights": "deploy-read",
+    "default_model_level": "standard",
+    "runner_id": "claude-code",
+    "wrappers": {
+      "codex": "adapters/codex/materialized/agents/deploy-watcher.toml",
+      "claude_code": "adapters/claude-code/materialized/agents/deploy-watcher.md"
+    }
+  },
+  {
+    "id": "developer",
+    "path": "stub.md",
+    "surface": "any",
+    "rights": "write-working-tree",
+    "default_model_level": "standard",
+    "runner_id": "claude-code",
+    "wrappers": {
+      "codex": "adapters/codex/materialized/agents/developer.toml",
+      "claude_code": "adapters/claude-code/materialized/agents/developer.md"
+    }
+  },
+  {
+    "id": "developer-backend",
+    "path": "stub.md",
+    "surface": "backend",
+    "rights": "write-working-tree",
+    "default_model_level": "standard",
+    "runner_id": "claude-code",
+    "wrappers": {
+      "codex": "adapters/codex/materialized/agents/developer-backend.toml",
+      "claude_code": "adapters/claude-code/materialized/agents/developer-backend.md"
+    }
+  },
+  {
+    "id": "developer-frontend",
+    "path": "stub.md",
+    "surface": "frontend",
+    "rights": "write-working-tree",
+    "default_model_level": "standard",
+    "runner_id": "claude-code",
+    "wrappers": {
+      "codex": "adapters/codex/materialized/agents/developer-frontend.toml",
+      "claude_code": "adapters/claude-code/materialized/agents/developer-frontend.md"
+    }
+  },
+  {
+    "id": "integrator",
+    "path": "stub.md",
+    "surface": "repo",
+    "rights": "git-gh",
+    "default_model_level": "standard",
+    "runner_id": "revo-integrator",
+    "wrappers": {
+      "codex": "adapters/codex/materialized/agents/integrator.toml",
+      "claude_code": "adapters/claude-code/materialized/agents/integrator.md"
+    }
+  },
+  {
+    "id": "knowledge-engineer",
+    "path": "stub.md",
+    "surface": "method",
+    "rights": "write-working-tree",
+    "default_model_level": "deep",
+    "runner_id": "claude-code",
+    "wrappers": {
+      "codex": "adapters/codex/materialized/agents/knowledge-engineer.toml",
+      "claude_code": "adapters/claude-code/materialized/agents/knowledge-engineer.md"
+    }
+  },
+  {
+    "id": "merger",
+    "path": "stub.md",
+    "surface": "repo",
+    "rights": "git-gh",
+    "default_model_level": "standard",
+    "runner_id": "revo-merger",
+    "wrappers": {
+      "codex": "adapters/codex/materialized/agents/merger.toml",
+      "claude_code": "adapters/claude-code/materialized/agents/merger.md"
+    }
+  },
+  {
+    "id": "orchestrator",
+    "path": "stub.md",
+    "surface": "any",
+    "rights": "read-only",
+    "default_model_level": "deep",
+    "runner_id": "claude-code",
+    "wrappers": {
+      "codex": "adapters/codex/materialized/agents/orchestrator.toml",
+      "claude_code": "adapters/claude-code/materialized/agents/orchestrator.md"
+    }
+  },
+  {
+    "id": "qa-backend",
+    "path": "stub.md",
+    "surface": "backend",
+    "rights": "qa-live",
+    "default_model_level": "standard",
+    "runner_id": "claude-code",
+    "wrappers": {
+      "codex": "adapters/codex/materialized/agents/qa-backend.toml",
+      "claude_code": "adapters/claude-code/materialized/agents/qa-backend.md"
+    }
+  },
+  {
+    "id": "qa-frontend",
+    "path": "stub.md",
+    "surface": "frontend",
+    "rights": "qa-live",
+    "default_model_level": "standard",
+    "runner_id": "claude-code",
+    "wrappers": {
+      "codex": "adapters/codex/materialized/agents/qa-frontend.toml",
+      "claude_code": "adapters/claude-code/materialized/agents/qa-frontend.md"
+    }
+  },
+  {
+    "id": "reviewer",
+    "path": "stub.md",
+    "surface": "any",
+    "rights": "read-only",
+    "default_model_level": "deep",
+    "runner_id": "claude-code",
+    "wrappers": {
+      "codex": "adapters/codex/materialized/agents/reviewer.toml",
+      "claude_code": "adapters/claude-code/materialized/agents/reviewer.md"
+    }
+  },
+  {
+    "id": "watcher",
+    "path": "stub.md",
+    "surface": "repo",
+    "rights": "read-only",
+    "default_model_level": "standard",
+    "runner_id": "claude-code",
+    "wrappers": {
+      "codex": "adapters/codex/materialized/agents/watcher.toml",
+      "claude_code": "adapters/claude-code/materialized/agents/watcher.md"
+    }
+  },
+  {
+    "id": "pr-watcher",
+    "path": "stub.md",
+    "surface": "any",
+    "rights": "read-only",
+    "default_model_level": "cheap",
+    "runner_id": "claude-code"
+  }
+]

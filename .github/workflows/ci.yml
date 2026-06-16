@@ -63,16 +63,8 @@ jobs:
         with:
           persist-credentials: false
 
-      # The e2e test installs a playbook from REVO_PLAYBOOK_SOURCE (defaults to ../agent-playbook).
-      # revisium/agent-playbook is PUBLIC, so the default GITHUB_TOKEN can read it.
-      - name: Checkout agent-playbook (e2e playbook source)
-        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
-        with:
-          persist-credentials: false
-          repository: revisium/agent-playbook
-          ref: master
-          path: .agent-playbook
-
+      # No external playbook checkout: the e2e installs the self-contained fixture committed under
+      # src/e2e/fixtures/playbook (PLAYBOOK_SOURCE default), so the suite is independent + stable.
       - name: Setup pnpm
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
 
@@ -102,8 +94,6 @@ jobs:
       # script), bootstraps the control-plane, and installs the playbook — then the test files run.
       # No separate start/bootstrap steps, and no collision with a developer's dogfooding daemon.
       - name: Run E2E (REVO_E2E_REAL=1)
-        env:
-          REVO_PLAYBOOK_SOURCE: ${{ github.workspace }}/.agent-playbook
         run: pnpm run test:e2e
 
   checks:
