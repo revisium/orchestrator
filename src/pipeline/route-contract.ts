@@ -4,6 +4,9 @@ export type ExecutionProfile = {
   availableRunners?: string[];
 };
 
+export const ROLE_KINDS = ['developer', 'review', 'status', 'integrator'] as const;
+export type RoleKind = (typeof ROLE_KINDS)[number];
+
 export type RouteRoleBinding = {
   roleId: string;
   rowId: string;
@@ -11,6 +14,7 @@ export type RouteRoleBinding = {
   runnerId: string;
   resolvedRunnerId: string;
   runnerSource: 'playbook' | 'execution-profile';
+  kind?: RoleKind;
 };
 
 export type RouteDecision = {

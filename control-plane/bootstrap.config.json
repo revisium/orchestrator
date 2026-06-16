@@ -499,6 +499,11 @@
             "default": "",
             "description": "Portable playbook runner binding, for example claude-code or revo-integrator"
           },
+          "kind": {
+            "type": "string",
+            "default": "",
+            "description": "Role classification for the pipeline phase: developer|review|status|integrator (empty = infer from id)"
+          },
           "allowed_tools": {
             "type": "array",
             "items": {

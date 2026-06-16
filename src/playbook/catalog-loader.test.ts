@@ -148,6 +148,100 @@ test('loadPlaybookCatalogs: rejects stub-agent as a production role runner', () 
   );
 });
 
+test('loadPlaybookCatalogs: rejects an unknown role kind', () => {
+  const { root, manifest } = makeRoot();
+  writeFileSync(
+    join(root, 'catalog', 'roles.json'),
+    JSON.stringify([
+      {
+        id: 'developer',
+        path: 'roles/developer/ROLE.md',
+        surface: 'any',
+        rights: 'write-working-tree',
+        default_model_level: 'standard',
+        runner_id: 'claude-code',
+        kind: 'wizard',
+      },
+    ]),
+  );
+  writeFileSync(join(root, 'catalog', 'pipelines.json'), JSON.stringify([]));
+
+  assert.throws(
+    () => loadPlaybookCatalogs(root, manifest),
+    /kind is invalid/,
+  );
+});
+
+test('loadPlaybookCatalogs: loads a valid kind on a non-built-in role id', () => {
+  const { root, manifest } = makeRoot();
+  writeFileSync(
+    join(root, 'catalog', 'roles.json'),
+    JSON.stringify([
+      {
+        id: 'pr-poller',
+        path: 'roles/developer/ROLE.md',
+        surface: 'any',
+        rights: 'read-only',
+        default_model_level: 'cheap',
+        runner_id: 'claude-code',
+        kind: 'status',
+      },
+    ]),
+  );
+  writeFileSync(join(root, 'catalog', 'pipelines.json'), JSON.stringify([]));
+
+  const catalogs = loadPlaybookCatalogs(root, manifest);
+  assert.equal(catalogs.roles[0]?.id, 'pr-poller');
+  assert.equal(catalogs.roles[0]?.kind, 'status');
+});
+
+test('loadPlaybookCatalogs: rejects a built-in role id whose kind conflicts with its class', () => {
+  const { root, manifest } = makeRoot();
+  writeFileSync(
+    join(root, 'catalog', 'roles.json'),
+    JSON.stringify([
+      {
+        id: 'developer',
+        path: 'roles/developer/ROLE.md',
+        surface: 'any',
+        rights: 'write-working-tree',
+        default_model_level: 'standard',
+        runner_id: 'claude-code',
+        kind: 'review',
+      },
+    ]),
+  );
+  writeFileSync(join(root, 'catalog', 'pipelines.json'), JSON.stringify([]));
+
+  assert.throws(
+    () => loadPlaybookCatalogs(root, manifest),
+    /conflicts with built-in role id/,
+  );
+});
+
+test('loadPlaybookCatalogs: accepts a built-in role id whose kind matches its class', () => {
+  const { root, manifest } = makeRoot();
+  writeFileSync(
+    join(root, 'catalog', 'roles.json'),
+    JSON.stringify([
+      {
+        id: 'reviewer',
+        path: 'roles/developer/ROLE.md',
+        surface: 'any',
+        rights: 'read-only',
+        default_model_level: 'deep',
+        runner_id: 'claude-code',
+        kind: 'review',
+      },
+    ]),
+  );
+  writeFileSync(join(root, 'catalog', 'pipelines.json'), JSON.stringify([]));
+
+  const catalogs = loadPlaybookCatalogs(root, manifest);
+  assert.equal(catalogs.roles[0]?.id, 'reviewer');
+  assert.equal(catalogs.roles[0]?.kind, 'review');
+});
+
 test('loadPlaybookCatalogs: normalizes runner_id before production-runner validation', () => {
   const { root, manifest } = makeRoot();
   writeFileSync(

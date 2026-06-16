@@ -486,15 +486,20 @@ for existing roles:
   optional field; a reader that doesn't know it ignores it (`parsePlaybookManifest`/`parseRole` only reject
   *known-but-invalid* shapes, not unknown optional keys). So bumping from `2` → `3` is unnecessary and would force
   every already-installed playbook to re-declare.
-- **But a kind-DEPENDENT playbook is NOT forward-compatible with an older host.** A playbook whose correctness
-  *depends* on `role_kind` — i.e. an **unknown-id role positioned post-integrator** — would, on a host that
-  predates this feature, **install fine** (the optional `kind` is ignored) and then **fail `ROUTE_UNSUPPORTED`** at
-  route time (the old `isPostIntegratorStatusRole` doesn't recognize the unknown id). That is a latent runtime
-  failure, not an install-time rejection.
-- **Follow-up (out of scope here):** before any kind-dependent playbook ships to **mixed/older hosts**, add a
-  capability gate so an old host *rejects at install* — e.g. a `requires_features: ['role_kind']` field in the
-  manifest checked by `parsePlaybookManifest`, or a `schema_version: 3` gated on host support. Tracked in Out of
-  scope. The fixture in Step 7 is exempt because it is installed only by a host that already has this feature.
+- **A kind-bearing playbook is NOT forward-compatible with an older host — and it fails at INSTALL, not route
+  time.** The control-plane `roles` table schema (`control-plane/bootstrap.config.json`) is strict
+  (`additionalProperties: false`). A host that predates this feature has a `roles` schema that does *not* declare
+  `kind`, so installing a role row carrying `data.kind` is **rejected by `createRow`** with a validation error
+  (`… has unknown property "kind"`) — an **install-time** failure, not the latent route-time `ROUTE_UNSUPPORTED`
+  an earlier draft of this note assumed. (This revision adds `kind` to that table schema; the already-merged
+  additive migration in `src/control-plane/schema-migration.ts` reconciles an existing control-plane's schema on
+  the next `revo bootstrap`, so a host running THIS code accepts the field.)
+- **Follow-up (out of scope here):** the install-time rejection above is *loud* but its message is a raw
+  schema-level "unknown property" error. Before any kind-dependent playbook ships to **mixed/older hosts**, add a
+  capability gate that fails install with a *clear, typed* reason — e.g. a `requires_features: ['role_kind']`
+  field in the manifest checked by `parsePlaybookManifest`, or a `schema_version: 3` gated on host support.
+  Tracked in Out of scope. The fixture in Step 7 is exempt because it is installed only by a host that already
+  has this feature (and bootstraps before install).
 
 ## Open questions / risks for reviewers
 

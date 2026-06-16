@@ -44,6 +44,7 @@ import type { BlockRunResult } from '../run/block-run.js';
 import {
   dispatchRunnerId,
   type ExecutionProfile,
+  type RoleKind,
   type RouteDecision,
   type RouteRoleBinding,
   normalizeRouteGates,
@@ -930,6 +931,11 @@ function singleRoleIndex(
 }
 
 function validatePostIntegratorBindings(route: RouteDecision, bindings: RouteRoleBinding[]): void {
+  // `isPostIntegratorStatusRole` is now kind-aware: a binding with an UNKNOWN id but `kind: 'status'`
+  // that is already positioned after the integrator passes here (the new capability — classification
+  // from data, no id-list edit). A `kind: 'status'` role positioned BEFORE the integrator is unaffected:
+  // it never enters `afterIntegratorBindings` (that set is `slice(integratorIndex + 1)`), so `kind` only
+  // re-classifies a binding at its existing position, never moves it.
   const unsupportedAfter = bindings.filter((binding) => !isPostIntegratorStatusRole(binding));
   if (unsupportedAfter.length === 0) return;
 
@@ -943,8 +949,22 @@ function beforeDeveloperPhase(binding: RouteRoleBinding, index: number): RouteEx
   return 'prepare';
 }
 
+/**
+ * kind-first classification with id-fallback: an explicit `binding.kind` decides; absent it, fall back
+ * to the hardcoded role-id lists (full back-compat for every known role). Per-axis fallback is passed
+ * in by the caller so the id lists are expressed once at each call site.
+ */
+function bindingMatchesKind(binding: RouteRoleBinding, kind: RoleKind, idFallback: boolean): boolean {
+  if (binding.kind) return binding.kind === kind; // explicit kind decides
+  return idFallback; // back-compat: hardcoded id lists
+}
+
 function isDeveloperRole(binding: RouteRoleBinding): boolean {
-  return ['developer', 'developer-backend', 'developer-frontend', 'knowledge-engineer'].includes(binding.roleId);
+  return bindingMatchesKind(
+    binding,
+    'developer',
+    ['developer', 'developer-backend', 'developer-frontend', 'knowledge-engineer'].includes(binding.roleId),
+  );
 }
 
 function isOrchestrationRole(binding: RouteRoleBinding): boolean {
@@ -952,15 +972,22 @@ function isOrchestrationRole(binding: RouteRoleBinding): boolean {
 }
 
 function isReviewRole(binding: RouteRoleBinding): boolean {
-  return ['reviewer', 'watcher', 'pr-watcher', 'deploy-watcher', 'qa-backend', 'qa-frontend'].includes(binding.roleId);
+  return bindingMatchesKind(
+    binding,
+    'review',
+    ['reviewer', 'watcher', 'pr-watcher', 'deploy-watcher', 'qa-backend', 'qa-frontend'].includes(binding.roleId),
+  );
 }
 
 function isIntegratorRole(binding: RouteRoleBinding): boolean {
-  return binding.roleId === 'integrator' || runnerUsesRealIntegrator(binding.resolvedRunnerId);
+  // Runner-wins (D7): a role whose resolved runner mechanically performs the merge is the integrator
+  // regardless of `kind` — `kind` must not be able to demote it past the integrator gate.
+  if (runnerUsesRealIntegrator(binding.resolvedRunnerId)) return true;
+  return bindingMatchesKind(binding, 'integrator', binding.roleId === 'integrator');
 }
 
 function isPostIntegratorStatusRole(binding: RouteRoleBinding): boolean {
-  return isReviewRole(binding);
+  return bindingMatchesKind(binding, 'status', isReviewRole(binding));
 }
 
 function legacyRouteDecision(runnerMode: RunnerMode = 'script'): RouteDecision {
