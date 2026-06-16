@@ -180,7 +180,7 @@ export type DataDrivenTaskDeps = {
 function gateVerdict(decision: GateDecision, outcomes: string[]): string | undefined {
   if (decision.decision === 'approve') return outcomes[0];
   // reject: prefer a declared "rework/changes" outcome; else let the default branch route (blocked).
-  return outcomes.length > 1 ? outcomes[outcomes.length - 1] : undefined;
+  return outcomes.length > 1 ? outcomes.at(-1) : undefined;
 }
 
 /** Stable gate topic from a node's reason (plan-review → 'plan', merge-review → 'merge', else 'plan'). */
@@ -271,74 +271,95 @@ export function makeDataDrivenTask(
         return await finish(runId, decision.status, lastVerdict, stepCount);
       }
 
-      switch (decision.type) {
-        case 'invokeRole': {
-          stepCount++;
-          const node = resolveNode(template, decision.nodeId);
-          const result = await invokeRole(runId, decision, node, bindingByRef, executionProfile);
-          if (result.failed) {
-            lastResult = { outcome: 'failed', errorCode: result.errorCode };
-            lastVerdict = 'FAILED';
-          } else {
-            const verdict = result.verdict;
-            lastResult = { outcome: 'succeeded', ...(verdict ? { verdict } : {}) };
-            if (verdict) lastVerdict = verdict;
-          }
-          break;
-        }
-
-        case 'invokeScript': {
-          stepCount++;
-          const scriptResult = await invokeScript(runId, decision, { taskId, title, base }, bindingByRef);
-          if (scriptResult.failed) {
-            lastResult = { outcome: 'failed', errorCode: REVO_SCRIPT_FAILED };
-            lastVerdict = 'FAILED';
-          } else {
-            lastResult = { outcome: 'succeeded' };
-          }
-          break;
-        }
-
-        case 'awaitGate': {
-          const topic = gateTopicFor(decision.reason);
-          const human = await awaitHuman(runId, topic, `${decision.reason} approval`, {
-            nodeId: decision.nodeId,
-            outcomes: decision.outcomes,
-          });
-          const verdict = gateVerdict(human, decision.outcomes);
-          lastResult = verdict ? { verdict } : {};
-          if (verdict) lastVerdict = verdict;
-          break;
-        }
-
-        case 'fork':
-          // Fork/join is supported by the core; the MVP feature-development pipeline has none. Record a
-          // deterministic barrier arrival per branch (verdict undefined) so an `all` join proceeds. A
-          // richer concurrent-branch executor (DBOS child workflows) is a later slice (§14 Q1).
-          lastResult = {
-            joinArrivals: decision.branches.map((b, idx) => ({ branchId: b.id, seq: idx + 1 })),
-          };
-          await appendEvent({
-            runId,
-            taskId,
-            stepId: '',
-            stepKey: `fork:${decision.nodeId}`,
-            type: 'pipeline_fork',
-            payload: { nodeId: decision.nodeId, branches: decision.branches.map((b) => b.id), joinId: decision.joinId },
-          });
-          break;
-
-        case 'startTimer':
-          // `wait` nodes are rare (§1) and unused by the MVP templates; a durable timer executor is a
-          // later slice. Treat as an immediate (recorded) resume so a template using it still advances.
-          lastResult = {};
-          break;
-      }
+      const eff = await applyDecision(decision, {
+        runId, template, bindingByRef, executionProfile, taskId, title, base,
+      });
+      lastResult = eff.lastResult;
+      if (eff.lastVerdict !== undefined) lastVerdict = eff.lastVerdict;
+      stepCount += eff.stepDelta;
     }
 
     throw new InterpretError(
       `data-driven ${template.pipelineId} did not terminate within ${MAX_STEPS} steps (template loop bug)`,
     );
+  }
+
+  // ── Decision dispatch ────────────────────────────────────────────────────────
+
+  /** What executing one non-terminal Decision yields back to the loop. */
+  type DecisionEffect = { lastResult: LastResult | undefined; lastVerdict?: string; stepDelta: number };
+  type EffectCtx = {
+    runId: string;
+    template: Template;
+    bindingByRef: Map<string, RouteRoleBinding>;
+    executionProfile: ExecutionProfile;
+    taskId: string;
+    title: string;
+    base: string;
+  };
+
+  /**
+   * Execute ONE non-terminal Decision as a durable effect and return the next `lastResult`/`lastVerdict`
+   * + the step-count delta. Extracted from the `runBody` loop so each is small + independently testable
+   * (the loop just threads the result; this is the per-kind dispatch).
+   */
+  async function applyDecision(
+    decision: Exclude<Decision, { type: 'complete' }>,
+    ctx: EffectCtx,
+  ): Promise<DecisionEffect> {
+    const { runId, template, bindingByRef, executionProfile, taskId, title, base } = ctx;
+    switch (decision.type) {
+      case 'invokeRole': {
+        const node = resolveNode(template, decision.nodeId);
+        const result = await invokeRole(runId, decision, node, bindingByRef, executionProfile);
+        if (result.failed) {
+          return { lastResult: { outcome: 'failed', errorCode: result.errorCode }, lastVerdict: 'FAILED', stepDelta: 1 };
+        }
+        const verdict = result.verdict;
+        return {
+          lastResult: { outcome: 'succeeded', ...(verdict ? { verdict } : {}) },
+          ...(verdict ? { lastVerdict: verdict } : {}),
+          stepDelta: 1,
+        };
+      }
+      case 'invokeScript': {
+        const scriptResult = await invokeScript(runId, decision, { taskId, title, base }, bindingByRef);
+        if (scriptResult.failed) {
+          return { lastResult: { outcome: 'failed', errorCode: REVO_SCRIPT_FAILED }, lastVerdict: 'FAILED', stepDelta: 1 };
+        }
+        return { lastResult: { outcome: 'succeeded' }, stepDelta: 1 };
+      }
+      case 'awaitGate': {
+        const topic = gateTopicFor(decision.reason);
+        const human = await awaitHuman(runId, topic, `${decision.reason} approval`, {
+          nodeId: decision.nodeId,
+          outcomes: decision.outcomes,
+        });
+        const verdict = gateVerdict(human, decision.outcomes);
+        return { lastResult: verdict ? { verdict } : {}, ...(verdict ? { lastVerdict: verdict } : {}), stepDelta: 0 };
+      }
+      case 'fork': {
+        // Fork/join is supported by the core; the MVP feature-development pipeline has none. Record a
+        // deterministic barrier arrival per branch (verdict undefined) so an `all` join proceeds. A richer
+        // concurrent-branch executor (DBOS child workflows) is a later slice (§14 Q1).
+        await appendEvent({
+          runId,
+          taskId,
+          stepId: '',
+          stepKey: `fork:${decision.nodeId}`,
+          type: 'pipeline_fork',
+          payload: { nodeId: decision.nodeId, branches: decision.branches.map((b) => b.id), joinId: decision.joinId },
+        });
+        return {
+          lastResult: { joinArrivals: decision.branches.map((b, idx) => ({ branchId: b.id, seq: idx + 1 })) },
+          stepDelta: 0,
+        };
+      }
+      case 'startTimer':
+        // `wait` nodes are rare (§1) and unused by the MVP templates; a durable timer executor is a later
+        // slice. Treat as an immediate (recorded) resume so a template using it still advances.
+        return { lastResult: {}, stepDelta: 0 };
+    }
   }
 
   // ── Effect executors ─────────────────────────────────────────────────────────
