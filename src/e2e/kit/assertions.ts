@@ -29,9 +29,18 @@ export async function assertAttemptVerdicts(api: Api, runId: string, verdicts: s
   return attempts;
 }
 
-/** Assert every listed event type is visible for the run. */
+/** Assert every listed event type is visible for the run. Polls briefly: a terminal event such as
+ *  `run_completed` is appended just AFTER the run-row status patch (same ordering `assertCompleted`
+ *  guards — the run row settles first, the rest lags a beat), so a single read taken the instant
+ *  `approveUntilTerminal` returns can race the append and miss it (the F1 recovery flake). A type that
+ *  is genuinely never emitted still fails after the window — this hides propagation lag, not real gaps. */
 export async function assertEventsPresent(api: Api, runId: string, types: string[]) {
-  const events = await api.getRunEvents({ runId, limit: 50 });
+  let events = await api.getRunEvents({ runId, limit: 50 });
+  const missing = () => types.filter((type) => !events.some((e) => e.type === type));
+  for (let waited = 0; waited < 5_000 && missing().length > 0; waited += 250) {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    events = await api.getRunEvents({ runId, limit: 50 });
+  }
   for (const type of types) {
     assert.ok(events.some((e) => e.type === type), `event "${type}" must be visible`);
   }
