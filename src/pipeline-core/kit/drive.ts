@@ -95,7 +95,7 @@ function joinArrivalsFor(script: DriveScript, joinId: string, branchIds: string[
 function resultFor(
   script: DriveScript,
   nodeId: string,
-  decision: Decision,
+  _decision: Decision,
   visits: Map<string, number>,
 ): LastResult {
   const n = visits.get(nodeId) ?? 0;
@@ -104,9 +104,8 @@ function resultFor(
   const entry = script[nodeId];
   if (entry === undefined) {
     // A gate/effect with no script: assume structural success with no domain verdict (e.g. a script
-    // node that just proceeds). Tests that route on a verdict must script it. `decision` is unused
+    // node that just proceeds). Tests that route on a verdict must script it. `_decision` is unused
     // here but kept in the signature so a future kind-specific default can branch on it.
-    void decision;
     return {};
   }
   const picked = Array.isArray(entry) ? (entry[Math.min(n, entry.length - 1)] ?? {}) : entry;

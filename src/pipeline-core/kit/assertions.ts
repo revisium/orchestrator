@@ -14,11 +14,8 @@ import type { DriveResult } from './drive.js';
 export function assertValid(template: Template): Diagnostic[] {
   const diags = validateTemplate(template);
   const errors = diags.filter((d) => d.severity === 'error');
-  assert.equal(
-    errors.length,
-    0,
-    `expected a valid template, got: ${errors.map((d) => `${d.code}@${d.nodeId ?? d.scope ?? '-'}`).join(', ')}`,
-  );
+  const offending = errors.map((d) => `${d.code}@${d.nodeId ?? d.scope ?? '-'}`).join(', ');
+  assert.equal(errors.length, 0, `expected a valid template, got: ${offending}`);
   return diags;
 }
 

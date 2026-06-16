@@ -22,21 +22,19 @@ export type CoreVerdict = (typeof CORE_VERDICTS)[number];
 export const TERMINAL_STATUSES = ['succeeded', 'failed', 'blocked'] as const;
 export type TerminalStatus = (typeof TERMINAL_STATUSES)[number];
 
-/** A DOMAIN verdict label — declared per-template in `verdicts.domain`; opaque to the engine (§8). */
-export type DomainVerdict = string;
-
-/** Any label that may legally appear in a `verdict.*` guard value (a domain label only — §3/§8/§9.9). */
-export type VerdictLabel = DomainVerdict;
+// A DOMAIN verdict label (declared per-template in `verdicts.domain`; opaque to the engine, §8) and
+// any label that may legally appear in a `verdict.*` guard value (a domain label only, §3/§8/§9.9) are
+// both plain strings — the field/param names below carry the domain meaning.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // §3 Condition — closed tagged union (NO expression strings). v1 grammar = verdict + counter only.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type Condition =
-  | { op: 'verdict.eq'; value: VerdictLabel }
-  | { op: 'verdict.in'; value: VerdictLabel[] }
-  | { op: 'counter.lt'; scope: ScopeId; value: number }
-  | { op: 'counter.gte'; scope: ScopeId; value: number }
+  | { op: 'verdict.eq'; value: string }
+  | { op: 'verdict.in'; value: string[] }
+  | { op: 'counter.lt'; scope: string; value: number }
+  | { op: 'counter.gte'; scope: string; value: number }
   | { op: 'all'; of: Condition[] }
   | { op: 'any'; of: Condition[] }
   | { op: 'not'; cond: Condition };
@@ -57,9 +55,9 @@ export const CONDITION_OPS = [
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** A guarded branch: route to `goto` when `when` holds. */
-export type GuardedBranch = { when: Condition; goto: NodeId };
+export type GuardedBranch = { when: Condition; goto: string };
 /** The mandatory trailing fallback of a `branches` list. */
-export type DefaultBranch = { default: NodeId };
+export type DefaultBranch = { default: string };
 /** A `branches` entry is either a guard or the trailing default. */
 export type Branch = GuardedBranch | DefaultBranch;
 
@@ -71,26 +69,23 @@ export function isGuardedBranch(b: Branch): b is GuardedBranch {
 }
 
 /** §6 `catch` entry — engine-emitted failure routing only (matched on a reserved `revo.*` code). */
-export type CatchEntry = { onError: RevoErrorCode; goto: NodeId };
+export type CatchEntry = { onError: RevoErrorCode; goto: string };
 
 /** §6 per-node failure policy. */
 export type FailurePolicy = 'abort' | 'route' | 'escalate';
 export const FAILURE_POLICIES = ['abort', 'route', 'escalate'] as const;
 
 /** §6 optional gate SLA: absent ⇒ wait indefinitely. */
-export type GateTimeout = { after: string; goto: NodeId };
+export type GateTimeout = { after: string; goto: string };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // §1/§3/§4 Node — the closed 8-kind discriminated union.
+//
+// Node ids, scope ids, role/script capability handles and result-schema handles are all plain
+// strings; the field and parameter names below carry their domain meaning. (A roleRef/scriptRef is an
+// opaque capability handle the adapter resolves — the engine holds no role-ids, §1; a resultSchema is
+// validated at the ADAPTER boundary, never in the core, §10.)
 // ─────────────────────────────────────────────────────────────────────────────
-
-export type NodeId = string;
-export type ScopeId = string;
-/** Opaque capability handle the adapter resolves; the engine holds no role-ids (§1). */
-export type RoleRef = string;
-export type ScriptRef = string;
-/** Opaque handle to a result schema; validated at the ADAPTER boundary, never in the core (§10). */
-export type SchemaRef = string;
 
 export const NODE_KINDS = [
   'agent',
@@ -105,47 +100,47 @@ export const NODE_KINDS = [
 export type NodeKind = (typeof NODE_KINDS)[number];
 
 /** Common envelope on every node (§1). `id` is permanent — never reused/repurposed. */
-export type NodeEnvelope = { id: NodeId; displayName?: string };
+export type NodeEnvelope = { id: string; displayName?: string };
 
 /** Fields shared by the two effect-running kinds (`agent`/`script`) — §3 next/catch, §6/§7 policy. */
 export type EffectNodeFields = {
-  next: NodeId;
+  next: string;
   catch?: CatchEntry[];
-  resultSchema?: SchemaRef;
+  resultSchema?: string;
   onFailure?: FailurePolicy; //                         default 'abort' (§6)
-  escalateTo?: NodeId; //                               required when onFailure === 'escalate' (§6)
-  incrementCounters?: ScopeId[]; //                     loop-entry increment trigger (§7)
+  escalateTo?: string; //                               required when onFailure === 'escalate' (§6)
+  incrementCounters?: string[]; //                      loop-entry increment trigger (§7)
 };
 
 /** `agent` — run a generic ROLE capability → `invokeRole`. */
-export type AgentNode = NodeEnvelope & { kind: 'agent'; roleRef: RoleRef } & EffectNodeFields;
+export type AgentNode = NodeEnvelope & { kind: 'agent'; roleRef: string } & EffectNodeFields;
 /** `script` — run a built-in system SCRIPT (integrator, pollers) → `invokeScript`. */
-export type ScriptNode = NodeEnvelope & { kind: 'script'; scriptRef: ScriptRef } & EffectNodeFields;
+export type ScriptNode = NodeEnvelope & { kind: 'script'; scriptRef: string } & EffectNodeFields;
 
 /** `humanGate` — suspend until an external verdict → `awaitGate`. */
 export type HumanGateNode = NodeEnvelope & {
   kind: 'humanGate';
   reason: string;
-  outcomes: DomainVerdict[]; //                          must be ⊆ verdicts.domain (§8/§12.9)
+  outcomes: string[]; //                                 must be ⊆ verdicts.domain (§8/§12.9)
   branches: Branch[];
   timeout?: GateTimeout; //                              §6 — absent ⇒ wait indefinitely
-  incrementCounters?: ScopeId[];
+  incrementCounters?: string[];
 };
 
 /** `choice` — pure conditional routing, no effect. */
 export type ChoiceNode = NodeEnvelope & {
   kind: 'choice';
   branches: Branch[];
-  incrementCounters?: ScopeId[];
+  incrementCounters?: string[];
 };
 
 /** §4 a declared fork branch: a self-contained sub-graph entered at `entry`. */
-export type ParallelBranch = { id: string; entry: NodeId };
+export type ParallelBranch = { id: string; entry: string };
 /** `parallel` — fork into N named branches → `fork`. */
 export type ParallelNode = NodeEnvelope & {
   kind: 'parallel';
   branches: ParallelBranch[];
-  join: NodeId; //                                       the matching join (§4/§12.8)
+  join: string; //                                       the matching join (§4/§12.8)
 };
 
 /** §4 join mode. */
@@ -160,11 +155,11 @@ export type JoinNode = NodeEnvelope & {
   kind: 'join';
   joinMode: JoinMode;
   merge?: Record<string, MergeReducer>;
-  next: NodeId;
+  next: string;
 };
 
 /** `wait` — timed auto-resume → `startTimer`. Rare; v1 gate SLAs use `humanGate.timeout` instead (§1). */
-export type WaitNode = NodeEnvelope & { kind: 'wait'; duration: string; next: NodeId };
+export type WaitNode = NodeEnvelope & { kind: 'wait'; duration: string; next: string };
 
 /** `terminal` — end the run → `complete{status}`. No exit. */
 export type TerminalNode = NodeEnvelope & { kind: 'terminal'; status: TerminalStatus };
@@ -183,7 +178,7 @@ export type Node =
 // §7 Scopes — loop/counter scopes. The scope id IS the canonical counter identifier.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export type Scope = { cap: number; parent: ScopeId | null };
+export type Scope = { cap: number; parent: string | null };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // §2 Template — one record.
@@ -198,11 +193,11 @@ export type Template = {
   specVersion: string; //                                carries the CORE verdict vocabulary (§8)
   pipelineId: string;
   title?: string;
-  entry: NodeId; //                                      single entry (validated, §12.1)
-  verdicts: { domain: DomainVerdict[] };
+  entry: string; //                                      single entry (validated, §12.1)
+  verdicts: { domain: string[] };
   policy?: TemplatePolicy;
-  scopes?: Record<ScopeId, Scope>;
-  nodes: Record<NodeId, Node>;
+  scopes?: Record<string, Scope>;
+  nodes: Record<string, Node>;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -221,17 +216,17 @@ export function isRevoErrorCode(value: string): value is RevoErrorCode {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export type Decision =
-  | { type: 'invokeRole'; nodeId: NodeId; roleRef: RoleRef; input: DecisionInput }
-  | { type: 'invokeScript'; nodeId: NodeId; scriptRef: ScriptRef; input: DecisionInput }
+  | { type: 'invokeRole'; nodeId: string; roleRef: string; input: DecisionInput }
+  | { type: 'invokeScript'; nodeId: string; scriptRef: string; input: DecisionInput }
   | {
       type: 'awaitGate';
-      nodeId: NodeId;
+      nodeId: string;
       reason: string;
-      outcomes: DomainVerdict[];
+      outcomes: string[];
       timeout?: GateTimeout; //                          OPTIONAL (§6/§10)
     }
-  | { type: 'fork'; nodeId: NodeId; branches: ParallelBranch[]; joinId: NodeId; mode: JoinMode }
-  | { type: 'startTimer'; nodeId: NodeId; duration: string }
+  | { type: 'fork'; nodeId: string; branches: ParallelBranch[]; joinId: string; mode: JoinMode }
+  | { type: 'startTimer'; nodeId: string; duration: string }
   | { type: 'complete'; status: TerminalStatus };
 
 /** Opaque input handed to a role/script effect. The core forwards data; it never inspects it. */
@@ -256,13 +251,13 @@ export type RunStatus = 'running' | 'awaiting_gate' | 'succeeded' | 'failed' | '
  */
 export type LastResult = {
   outcome?: CoreVerdict;
-  verdict?: DomainVerdict;
+  verdict?: string;
   errorCode?: RevoErrorCode;
   joinArrivals?: JoinArrival[];
 };
 
 /** One durably-recorded branch arrival at a join (§4). `seq` is the monotonic recorded sequence. */
-export type JoinArrival = { branchId: string; seq: number; verdict?: DomainVerdict };
+export type JoinArrival = { branchId: string; seq: number; verdict?: string };
 
 // ─────────────────────────────────────────────────────────────────────────────
 // §7/§9/§10 RunState — the durable cursor the core reads and returns (pure values only).
@@ -274,8 +269,8 @@ export type JoinArrival = { branchId: string; seq: number; verdict?: DomainVerdi
  * its current count (§7). All values are plain/serializable — no clocks, no handles.
  */
 export type RunState = {
-  activeNodeIds: ReadonlySet<NodeId>;
-  scopedCounters: Readonly<Record<ScopeId, number>>;
+  activeNodeIds: ReadonlySet<string>;
+  scopedCounters: Readonly<Record<string, number>>;
   status: RunStatus;
   lastResult?: LastResult;
 };
@@ -294,8 +289,8 @@ export type Diagnostic = {
   code: DiagnosticCode;
   severity: DiagnosticSeverity;
   message: string;
-  nodeId?: NodeId;
-  scope?: ScopeId;
+  nodeId?: string;
+  scope?: string;
   path?: string;
 };
 

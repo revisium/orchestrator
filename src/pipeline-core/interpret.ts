@@ -29,10 +29,8 @@ import type {
   JoinMode,
   LastResult,
   Node,
-  NodeId,
   RunState,
   RunStatus,
-  ScopeId,
   Template,
   TerminalStatus,
 } from './types.js';
@@ -68,7 +66,7 @@ function suspends(node: Node): boolean {
  * The first `step(t, initialState(t), undefined)` emits the entry node's first Decision.
  */
 export function initialState(template: Template): RunState {
-  const scopedCounters: Record<ScopeId, number> = {};
+  const scopedCounters: Record<string, number> = {};
   for (const scopeId of Object.keys(template.scopes ?? {})) scopedCounters[scopeId] = 0;
   return { activeNodeIds: new Set([template.entry]), scopedCounters, status: 'running' };
 }
@@ -144,7 +142,7 @@ function routeFrom(
     case 'join': {
       const arrivals = lastResult?.joinArrivals ?? [];
       const winner = selectJoinWinner(node.joinMode, arrivals, node.id);
-      const forward = winner?.verdict !== undefined ? { verdict: winner.verdict } : undefined;
+      const forward = winner?.verdict === undefined ? undefined : { verdict: winner.verdict };
       return enter(template, node.next, state, forward);
     }
 
@@ -200,7 +198,7 @@ function routeEffect(
  */
 function enter(
   template: Template,
-  nodeId: NodeId,
+  nodeId: string,
   state: RunState,
   incoming: LastResult | undefined,
 ): { state: RunState; decision: Decision } {
@@ -268,13 +266,13 @@ function emit(
   }
 }
 
-function activate(state: RunState, nodeId: NodeId, status: RunStatus): RunState {
+function activate(state: RunState, nodeId: string, status: RunStatus): RunState {
   return { ...state, activeNodeIds: new Set([nodeId]), status };
 }
 
 /** Forward only a domain verdict (core outcomes are consumed structurally, never carried forward). */
 function carryVerdict(lastResult: LastResult | undefined): LastResult | undefined {
-  return lastResult?.verdict !== undefined ? { verdict: lastResult.verdict } : undefined;
+  return lastResult?.verdict === undefined ? undefined : { verdict: lastResult.verdict };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -283,12 +281,12 @@ function carryVerdict(lastResult: LastResult | undefined): LastResult | undefine
 
 function evalBranches(
   template: Template,
-  nodeId: NodeId,
-  branches: { when?: Condition; goto?: NodeId; default?: NodeId }[],
+  nodeId: string,
+  branches: { when?: Condition; goto?: string; default?: string }[],
   state: RunState,
   lastResult: LastResult | undefined,
-): NodeId {
-  let fallback: NodeId | undefined;
+): string {
+  let fallback: string | undefined;
   for (const b of branches) {
     if (b.default !== undefined) {
       fallback = b.default;
@@ -329,7 +327,7 @@ export function evalCondition(
   }
 }
 
-function counterValue(state: RunState, scope: ScopeId): number {
+function counterValue(state: RunState, scope: string): number {
   return state.scopedCounters[scope] ?? 0;
 }
 
@@ -343,11 +341,11 @@ function counterValue(state: RunState, scope: ScopeId): number {
  */
 export function applyCounterMutations(
   template: Template,
-  current: Readonly<Record<ScopeId, number>>,
-  increments: readonly ScopeId[],
-): Record<ScopeId, number> {
+  current: Readonly<Record<string, number>>,
+  increments: readonly string[],
+): Record<string, number> {
   if (increments.length === 0) return { ...current };
-  const next: Record<ScopeId, number> = { ...current };
+  const next: Record<string, number> = { ...current };
   const scopes = template.scopes ?? {};
   for (const scopeId of increments) {
     next[scopeId] = (next[scopeId] ?? 0) + 1;
@@ -362,12 +360,12 @@ export function applyCounterMutations(
 
 /** True when `candidate`'s ancestor chain (via `parent`) passes through `ancestor`. */
 function isDescendantScope(
-  scopes: Record<ScopeId, { parent: ScopeId | null }>,
-  candidate: ScopeId,
-  ancestor: ScopeId,
+  scopes: Record<string, { parent: string | null }>,
+  candidate: string,
+  ancestor: string,
 ): boolean {
   let cursor = scopes[candidate]?.parent ?? null;
-  const seen = new Set<ScopeId>();
+  const seen = new Set<string>();
   while (cursor !== null) {
     if (cursor === ancestor) return true;
     if (seen.has(cursor)) break; // defensive against a malformed cycle (validation rejects these)
@@ -377,7 +375,7 @@ function isDescendantScope(
   return false;
 }
 
-function incrementCountersOf(node: Node): readonly ScopeId[] {
+function incrementCountersOf(node: Node): readonly string[] {
   return 'incrementCounters' in node ? (node.incrementCounters ?? []) : [];
 }
 
@@ -396,7 +394,7 @@ function incrementCountersOf(node: Node): readonly ScopeId[] {
 export function selectJoinWinner(
   mode: JoinMode,
   arrivals: readonly JoinArrival[],
-  joinId: NodeId,
+  joinId: string,
 ): JoinArrival | undefined {
   const ordered = [...arrivals].sort((a, b) => a.seq - b.seq || cmp(a.branchId, b.branchId));
   if (mode.kind === 'any') return ordered[0];
@@ -408,14 +406,16 @@ export function selectJoinWinner(
     }
     return ordered[mode.count - 1];
   }
-  return ordered[ordered.length - 1]; // 'all'
+  return ordered.at(-1); // 'all'
 }
 
 function cmp(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
 }
 
-function joinModeOf(template: Template, joinId: NodeId): JoinMode {
+function joinModeOf(template: Template, joinId: string): JoinMode {
   const join = resolveNode(template, joinId);
   if (join.kind !== 'join') {
     throw new InterpretError(`fork target ${joinId} is not a join (${join.kind})`);
@@ -427,18 +427,18 @@ function joinModeOf(template: Template, joinId: NodeId): JoinMode {
 // Helpers.
 // ─────────────────────────────────────────────────────────────────────────────
 
-function resolveNode(template: Template, id: NodeId): Node {
+function resolveNode(template: Template, id: string): Node {
   const node = template.nodes[id];
   if (!node) throw new InterpretError(`unknown node id "${id}" (invalid template)`);
   return node;
 }
 
-function soleActiveNodeId(state: RunState): NodeId {
+function soleActiveNodeId(state: RunState): string {
   const ids = [...state.activeNodeIds];
   if (ids.length !== 1) {
     throw new InterpretError(
       `step() expects exactly one active node, got ${ids.length} [${ids.join(', ')}]`,
     );
   }
-  return ids[0]!;
+  return ids[0];
 }

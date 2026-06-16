@@ -132,9 +132,16 @@ export function nestedScopeLoop(): Template {
 // Targeted — a parallel/join (two review branches → join → terminal).
 // ─────────────────────────────────────────────────────────────────────────────
 
+/** Map a join-mode kind to its `JoinMode` (quorum fixed at 2 for this fan-out shape). */
+function joinModeFromKind(kind: 'all' | 'any' | 'quorum') {
+  if (kind === 'all') return joinAll();
+  if (kind === 'any') return joinAny();
+  return joinQuorum(2);
+}
+
 /** `joinModeKind` selects `all` (default), `any`, or `quorum{2}` on the same fan-out shape. */
 export function parallelReview(joinModeKind: 'all' | 'any' | 'quorum' = 'all'): Template {
-  const mode = joinModeKind === 'all' ? joinAll() : joinModeKind === 'any' ? joinAny() : joinQuorum(2);
+  const mode = joinModeFromKind(joinModeKind);
   return template('parallel-review')
     .entry('fanout')
     .domain('clean', 'dirty', 'approved')
@@ -354,7 +361,7 @@ export const invalidGateOutcomeNotSubset = (): Template =>
 export const invalidBadId = (): Template => {
   const t = template('inv').entry('a').domain('approved').add(node.agent('a', 'role:x', 'end'), node.terminal('end', 'succeeded')).build();
   // Re-key 'a' to an illegal id and re-point entry.
-  const a = t.nodes['a']!;
+  const a = t.nodes['a'];
   delete t.nodes['a'];
   (a as { id: string }).id = '1bad';
   t.nodes['1bad'] = a;

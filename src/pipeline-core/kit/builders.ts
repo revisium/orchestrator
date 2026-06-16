@@ -16,14 +16,10 @@ import type {
   JoinMode,
   JoinNode,
   Node,
-  NodeId,
   ParallelBranch,
   ParallelNode,
-  RoleRef,
   Scope,
-  ScopeId,
   ScriptNode,
-  ScriptRef,
   Template,
   TemplatePolicy,
   TerminalNode,
@@ -37,8 +33,8 @@ import type {
 
 export const verdictEq = (value: string): Condition => ({ op: 'verdict.eq', value });
 export const verdictIn = (...value: string[]): Condition => ({ op: 'verdict.in', value });
-export const counterLt = (scope: ScopeId, value: number): Condition => ({ op: 'counter.lt', scope, value });
-export const counterGte = (scope: ScopeId, value: number): Condition => ({ op: 'counter.gte', scope, value });
+export const counterLt = (scope: string, value: number): Condition => ({ op: 'counter.lt', scope, value });
+export const counterGte = (scope: string, value: number): Condition => ({ op: 'counter.gte', scope, value });
 export const allOf = (...of: Condition[]): Condition => ({ op: 'all', of });
 export const anyOf = (...of: Condition[]): Condition => ({ op: 'any', of });
 export const notCond = (cond: Condition): Condition => ({ op: 'not', cond });
@@ -47,8 +43,8 @@ export const notCond = (cond: Condition): Condition => ({ op: 'not', cond });
 // Branch shorthands.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const on = (when: Condition, goto: NodeId): Branch => ({ when, goto });
-export const otherwise = (goto: NodeId): Branch => ({ default: goto });
+export const on = (when: Condition, goto: string): Branch => ({ when, goto });
+export const otherwise = (goto: string): Branch => ({ default: goto });
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Node builders — `node.*` factories returning a fully-typed Node.
@@ -57,25 +53,25 @@ export const otherwise = (goto: NodeId): Branch => ({ default: goto });
 type EffectOpts = {
   catch?: AgentNode['catch'];
   onFailure?: AgentNode['onFailure'];
-  escalateTo?: NodeId;
+  escalateTo?: string;
   resultSchema?: string;
-  incrementCounters?: ScopeId[];
+  incrementCounters?: string[];
   displayName?: string;
 };
 
 export const node = {
-  agent(id: NodeId, roleRef: RoleRef, next: NodeId, opts: EffectOpts = {}): AgentNode {
+  agent(id: string, roleRef: string, next: string, opts: EffectOpts = {}): AgentNode {
     return { id, kind: 'agent', roleRef, next, ...effect(opts) };
   },
-  script(id: NodeId, scriptRef: ScriptRef, next: NodeId, opts: EffectOpts = {}): ScriptNode {
+  script(id: string, scriptRef: string, next: string, opts: EffectOpts = {}): ScriptNode {
     return { id, kind: 'script', scriptRef, next, ...effect(opts) };
   },
   humanGate(
-    id: NodeId,
+    id: string,
     reason: string,
     outcomes: string[],
     branches: Branch[],
-    opts: { timeout?: HumanGateNode['timeout']; displayName?: string; incrementCounters?: ScopeId[] } = {},
+    opts: { timeout?: HumanGateNode['timeout']; displayName?: string; incrementCounters?: string[] } = {},
   ): HumanGateNode {
     return {
       id,
@@ -88,7 +84,7 @@ export const node = {
       ...(opts.displayName ? { displayName: opts.displayName } : {}),
     };
   },
-  choice(id: NodeId, branches: Branch[], opts: { displayName?: string; incrementCounters?: ScopeId[] } = {}): ChoiceNode {
+  choice(id: string, branches: Branch[], opts: { displayName?: string; incrementCounters?: string[] } = {}): ChoiceNode {
     return {
       id,
       kind: 'choice',
@@ -97,10 +93,10 @@ export const node = {
       ...(opts.displayName ? { displayName: opts.displayName } : {}),
     };
   },
-  parallel(id: NodeId, branches: ParallelBranch[], join: NodeId, opts: { displayName?: string } = {}): ParallelNode {
+  parallel(id: string, branches: ParallelBranch[], join: string, opts: { displayName?: string } = {}): ParallelNode {
     return { id, kind: 'parallel', branches, join, ...(opts.displayName ? { displayName: opts.displayName } : {}) };
   },
-  join(id: NodeId, joinMode: JoinMode, next: NodeId, opts: { merge?: JoinNode['merge']; displayName?: string } = {}): JoinNode {
+  join(id: string, joinMode: JoinMode, next: string, opts: { merge?: JoinNode['merge']; displayName?: string } = {}): JoinNode {
     return {
       id,
       kind: 'join',
@@ -110,10 +106,10 @@ export const node = {
       ...(opts.displayName ? { displayName: opts.displayName } : {}),
     };
   },
-  wait(id: NodeId, duration: string, next: NodeId, opts: { displayName?: string } = {}): WaitNode {
+  wait(id: string, duration: string, next: string, opts: { displayName?: string } = {}): WaitNode {
     return { id, kind: 'wait', duration, next, ...(opts.displayName ? { displayName: opts.displayName } : {}) };
   },
-  terminal(id: NodeId, status: TerminalStatus, opts: { displayName?: string } = {}): TerminalNode {
+  terminal(id: string, status: TerminalStatus, opts: { displayName?: string } = {}): TerminalNode {
     return { id, kind: 'terminal', status, ...(opts.displayName ? { displayName: opts.displayName } : {}) };
   },
 };
@@ -142,7 +138,7 @@ export const joinQuorum = (count: number): JoinMode => ({ kind: 'quorum', count 
 // ─────────────────────────────────────────────────────────────────────────────
 
 export class TemplateBuilder {
-  private t: Template;
+  private readonly t: Template;
   constructor(pipelineId: string) {
     this.t = { specVersion: '1.0', pipelineId, entry: '', verdicts: { domain: [] }, nodes: {} };
   }
@@ -154,7 +150,7 @@ export class TemplateBuilder {
     this.t.title = title;
     return this;
   }
-  entry(id: NodeId): this {
+  entry(id: string): this {
     this.t.entry = id;
     return this;
   }
@@ -166,8 +162,9 @@ export class TemplateBuilder {
     this.t.policy = policy;
     return this;
   }
-  scope(id: ScopeId, scope: Scope): this {
-    this.t.scopes = { ...(this.t.scopes ?? {}), [id]: scope };
+  scope(id: string, scope: Scope): this {
+    this.t.scopes ??= {};
+    this.t.scopes[id] = scope;
     return this;
   }
   add(...nodes: Node[]): this {

@@ -24,12 +24,11 @@ import type {
   Diagnostic,
   DiagnosticCode,
   Node,
-  NodeId,
-  ScopeId,
+  Scope,
   Template,
 } from './types.js';
 
-const NODE_ID_PATTERN = /^[A-Za-z][A-Za-z0-9_]*$/;
+const NODE_ID_PATTERN = /^[A-Za-z]\w*$/;
 const CAPABILITY_REF_PATTERN = /^(role|script):[A-Za-z][A-Za-z0-9_-]*$/;
 
 class DiagSink {
@@ -83,28 +82,36 @@ export function validateTemplate(template: Template): Diagnostic[] {
 // ─────────────────────────────────────────────────────────────────────────────
 
 function ruleIdHygiene(template: Template, d: DiagSink): void {
-  const seen = new Set<NodeId>();
+  const seen = new Set<string>();
   for (const [key, node] of Object.entries(template.nodes ?? {})) {
-    // The map key is the canonical id; a node carrying a mismatching `id` is a hygiene defect too.
-    if (node && node.id !== undefined && node.id !== key) {
-      d.error('ID_BAD_PATTERN', `node "${key}" has mismatching id "${node.id}"`, { nodeId: key });
-    }
-    if (!NODE_ID_PATTERN.test(key)) {
-      d.error('ID_BAD_PATTERN', `node id "${key}" does not match ${NODE_ID_PATTERN}`, { nodeId: key });
-    }
-    if (seen.has(key)) d.error('ID_DUPLICATE', `duplicate node id "${key}"`, { nodeId: key });
+    checkNodeKeyHygiene(key, node, seen, d);
     seen.add(key);
   }
-  // revo.* error codes must never collide with a declared verdict label (disjoint namespaces, §3/§6).
+  checkCatchCodeVerdictCollisions(template, d);
+}
+
+/** One node entry's id hygiene: map-key/node-id mismatch, id pattern, and duplicate-key detection. */
+function checkNodeKeyHygiene(key: string, node: Node | undefined, seen: Set<string>, d: DiagSink): void {
+  // The map key is the canonical id; a node carrying a mismatching `id` is a hygiene defect too.
+  if (node?.id !== undefined && node.id !== key) {
+    d.error('ID_BAD_PATTERN', `node "${key}" has mismatching id "${node.id}"`, { nodeId: key });
+  }
+  if (!NODE_ID_PATTERN.test(key)) {
+    d.error('ID_BAD_PATTERN', `node id "${key}" does not match ${NODE_ID_PATTERN}`, { nodeId: key });
+  }
+  if (seen.has(key)) d.error('ID_DUPLICATE', `duplicate node id "${key}"`, { nodeId: key });
+}
+
+/** revo.* error codes must never collide with a declared verdict label (disjoint namespaces, §3/§6). */
+function checkCatchCodeVerdictCollisions(template: Template, d: DiagSink): void {
   const domain = new Set(template.verdicts?.domain ?? []);
   for (const node of Object.values(template.nodes ?? {})) {
-    if (node && (node.kind === 'agent' || node.kind === 'script')) {
-      for (const c of node.catch ?? []) {
-        if (domain.has(c.onError as string)) {
-          d.error('REVO_CODE_COLLIDES_VERDICT', `catch code "${c.onError}" collides with a verdict label`, {
-            nodeId: node.id,
-          });
-        }
+    if (node?.kind !== 'agent' && node?.kind !== 'script') continue;
+    for (const c of node.catch ?? []) {
+      if (domain.has(c.onError)) {
+        d.error('REVO_CODE_COLLIDES_VERDICT', `catch code "${c.onError}" collides with a verdict label`, {
+          nodeId: node.id,
+        });
       }
     }
   }
@@ -114,7 +121,7 @@ function ruleIdHygiene(template: Template, d: DiagSink): void {
 // Rule 1 — single entry.
 // ─────────────────────────────────────────────────────────────────────────────
 
-function ruleSingleEntry(template: Template, ids: Set<NodeId>, d: DiagSink): void {
+function ruleSingleEntry(template: Template, ids: Set<string>, d: DiagSink): void {
   if (!template.entry) {
     d.error('ENTRY_MISSING', 'template has no `entry`');
     return;
@@ -130,8 +137,8 @@ function ruleSingleEntry(template: Template, ids: Set<NodeId>, d: DiagSink): voi
 // Rule 2 — references resolve (every edge target exists).
 // ─────────────────────────────────────────────────────────────────────────────
 
-function ruleReferencesResolve(template: Template, ids: Set<NodeId>, d: DiagSink): void {
-  const check = (target: NodeId | undefined, node: Node, path: string): void => {
+function ruleReferencesResolve(template: Template, ids: Set<string>, d: DiagSink): void {
+  const check = (target: string | undefined, node: Node, path: string): void => {
     if (target === undefined) return;
     if (!ids.has(target)) {
       d.error('REF_UNRESOLVED', `${node.id}.${path} → unknown node "${target}"`, { nodeId: node.id, path });
@@ -143,8 +150,8 @@ function ruleReferencesResolve(template: Template, ids: Set<NodeId>, d: DiagSink
 }
 
 /** Every outgoing edge of a node as `[path, targetId]` pairs (for refs/topology/diff rules). */
-function outgoingEdges(node: Node): Array<[string, NodeId]> {
-  const edges: Array<[string, NodeId]> = [];
+function outgoingEdges(node: Node): Array<[string, string]> {
+  const edges: Array<[string, string]> = [];
   switch (node.kind) {
     case 'agent':
     case 'script':
@@ -175,8 +182,8 @@ function outgoingEdges(node: Node): Array<[string, NodeId]> {
   return edges;
 }
 
-function branchTargets(branches: Branch[]): Array<[string, NodeId]> {
-  return branches.map((b, i): [string, NodeId] =>
+function branchTargets(branches: Branch[]): Array<[string, string]> {
+  return branches.map((b, i): [string, string] =>
     isDefaultBranch(b) ? [`[${i}].default`, b.default] : [`[${i}].goto`, b.goto],
   );
 }
@@ -212,7 +219,7 @@ function ruleConditionGrammar(template: Template, d: DiagSink): void {
   }
 }
 
-function checkCondition(cond: Condition, nodeId: NodeId, d: DiagSink): void {
+function checkCondition(cond: Condition, nodeId: string, d: DiagSink): void {
   const op = (cond as { op?: unknown }).op;
   if (typeof op !== 'string' || !CONDITION_OPS.includes(op as (typeof CONDITION_OPS)[number])) {
     d.error('CONDITION_BAD_OP', `node ${nodeId} guard has unknown op "${String(op)}"`, { nodeId });
@@ -235,12 +242,12 @@ function checkCondition(cond: Condition, nodeId: NodeId, d: DiagSink): void {
       break;
     case 'all':
     case 'any':
-      if (!Array.isArray(cond.of)) d.error('CONDITION_BAD_SHAPE', `${cond.op} needs an "of" array`, { nodeId });
-      else cond.of.forEach((c) => checkCondition(c, nodeId, d));
+      if (Array.isArray(cond.of)) cond.of.forEach((c) => checkCondition(c, nodeId, d));
+      else d.error('CONDITION_BAD_SHAPE', `${cond.op} needs an "of" array`, { nodeId });
       break;
     case 'not':
-      if (!cond.cond) d.error('CONDITION_BAD_SHAPE', `not needs a "cond"`, { nodeId });
-      else checkCondition(cond.cond, nodeId, d);
+      if (cond.cond) checkCondition(cond.cond, nodeId, d);
+      else d.error('CONDITION_BAD_SHAPE', `not needs a "cond"`, { nodeId });
       break;
   }
 }
@@ -265,7 +272,7 @@ function ruleTotalRouting(template: Template, d: DiagSink): void {
         nodeId: node.id,
       });
     }
-    const firstDefault = defaultIdxs[0]!;
+    const firstDefault = defaultIdxs[0];
     if (firstDefault !== branches.length - 1) {
       d.error('ROUTING_GUARD_AFTER_DEFAULT', `${node.kind} ${node.id} has a guard after its default`, {
         nodeId: node.id,
@@ -278,7 +285,7 @@ function ruleTotalRouting(template: Template, d: DiagSink): void {
 // Rule 5 — reachability (every node reachable from entry; no dead nodes).
 // ─────────────────────────────────────────────────────────────────────────────
 
-function ruleReachability(template: Template, ids: Set<NodeId>, d: DiagSink): void {
+function ruleReachability(template: Template, ids: Set<string>, d: DiagSink): void {
   if (!template.entry || !ids.has(template.entry)) return; // rule 1 already flagged it
   const reachable = reachableFrom(template, template.entry);
   for (const id of ids) {
@@ -286,8 +293,8 @@ function ruleReachability(template: Template, ids: Set<NodeId>, d: DiagSink): vo
   }
 }
 
-function reachableFrom(template: Template, entry: NodeId): Set<NodeId> {
-  const seen = new Set<NodeId>();
+function reachableFrom(template: Template, entry: string): Set<string> {
+  const seen = new Set<string>();
   const stack = [entry];
   while (stack.length) {
     const id = stack.pop()!;
@@ -306,28 +313,32 @@ function reachableFrom(template: Template, entry: NodeId): Set<NodeId> {
 
 function ruleFailurePolicy(template: Template, d: DiagSink): void {
   for (const node of Object.values(template.nodes)) {
-    if (node.kind !== 'agent' && node.kind !== 'script') continue;
-    const policy = node.onFailure ?? 'abort';
-    if (!FAILURE_POLICIES.includes(policy)) {
-      d.error('CATCH_BAD_CODE', `node ${node.id} has unknown onFailure "${policy}"`, { nodeId: node.id });
-    }
-    for (const c of node.catch ?? []) {
-      if (typeof c.onError !== 'string' || !isRevoErrorCode(c.onError)) {
-        d.error('CATCH_BAD_CODE', `node ${node.id} catch onError "${c.onError}" is not a revo.* code`, {
-          nodeId: node.id,
-        });
-      }
-    }
-    if (policy === 'route' && (node.catch ?? []).length === 0) {
-      d.error('FAILURE_ROUTE_NO_CATCH', `node ${node.id} onFailure=route requires a catch`, {
+    if (node.kind === 'agent' || node.kind === 'script') checkNodeFailurePolicy(node, d);
+  }
+}
+
+/** Per effect-node §6 failure-policy well-formedness: known policy, valid catch codes, route/escalate. */
+function checkNodeFailurePolicy(node: Extract<Node, { kind: 'agent' | 'script' }>, d: DiagSink): void {
+  const policy = node.onFailure ?? 'abort';
+  if (!FAILURE_POLICIES.includes(policy)) {
+    d.error('CATCH_BAD_CODE', `node ${node.id} has unknown onFailure "${policy}"`, { nodeId: node.id });
+  }
+  for (const c of node.catch ?? []) {
+    if (typeof c.onError !== 'string' || !isRevoErrorCode(c.onError)) {
+      d.error('CATCH_BAD_CODE', `node ${node.id} catch onError "${c.onError}" is not a revo.* code`, {
         nodeId: node.id,
       });
     }
-    if (policy === 'escalate' && node.escalateTo === undefined) {
-      d.error('FAILURE_ESCALATE_NO_TARGET', `node ${node.id} onFailure=escalate requires escalateTo`, {
-        nodeId: node.id,
-      });
-    }
+  }
+  if (policy === 'route' && (node.catch ?? []).length === 0) {
+    d.error('FAILURE_ROUTE_NO_CATCH', `node ${node.id} onFailure=route requires a catch`, {
+      nodeId: node.id,
+    });
+  }
+  if (policy === 'escalate' && node.escalateTo === undefined) {
+    d.error('FAILURE_ESCALATE_NO_TARGET', `node ${node.id} onFailure=escalate requires escalateTo`, {
+      nodeId: node.id,
+    });
   }
 }
 
@@ -363,8 +374,8 @@ function ruleLoopCap(template: Template, d: DiagSink): void {
 }
 
 /** Scope ids incremented by any node on the cycle (the loop's bound must count one of these). */
-function scopesIncrementedOnCycle(template: Template, cycle: Set<NodeId>): Set<ScopeId> {
-  const out = new Set<ScopeId>();
+function scopesIncrementedOnCycle(template: Template, cycle: Set<string>): Set<string> {
+  const out = new Set<string>();
   for (const id of cycle) {
     const node = template.nodes[id];
     if (node && 'incrementCounters' in node) for (const s of node.incrementCounters ?? []) out.add(s);
@@ -373,14 +384,14 @@ function scopesIncrementedOnCycle(template: Template, cycle: Set<NodeId>): Set<S
 }
 
 /** A choice with a guard that references a `counter.*` over a scope incremented on the cycle. */
-function choiceGatesCycleByCounter(template: Template, id: NodeId, incrementedOnCycle: Set<ScopeId>): boolean {
+function choiceGatesCycleByCounter(template: Template, id: string, incrementedOnCycle: Set<string>): boolean {
   const node = template.nodes[id];
-  if (!node || node.kind !== 'choice') return false;
+  if (node?.kind !== 'choice') return false;
   return node.branches.filter(isGuardedBranch).some((b) => conditionGatesOnScopes(b.when, incrementedOnCycle));
 }
 
 /** True when `cond` compares a `counter.*` against one of `scopes`. */
-function conditionGatesOnScopes(cond: Condition, scopes: Set<ScopeId>): boolean {
+function conditionGatesOnScopes(cond: Condition, scopes: Set<string>): boolean {
   switch (cond.op) {
     case 'counter.lt':
     case 'counter.gte':
@@ -396,11 +407,11 @@ function conditionGatesOnScopes(cond: Condition, scopes: Set<ScopeId>): boolean 
 }
 
 /** Back-edges = forward edges whose target is an ancestor on the DFS stack (a cycle re-entry). */
-function findBackEdges(template: Template): Array<{ from: NodeId; to: NodeId }> {
-  const back: Array<{ from: NodeId; to: NodeId }> = [];
-  const onStack = new Set<NodeId>();
-  const done = new Set<NodeId>();
-  const dfs = (id: NodeId): void => {
+function findBackEdges(template: Template): Array<{ from: string; to: string }> {
+  const back: Array<{ from: string; to: string }> = [];
+  const onStack = new Set<string>();
+  const done = new Set<string>();
+  const dfs = (id: string): void => {
     onStack.add(id);
     const node = template.nodes[id];
     if (node) {
@@ -417,26 +428,26 @@ function findBackEdges(template: Template): Array<{ from: NodeId; to: NodeId }> 
 }
 
 /** Forward (non-catch, non-escalate) edges — `catch`/`escalateTo` are failure routes, not loop edges. */
-function structuralEdges(node: Node): Array<[string, NodeId]> {
+function structuralEdges(node: Node): Array<[string, string]> {
   return outgoingEdges(node).filter(([p]) => !p.startsWith('catch') && p !== 'escalateTo');
 }
 
 /** Nodes on a cycle that re-enters `to` via the back-edge from `from` (path to→…→from + from). */
-function cycleNodes(template: Template, to: NodeId, from: NodeId): Set<NodeId> {
+function cycleNodes(template: Template, to: string, from: string): Set<string> {
   // Forward-reachable from `to` (staying inside the SCC reaching `from`) — a simple over-approx is the
   // set of nodes on some path to→…→from. We collect nodes that can both reach `from` and are reached
   // from `to`, which is exactly the cycle's SCC member set for these structural edges.
   const fromTo = forwardReach(template, to);
   const canReachFrom = backwardReach(template, from);
-  const cycle = new Set<NodeId>();
+  const cycle = new Set<string>();
   for (const id of fromTo) if (canReachFrom.has(id)) cycle.add(id);
   cycle.add(to);
   cycle.add(from);
   return cycle;
 }
 
-function forwardReach(template: Template, start: NodeId): Set<NodeId> {
-  const seen = new Set<NodeId>();
+function forwardReach(template: Template, start: string): Set<string> {
+  const seen = new Set<string>();
   const stack = [start];
   while (stack.length) {
     const id = stack.pop()!;
@@ -448,12 +459,12 @@ function forwardReach(template: Template, start: NodeId): Set<NodeId> {
   return seen;
 }
 
-function backwardReach(template: Template, target: NodeId): Set<NodeId> {
-  const preds = new Map<NodeId, NodeId[]>();
+function backwardReach(template: Template, target: string): Set<string> {
+  const preds = new Map<string, string[]>();
   for (const node of Object.values(template.nodes)) {
     for (const [, t] of structuralEdges(node)) (preds.get(t) ?? preds.set(t, []).get(t)!).push(node.id);
   }
-  const seen = new Set<NodeId>();
+  const seen = new Set<string>();
   const stack = [target];
   while (stack.length) {
     const id = stack.pop()!;
@@ -472,7 +483,18 @@ function ruleCounterScopes(template: Template, d: DiagSink): void {
   const scopes = template.scopes ?? {};
   const scopeIds = new Set(Object.keys(scopes));
 
-  // 7a parents resolve + no cycle.
+  checkScopeParentsAndCycles(scopes, scopeIds, d); //          7a parents resolve + no cycle
+  checkScopesDeclared(template, scopeIds, d); //               7b every referenced scope is declared
+  for (const scopeId of scopeIds) checkScopeStrictAncestry(template, scopeId, d); // 7c reset = strict ancestor
+  for (const scopeId of Object.keys(scopes)) checkScopeDoesNotSpanParallel(template, scopeId, d); // 7d no parallel/join
+}
+
+/** 7a — every scope's parent resolves to a declared scope and the parent chain has no cycle. */
+function checkScopeParentsAndCycles(
+  scopes: Record<string, Scope>,
+  scopeIds: Set<string>,
+  d: DiagSink,
+): void {
   for (const [scopeId, scope] of Object.entries(scopes)) {
     if (scope.parent !== null && !scopeIds.has(scope.parent)) {
       d.error('SCOPE_PARENT_UNRESOLVED', `scope "${scopeId}" parent "${scope.parent}" is not declared`, {
@@ -485,8 +507,10 @@ function ruleCounterScopes(template: Template, d: DiagSink): void {
       d.error('SCOPE_CYCLE', `scope "${scopeId}" has a parent cycle`, { scope: scopeId });
     }
   }
+}
 
-  // 7b every referenced scope is declared.
+/** 7b — every scope referenced by a node (increment or guard) is declared. */
+function checkScopesDeclared(template: Template, scopeIds: Set<string>, d: DiagSink): void {
   for (const node of Object.values(template.nodes)) {
     for (const scopeRef of referencedScopes(node)) {
       if (!scopeIds.has(scopeRef)) {
@@ -497,57 +521,58 @@ function ruleCounterScopes(template: Template, d: DiagSink): void {
       }
     }
   }
+}
 
-  // 7c reset scope is a STRICT ancestor of every node that reads/increments it (§7/§12.7). The scope's
-  // region is its loop sub-graph: the node(s) that increment it + the guard node(s) that read it. A
-  // well-formed reader sits inside that loop — i.e. it shares a cycle with an increment site, or is
-  // forward-reachable from one (the cap-guard reads after a rework hop). A reader disconnected from
-  // every increment site is a cross-scope/out-of-scope reference; a scope read but never incremented
-  // can never advance (its cap is dead). Both are SCOPE_NOT_STRICT_ANCESTOR.
-  for (const scopeId of scopeIds) {
-    if (!scopeIds.has(scopeId)) continue;
-    const incrementSites = nodesIncrementing(template, scopeId);
-    const readers = nodesReadingScope(template, scopeId);
-    if (incrementSites.length === 0 && readers.length > 0) {
-      for (const r of readers) {
-        d.error('SCOPE_NOT_STRICT_ANCESTOR', `scope "${scopeId}" is read by ${r} but never incremented`, {
-          nodeId: r,
-          scope: scopeId,
-        });
-      }
-      continue;
+/**
+ * 7c — a reset scope is a STRICT ancestor of every node that reads/increments it (§7/§12.7). The scope's
+ * region is its loop sub-graph: the node(s) that increment it + the guard node(s) that read it. A
+ * well-formed reader sits inside that loop — i.e. it shares a cycle with an increment site, or is
+ * forward-reachable from one (the cap-guard reads after a rework hop). A reader disconnected from
+ * every increment site is a cross-scope/out-of-scope reference; a scope read but never incremented
+ * can never advance (its cap is dead). Both are SCOPE_NOT_STRICT_ANCESTOR.
+ */
+function checkScopeStrictAncestry(template: Template, scopeId: string, d: DiagSink): void {
+  const incrementSites = nodesIncrementing(template, scopeId);
+  const readers = nodesReadingScope(template, scopeId);
+  if (incrementSites.length === 0 && readers.length > 0) {
+    for (const r of readers) {
+      d.error('SCOPE_NOT_STRICT_ANCESTOR', `scope "${scopeId}" is read by ${r} but never incremented`, {
+        nodeId: r,
+        scope: scopeId,
+      });
     }
-    for (const reader of readers) {
-      const insideLoop = incrementSites.some(
-        (site) => sharesCycle(template, site, reader) || forwardReach(template, site).has(reader),
-      );
-      if (!insideLoop) {
-        d.error('SCOPE_NOT_STRICT_ANCESTOR', `scope "${scopeId}" reader ${reader} is outside its loop region`, {
-          nodeId: reader,
-          scope: scopeId,
-        });
-      }
-    }
+    return;
   }
-
-  // 7d a counter scope may not span a parallel/join boundary (v1).
-  for (const [scopeId] of Object.entries(scopes)) {
-    const region = new Set<NodeId>([...nodesIncrementing(template, scopeId), ...nodesReadingScope(template, scopeId)]);
-    for (const id of region) {
-      const node = template.nodes[id];
-      if (node && (node.kind === 'parallel' || node.kind === 'join')) {
-        d.error('SCOPE_SPANS_PARALLEL', `scope "${scopeId}" spans a ${node.kind} boundary (${id})`, {
-          nodeId: id,
-          scope: scopeId,
-        });
-      }
+  for (const reader of readers) {
+    const insideLoop = incrementSites.some(
+      (site) => sharesCycle(template, site, reader) || forwardReach(template, site).has(reader),
+    );
+    if (!insideLoop) {
+      d.error('SCOPE_NOT_STRICT_ANCESTOR', `scope "${scopeId}" reader ${reader} is outside its loop region`, {
+        nodeId: reader,
+        scope: scopeId,
+      });
     }
   }
 }
 
-function scopeChainHasCycle(scopes: Record<ScopeId, { parent: ScopeId | null }>, start: ScopeId): boolean {
-  let cursor: ScopeId | null = scopes[start]?.parent ?? null;
-  const seen = new Set<ScopeId>([start]);
+/** 7d — a counter scope may not span a parallel/join boundary (v1). */
+function checkScopeDoesNotSpanParallel(template: Template, scopeId: string, d: DiagSink): void {
+  const region = new Set<string>([...nodesIncrementing(template, scopeId), ...nodesReadingScope(template, scopeId)]);
+  for (const id of region) {
+    const node = template.nodes[id];
+    if (node && (node.kind === 'parallel' || node.kind === 'join')) {
+      d.error('SCOPE_SPANS_PARALLEL', `scope "${scopeId}" spans a ${node.kind} boundary (${id})`, {
+        nodeId: id,
+        scope: scopeId,
+      });
+    }
+  }
+}
+
+function scopeChainHasCycle(scopes: Record<string, { parent: string | null }>, start: string): boolean {
+  let cursor: string | null = scopes[start]?.parent ?? null;
+  const seen = new Set<string>([start]);
   while (cursor !== null) {
     if (seen.has(cursor)) return true;
     seen.add(cursor);
@@ -556,14 +581,14 @@ function scopeChainHasCycle(scopes: Record<ScopeId, { parent: ScopeId | null }>,
   return false;
 }
 
-function referencedScopes(node: Node): ScopeId[] {
-  const out: ScopeId[] = [];
+function referencedScopes(node: Node): string[] {
+  const out: string[] = [];
   if ('incrementCounters' in node && node.incrementCounters) out.push(...node.incrementCounters);
   for (const cond of guardConditionsOf(node)) collectCounterScopes(cond, out);
   return out;
 }
 
-function collectCounterScopes(cond: Condition, out: ScopeId[]): void {
+function collectCounterScopes(cond: Condition, out: string[]): void {
   switch (cond.op) {
     case 'counter.lt':
     case 'counter.gte':
@@ -579,17 +604,17 @@ function collectCounterScopes(cond: Condition, out: ScopeId[]): void {
   }
 }
 
-function nodesIncrementing(template: Template, scopeId: ScopeId): NodeId[] {
+function nodesIncrementing(template: Template, scopeId: string): string[] {
   return Object.values(template.nodes)
     .filter((n) => 'incrementCounters' in n && (n.incrementCounters ?? []).includes(scopeId))
     .map((n) => n.id);
 }
 
-function nodesReadingScope(template: Template, scopeId: ScopeId): NodeId[] {
-  const out: NodeId[] = [];
+function nodesReadingScope(template: Template, scopeId: string): string[] {
+  const out: string[] = [];
   for (const node of Object.values(template.nodes)) {
     for (const cond of guardConditionsOf(node)) {
-      const scopes: ScopeId[] = [];
+      const scopes: string[] = [];
       collectCounterScopes(cond, scopes);
       if (scopes.includes(scopeId)) {
         out.push(node.id);
@@ -600,7 +625,7 @@ function nodesReadingScope(template: Template, scopeId: ScopeId): NodeId[] {
   return out;
 }
 
-function sharesCycle(template: Template, a: NodeId, b: NodeId): boolean {
+function sharesCycle(template: Template, a: string, b: string): boolean {
   return forwardReach(template, a).has(b) && forwardReach(template, b).has(a);
 }
 
@@ -611,49 +636,9 @@ function sharesCycle(template: Template, a: NodeId, b: NodeId): boolean {
 function ruleParallelJoin(template: Template, d: DiagSink): void {
   const nodes = template.nodes;
   const parallels = Object.values(nodes).filter((n): n is Extract<Node, { kind: 'parallel' }> => n.kind === 'parallel');
-  const joinUsedBy = new Map<NodeId, NodeId[]>();
+  const joinUsedBy = new Map<string, string[]>();
 
-  for (const par of parallels) {
-    const join = nodes[par.join];
-    if (!join) {
-      d.error('PARALLEL_JOIN_UNRESOLVED', `parallel ${par.id} join "${par.join}" does not resolve`, {
-        nodeId: par.id,
-      });
-      continue;
-    }
-    if (join.kind !== 'join') {
-      d.error('PARALLEL_JOIN_KIND', `parallel ${par.id} join "${par.join}" is a ${join.kind}, not a join`, {
-        nodeId: par.id,
-      });
-      continue;
-    }
-    (joinUsedBy.get(par.join) ?? joinUsedBy.set(par.join, []).get(par.join)!).push(par.id);
-
-    // Quorum K ≤ N.
-    if (join.kind === 'join' && join.joinMode.kind === 'quorum') {
-      const K = join.joinMode.count;
-      if (!Number.isInteger(K) || K < 1 || K > par.branches.length) {
-        d.error('QUORUM_K_GT_N', `join ${join.id} quorum K=${K} but parallel has ${par.branches.length} branches`, {
-          nodeId: join.id,
-        });
-      }
-    }
-
-    // Branch membership + cross-branch goto + all-reachability.
-    checkBranchMembership(template, par, join.id, d);
-
-    // Multi-writer fields need a merge reducer.
-    checkMergeReducers(template, par, join, d);
-    // Reject lastWrite explicitly (defensive; the type forbids it but data may carry it).
-    for (const [field, reducer] of Object.entries(join.merge ?? {})) {
-      if (!MERGE_REDUCERS.includes(reducer)) {
-        d.error('MERGE_LASTWRITE_REJECTED', `join ${join.id} merge.${field} = "${reducer}" is not allowed`, {
-          nodeId: join.id,
-          path: `merge.${field}`,
-        });
-      }
-    }
-  }
+  for (const par of parallels) checkParallelAgainstJoin(template, par, joinUsedBy, d);
 
   for (const [joinId, owners] of joinUsedBy) {
     if (owners.length > 1) {
@@ -664,16 +649,84 @@ function ruleParallelJoin(template: Template, d: DiagSink): void {
   }
 }
 
+/** Validate one parallel against its declared join (resolution, kind, quorum, membership, merge). */
+function checkParallelAgainstJoin(
+  template: Template,
+  par: Extract<Node, { kind: 'parallel' }>,
+  joinUsedBy: Map<string, string[]>,
+  d: DiagSink,
+): void {
+  const join = template.nodes[par.join];
+  if (!join) {
+    d.error('PARALLEL_JOIN_UNRESOLVED', `parallel ${par.id} join "${par.join}" does not resolve`, { nodeId: par.id });
+    return;
+  }
+  if (join.kind !== 'join') {
+    d.error('PARALLEL_JOIN_KIND', `parallel ${par.id} join "${par.join}" is a ${join.kind}, not a join`, {
+      nodeId: par.id,
+    });
+    return;
+  }
+  (joinUsedBy.get(par.join) ?? joinUsedBy.set(par.join, []).get(par.join)!).push(par.id);
+
+  checkQuorumBound(par, join, d);
+  // Branch membership + cross-branch goto + all-reachability.
+  checkBranchMembership(template, par, join.id, d);
+  // Multi-writer fields need a merge reducer.
+  checkMergeReducers(template, par, join, d);
+  checkRejectedMergeReducers(join, d);
+}
+
+/** Quorum K must satisfy 1 ≤ K ≤ N (branch count). */
+function checkQuorumBound(
+  par: Extract<Node, { kind: 'parallel' }>,
+  join: Extract<Node, { kind: 'join' }>,
+  d: DiagSink,
+): void {
+  if (join.joinMode.kind !== 'quorum') return;
+  const K = join.joinMode.count;
+  if (!Number.isInteger(K) || K < 1 || K > par.branches.length) {
+    d.error('QUORUM_K_GT_N', `join ${join.id} quorum K=${K} but parallel has ${par.branches.length} branches`, {
+      nodeId: join.id,
+    });
+  }
+}
+
+/** Reject any merge reducer outside the allowed set (defensive; the type forbids it but data may carry it). */
+function checkRejectedMergeReducers(join: Extract<Node, { kind: 'join' }>, d: DiagSink): void {
+  for (const [field, reducer] of Object.entries(join.merge ?? {})) {
+    if (!MERGE_REDUCERS.includes(reducer)) {
+      d.error('MERGE_LASTWRITE_REJECTED', `join ${join.id} merge.${field} = "${reducer}" is not allowed`, {
+        nodeId: join.id,
+        path: `merge.${field}`,
+      });
+    }
+  }
+}
+
 function checkBranchMembership(
   template: Template,
   par: Extract<Node, { kind: 'parallel' }>,
-  joinId: NodeId,
+  joinId: string,
   d: DiagSink,
 ): void {
-  const memberOf = new Map<NodeId, string>();
+  const memberOf = buildBranchMembership(template, par, joinId, d);
+  checkCrossBranchGotos(template, memberOf, joinId, d);
+}
+
+/**
+ * Assign each branch sub-graph node to its owning branch (flagging shared membership) and, for an
+ * `all` join, flag any branch that cannot reach the join. Returns the node→branch ownership map.
+ */
+function buildBranchMembership(
+  template: Template,
+  par: Extract<Node, { kind: 'parallel' }>,
+  joinId: string,
+  d: DiagSink,
+): Map<string, string> {
+  const memberOf = new Map<string, string>();
   for (const branch of par.branches) {
-    const members = branchSubgraph(template, branch.entry, joinId);
-    for (const m of members) {
+    for (const m of branchSubgraph(template, branch.entry, joinId)) {
       if (memberOf.has(m) && memberOf.get(m) !== branch.id) {
         d.error('BRANCH_MEMBERSHIP', `node ${m} is a member of branches "${memberOf.get(m)}" and "${branch.id}"`, {
           nodeId: m,
@@ -681,18 +734,34 @@ function checkBranchMembership(
       }
       memberOf.set(m, branch.id);
     }
-    // all-reachability: this branch must be able to reach the join (no deadlock) — only for joinMode all.
-    const join = template.nodes[joinId];
-    if (join && join.kind === 'join' && join.joinMode.kind === 'all') {
-      if (!forwardReach(template, branch.entry).has(joinId)) {
-        d.error('JOIN_UNREACHABLE_BRANCH', `branch "${branch.id}" (all) cannot reach join ${joinId}`, {
-          nodeId: branch.entry,
-        });
-      }
-    }
+    checkAllJoinReachable(template, branch, joinId, d);
   }
+  return memberOf;
+}
 
-  // Cross-branch goto: a branch member may only goto within its own branch sub-graph or to the join.
+/** all-reachability: an `all`-join branch must be able to reach the join (no deadlock). */
+function checkAllJoinReachable(
+  template: Template,
+  branch: { id: string; entry: string },
+  joinId: string,
+  d: DiagSink,
+): void {
+  const join = template.nodes[joinId];
+  if (join?.kind !== 'join' || join.joinMode.kind !== 'all') return;
+  if (!forwardReach(template, branch.entry).has(joinId)) {
+    d.error('JOIN_UNREACHABLE_BRANCH', `branch "${branch.id}" (all) cannot reach join ${joinId}`, {
+      nodeId: branch.entry,
+    });
+  }
+}
+
+/** Cross-branch goto: a branch member may only goto within its own branch sub-graph or to the join. */
+function checkCrossBranchGotos(
+  template: Template,
+  memberOf: Map<string, string>,
+  joinId: string,
+  d: DiagSink,
+): void {
   for (const [member, branchId] of memberOf) {
     const node = template.nodes[member];
     if (!node) continue;
@@ -710,8 +779,8 @@ function checkBranchMembership(
 }
 
 /** Nodes reachable from a branch `entry`, stopping AT the join (the join itself is not a member). */
-function branchSubgraph(template: Template, entry: NodeId, joinId: NodeId): Set<NodeId> {
-  const seen = new Set<NodeId>();
+function branchSubgraph(template: Template, entry: string, joinId: string): Set<string> {
+  const seen = new Set<string>();
   const stack = [entry];
   while (stack.length) {
     const id = stack.pop()!;
@@ -763,38 +832,51 @@ function ruleVerdictClosure(template: Template, d: DiagSink): void {
   }
 
   const used = new Set<string>();
-  // 9b every verdict.* guard label ∈ domain (a core label in a guard is a hard error).
   for (const node of Object.values(template.nodes)) {
-    for (const cond of guardConditionsOf(node)) {
-      collectVerdictLabels(cond, (label) => {
-        used.add(label);
-        if (core.has(label)) {
-          d.error('VERDICT_CORE_IN_GUARD', `node ${node.id} guard uses core verdict "${label}" (route it structurally)`, {
-            nodeId: node.id,
-          });
-        } else if (!domainSet.has(label)) {
-          d.error('VERDICT_UNDECLARED', `node ${node.id} guard uses undeclared verdict "${label}"`, {
-            nodeId: node.id,
-          });
-        }
-      });
-    }
-    // 9c humanGate.outcomes ⊆ domain.
-    if (node.kind === 'humanGate') {
-      for (const o of node.outcomes) {
-        used.add(o);
-        if (!domainSet.has(o)) {
-          d.error('GATE_OUTCOME_NOT_SUBSET', `gate ${node.id} outcome "${o}" is not in verdicts.domain`, {
-            nodeId: node.id,
-          });
-        }
-      }
-    }
+    checkGuardVerdictLabels(node, core, domainSet, used, d); //  9b verdict.* guard labels ∈ domain
+    checkGateOutcomesSubset(node, domainSet, used, d); //        9c humanGate.outcomes ⊆ domain
   }
 
   // 9d declared-but-unused (warning).
   for (const label of domain) {
     if (!used.has(label)) d.warn('VERDICT_DECLARED_UNUSED', `domain verdict "${label}" is declared but never used`);
+  }
+}
+
+/** 9b — every verdict.* guard label on a node is a declared domain label (a core label is a hard error). */
+function checkGuardVerdictLabels(
+  node: Node,
+  core: Set<string>,
+  domainSet: Set<string>,
+  used: Set<string>,
+  d: DiagSink,
+): void {
+  for (const cond of guardConditionsOf(node)) {
+    collectVerdictLabels(cond, (label) => {
+      used.add(label);
+      if (core.has(label)) {
+        d.error('VERDICT_CORE_IN_GUARD', `node ${node.id} guard uses core verdict "${label}" (route it structurally)`, {
+          nodeId: node.id,
+        });
+      } else if (!domainSet.has(label)) {
+        d.error('VERDICT_UNDECLARED', `node ${node.id} guard uses undeclared verdict "${label}"`, {
+          nodeId: node.id,
+        });
+      }
+    });
+  }
+}
+
+/** 9c — a humanGate's declared outcomes must all be declared domain labels. */
+function checkGateOutcomesSubset(node: Node, domainSet: Set<string>, used: Set<string>, d: DiagSink): void {
+  if (node.kind !== 'humanGate') return;
+  for (const o of node.outcomes) {
+    used.add(o);
+    if (!domainSet.has(o)) {
+      d.error('GATE_OUTCOME_NOT_SUBSET', `gate ${node.id} outcome "${o}" is not in verdicts.domain`, {
+        nodeId: node.id,
+      });
+    }
   }
 }
 
@@ -825,7 +907,7 @@ function ruleConflictMatrix(template: Template, d: DiagSink): void {
   if (conflicts.length === 0) return;
 
   // Map each role to the node ids that bind it (agent.roleRef = "role:<name>").
-  const roleNodes = new Map<string, NodeId[]>();
+  const roleNodes = new Map<string, string[]>();
   for (const node of Object.values(template.nodes)) {
     if (node.kind === 'agent') {
       const role = roleName(node.roleRef);
@@ -903,13 +985,7 @@ export type TemplateDiff = { kind: DiffKind; diagnostics: Diagnostic[] };
  *  - ANY field/path not explicitly classified          → breaking (conservative) + DIFF_UNCLASSIFIED
  */
 export function classifyTemplateDiff(old: Template, next: Template): TemplateDiff {
-  const diagnostics: Diagnostic[] = [];
-  let kind: DiffKind = 'safe';
-  const escalate = (to: DiffKind): void => {
-    if (to === 'invalid') kind = 'invalid';
-    else if (to === 'breaking' && kind !== 'invalid') kind = 'breaking';
-  };
-
+  const acc = newDiffAccumulator();
   const oldNodes = old.nodes ?? {};
   const nextNodes = next.nodes ?? {};
   const oldIds = new Set(Object.keys(oldNodes));
@@ -918,76 +994,99 @@ export function classifyTemplateDiff(old: Template, next: Template): TemplateDif
   // Deleted ids → breaking.
   for (const id of oldIds) {
     if (!nextIds.has(id)) {
-      escalate('breaking');
-      diagnostics.push({ code: 'DIFF_NODE_DELETED', severity: 'error', message: `node "${id}" was deleted`, nodeId: id });
+      acc.escalate('breaking');
+      acc.diagnostics.push({ code: 'DIFF_NODE_DELETED', severity: 'error', message: `node "${id}" was deleted`, nodeId: id });
     }
   }
 
   for (const id of nextIds) {
-    const after = nextNodes[id]!;
     const before = oldNodes[id];
-    if (!before) {
-      // A brand-new node id is additive → safe (a new branch/path), but reusing a PREVIOUSLY-deleted
-      // id is not observable here (single old/next pair). Adding a node is classified safe.
-      continue;
-    }
-    // kind change → breaking; an incompatible kind/resultSchema reuse → invalid.
-    if (before.kind !== after.kind) {
-      escalate('invalid'); // a reused id with a different kind is invalid (§12.13)
-      diagnostics.push({
-        code: 'DIFF_ID_REUSED_INCOMPATIBLE',
-        severity: 'error',
-        message: `node "${id}" kind changed ${before.kind} → ${after.kind} (id reuse with different kind)`,
-        nodeId: id,
-      });
-      continue;
-    }
-    // resultSchema change on a same-kind effect node → invalid (id reuse with different contract).
-    const beforeSchema = (before as { resultSchema?: string }).resultSchema;
-    const afterSchema = (after as { resultSchema?: string }).resultSchema;
-    if (beforeSchema !== afterSchema) {
-      escalate('invalid');
-      diagnostics.push({
-        code: 'DIFF_ID_REUSED_INCOMPATIBLE',
-        severity: 'error',
-        message: `node "${id}" resultSchema changed "${beforeSchema}" → "${afterSchema}"`,
-        nodeId: id,
-      });
-    }
-    // Outgoing topology change → breaking.
-    if (!sameTopology(before, after)) {
-      escalate('breaking');
-      diagnostics.push({
-        code: 'DIFF_NODE_TOPOLOGY_CHANGED',
-        severity: 'error',
-        message: `node "${id}" outgoing topology changed`,
-        nodeId: id,
-      });
-    }
-    // Any non-safe-classified, non-topology field change defaults to breaking + DIFF_UNCLASSIFIED.
-    const unclassified = unclassifiedFieldChange(before, after);
-    if (unclassified) {
-      escalate('breaking');
-      diagnostics.push({
-        code: 'DIFF_UNCLASSIFIED',
-        severity: 'error',
-        message: `node "${id}" has an unclassified field change in {${unclassified}} (defaulting to breaking)`,
-        nodeId: id,
-      });
-    }
+    // A brand-new node id is additive → safe (a new branch/path); reusing a PREVIOUSLY-deleted id is
+    // not observable here (single old/next pair). Adding a node is classified safe.
+    if (before) classifyExistingNodeChange(id, before, nextNodes[id], acc);
   }
 
-  // Top-level structural changes (entry / scopes / domain / policy) default to breaking if changed.
+  classifyTopLevelDiff(old, next, acc);
+  return { kind: acc.kind, diagnostics: acc.diagnostics };
+}
+
+/** Mutable classifier state: accumulated diagnostics + the worst diff kind seen so far. */
+type DiffAccumulator = {
+  diagnostics: Diagnostic[];
+  kind: DiffKind;
+  escalate: (to: DiffKind) => void;
+};
+
+function newDiffAccumulator(): DiffAccumulator {
+  const acc: DiffAccumulator = {
+    diagnostics: [],
+    kind: 'safe',
+    escalate: (to: DiffKind): void => {
+      if (to === 'invalid') acc.kind = 'invalid';
+      else if (to === 'breaking' && acc.kind !== 'invalid') acc.kind = 'breaking';
+    },
+  };
+  return acc;
+}
+
+/** Classify the change of a node id present in BOTH templates (kind / schema / topology / fields). */
+function classifyExistingNodeChange(id: string, before: Node, after: Node, acc: DiffAccumulator): void {
+  // kind change → breaking; an incompatible kind/resultSchema reuse → invalid.
+  if (before.kind !== after.kind) {
+    acc.escalate('invalid'); // a reused id with a different kind is invalid (§12.13)
+    acc.diagnostics.push({
+      code: 'DIFF_ID_REUSED_INCOMPATIBLE',
+      severity: 'error',
+      message: `node "${id}" kind changed ${before.kind} → ${after.kind} (id reuse with different kind)`,
+      nodeId: id,
+    });
+    return;
+  }
+  // resultSchema change on a same-kind effect node → invalid (id reuse with different contract).
+  const beforeSchema = (before as { resultSchema?: string }).resultSchema;
+  const afterSchema = (after as { resultSchema?: string }).resultSchema;
+  if (beforeSchema !== afterSchema) {
+    acc.escalate('invalid');
+    acc.diagnostics.push({
+      code: 'DIFF_ID_REUSED_INCOMPATIBLE',
+      severity: 'error',
+      message: `node "${id}" resultSchema changed "${beforeSchema}" → "${afterSchema}"`,
+      nodeId: id,
+    });
+  }
+  // Outgoing topology change → breaking.
+  if (!sameTopology(before, after)) {
+    acc.escalate('breaking');
+    acc.diagnostics.push({
+      code: 'DIFF_NODE_TOPOLOGY_CHANGED',
+      severity: 'error',
+      message: `node "${id}" outgoing topology changed`,
+      nodeId: id,
+    });
+  }
+  // Any non-safe-classified, non-topology field change defaults to breaking + DIFF_UNCLASSIFIED.
+  const unclassified = unclassifiedFieldChange(before, after);
+  if (unclassified) {
+    acc.escalate('breaking');
+    acc.diagnostics.push({
+      code: 'DIFF_UNCLASSIFIED',
+      severity: 'error',
+      message: `node "${id}" has an unclassified field change in {${unclassified}} (defaulting to breaking)`,
+      nodeId: id,
+    });
+  }
+}
+
+/** Top-level structural changes (entry / scopes) default to breaking if changed. */
+function classifyTopLevelDiff(old: Template, next: Template, acc: DiffAccumulator): void {
   if (old.entry !== next.entry) {
-    escalate('breaking');
-    diagnostics.push({ code: 'DIFF_NODE_TOPOLOGY_CHANGED', severity: 'error', message: `entry changed ${old.entry} → ${next.entry}` });
+    acc.escalate('breaking');
+    acc.diagnostics.push({ code: 'DIFF_NODE_TOPOLOGY_CHANGED', severity: 'error', message: `entry changed ${old.entry} → ${next.entry}` });
   }
   if (JSON.stringify(old.scopes ?? {}) !== JSON.stringify(next.scopes ?? {})) {
-    escalate('breaking');
-    diagnostics.push({ code: 'DIFF_UNCLASSIFIED', severity: 'error', message: `scopes changed (defaulting to breaking)` });
+    acc.escalate('breaking');
+    acc.diagnostics.push({ code: 'DIFF_UNCLASSIFIED', severity: 'error', message: `scopes changed (defaulting to breaking)` });
   }
-
-  return { kind, diagnostics };
 }
 
 /** Two nodes have the same outgoing topology iff their ordered edge `[path,target]` sets match. */
@@ -997,8 +1096,17 @@ function sameTopology(a: Node, b: Node): boolean {
   return ea === eb;
 }
 
-function orderedEdges(node: Node): Array<[string, NodeId]> {
-  return outgoingEdges(node).slice().sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : 0));
+function orderedEdges(node: Node): Array<[string, string]> {
+  return outgoingEdges(node)
+    .slice()
+    .sort((x, y) => comparePath(x[0], y[0]));
+}
+
+/** Stable lexical comparison of two edge paths (sort comparator: -1 / 0 / 1). */
+function comparePath(a: string, b: string): number {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
 }
 
 /**
