@@ -47,7 +47,54 @@
         "Default consensus: `none`.",
         "Escalate to `single-reviewer` when the answer cites source paths, line numbers, or irreversible architecture recommendations.",
         "Default iteration cap: 1 review/fix loop for produced artifacts."
-      ]
+      ],
+      "template_json": {
+        "specVersion": "1.0",
+        "pipelineId": "analysis-only",
+        "entry": "analyst",
+        "verdicts": {
+          "domain": [
+            "approved"
+          ]
+        },
+        "nodes": {
+          "analyst": {
+            "id": "analyst",
+            "kind": "agent",
+            "roleRef": "role:analyst",
+            "next": "analystRouter",
+            "onFailure": "abort",
+            "resultSchema": "schema:plan"
+          },
+          "analystRouter": {
+            "id": "analystRouter",
+            "kind": "choice",
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "approved"
+                },
+                "goto": "doneEnd"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ]
+          },
+          "doneEnd": {
+            "id": "doneEnd",
+            "kind": "terminal",
+            "status": "succeeded"
+          },
+          "blockedEnd": {
+            "id": "blockedEnd",
+            "kind": "terminal",
+            "status": "blocked"
+          }
+        },
+        "title": "Analysis only — analyst, no edits, no gate"
+      }
     }
   },
   {
@@ -111,7 +158,156 @@
         "Default consensus: `single-reviewer`.",
         "Escalate to `dual-model` when root cause, data loss, security, concurrency, migration, or architecture boundary risk is unclear.",
         "Default iteration cap: 3 developer/reviewer or developer/watcher loops."
-      ]
+      ],
+      "template_json": {
+        "specVersion": "1.0",
+        "pipelineId": "bugfix",
+        "entry": "analyst",
+        "verdicts": {
+          "domain": [
+            "approved",
+            "clean",
+            "blocker",
+            "changes_requested"
+          ]
+        },
+        "nodes": {
+          "analyst": {
+            "id": "analyst",
+            "kind": "agent",
+            "roleRef": "role:analyst",
+            "next": "developer",
+            "onFailure": "abort",
+            "resultSchema": "schema:plan"
+          },
+          "developer": {
+            "id": "developer",
+            "kind": "agent",
+            "roleRef": "role:developer",
+            "next": "integrator",
+            "onFailure": "abort",
+            "resultSchema": "schema:change"
+          },
+          "integrator": {
+            "id": "integrator",
+            "kind": "script",
+            "scriptRef": "script:integrator",
+            "next": "watcherPost",
+            "catch": [
+              {
+                "onError": "revo.ScriptBlocked",
+                "goto": "blockedEnd"
+              },
+              {
+                "onError": "revo.ScriptFailed",
+                "goto": "failedEnd"
+              }
+            ],
+            "onFailure": "route",
+            "resultSchema": "schema:integration"
+          },
+          "watcherPost": {
+            "id": "watcherPost",
+            "kind": "agent",
+            "roleRef": "role:watcher",
+            "next": "watcherRouter",
+            "onFailure": "abort",
+            "resultSchema": "schema:watchVerdict"
+          },
+          "watcherRouter": {
+            "id": "watcherRouter",
+            "kind": "choice",
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.in",
+                  "value": [
+                    "approved",
+                    "clean"
+                  ]
+                },
+                "goto": "mergeGate"
+              },
+              {
+                "when": {
+                  "op": "all",
+                  "of": [
+                    {
+                      "op": "verdict.in",
+                      "value": [
+                        "blocker",
+                        "changes_requested"
+                      ]
+                    },
+                    {
+                      "op": "counter.lt",
+                      "scope": "watcherLoop",
+                      "value": 3
+                    }
+                  ]
+                },
+                "goto": "watcherRework"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ]
+          },
+          "watcherRework": {
+            "id": "watcherRework",
+            "kind": "agent",
+            "roleRef": "role:developer",
+            "next": "integrator",
+            "onFailure": "abort",
+            "resultSchema": "schema:change",
+            "incrementCounters": [
+              "watcherLoop"
+            ]
+          },
+          "mergeGate": {
+            "id": "mergeGate",
+            "kind": "humanGate",
+            "reason": "merge-review",
+            "outcomes": [
+              "approved"
+            ],
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "approved"
+                },
+                "goto": "mergedEnd"
+              },
+              {
+                "default": "mergedEnd"
+              }
+            ]
+          },
+          "mergedEnd": {
+            "id": "mergedEnd",
+            "kind": "terminal",
+            "status": "succeeded"
+          },
+          "failedEnd": {
+            "id": "failedEnd",
+            "kind": "terminal",
+            "status": "failed"
+          },
+          "blockedEnd": {
+            "id": "blockedEnd",
+            "kind": "terminal",
+            "status": "blocked"
+          }
+        },
+        "title": "Bugfix — analyst → developer → integrate → watcher loop → merge gate (no plan gate, no code review)",
+        "scopes": {
+          "watcherLoop": {
+            "cap": 3,
+            "parent": null
+          }
+        }
+      }
     }
   },
   {
@@ -179,7 +375,255 @@
         "Default architecture review consensus: `single-reviewer`; use `dual-model` for cross-module, data, auth, security, migration, or public API decisions.",
         "Default code review consensus: `dual-model`.",
         "Default iteration cap: 3 developer/reviewer or developer/watcher loops before `needs_human`."
-      ]
+      ],
+      "template_json": {
+        "specVersion": "1.0",
+        "pipelineId": "feature-development",
+        "entry": "analyst",
+        "verdicts": {
+          "domain": [
+            "approved",
+            "clean",
+            "blocker",
+            "changes_requested"
+          ]
+        },
+        "nodes": {
+          "analyst": {
+            "id": "analyst",
+            "kind": "agent",
+            "roleRef": "role:analyst",
+            "next": "planReviewer",
+            "onFailure": "abort",
+            "resultSchema": "schema:plan"
+          },
+          "planReviewer": {
+            "id": "planReviewer",
+            "kind": "agent",
+            "roleRef": "role:reviewer",
+            "next": "planGate",
+            "onFailure": "abort",
+            "resultSchema": "schema:reviewVerdict"
+          },
+          "planGate": {
+            "id": "planGate",
+            "kind": "humanGate",
+            "reason": "plan-review",
+            "outcomes": [
+              "approved"
+            ],
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "approved"
+                },
+                "goto": "developer"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ]
+          },
+          "developer": {
+            "id": "developer",
+            "kind": "agent",
+            "roleRef": "role:developer",
+            "next": "codeReview",
+            "onFailure": "abort",
+            "resultSchema": "schema:change"
+          },
+          "codeReview": {
+            "id": "codeReview",
+            "kind": "agent",
+            "roleRef": "role:reviewer",
+            "next": "codeReviewRouter",
+            "onFailure": "abort",
+            "resultSchema": "schema:reviewVerdict"
+          },
+          "codeReviewRouter": {
+            "id": "codeReviewRouter",
+            "kind": "choice",
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.in",
+                  "value": [
+                    "approved",
+                    "clean"
+                  ]
+                },
+                "goto": "integrator"
+              },
+              {
+                "when": {
+                  "op": "all",
+                  "of": [
+                    {
+                      "op": "verdict.in",
+                      "value": [
+                        "blocker",
+                        "changes_requested"
+                      ]
+                    },
+                    {
+                      "op": "counter.lt",
+                      "scope": "codeReviewLoop",
+                      "value": 3
+                    }
+                  ]
+                },
+                "goto": "reworkDeveloper"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ]
+          },
+          "reworkDeveloper": {
+            "id": "reworkDeveloper",
+            "kind": "agent",
+            "roleRef": "role:developer",
+            "next": "codeReview",
+            "onFailure": "abort",
+            "resultSchema": "schema:change",
+            "incrementCounters": [
+              "codeReviewLoop"
+            ]
+          },
+          "integrator": {
+            "id": "integrator",
+            "kind": "script",
+            "scriptRef": "script:integrator",
+            "next": "watcherPost",
+            "catch": [
+              {
+                "onError": "revo.ScriptBlocked",
+                "goto": "blockedEnd"
+              },
+              {
+                "onError": "revo.ScriptFailed",
+                "goto": "failedEnd"
+              }
+            ],
+            "onFailure": "route",
+            "resultSchema": "schema:integration"
+          },
+          "watcherPost": {
+            "id": "watcherPost",
+            "kind": "agent",
+            "roleRef": "role:watcher",
+            "next": "watcherRouter",
+            "onFailure": "abort",
+            "resultSchema": "schema:watchVerdict"
+          },
+          "watcherRouter": {
+            "id": "watcherRouter",
+            "kind": "choice",
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.in",
+                  "value": [
+                    "approved",
+                    "clean"
+                  ]
+                },
+                "goto": "mergeGate"
+              },
+              {
+                "when": {
+                  "op": "all",
+                  "of": [
+                    {
+                      "op": "verdict.in",
+                      "value": [
+                        "blocker",
+                        "changes_requested"
+                      ]
+                    },
+                    {
+                      "op": "counter.lt",
+                      "scope": "watcherLoop",
+                      "value": 3
+                    }
+                  ]
+                },
+                "goto": "watcherRework"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ]
+          },
+          "watcherRework": {
+            "id": "watcherRework",
+            "kind": "agent",
+            "roleRef": "role:developer",
+            "next": "integrator",
+            "onFailure": "abort",
+            "resultSchema": "schema:change",
+            "incrementCounters": [
+              "watcherLoop"
+            ]
+          },
+          "mergeGate": {
+            "id": "mergeGate",
+            "kind": "humanGate",
+            "reason": "merge-review",
+            "outcomes": [
+              "approved"
+            ],
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "approved"
+                },
+                "goto": "mergedEnd"
+              },
+              {
+                "default": "mergedEnd"
+              }
+            ]
+          },
+          "mergedEnd": {
+            "id": "mergedEnd",
+            "kind": "terminal",
+            "status": "succeeded"
+          },
+          "failedEnd": {
+            "id": "failedEnd",
+            "kind": "terminal",
+            "status": "failed"
+          },
+          "blockedEnd": {
+            "id": "blockedEnd",
+            "kind": "terminal",
+            "status": "blocked"
+          }
+        },
+        "title": "Feature development — plan + merge gates, bounded code-review + watcher rework",
+        "policy": {
+          "conflicts": [
+            [
+              "developer",
+              "reviewer"
+            ]
+          ],
+          "enforcement": "strict"
+        },
+        "scopes": {
+          "codeReviewLoop": {
+            "cap": 3,
+            "parent": null
+          },
+          "watcherLoop": {
+            "cap": 3,
+            "parent": null
+          }
+        }
+      }
     }
   },
   {
@@ -233,7 +677,33 @@
         "Default consensus: `none`.",
         "Escalate to `single-reviewer` when the change touches behavior, contracts, security, persistence, generated artifacts, or required verification gates.",
         "Default iteration cap: 1 developer/reviewer or developer/watcher loop before `needs_human`."
-      ]
+      ],
+      "template_json": {
+        "specVersion": "1.0",
+        "pipelineId": "local-change",
+        "entry": "developer",
+        "verdicts": {
+          "domain": [
+            "approved"
+          ]
+        },
+        "nodes": {
+          "developer": {
+            "id": "developer",
+            "kind": "agent",
+            "roleRef": "role:developer",
+            "next": "doneEnd",
+            "onFailure": "abort",
+            "resultSchema": "schema:change"
+          },
+          "doneEnd": {
+            "id": "doneEnd",
+            "kind": "terminal",
+            "status": "succeeded"
+          }
+        },
+        "title": "Local change — developer only, no gate"
+      }
     }
   },
   {
@@ -285,7 +755,33 @@
         "Default consensus: `single-reviewer`.",
         "Use `dual-model` when adding routable roles, changing human gates, changing materialization behavior, or changing result/usage contracts.",
         "Default iteration cap: 2 knowledge-engineer/reviewer loops."
-      ]
+      ],
+      "template_json": {
+        "specVersion": "1.0",
+        "pipelineId": "method-development",
+        "entry": "ke",
+        "verdicts": {
+          "domain": [
+            "approved"
+          ]
+        },
+        "nodes": {
+          "ke": {
+            "id": "ke",
+            "kind": "agent",
+            "roleRef": "role:knowledge-engineer",
+            "next": "doneEnd",
+            "onFailure": "abort",
+            "resultSchema": "schema:change"
+          },
+          "doneEnd": {
+            "id": "doneEnd",
+            "kind": "terminal",
+            "status": "succeeded"
+          }
+        },
+        "title": "Method development — knowledge-engineer, no integrator (merge gate inert)"
+      }
     }
   },
   {
@@ -348,7 +844,62 @@
         "Default consensus: `none`.",
         "Escalate to `single-reviewer` when QA findings require code-risk classification or accepted-risk judgment.",
         "Default iteration cap: 1 QA/follow-up classification loop before route back to bugfix or feature-development."
-      ]
+      ],
+      "template_json": {
+        "specVersion": "1.0",
+        "pipelineId": "post-merge-qa",
+        "entry": "deployWatcher",
+        "verdicts": {
+          "domain": [
+            "approved"
+          ]
+        },
+        "nodes": {
+          "deployWatcher": {
+            "id": "deployWatcher",
+            "kind": "agent",
+            "roleRef": "role:deploy-watcher",
+            "next": "qa",
+            "onFailure": "abort",
+            "resultSchema": "schema:watchVerdict"
+          },
+          "qa": {
+            "id": "qa",
+            "kind": "agent",
+            "roleRef": "role:qa-backend",
+            "next": "qaRouter",
+            "onFailure": "abort",
+            "resultSchema": "schema:watchVerdict"
+          },
+          "qaRouter": {
+            "id": "qaRouter",
+            "kind": "choice",
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "approved"
+                },
+                "goto": "doneEnd"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ]
+          },
+          "doneEnd": {
+            "id": "doneEnd",
+            "kind": "terminal",
+            "status": "succeeded"
+          },
+          "blockedEnd": {
+            "id": "blockedEnd",
+            "kind": "terminal",
+            "status": "blocked"
+          }
+        },
+        "title": "Post-merge QA — deploy-watcher → qa, no integrator, no gate"
+      }
     }
   },
   {
@@ -407,7 +958,255 @@
         "Default architecture review consensus: `single-reviewer`; use `dual-model` for cross-module, data, auth, security, migration, or public API decisions.",
         "Default code review consensus: `dual-model`.",
         "Default iteration cap: 3 developer/reviewer or developer/watcher loops before `needs_human`."
-      ]
+      ],
+      "template_json": {
+        "specVersion": "1.0",
+        "pipelineId": "feature-pr-watch",
+        "entry": "analyst",
+        "verdicts": {
+          "domain": [
+            "approved",
+            "clean",
+            "blocker",
+            "changes_requested"
+          ]
+        },
+        "nodes": {
+          "analyst": {
+            "id": "analyst",
+            "kind": "agent",
+            "roleRef": "role:analyst",
+            "next": "planReviewer",
+            "onFailure": "abort",
+            "resultSchema": "schema:plan"
+          },
+          "planReviewer": {
+            "id": "planReviewer",
+            "kind": "agent",
+            "roleRef": "role:reviewer",
+            "next": "planGate",
+            "onFailure": "abort",
+            "resultSchema": "schema:reviewVerdict"
+          },
+          "planGate": {
+            "id": "planGate",
+            "kind": "humanGate",
+            "reason": "plan-review",
+            "outcomes": [
+              "approved"
+            ],
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "approved"
+                },
+                "goto": "developer"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ]
+          },
+          "developer": {
+            "id": "developer",
+            "kind": "agent",
+            "roleRef": "role:developer",
+            "next": "codeReview",
+            "onFailure": "abort",
+            "resultSchema": "schema:change"
+          },
+          "codeReview": {
+            "id": "codeReview",
+            "kind": "agent",
+            "roleRef": "role:reviewer",
+            "next": "codeReviewRouter",
+            "onFailure": "abort",
+            "resultSchema": "schema:reviewVerdict"
+          },
+          "codeReviewRouter": {
+            "id": "codeReviewRouter",
+            "kind": "choice",
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.in",
+                  "value": [
+                    "approved",
+                    "clean"
+                  ]
+                },
+                "goto": "integrator"
+              },
+              {
+                "when": {
+                  "op": "all",
+                  "of": [
+                    {
+                      "op": "verdict.in",
+                      "value": [
+                        "blocker",
+                        "changes_requested"
+                      ]
+                    },
+                    {
+                      "op": "counter.lt",
+                      "scope": "codeReviewLoop",
+                      "value": 3
+                    }
+                  ]
+                },
+                "goto": "reworkDeveloper"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ]
+          },
+          "reworkDeveloper": {
+            "id": "reworkDeveloper",
+            "kind": "agent",
+            "roleRef": "role:developer",
+            "next": "codeReview",
+            "onFailure": "abort",
+            "resultSchema": "schema:change",
+            "incrementCounters": [
+              "codeReviewLoop"
+            ]
+          },
+          "integrator": {
+            "id": "integrator",
+            "kind": "script",
+            "scriptRef": "script:integrator",
+            "next": "watcherPost",
+            "catch": [
+              {
+                "onError": "revo.ScriptBlocked",
+                "goto": "blockedEnd"
+              },
+              {
+                "onError": "revo.ScriptFailed",
+                "goto": "failedEnd"
+              }
+            ],
+            "onFailure": "route",
+            "resultSchema": "schema:integration"
+          },
+          "watcherPost": {
+            "id": "watcherPost",
+            "kind": "agent",
+            "roleRef": "role:pr-watcher",
+            "next": "watcherRouter",
+            "onFailure": "abort",
+            "resultSchema": "schema:watchVerdict"
+          },
+          "watcherRouter": {
+            "id": "watcherRouter",
+            "kind": "choice",
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.in",
+                  "value": [
+                    "approved",
+                    "clean"
+                  ]
+                },
+                "goto": "mergeGate"
+              },
+              {
+                "when": {
+                  "op": "all",
+                  "of": [
+                    {
+                      "op": "verdict.in",
+                      "value": [
+                        "blocker",
+                        "changes_requested"
+                      ]
+                    },
+                    {
+                      "op": "counter.lt",
+                      "scope": "watcherLoop",
+                      "value": 3
+                    }
+                  ]
+                },
+                "goto": "watcherRework"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ]
+          },
+          "watcherRework": {
+            "id": "watcherRework",
+            "kind": "agent",
+            "roleRef": "role:developer",
+            "next": "integrator",
+            "onFailure": "abort",
+            "resultSchema": "schema:change",
+            "incrementCounters": [
+              "watcherLoop"
+            ]
+          },
+          "mergeGate": {
+            "id": "mergeGate",
+            "kind": "humanGate",
+            "reason": "merge-review",
+            "outcomes": [
+              "approved"
+            ],
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "approved"
+                },
+                "goto": "mergedEnd"
+              },
+              {
+                "default": "mergedEnd"
+              }
+            ]
+          },
+          "mergedEnd": {
+            "id": "mergedEnd",
+            "kind": "terminal",
+            "status": "succeeded"
+          },
+          "failedEnd": {
+            "id": "failedEnd",
+            "kind": "terminal",
+            "status": "failed"
+          },
+          "blockedEnd": {
+            "id": "blockedEnd",
+            "kind": "terminal",
+            "status": "blocked"
+          }
+        },
+        "title": "Feature PR watch — feature shape with an embedded pr-watcher post-integrator",
+        "policy": {
+          "conflicts": [
+            [
+              "developer",
+              "reviewer"
+            ]
+          ],
+          "enforcement": "strict"
+        },
+        "scopes": {
+          "codeReviewLoop": {
+            "cap": 3,
+            "parent": null
+          },
+          "watcherLoop": {
+            "cap": 3,
+            "parent": null
+          }
+        }
+      }
     }
   },
   {
@@ -446,7 +1245,255 @@
       "raw": [
         "An unknown-id role (pr-poller) is classified as a post-integrator status role purely via its `kind`.",
         "Default iteration cap: 3 developer/reviewer loops before `needs_human`."
-      ]
+      ],
+      "template_json": {
+        "specVersion": "1.0",
+        "pipelineId": "feature-pr-poll",
+        "entry": "analyst",
+        "verdicts": {
+          "domain": [
+            "approved",
+            "clean",
+            "blocker",
+            "changes_requested"
+          ]
+        },
+        "nodes": {
+          "analyst": {
+            "id": "analyst",
+            "kind": "agent",
+            "roleRef": "role:analyst",
+            "next": "planReviewer",
+            "onFailure": "abort",
+            "resultSchema": "schema:plan"
+          },
+          "planReviewer": {
+            "id": "planReviewer",
+            "kind": "agent",
+            "roleRef": "role:reviewer",
+            "next": "planGate",
+            "onFailure": "abort",
+            "resultSchema": "schema:reviewVerdict"
+          },
+          "planGate": {
+            "id": "planGate",
+            "kind": "humanGate",
+            "reason": "plan-review",
+            "outcomes": [
+              "approved"
+            ],
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "approved"
+                },
+                "goto": "developer"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ]
+          },
+          "developer": {
+            "id": "developer",
+            "kind": "agent",
+            "roleRef": "role:developer",
+            "next": "codeReview",
+            "onFailure": "abort",
+            "resultSchema": "schema:change"
+          },
+          "codeReview": {
+            "id": "codeReview",
+            "kind": "agent",
+            "roleRef": "role:reviewer",
+            "next": "codeReviewRouter",
+            "onFailure": "abort",
+            "resultSchema": "schema:reviewVerdict"
+          },
+          "codeReviewRouter": {
+            "id": "codeReviewRouter",
+            "kind": "choice",
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.in",
+                  "value": [
+                    "approved",
+                    "clean"
+                  ]
+                },
+                "goto": "integrator"
+              },
+              {
+                "when": {
+                  "op": "all",
+                  "of": [
+                    {
+                      "op": "verdict.in",
+                      "value": [
+                        "blocker",
+                        "changes_requested"
+                      ]
+                    },
+                    {
+                      "op": "counter.lt",
+                      "scope": "codeReviewLoop",
+                      "value": 3
+                    }
+                  ]
+                },
+                "goto": "reworkDeveloper"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ]
+          },
+          "reworkDeveloper": {
+            "id": "reworkDeveloper",
+            "kind": "agent",
+            "roleRef": "role:developer",
+            "next": "codeReview",
+            "onFailure": "abort",
+            "resultSchema": "schema:change",
+            "incrementCounters": [
+              "codeReviewLoop"
+            ]
+          },
+          "integrator": {
+            "id": "integrator",
+            "kind": "script",
+            "scriptRef": "script:integrator",
+            "next": "watcherPost",
+            "catch": [
+              {
+                "onError": "revo.ScriptBlocked",
+                "goto": "blockedEnd"
+              },
+              {
+                "onError": "revo.ScriptFailed",
+                "goto": "failedEnd"
+              }
+            ],
+            "onFailure": "route",
+            "resultSchema": "schema:integration"
+          },
+          "watcherPost": {
+            "id": "watcherPost",
+            "kind": "agent",
+            "roleRef": "role:pr-poller",
+            "next": "watcherRouter",
+            "onFailure": "abort",
+            "resultSchema": "schema:watchVerdict"
+          },
+          "watcherRouter": {
+            "id": "watcherRouter",
+            "kind": "choice",
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.in",
+                  "value": [
+                    "approved",
+                    "clean"
+                  ]
+                },
+                "goto": "mergeGate"
+              },
+              {
+                "when": {
+                  "op": "all",
+                  "of": [
+                    {
+                      "op": "verdict.in",
+                      "value": [
+                        "blocker",
+                        "changes_requested"
+                      ]
+                    },
+                    {
+                      "op": "counter.lt",
+                      "scope": "watcherLoop",
+                      "value": 3
+                    }
+                  ]
+                },
+                "goto": "watcherRework"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ]
+          },
+          "watcherRework": {
+            "id": "watcherRework",
+            "kind": "agent",
+            "roleRef": "role:developer",
+            "next": "integrator",
+            "onFailure": "abort",
+            "resultSchema": "schema:change",
+            "incrementCounters": [
+              "watcherLoop"
+            ]
+          },
+          "mergeGate": {
+            "id": "mergeGate",
+            "kind": "humanGate",
+            "reason": "merge-review",
+            "outcomes": [
+              "approved"
+            ],
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "approved"
+                },
+                "goto": "mergedEnd"
+              },
+              {
+                "default": "mergedEnd"
+              }
+            ]
+          },
+          "mergedEnd": {
+            "id": "mergedEnd",
+            "kind": "terminal",
+            "status": "succeeded"
+          },
+          "failedEnd": {
+            "id": "failedEnd",
+            "kind": "terminal",
+            "status": "failed"
+          },
+          "blockedEnd": {
+            "id": "blockedEnd",
+            "kind": "terminal",
+            "status": "blocked"
+          }
+        },
+        "title": "Feature PR poll — feature shape with an embedded (unknown-id, kind:status) pr-poller post-integrator",
+        "policy": {
+          "conflicts": [
+            [
+              "developer",
+              "reviewer"
+            ]
+          ],
+          "enforcement": "strict"
+        },
+        "scopes": {
+          "codeReviewLoop": {
+            "cap": 3,
+            "parent": null
+          },
+          "watcherLoop": {
+            "cap": 3,
+            "parent": null
+          }
+        }
+      }
     }
   },
   {

@@ -14,6 +14,24 @@ import type { RolesService } from '../revisium/roles.service.js';
 import type { RunService } from '../revisium/run.service.js';
 import { TaskControlPlaneApiService } from './task-control-plane-api.service.js';
 
+/**
+ * A minimal VALID data-driven template (one developer agent → success terminal). The cutover (plan
+ * 0015 slice 3) routes EVERY pipeline through the data-driven engine, so the fake `local-change`
+ * pipeline must carry a template in its execution_policy or `start` would FAIL LOUD
+ * (PIPELINE_NOT_DATA_DRIVEN). Validated by pipeline-core at run start.
+ */
+const LOCAL_CHANGE_TEMPLATE = {
+  specVersion: '1.0',
+  pipelineId: 'local-change',
+  entry: 'developer',
+  verdicts: { domain: ['approved'] },
+  nodes: {
+    developer: { id: 'developer', kind: 'agent', roleRef: 'role:developer', next: 'doneEnd', onFailure: 'abort' },
+    doneEnd: { id: 'doneEnd', kind: 'terminal', status: 'succeeded' },
+  },
+};
+const LOCAL_CHANGE_POLICY = { template_json: LOCAL_CHANGE_TEMPLATE };
+
 function makeInboxItem(overrides: Partial<InboxItem> = {}): InboxItem {
   return {
     id: 'inbox-1',
@@ -131,7 +149,7 @@ function makeApi(overrides: {
           alternativeRoles: [],
           optionalRoles: [],
           routeGates: [],
-          executionPolicy: {},
+          executionPolicy: LOCAL_CHANGE_POLICY,
         },
       ];
     },
@@ -146,7 +164,7 @@ function makeApi(overrides: {
         alternativeRoles: [],
         optionalRoles: [],
         routeGates: [],
-        executionPolicy: {},
+        executionPolicy: LOCAL_CHANGE_POLICY,
       };
     },
     async getPipeline() {
@@ -155,8 +173,8 @@ function makeApi(overrides: {
     ...overrides.playbooksService,
   };
   const pipelineService: Partial<PipelineService> = {
-    async startDevelopTask(runId) {
-      return { workflowID: runId } as Awaited<ReturnType<PipelineService['startDevelopTask']>>;
+    async startDataDrivenTask(runId) {
+      return { workflowID: runId } as Awaited<ReturnType<PipelineService['startDataDrivenTask']>>;
     },
     ...overrides.pipelineService,
   };
@@ -373,13 +391,13 @@ test('TaskControlPlaneApiService.createRun can immediately start the workflow', 
   const starts: Array<{ runId: string; pipelineId?: string; override?: string }> = [];
   const api = makeApi({
     pipelineService: {
-      async startDevelopTask(runId, opts) {
+      async startDataDrivenTask(runId, opts) {
         starts.push({
           runId,
-          pipelineId: opts.route?.pipelineId,
-          override: opts.route?.executionProfile.runnerOverrides['claude-code'],
+          pipelineId: opts.route.pipelineId,
+          override: opts.route.executionProfile.runnerOverrides['claude-code'],
         });
-        return { workflowID: runId } as Awaited<ReturnType<PipelineService['startDevelopTask']>>;
+        return { workflowID: runId } as Awaited<ReturnType<PipelineService['startDataDrivenTask']>>;
       },
     },
   });
@@ -420,12 +438,12 @@ test('TaskControlPlaneApiService.createRun ignores public params for runner prof
   const starts: Array<{ override?: string; params: Record<string, unknown> }> = [];
   const api = makeApi({
     pipelineService: {
-      async startDevelopTask(runId, opts) {
+      async startDataDrivenTask(runId, opts) {
         starts.push({
-          override: opts.route?.executionProfile.runnerOverrides['claude-code'],
-          params: opts.route?.params ?? {},
+          override: opts.route.executionProfile.runnerOverrides['claude-code'],
+          params: opts.route.params ?? {},
         });
-        return { workflowID: runId } as Awaited<ReturnType<PipelineService['startDevelopTask']>>;
+        return { workflowID: runId } as Awaited<ReturnType<PipelineService['startDataDrivenTask']>>;
       },
     },
   });
@@ -753,7 +771,11 @@ test('TaskControlPlaneApiService.simulateRoute binds canonical feature-developme
   assert.equal(route.roleBindings.find((item) => item.roleId === 'watcher')?.rowId, 'pb-watcher');
 });
 
-test('TaskControlPlaneApiService.simulateRoute inserts bugfix defect-analysis role before developer', async () => {
+// Plan 0015 slice 3: the old phase-order hardcode (`insertBeforeFirstDeveloperRole`) was removed with
+// the hardcoded engine. Route role ORDER is no longer load-bearing — the data-driven template owns node
+// sequencing — so an alternative-group selection (analyst for bugfix's defect-analysis group) now simply
+// APPENDS. The route's job is to BIND the right capability handles, not to order them.
+test('TaskControlPlaneApiService.simulateRoute binds the bugfix defect-analysis alternative role (appended; order no longer load-bearing)', async () => {
   const api = makeApi({
     rolesService: {
       async listRoles() {
@@ -832,12 +854,14 @@ test('TaskControlPlaneApiService.simulateRoute inserts bugfix defect-analysis ro
   const route = await api.simulateRoute({ title: 'Fix bug', pipeline: 'bugfix' });
 
   assert.deepEqual(route.requiredRoles, ['orchestrator', 'developer', 'integrator', 'watcher']);
+  // analyst (the resolved defect-analysis alternative) is appended after the required roles; the
+  // data-driven `bugfix` template sequences analyst→developer→… itself, so this order is fine.
   assert.deepEqual(route.roleBindings.map((item) => item.roleId), [
     'orchestrator',
-    'analyst',
     'developer',
     'integrator',
     'watcher',
+    'analyst',
   ]);
 });
 

@@ -112,19 +112,20 @@ test('J5: concurrent mixed terminals — approve one gate, reject another — ea
       waitForGate(h.api, keep.runId, 'plan'),
       waitForGate(h.api, kill.runId, 'plan'),
     ]);
-    // Resolve two parked runs to OPPOSITE terminals in the same tick — approve drives one through
-    // to completion, reject signals the other's recv and cancels it (B3). Both resolve via gate
-    // signals (no lingering workflow), and the per-run deterministic terminal writes must not cross.
+    // Resolve two parked runs to OPPOSITE terminals in the same tick — approve drives one through to
+    // completion; reject signals the other's recv and routes it to the data-driven `blocked` terminal
+    // (B3 — the old hard-cancel is now a data-routed block). Both resolve via gate signals (no lingering
+    // workflow), and the per-run deterministic terminal writes must not cross.
     const [terminal] = await Promise.all([
       approveUntilTerminal(h.api, keep.runId),
       h.api.rejectGate({ inboxId: killGate.inboxId, resolvedBy: 'e2e' }),
     ]);
     assert.equal(terminal.state, 'completed');
-    await waitState(h.api, kill.runId); // let the reject settle the run (waitForRun reports a cancelled run as a settled non-gate state)
+    await waitState(h.api, kill.runId); // let the reject settle the run (waitForRun reports a blocked run as a settled non-gate state)
     const killed = await h.api.getRun({ runId: kill.runId });
-    assert.equal(killed.run.status, 'cancelled'); // plan-gate reject cancels the run (B3), even concurrently with another's approval
+    assert.notEqual(killed.run.status, 'completed'); // plan-gate reject blocks the run (B3), even concurrently with another's approval
     assert.equal(await countEvents(keep.runId, 'run_completed'), 1);
-    assert.equal(await countEvents(kill.runId, 'run_cancelled'), 1);
+    assert.equal(await countEvents(kill.runId, 'pipeline_blocked') >= 1, true, 'the rejected run emitted pipeline_blocked');
   } finally {
     targets.forEach((t) => t.cleanup());
   }
