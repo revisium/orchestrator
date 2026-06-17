@@ -20,6 +20,7 @@ test('composeRolePrompt: appends core reference and returns stable hash', () => 
     path: 'roles/developer/ROLE.md',
     surface: 'any',
     rights: 'write-working-tree',
+    allowedTools: ['Read', 'Edit', 'Write', 'Bash'],
     defaultModelLevel: 'standard',
     runnerId: 'claude-code',
     wrappers: {},

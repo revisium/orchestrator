@@ -34,6 +34,7 @@ function makePlaybookRoot(): string {
         path: 'roles/developer/ROLE.md',
         surface: 'any',
         rights: 'write-working-tree',
+        allowed_tools: ['Read', 'Edit', 'Write', 'Bash'],
         default_model_level: 'standard',
         runner_id: 'claude-code',
       },

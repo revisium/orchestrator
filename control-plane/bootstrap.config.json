@@ -499,11 +499,6 @@
             "default": "",
             "description": "Portable playbook runner binding, for example claude-code or revo-integrator"
           },
-          "kind": {
-            "type": "string",
-            "default": "",
-            "description": "Role classification for the pipeline phase: developer|review|status|integrator (empty = infer from id)"
-          },
           "allowed_tools": {
             "type": "array",
             "items": {
@@ -878,7 +873,7 @@
       "data": {
         "id": "integrator",
         "name": "integrator",
-        "system_prompt": "[DEPRECATED] Integration is now deterministic code in src/runners/integrator.ts; this role is retired from the executed chain and is not dispatched. Kept only so `run create --role integrator` validates against KNOWN_ROLES.",
+        "system_prompt": "[DEPRECATED] Integration is now deterministic code in src/runners/integrator.ts; this role is retired from the executed chain and is not dispatched. Kept only so `run create --role integrator` resolves to a seeded role row.",
         "model_level": "standard",
         "effort": "high",
         "runner": "script",
