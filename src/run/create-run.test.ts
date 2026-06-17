@@ -6,7 +6,6 @@ import path from 'node:path';
 import {
   createRunWorkflow,
   CreateRunWorkflowError,
-  KNOWN_ROLES,
   type CreateRunInput,
   type CreateRunResult,
 } from './create-run.js';
@@ -257,19 +256,22 @@ test('omitting role defaults both fields to architect', async () => {
   assert.equal(byTable(rows, 'steps').data.role, 'architect');
 });
 
-test('unsafe or unknown bare role rejects before assertReady or writes', async () => {
+test('a charset-invalid bare role rejects before assertReady or writes', async () => {
   const { access, calls, rows } = createFakeDataAccess();
 
-  await assert.rejects(() => createRunWorkflow(access, { ...baseInput, role: 'tester' }), /role must be/);
+  await assert.rejects(() => createRunWorkflow(access, { ...baseInput, role: 'tester!' }), /role must be/);
   assert.deepEqual(calls, []);
   assert.deepEqual(rows, []);
 });
 
-test('each known role is accepted and written to steps.role', async () => {
-  for (const knownRole of KNOWN_ROLES) {
+test('any well-formed role id is accepted (no KNOWN_ROLES allow-list; hyphen no longer required)', async () => {
+  // Roles are DATA, not a code allow-list: a hyphen-less bare id ('developer', 'tester') and the former
+  // legacy ids are all accepted (charset + length only). The data-driven engine resolves the role row id
+  // as an opaque capability handle.
+  for (const role of ['architect', 'developer', 'reviewer', 'integrator', 'pr-watcher', 'tester']) {
     const { access, rows } = createFakeDataAccess();
-    await createRunWorkflow(access, { ...baseInput, role: knownRole });
-    assert.equal(byTable(rows, 'steps').data.role, knownRole);
+    await createRunWorkflow(access, { ...baseInput, role });
+    assert.equal(byTable(rows, 'steps').data.role, role);
   }
 });
 

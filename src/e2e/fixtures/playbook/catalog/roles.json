@@ -4,6 +4,7 @@
     "path": "stub.md",
     "surface": "any",
     "rights": "read-only",
+    "allowed_tools": ["Read", "Grep", "Glob"],
     "default_model_level": "deep",
     "runner_id": "claude-code",
     "wrappers": {
@@ -16,6 +17,7 @@
     "path": "stub.md",
     "surface": "any",
     "rights": "read-only",
+    "allowed_tools": ["Read", "Grep", "Glob"],
     "default_model_level": "deep",
     "runner_id": "claude-code",
     "wrappers": {
@@ -28,6 +30,7 @@
     "path": "stub.md",
     "surface": "deployment",
     "rights": "deploy-read",
+    "allowed_tools": ["Read", "Bash"],
     "default_model_level": "standard",
     "runner_id": "claude-code",
     "wrappers": {
@@ -40,6 +43,7 @@
     "path": "stub.md",
     "surface": "any",
     "rights": "write-working-tree",
+    "allowed_tools": ["Read", "Grep", "Glob", "Edit", "Write", "Bash"],
     "default_model_level": "standard",
     "runner_id": "claude-code",
     "wrappers": {
@@ -52,6 +56,7 @@
     "path": "stub.md",
     "surface": "backend",
     "rights": "write-working-tree",
+    "allowed_tools": ["Read", "Grep", "Glob", "Edit", "Write", "Bash"],
     "default_model_level": "standard",
     "runner_id": "claude-code",
     "wrappers": {
@@ -64,6 +69,7 @@
     "path": "stub.md",
     "surface": "frontend",
     "rights": "write-working-tree",
+    "allowed_tools": ["Read", "Grep", "Glob", "Edit", "Write", "Bash"],
     "default_model_level": "standard",
     "runner_id": "claude-code",
     "wrappers": {
@@ -76,6 +82,7 @@
     "path": "stub.md",
     "surface": "repo",
     "rights": "git-gh",
+    "allowed_tools": ["Read", "Bash"],
     "default_model_level": "standard",
     "runner_id": "revo-integrator",
     "wrappers": {
@@ -88,6 +95,7 @@
     "path": "stub.md",
     "surface": "method",
     "rights": "write-working-tree",
+    "allowed_tools": ["Read", "Grep", "Glob", "Edit", "Write", "Bash"],
     "default_model_level": "deep",
     "runner_id": "claude-code",
     "wrappers": {
@@ -100,6 +108,7 @@
     "path": "stub.md",
     "surface": "repo",
     "rights": "git-gh",
+    "allowed_tools": ["Read", "Bash"],
     "default_model_level": "standard",
     "runner_id": "revo-merger",
     "wrappers": {
@@ -112,6 +121,7 @@
     "path": "stub.md",
     "surface": "any",
     "rights": "read-only",
+    "allowed_tools": ["Read", "Grep", "Glob"],
     "default_model_level": "deep",
     "runner_id": "claude-code",
     "wrappers": {
@@ -124,6 +134,7 @@
     "path": "stub.md",
     "surface": "backend",
     "rights": "qa-live",
+    "allowed_tools": ["Read", "Bash"],
     "default_model_level": "standard",
     "runner_id": "claude-code",
     "wrappers": {
@@ -136,6 +147,7 @@
     "path": "stub.md",
     "surface": "frontend",
     "rights": "qa-live",
+    "allowed_tools": ["Read", "Bash"],
     "default_model_level": "standard",
     "runner_id": "claude-code",
     "wrappers": {
@@ -148,6 +160,7 @@
     "path": "stub.md",
     "surface": "any",
     "rights": "read-only",
+    "allowed_tools": ["Read", "Grep", "Glob"],
     "default_model_level": "deep",
     "runner_id": "claude-code",
     "wrappers": {
@@ -160,6 +173,7 @@
     "path": "stub.md",
     "surface": "repo",
     "rights": "read-only",
+    "allowed_tools": ["Read", "Grep", "Glob"],
     "default_model_level": "standard",
     "runner_id": "claude-code",
     "wrappers": {
@@ -172,6 +186,7 @@
     "path": "stub.md",
     "surface": "any",
     "rights": "read-only",
+    "allowed_tools": ["Read", "Grep", "Glob"],
     "default_model_level": "cheap",
     "runner_id": "claude-code"
   },
@@ -180,8 +195,8 @@
     "path": "stub.md",
     "surface": "any",
     "rights": "read-only",
+    "allowed_tools": ["Read", "Grep", "Glob"],
     "default_model_level": "cheap",
-    "runner_id": "claude-code",
-    "kind": "status"
+    "runner_id": "claude-code"
   }
 ]

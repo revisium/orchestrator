@@ -8,7 +8,6 @@ import { registerMcp } from './commands/mcp.js';
 import { registerPlaybook } from './commands/playbook.js';
 import { registerRevisium } from './commands/revisium.js';
 import { registerRun } from './commands/run.js';
-import { registerWork } from './commands/work.js';
 
 export { readPackageVersion };
 
@@ -31,7 +30,6 @@ export function buildProgram(app?: INestApplicationContext): Command {
   registerBootstrap(program);
   registerPlaybook(program);
   registerRun(program, app);
-  registerWork(program);
   registerInbox(program, app); // G6: forward app so gate resolve path can access DbosService
   registerMcp(program, app);
   registerDev(program, app);

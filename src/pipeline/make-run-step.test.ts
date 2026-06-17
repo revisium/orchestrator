@@ -165,10 +165,10 @@ test('T1: runStep(architect) writes one step_succeeded event with a canonical lo
   assert.equal(harness.loadRoleArgs[0], 'architect');
   assert.ok(!harness.loadRoleArgs[0]?.includes('#'), 'loadRole must receive canonical name');
 
-  // Output carries the stub echo + the step input.
+  // Output carries the generic stub echo + a passing verdict (the stub is role-agnostic, slice 4).
   const output = result.output as Record<string, unknown>;
   assert.ok(typeof output.echo === 'string' && output.echo.includes('role=architect'));
-  assert.equal(output.phase, 'plan');
+  assert.equal(output.verdict, 'PASS');
 
   // A bounded, deterministic attempt row was written.
   const attempt = harness.appendAttemptInputs[0];
