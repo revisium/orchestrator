@@ -68,7 +68,7 @@ test('default playbook: installs as revisium-default with feature-development + 
 
   assert.equal(result.playbookId, DEFAULT_PLAYBOOK_ID);
   assert.equal(result.committed, true);
-  assert.ok(result.roles >= 5, `expected the core roles to install (got ${result.roles})`);
+  assert.equal(result.roles, 6, `expected exactly 6 default roles (got ${result.roles})`);
   assert.equal(result.pipelines, 2, 'feature-development + local-change');
 
   const pipelineRowIds = fake.rows.filter((r) => r.table === 'pipelines').map((r) => r.rowId);
@@ -182,6 +182,15 @@ test('seedDefaultPlaybook: tolerates a benign concurrent-commit race', async () 
   const installer: DefaultPlaybookInstaller = {
     async listPlaybooks() { return []; },
     async install() { throw new Error('revision is not a draft'); },
+  };
+  const outcome = await seedDefaultPlaybook(installer, DEFAULT_PLAYBOOK_SOURCE);
+  assert.equal(outcome.status, 'raced');
+});
+
+test('seedDefaultPlaybook: tolerates a benign race thrown as a non-Error value', async () => {
+  const installer: DefaultPlaybookInstaller = {
+    async listPlaybooks() { return []; },
+    async install() { throw 'revision is not a draft'; },
   };
   const outcome = await seedDefaultPlaybook(installer, DEFAULT_PLAYBOOK_SOURCE);
   assert.equal(outcome.status, 'raced');

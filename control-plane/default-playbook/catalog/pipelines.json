@@ -234,7 +234,7 @@
                 "goto": "mergedEnd"
               },
               {
-                "default": "mergedEnd"
+                "default": "blockedEnd"
               }
             ]
           },

@@ -37,9 +37,15 @@ export type DefaultPlaybookInstaller = {
   install(options: { source: string; name: string; commit: boolean }): Promise<PlaybookInstallResult>;
 };
 
-/** True for a benign "already committed / nothing to do" race during a concurrent bootstrap. */
+/**
+ * True for a benign "already committed / nothing to do" race during a concurrent bootstrap. Matched
+ * narrowly against the explicit duplicate-commit signals (Revisium draft commit + control-plane
+ * ROW_CONFLICT) — a generic `already` substring would misclassify unrelated installer failures as a
+ * race and silently swallow them.
+ */
 function isBenignInstallRace(err: unknown): boolean {
-  return /not a draft|already|nothing to commit|ROW_CONFLICT/i.test(String(err));
+  const message = err instanceof Error ? err.message : String(err);
+  return /revision is not a draft|nothing to commit|ROW_CONFLICT/i.test(message);
 }
 
 /**
