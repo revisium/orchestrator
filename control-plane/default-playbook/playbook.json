@@ -1,0 +1,13 @@
+{
+  "id": "revisium-default",
+  "name": "Revisium Default Playbook",
+  "schema_version": 2,
+  "package": "@revisium/orchestrator-default-playbook",
+  "catalogs": {
+    "roles": "catalog/roles.json",
+    "pipelines": "catalog/pipelines.json"
+  },
+  "supported_runtimes": [
+    "revo"
+  ]
+}

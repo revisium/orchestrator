@@ -1,0 +1,329 @@
+[
+  {
+    "id": "feature-development",
+    "path": "prompts/orchestrator.md",
+    "triggers": [
+      "new feature",
+      "multi-repo change",
+      "task-to-PR work"
+    ],
+    "required_roles": [
+      "orchestrator",
+      "analyst",
+      "reviewer",
+      "developer",
+      "integrator",
+      "watcher"
+    ],
+    "alternative_roles": [],
+    "optional_roles": [],
+    "route_gates": [
+      "task spec approval",
+      "merge approval"
+    ],
+    "platform_invocation": "canonical-only",
+    "execution_policy": {
+      "raw": [
+        "Built-in default (slice 5, plan 0015): the pipeline graph is DATA — see template_json.",
+        "analyst -> reviewer[plan gate] -> developer -> reviewer[code] (bounded rework, cap 3) -> integrator(script) -> watcher[post-integrator] -> merge gate."
+      ],
+      "template_json": {
+        "specVersion": "1.0",
+        "pipelineId": "feature-development",
+        "entry": "analyst",
+        "verdicts": {
+          "domain": [
+            "approved",
+            "clean",
+            "blocker",
+            "changes_requested"
+          ]
+        },
+        "nodes": {
+          "analyst": {
+            "id": "analyst",
+            "kind": "agent",
+            "roleRef": "role:analyst",
+            "next": "planReviewer",
+            "onFailure": "abort",
+            "resultSchema": "schema:plan"
+          },
+          "planReviewer": {
+            "id": "planReviewer",
+            "kind": "agent",
+            "roleRef": "role:reviewer",
+            "next": "planGate",
+            "onFailure": "abort",
+            "resultSchema": "schema:reviewVerdict"
+          },
+          "planGate": {
+            "id": "planGate",
+            "kind": "humanGate",
+            "reason": "plan-review",
+            "outcomes": [
+              "approved"
+            ],
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "approved"
+                },
+                "goto": "developer"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ]
+          },
+          "developer": {
+            "id": "developer",
+            "kind": "agent",
+            "roleRef": "role:developer",
+            "next": "codeReview",
+            "onFailure": "abort",
+            "resultSchema": "schema:change"
+          },
+          "codeReview": {
+            "id": "codeReview",
+            "kind": "agent",
+            "roleRef": "role:reviewer",
+            "next": "codeReviewRouter",
+            "onFailure": "abort",
+            "resultSchema": "schema:reviewVerdict"
+          },
+          "codeReviewRouter": {
+            "id": "codeReviewRouter",
+            "kind": "choice",
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.in",
+                  "value": [
+                    "approved",
+                    "clean"
+                  ]
+                },
+                "goto": "integrator"
+              },
+              {
+                "when": {
+                  "op": "all",
+                  "of": [
+                    {
+                      "op": "verdict.in",
+                      "value": [
+                        "blocker",
+                        "changes_requested"
+                      ]
+                    },
+                    {
+                      "op": "counter.lt",
+                      "scope": "codeReviewLoop",
+                      "value": 3
+                    }
+                  ]
+                },
+                "goto": "reworkDeveloper"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ]
+          },
+          "reworkDeveloper": {
+            "id": "reworkDeveloper",
+            "kind": "agent",
+            "roleRef": "role:developer",
+            "next": "codeReview",
+            "onFailure": "abort",
+            "resultSchema": "schema:change",
+            "incrementCounters": [
+              "codeReviewLoop"
+            ]
+          },
+          "integrator": {
+            "id": "integrator",
+            "kind": "script",
+            "scriptRef": "script:integrator",
+            "next": "watcherPost",
+            "catch": [
+              {
+                "onError": "revo.ScriptBlocked",
+                "goto": "blockedEnd"
+              },
+              {
+                "onError": "revo.ScriptFailed",
+                "goto": "failedEnd"
+              }
+            ],
+            "onFailure": "route",
+            "resultSchema": "schema:integration"
+          },
+          "watcherPost": {
+            "id": "watcherPost",
+            "kind": "agent",
+            "roleRef": "role:watcher",
+            "next": "watcherRouter",
+            "onFailure": "abort",
+            "resultSchema": "schema:watchVerdict"
+          },
+          "watcherRouter": {
+            "id": "watcherRouter",
+            "kind": "choice",
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.in",
+                  "value": [
+                    "approved",
+                    "clean"
+                  ]
+                },
+                "goto": "mergeGate"
+              },
+              {
+                "when": {
+                  "op": "all",
+                  "of": [
+                    {
+                      "op": "verdict.in",
+                      "value": [
+                        "blocker",
+                        "changes_requested"
+                      ]
+                    },
+                    {
+                      "op": "counter.lt",
+                      "scope": "watcherLoop",
+                      "value": 3
+                    }
+                  ]
+                },
+                "goto": "watcherRework"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ]
+          },
+          "watcherRework": {
+            "id": "watcherRework",
+            "kind": "agent",
+            "roleRef": "role:developer",
+            "next": "integrator",
+            "onFailure": "abort",
+            "resultSchema": "schema:change",
+            "incrementCounters": [
+              "watcherLoop"
+            ]
+          },
+          "mergeGate": {
+            "id": "mergeGate",
+            "kind": "humanGate",
+            "reason": "merge-review",
+            "outcomes": [
+              "approved"
+            ],
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "approved"
+                },
+                "goto": "mergedEnd"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ]
+          },
+          "mergedEnd": {
+            "id": "mergedEnd",
+            "kind": "terminal",
+            "status": "succeeded"
+          },
+          "failedEnd": {
+            "id": "failedEnd",
+            "kind": "terminal",
+            "status": "failed"
+          },
+          "blockedEnd": {
+            "id": "blockedEnd",
+            "kind": "terminal",
+            "status": "blocked"
+          }
+        },
+        "title": "Feature development — plan + merge gates, bounded code-review + watcher rework",
+        "policy": {
+          "conflicts": [
+            [
+              "developer",
+              "reviewer"
+            ]
+          ],
+          "enforcement": "strict"
+        },
+        "scopes": {
+          "codeReviewLoop": {
+            "cap": 3,
+            "parent": null
+          },
+          "watcherLoop": {
+            "cap": 3,
+            "parent": null
+          }
+        }
+      }
+    }
+  },
+  {
+    "id": "local-change",
+    "path": "prompts/orchestrator.md",
+    "triggers": [
+      "small local edit",
+      "obvious fix",
+      "repo-local maintenance"
+    ],
+    "required_roles": [
+      "orchestrator",
+      "developer"
+    ],
+    "alternative_roles": [],
+    "optional_roles": [],
+    "route_gates": [],
+    "platform_invocation": "canonical-only",
+    "execution_policy": {
+      "raw": [
+        "Built-in default (slice 5, plan 0015): the pipeline graph is DATA — see template_json.",
+        "orchestrator routes; the graph runs developer -> done with no gate."
+      ],
+      "template_json": {
+        "specVersion": "1.0",
+        "pipelineId": "local-change",
+        "entry": "developer",
+        "verdicts": {
+          "domain": [
+            "approved"
+          ]
+        },
+        "nodes": {
+          "developer": {
+            "id": "developer",
+            "kind": "agent",
+            "roleRef": "role:developer",
+            "next": "doneEnd",
+            "onFailure": "abort",
+            "resultSchema": "schema:change"
+          },
+          "doneEnd": {
+            "id": "doneEnd",
+            "kind": "terminal",
+            "status": "succeeded"
+          }
+        },
+        "title": "Local change — developer only, no gate"
+      }
+    }
+  }
+]

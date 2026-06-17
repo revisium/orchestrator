@@ -28,6 +28,7 @@
     "dist/",
     "bin/",
     "control-plane/bootstrap.config.json",
+    "control-plane/default-playbook/",
     "revisium.config.json"
   ],
   "publishConfig": {
