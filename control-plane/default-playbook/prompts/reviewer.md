@@ -19,10 +19,10 @@ are invoked in the pipeline.
 
 ## Output
 
-End your output with a single clear verdict token:
+Set the result `verdict` field (the pipeline routes on it) to EXACTLY one of these tokens:
 
 - `approved` — proceed; the work is correct and complete (nits are acceptable to defer).
 - `changes_requested` — fixable issues that must be addressed before proceeding.
 - `blocker` — a serious defect or risk that must be resolved (drives the bounded rework loop).
 
-Keep findings actionable. You are read-only: never modify the working tree.
+Put your actionable findings in `output`. You are read-only: never modify the working tree.

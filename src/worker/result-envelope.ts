@@ -15,7 +15,8 @@ valid JSON between them, and NOTHING after the closing marker:
 
 <<<REVO_RESULT
 {
-  "output": <any JSON — a short human-readable summary or structured result>,
+  "verdict": <REQUIRED if your role emits one — EXACTLY one routing token, lowercase, no prose, e.g. "approved" | "changes_requested" | "blocker" | "clean" | "dirty"; the pipeline routes on this. Use null if your role emits no verdict>,
+  "output": <any JSON — a short human-readable summary or structured result the next step consumes>,
   "artifacts": <any JSON, optional — e.g. { "planPath": "docs/plans/00xx.md" }; omit if none>,
   "nextSteps": [
     { "role": "developer", "kind": "implement", "input": { "from": "<this step>" },
@@ -36,16 +37,58 @@ If you have no follow-up work, return "nextSteps": []. If you are blocked and ne
 const OPEN_MARKER = '<<<REVO_RESULT';
 const CLOSE_MARKER = 'REVO_RESULT>>>';
 
+// PRIMARY result channel (0016 follow-up): the claude CLI `--json-schema` constrains the agent's final
+// message to this schema and returns it as the transport `structured_output` field — a RELIABLE
+// `verdict` (the pipeline routes on it), unlike mining a free-text REVO_RESULT block (which the agent
+// shaped as prose, leaving no routable verdict). `output` is the summary/plan the next step consumes.
+export const AGENT_RESULT_SCHEMA = JSON.stringify({
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    verdict: { type: 'string', description: 'the single routing token, lowercase, e.g. approved | changes_requested | blocker | clean | dirty' },
+    output: { type: 'string', description: 'a short summary, or the artifact (e.g. the plan) the next step consumes' },
+    needsHuman: { type: 'boolean', description: 'true only if you are blocked and a human must intervene' },
+    lesson: { type: 'string', description: 'optional one-line note for a future attempt' },
+  },
+  required: ['verdict', 'output'],
+});
+
+/** Short prompt note paired with `--json-schema` (replaces the prose REVO_RESULT block — the two output
+ *  instructions conflict; with --json-schema the CLI returns `structured_output`). */
+export const STRUCTURED_RESULT_NOTE = `
+Return your final answer as JSON matching the provided output schema:
+- "verdict": the single routing token for your role (lowercase; e.g. approved | changes_requested | blocker | clean | dirty).
+- "output": a short summary, or — if you produce an artifact for a later step (e.g. an implementation plan) — that artifact.
+Set "needsHuman": true only if you are blocked and a human must intervene.
+`;
+
+/** Build the AgentResult from a validated structured_output object (the --json-schema path). */
+export function agentResultFromStructured(structured: unknown): AgentResult | null {
+  if (structured === null || typeof structured !== 'object') return null;
+  const o = structured as Record<string, unknown>;
+  return {
+    output: typeof o.output === 'string' ? o.output : (o.output ?? ''),
+    verdict: typeof o.verdict === 'string' && o.verdict.length > 0 ? o.verdict : undefined,
+    artifacts: o.artifacts,
+    nextSteps: Array.isArray(o.nextSteps) ? o.nextSteps : [],
+    needsHuman: Boolean(o.needsHuman),
+    lesson: typeof o.lesson === 'string' ? o.lesson : undefined,
+  };
+}
+
 export type TransportEnvelope = {
   text: string;
   isError: boolean;
   costUsd?: number;
   inputTokens?: number;
   outputTokens?: number;
+  /** The `--json-schema`-validated final message (claude CLI `structured_output`), when present. */
+  structuredOutput?: unknown;
 };
 
 export type AgentResult = {
   output: unknown;
+  verdict?: string;
   artifacts?: unknown;
   nextSteps: unknown[];
   needsHuman: boolean;
@@ -85,6 +128,7 @@ export function parseTransportEnvelope(stdout: string): TransportEnvelope {
     costUsd: readNumber(obj.total_cost_usd) ?? readNumber(obj.cost_usd),
     inputTokens: readNumber(usage?.input_tokens),
     outputTokens: readNumber(usage?.output_tokens),
+    structuredOutput: obj.structured_output,
   };
 }
 
@@ -109,6 +153,7 @@ export function extractAgentResult(text: string): AgentResult {
   const obj = parsed as Record<string, unknown>;
   return {
     output: obj.output,
+    verdict: typeof obj.verdict === 'string' && obj.verdict.length > 0 ? obj.verdict : undefined,
     artifacts: obj.artifacts,
     nextSteps: Array.isArray(obj.nextSteps) ? obj.nextSteps : [],
     needsHuman: Boolean(obj.needsHuman),

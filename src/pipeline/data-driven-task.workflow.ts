@@ -115,10 +115,31 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * The value is lowercased to match the spec's domain vocabulary (`approved|blocker|clean|…`).
  */
 function domainVerdictOf(result: AttemptResult): string | undefined {
+  // Preferred: the explicit top-level `verdict` (REVO_RESULT contract — a prominent required field the
+  // agent reliably fills, unlike a prose `output`).
+  if (typeof result.verdict === 'string' && result.verdict.length > 0) return normalizeDomainLabel(result.verdict);
   const output = result.output;
-  const raw = isRecord(output) ? output.verdict : output;
-  if (typeof raw !== 'string') return undefined;
-  return normalizeDomainLabel(raw);
+  // Then a structured `output: { verdict: "<label>" }` (back-compat with the older convention).
+  if (isRecord(output) && typeof output.verdict === 'string') return normalizeDomainLabel(output.verdict);
+  // Fallback: the agent returned a free-text/summary string. The prompt still requires a verdict token,
+  // so scan the text for the LAST known domain label as a whole word. Without this a prose-shaped output
+  // yields no routable verdict and a `choice` router falls to its default → blocked (the planReviewRouter
+  // exposed exactly this in the alpha.4 dogfood: "Plan approved: …" produced no `approved` for routing).
+  if (typeof output === 'string') return scanVerdict(output);
+  return undefined;
+}
+
+/** Exact domain-verdict words a free-text output may carry (NOT the PASS/MINOR structural aliases — those
+ *  would false-positive on prose like "tests passed"). */
+const DOMAIN_VERDICT_WORDS = new Set(['APPROVED', 'CLEAN', 'CHANGES_REQUESTED', 'BLOCKER', 'DIRTY']);
+
+/** Last known domain-verdict word in free text → its lowercase label. Total + deterministic. */
+function scanVerdict(text: string): string | undefined {
+  let found: string | undefined;
+  for (const token of text.split(/[^A-Za-z_]+/)) {
+    if (token && DOMAIN_VERDICT_WORDS.has(token.toUpperCase())) found = token.toLowerCase();
+  }
+  return found;
 }
 
 /**

@@ -176,14 +176,28 @@ test('claude-code runner (0008 #5): no --max-turns flag when params is empty', a
 
 // ─── prompt contains the contract (regression guard) ──────────────────────────
 
-test('claude-code runner: appends REVO_RESULT_CONTRACT to every prompt', async () => {
+test('claude-code runner: constrains output via --json-schema + a structured-result note', async () => {
   const captured: ExecRequest[] = [];
   const stdout = transport(agentBlock({ output: 'ok', nextSteps: [], needsHuman: false }));
   await run(fakeExecutor(ok(stdout), captured));
 
+  const args = captured[0]?.args ?? [];
+  assert.ok(args.includes('--json-schema'), 'args must pass --json-schema (structured output)');
   const input = captured[0]?.input ?? '';
-  assert.ok(input.includes('<<<REVO_RESULT'), 'prompt must contain the open marker');
-  assert.ok(input.includes('REVO_RESULT>>>'), 'prompt must contain the close marker');
+  assert.ok(/verdict/.test(input), 'prompt must instruct the structured result (verdict field)');
+});
+
+test('claude-code runner: reads verdict + output from --json-schema structured_output', async () => {
+  const stdout = transport('ignored prose', { structured_output: { verdict: 'approved', output: 'the plan' } });
+  const result = await run(fakeExecutor(ok(stdout), []));
+  assert.equal(result.verdict, 'approved', 'verdict comes from the validated structured_output');
+  assert.equal(result.output, 'the plan');
+});
+
+test('claude-code runner: falls back to the prose REVO_RESULT block when structured_output is absent', async () => {
+  const stdout = transport(agentBlock({ verdict: 'blocker', output: 'x', nextSteps: [], needsHuman: false }));
+  const result = await run(fakeExecutor(ok(stdout), []));
+  assert.equal(result.verdict, 'blocker', 'verdict parsed from the prose-envelope fallback');
 });
 
 // ─── envelope parse → AttemptResult ───────────────────────────────────────────
