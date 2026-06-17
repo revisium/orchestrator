@@ -45,6 +45,7 @@ import type { ExecutionProfile, RouteDecision, RouteRoleBinding } from './route-
 import { runnerNeedsLivePreflight, runnerUsesRealIntegrator } from './route-contract.js';
 import type { IntegratorInput, IntegratorOutput, IntegratorBlocked } from '../runners/integrator.js';
 import type { AppendEventInput } from '../run/append-event.js';
+import type { RunOutputRow } from '../run/run-outputs.js';
 import type { Decision as GateDecision } from './await-human.js';
 import type { CompleteRunResult } from '../run/complete-run.js';
 import type { FailRunResult } from '../run/fail-run.js';
@@ -84,6 +85,22 @@ const MAX_STEPS = 1_000; // a VALID template terminates; guards a data/loop auth
 const REVO_SCRIPT_FAILED = 'revo.ScriptFailed' as const;
 const REVO_SCRIPT_BLOCKED = 'revo.ScriptBlocked' as const;
 const REVO_RESULT_INVALID = 'revo.ResultInvalid' as const;
+const REVO_INPUT_MISSING = 'revo.InputMissing' as const;
+
+/** Per-node execution stepKey: the bare nodeId on the first entry (stable ids for existing tests), an
+ *  ordinal-suffixed key on loop re-entries so attempts/events/outputs are distinct per iteration (0016
+ *  §4.1 — fixes the latent 0015 stepKey-reuse collision). */
+function stepKeyFor(nodeId: string, ordinal: number): string {
+  return ordinal <= 1 ? nodeId : `${nodeId}#${ordinal}`;
+}
+
+/** Next per-(run,node) execution ordinal (1-based). Deterministic on DBOS replay: the runBody loop
+ *  re-runs identically (coreStep is pure, effects are memoized), so the accumulator is rebuilt 1:1. */
+function nextOrdinal(byNode: Map<string, number>, nodeId: string): number {
+  const n = (byNode.get(nodeId) ?? 0) + 1;
+  byNode.set(nodeId, n);
+  return n;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -158,6 +175,8 @@ function resultSatisfiesSchema(node: Node, result: AttemptResult): boolean {
 /** Dependencies for the dataDrivenTask builder. */
 export type DataDrivenTaskDeps = {
   appendEvent: (input: AppendEventInput) => Promise<void>;
+  /** Persist a produced step output to Revisium (0016). DBOS-wrapped in prod; idempotent on replay. */
+  appendRunOutput: (input: RunOutputRow) => Promise<void>;
   /** Reuse of the gate park/resume (DBOS recv/send) — the SAME mechanism the hardcoded path uses. */
   awaitHuman: (
     runId: string,
@@ -223,7 +242,64 @@ export function makeDataDrivenTask(
   ) => Promise<AttemptResult>,
   deps: DataDrivenTaskDeps,
 ) {
-  const { appendEvent, awaitHuman, completeRun, failRun, blockRun, loadRunTaskContext, integrateFn, runStub, preflightFn } = deps;
+  const { appendEvent, appendRunOutput, awaitHuman, completeRun, failRun, blockRun, loadRunTaskContext, integrateFn, runStub, preflightFn } = deps;
+
+  /** Resolve a node's `consumes` from the workflow-local output accumulator — NOT live Revisium reads
+   *  (0016 §6 / consensus M4: a live read on replay can see rows written past the replay point). */
+  function resolveConsumes(
+    node: Node,
+    outputsByNode: Map<string, RunOutputRow[]>,
+  ): { inputs: Record<string, unknown> } | { missing: string } {
+    const refs = 'consumes' in node ? (node.consumes ?? []) : [];
+    const inputs: Record<string, unknown> = {};
+    for (const ref of refs) {
+      const produced = outputsByNode.get(ref.node) ?? [];
+      const iteration = ref.iteration ?? 'latest';
+      let value: unknown;
+      let found: boolean;
+      if (iteration === 'all') {
+        value = produced.map((o) => o.payload);
+        found = produced.length > 0;
+      } else if (iteration === 'latest') {
+        value = produced.length ? produced[produced.length - 1].payload : undefined;
+        found = produced.length > 0;
+      } else {
+        const hit = produced.find((o) => o.ordinal === iteration);
+        value = hit?.payload;
+        found = hit !== undefined;
+      }
+      if (!found) {
+        if (ref.optional) continue;
+        return { missing: `${ref.node} as ${ref.as}` };
+      }
+      inputs[ref.as] = value;
+    }
+    return { inputs };
+  }
+
+  /** Record a node's produced output to the workflow-local accumulator + Revisium (when `produces`). */
+  async function recordOutput(
+    runId: string,
+    node: Node,
+    ordinal: number,
+    output: unknown,
+    outputsByNode: Map<string, RunOutputRow[]>,
+  ): Promise<void> {
+    if (!('produces' in node) || !node.produces) return;
+    const row: RunOutputRow = {
+      runId,
+      nodeId: node.id,
+      ordinal,
+      name: node.produces.name,
+      schemaRef: ('resultSchema' in node && node.resultSchema) || '',
+      payload: output,
+      attemptId: stepKeyFor(node.id, ordinal),
+    };
+    const list = outputsByNode.get(node.id) ?? [];
+    list.push(row);
+    outputsByNode.set(node.id, list);
+    await appendRunOutput(row);
+  }
 
   return async function dataDrivenTaskImpl(
     runId: string,
@@ -292,6 +368,11 @@ export function makeDataDrivenTask(
     let lastResult: LastResult | undefined;
     let lastVerdict = '';
     let stepCount = 0;
+    // Workflow-local dataflow state (0016 §4.1/§6): per-node execution ordinals + produced outputs.
+    // Both are rebuilt deterministically on DBOS replay (the loop re-runs identically); the adapter
+    // hydrates consumers from `outputsByNode`, never from a live Revisium read.
+    const effectOrdinalByNode = new Map<string, number>();
+    const outputsByNode = new Map<string, RunOutputRow[]>();
 
     for (let i = 0; i < MAX_STEPS; i++) {
       const { state: nextState, decision } = coreStep(template, state, lastResult);
@@ -303,6 +384,7 @@ export function makeDataDrivenTask(
 
       const eff = await applyDecision(decision, {
         runId, template, bindingByRef, executionProfile, taskId, title, base,
+        effectOrdinalByNode, outputsByNode,
       });
       lastResult = eff.lastResult;
       if (eff.lastVerdict !== undefined) lastVerdict = eff.lastVerdict;
@@ -326,6 +408,8 @@ export function makeDataDrivenTask(
     taskId: string;
     title: string;
     base: string;
+    effectOrdinalByNode: Map<string, number>;
+    outputsByNode: Map<string, RunOutputRow[]>;
   };
 
   /**
@@ -341,10 +425,24 @@ export function makeDataDrivenTask(
     switch (decision.type) {
       case 'invokeRole': {
         const node = resolveNode(template, decision.nodeId);
-        const result = await invokeRole(runId, decision, node, bindingByRef, executionProfile);
+        const ordinal = nextOrdinal(ctx.effectOrdinalByNode, node.id);
+        const stepKey = stepKeyFor(node.id, ordinal);
+        const resolved = resolveConsumes(node, ctx.outputsByNode);
+        if ('missing' in resolved) {
+          // A required upstream output is absent → fail-loud as a WIRING fault (0016 §6 / consensus M3):
+          // a dedicated step_failed names the missing (node, as), distinct from a domain `blocker`. The
+          // node's default onFailure='abort' then routes to a failed terminal (the run fails loud).
+          await appendEvent({
+            runId, taskId, stepId: '', stepKey, type: 'step_failed',
+            payload: { nodeId: node.id, error: `${REVO_INPUT_MISSING}: required input ${resolved.missing} was not produced` },
+          });
+          return { lastResult: { outcome: 'failed', errorCode: REVO_INPUT_MISSING }, lastVerdict: 'failed', stepDelta: 1 };
+        }
+        const result = await invokeRole(runId, decision, node, bindingByRef, executionProfile, resolved.inputs, stepKey);
         if (result.failed) {
           return { lastResult: { outcome: 'failed', errorCode: result.errorCode }, lastVerdict: 'failed', stepDelta: 1 };
         }
+        await recordOutput(runId, node, ordinal, result.output, ctx.outputsByNode);
         const verdict = result.verdict;
         return {
           lastResult: { outcome: 'succeeded', ...(verdict ? { verdict } : {}) },
@@ -353,7 +451,9 @@ export function makeDataDrivenTask(
         };
       }
       case 'invokeScript': {
-        const scriptResult = await invokeScript(runId, decision, { taskId, title, base }, bindingByRef);
+        const node = resolveNode(template, decision.nodeId);
+        const ordinal = nextOrdinal(ctx.effectOrdinalByNode, node.id);
+        const scriptResult = await invokeScript(runId, decision, { taskId, title, base }, bindingByRef, stepKeyFor(node.id, ordinal));
         // A blocked script (needsHuman) routes via revo.ScriptBlocked → a `blocked` terminal; a thrown
         // script routes via revo.ScriptFailed → a `failed` terminal (§6 catch). The lesson-bearing
         // pipeline_blocked is emitted inside invokeScript for the block path (parity with the old engine).
@@ -363,6 +463,7 @@ export function makeDataDrivenTask(
         if (scriptResult.outcome === 'failed') {
           return { lastResult: { outcome: 'failed', errorCode: REVO_SCRIPT_FAILED }, lastVerdict: 'failed', stepDelta: 1 };
         }
+        await recordOutput(runId, node, ordinal, scriptResult.pointer, ctx.outputsByNode);
         return { lastResult: { outcome: 'succeeded' }, stepDelta: 1 };
       }
       case 'awaitGate': {
@@ -407,27 +508,26 @@ export function makeDataDrivenTask(
     node: Node,
     bindingByRef: Map<string, RouteRoleBinding>,
     executionProfile: ExecutionProfile,
-  ): Promise<{ failed: true; errorCode: typeof REVO_RESULT_INVALID } | { failed: false; verdict?: string }> {
+    inputs: Record<string, unknown>,
+    stepKey: string,
+  ): Promise<{ failed: true; errorCode: typeof REVO_RESULT_INVALID } | { failed: false; verdict?: string; output: unknown }> {
     const binding = bindingByRef.get(decision.roleRef);
     if (!binding) {
       // A VALID template's caps resolve at run start; an unresolved roleRef is a fatal config gap.
       throw new Error(`CAPABILITY_UNRESOLVED: roleRef ${decision.roleRef} has no route binding`);
     }
-    // stepKey carries the nodeId so per-node attempts/events are distinct (and stable across replay).
-    const result = await runStepFn(
-      runId,
-      binding.rowId,
-      decision.nodeId,
-      { nodeId: decision.nodeId },
-      binding.resolvedRunnerId,
-      executionProfile,
-    );
+    // stepKey is ordinal-aware (0016 §4.1): distinct per loop iteration, stable across replay. The
+    // hydrated `inputs` (consumed upstream outputs) ride in stepInput → the runner renders them as a
+    // `## Inputs (from previous steps)` prompt section (build-context).
+    const stepInput =
+      Object.keys(inputs).length > 0 ? { nodeId: decision.nodeId, inputs } : { nodeId: decision.nodeId };
+    const result = await runStepFn(runId, binding.rowId, stepKey, stepInput, binding.resolvedRunnerId, executionProfile);
     // runStep converts a runner-process crash into a blocking attempt (needsHuman + verdict BLOCKER);
     // that is a domain failure of the node → route via §6 precedence as a result-invalid/failed effect.
     if (result.needsHuman || !resultSatisfiesSchema(node, result)) {
       return { failed: true, errorCode: REVO_RESULT_INVALID };
     }
-    return { failed: false, verdict: domainVerdictOf(result) };
+    return { failed: false, verdict: domainVerdictOf(result), output: result.output };
   }
 
   /**
@@ -448,7 +548,8 @@ export function makeDataDrivenTask(
     decision: Extract<Decision, { type: 'invokeScript' }>,
     ctx: { taskId: string; title: string; base: string },
     bindingByRef: Map<string, RouteRoleBinding>,
-  ): Promise<{ outcome: 'ok' | 'blocked' | 'failed' }> {
+    stepKey: string,
+  ): Promise<{ outcome: 'ok'; pointer: unknown } | { outcome: 'blocked' } | { outcome: 'failed' }> {
     const binding = bindingByRef.get(decision.scriptRef) ?? bindingByRef.get('script:integrator');
     const integratorInput: IntegratorInput = { runId, taskId: ctx.taskId, title: ctx.title, base: ctx.base };
     let result: IntegratorOutput | IntegratorBlocked;
@@ -463,7 +564,7 @@ export function makeDataDrivenTask(
         runId,
         taskId: ctx.taskId,
         stepId: '',
-        stepKey: decision.nodeId,
+        stepKey,
         type: 'step_failed',
         payload: { scriptRef: decision.scriptRef, error: err instanceof Error ? err.message : String(err) },
       });
@@ -486,11 +587,11 @@ export function makeDataDrivenTask(
       runId,
       taskId: ctx.taskId,
       stepId: '',
-      stepKey: decision.nodeId,
+      stepKey,
       type: 'integrate_succeeded',
       payload: { prUrl: result.prUrl, branch: result.branch, prNumber: result.prNumber },
     });
-    return { outcome: 'ok' };
+    return { outcome: 'ok', pointer: { prUrl: result.prUrl, branch: result.branch, prNumber: result.prNumber } };
   }
 
   /** Terminal: finish the run in Revisium per the core's terminal status. */

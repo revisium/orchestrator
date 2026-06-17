@@ -384,6 +384,7 @@ export class PipelineService {
     // through the existing runner machinery (no duplicate dispatch logic, no role-ids in the engine).
     const dataDrivenDeps: DataDrivenTaskDeps = {
       appendEvent: stepDeps.appendEvent,
+      appendRunOutput: this.runService.appendRunOutput.bind(this.runService),
       awaitHuman,
       completeRun: (
         runId: string,

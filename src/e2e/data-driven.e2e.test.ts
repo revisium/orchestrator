@@ -88,6 +88,21 @@ test('L1: a data-driven run drives plan→merge gates to completed on real DBOS/
   }
 });
 
+test('L4: a produced plan is persisted and hydrated into the consuming developer prompt (0016 dataflow)', { skip: e2eSkip }, async () => {
+  // The fixture feature-development-dd template declares analyst `produces:plan` and developer
+  // `consumes:plan`. This proves the dataflow end-to-end on real DBOS/Revisium: the analyst's output
+  // is persisted (appendRunOutput — a throw would fail the run) and hydrated into the developer's
+  // prompt as a `## Inputs (from previous steps)` section.
+  const run = await startDataDrivenRun(h, target, specs, cleanWatcher);
+  const terminal = await approveUntilTerminal(h.api, run.runId);
+  assert.equal(terminal.state, 'completed', 'the dataflow-wired run still completes (persist did not throw)');
+
+  const devCall = h.agentCalls.find((c) => c.runId === run.runId && c.role === 'developer');
+  assert.ok(devCall, 'the developer ran');
+  assert.match(devCall.context, /## Inputs \(from previous steps\)/, 'developer prompt carries a hydrated Inputs section');
+  assert.match(devCall.context, /"role":\s*"analyst"/, 'the analyst-produced plan reached the developer (consumes resolved end-to-end)');
+});
+
 // L2 (data-driven crash-recovery) lives in its OWN file (data-driven-recovery.e2e.test.ts), mirroring
 // recovery.e2e.test.ts: the crash must happen BEFORE any long-lived harness exists, else a competing
 // host on the shared DBOS queue could steal + run the recovered workflow with the wrong agent.

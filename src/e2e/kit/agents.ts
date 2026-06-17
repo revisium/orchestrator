@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import type { AttemptResult, RunAgent } from '../../worker/runner.js';
 
 /** One recorded agent invocation — lets tests assert who ran with which runner (scoped by runId). */
-export type AgentCall = { role: string; runner: string; attemptId: string; runId: string };
+export type AgentCall = { role: string; runner: string; attemptId: string; runId: string; context: string };
 
 /** runId → worktree path where the `developer` role should write a change file. */
 export type DeveloperWrites = Map<string, string>;
@@ -65,9 +65,9 @@ function runBehavior(
 /** Agent driven by a single {@link AgentSpec} (same plan for every run). Records into `sink`. */
 export function scriptedAgent(spec: AgentSpec, sink: AgentSink): RunAgent {
   const counts = new Map<string, number>();
-  return async ({ role, profile, attemptId, step }): Promise<AttemptResult> => {
+  return async ({ role, profile, attemptId, step, context }): Promise<AttemptResult> => {
     const logicalRole = role.playbookRoleId ?? role.name;
-    sink.agentCalls.push({ role: logicalRole, runner: role.runner, attemptId, runId: step.runId });
+    sink.agentCalls.push({ role: logicalRole, runner: role.runner, attemptId, runId: step.runId, context });
     const n = counts.get(logicalRole) ?? 0;
     counts.set(logicalRole, n + 1);
     return runBehavior(pickBehavior(spec, logicalRole, n), {
@@ -87,9 +87,9 @@ export function scriptedAgent(spec: AgentSpec, sink: AgentSink): RunAgent {
  */
 export function routedScriptedAgent(specs: Map<string, AgentSpec>, sink: AgentSink): RunAgent {
   const counts = new Map<string, number>();
-  return async ({ role, profile, attemptId, step }): Promise<AttemptResult> => {
+  return async ({ role, profile, attemptId, step, context }): Promise<AttemptResult> => {
     const logicalRole = role.playbookRoleId ?? role.name;
-    sink.agentCalls.push({ role: logicalRole, runner: role.runner, attemptId, runId: step.runId });
+    sink.agentCalls.push({ role: logicalRole, runner: role.runner, attemptId, runId: step.runId, context });
     const key = `${step.runId}::${logicalRole}`;
     const n = counts.get(key) ?? 0;
     counts.set(key, n + 1);
@@ -116,9 +116,9 @@ export function deterministicAgent(
   agentCalls: AgentCall[],
   developerWrites: DeveloperWrites,
 ): RunAgent {
-  return async ({ role, profile, attemptId, step }): Promise<AttemptResult> => {
+  return async ({ role, profile, attemptId, step, context }): Promise<AttemptResult> => {
     const logicalRole = role.playbookRoleId ?? role.name;
-    agentCalls.push({ role: logicalRole, runner: role.runner, attemptId, runId: step.runId });
+    agentCalls.push({ role: logicalRole, runner: role.runner, attemptId, runId: step.runId, context });
     const writeRepo = logicalRole === 'developer' ? developerWrites.get(step.runId) : undefined;
     if (writeRepo) {
       writeFileSync(join(writeRepo, `developer-${attemptId}.txt`), `change from ${attemptId}\n`);

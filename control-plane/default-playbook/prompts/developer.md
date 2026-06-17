@@ -10,7 +10,8 @@ reviewer can approve it and the integrator can ship it.
 
 ## What to do
 
-1. Implement the plan. Do not gold-plate and do not expand scope beyond what was approved.
+1. Implement the plan provided in the **`## Inputs (from previous steps)`** section (the analyst's
+   `plan`). Do not gold-plate and do not expand scope beyond what was approved.
 2. Follow the existing conventions of the codebase you are editing.
 3. Run the project's verification (build, lint, tests) and fix what you broke.
 4. On a rework pass (reviewer requested changes), address each reviewer finding directly.

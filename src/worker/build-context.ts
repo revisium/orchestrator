@@ -51,6 +51,25 @@ export async function buildContext(
     }
   }
 
+  // 0016 dataflow: the data-driven adapter hydrates `step.input.inputs` with upstream step outputs
+  // (e.g. the analyst's plan for a developer/reviewer). Render them as a clear, named section so the
+  // agent receives the produced artifacts. Omitted entirely when there are no hydrated inputs (every
+  // legacy/no-consumes node), so existing prompts are unchanged.
+  const si = step.input;
+  const hydrated =
+    si !== null && typeof si === 'object' && !Array.isArray(si)
+      ? (si as Record<string, unknown>).inputs
+      : undefined;
+  if (hydrated !== null && typeof hydrated === 'object' && !Array.isArray(hydrated)) {
+    const entries = Object.entries(hydrated as Record<string, unknown>);
+    if (entries.length > 0) {
+      parts.push('## Inputs (from previous steps):');
+      for (const [as, value] of entries) {
+        parts.push(`### ${as}`, typeof value === 'string' ? value : JSON.stringify(value, null, 2));
+      }
+    }
+  }
+
   parts.push('## Current step input:', inputStr);
 
   return parts.join('\n');

@@ -9,6 +9,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { validateTemplate } from './validate.js';
+import type { ConsumesRef } from './types.js';
 import {
   assertDiagnostics,
   assertHasDiagnostic,
@@ -37,6 +38,9 @@ import {
   invalidUnboundedLoop,
   invalidUnreachable,
   invalidVerdictUndeclared,
+  allOf,
+  counterLt,
+  joinAll,
   localChange,
   nestedScopeLoop,
   node,
@@ -340,4 +344,176 @@ test('grammar: an unknown guard op → CONDITION_BAD_OP', () => {
     { default: 'end' },
   ];
   assertHasDiagnostic(t, 'CONDITION_BAD_OP');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Rule 14 — dataflow (produces/consumes, 0016 §7).
+// ─────────────────────────────────────────────────────────────────────────────
+
+const dfDominated = () =>
+  template('df')
+    .specVersion('1.0')
+    .entry('a')
+    .domain('approved')
+    .add(
+      node.agent('a', 'role:analyst', 'b', { produces: { name: 'plan' } }),
+      node.agent('b', 'role:developer', 'done', { consumes: [{ node: 'a', as: 'plan' }] }),
+      node.terminal('done', 'succeeded'),
+    )
+    .build();
+
+test('rule 14: a dominated consume produces no dataflow diagnostics', () => {
+  const diags = validateTemplate(dfDominated());
+  assert.deepEqual(
+    diags.filter((d) => d.code.startsWith('CONSUMES') || d.code === 'PRODUCES_NAME_DUP'),
+    [],
+  );
+});
+
+test('rule 14: consuming an unknown node → CONSUMES_NODE_UNRESOLVED', () => {
+  const t = template('df')
+    .specVersion('1.0')
+    .entry('a')
+    .domain('approved')
+    .add(
+      node.agent('a', 'role:x', 'done', { consumes: [{ node: 'ghost', as: 'p' }] }),
+      node.terminal('done', 'succeeded'),
+    )
+    .build();
+  assertHasDiagnostic(t, 'CONSUMES_NODE_UNRESOLVED');
+});
+
+test('rule 14: consuming a node with no produces → CONSUMES_PRODUCER_MISSING', () => {
+  const t = template('df')
+    .specVersion('1.0')
+    .entry('a')
+    .domain('approved')
+    .add(
+      node.agent('a', 'role:x', 'b'),
+      node.agent('b', 'role:y', 'done', { consumes: [{ node: 'a', as: 'p' }] }),
+      node.terminal('done', 'succeeded'),
+    )
+    .build();
+  assertHasDiagnostic(t, 'CONSUMES_PRODUCER_MISSING');
+});
+
+const dfNotDominated = (optional: boolean) =>
+  template('df')
+    .specVersion('1.0')
+    .entry('start')
+    .domain('approved')
+    .add(
+      node.agent('start', 'role:x', 'c'),
+      node.choice('c', [on(verdictEq('approved'), 'p'), otherwise('q')]),
+      node.agent('p', 'role:y', 'm', { produces: { name: 'plan' } }),
+      node.agent('q', 'role:z', 'm'),
+      node.agent('m', 'role:w', 'done', { consumes: [{ node: 'p', as: 'plan', ...(optional ? { optional: true } : {}) }] }),
+      node.terminal('done', 'succeeded'),
+    )
+    .build();
+
+test('rule 14: a required consume whose producer is not on every path → CONSUMES_NOT_DOMINATED (error)', () => {
+  assert.equal(assertHasDiagnostic(dfNotDominated(false), 'CONSUMES_NOT_DOMINATED').severity, 'error');
+});
+
+test('rule 14: the same non-dominated consume marked optional → CONSUMES_NOT_DOMINATED is a warning', () => {
+  assert.equal(assertHasDiagnostic(dfNotDominated(true), 'CONSUMES_NOT_DOMINATED').severity, 'warning');
+});
+
+test('rule 14: duplicate `as` keys on one node → CONSUMES_AS_DUP', () => {
+  const t = template('df')
+    .specVersion('1.0')
+    .entry('a')
+    .domain('approved')
+    .add(
+      node.agent('a', 'role:x', 'a2', { produces: { name: 'x' } }),
+      node.agent('a2', 'role:y', 'm', { produces: { name: 'y' } }),
+      node.agent('m', 'role:z', 'done', {
+        consumes: [
+          { node: 'a', as: 'p' },
+          { node: 'a2', as: 'p' },
+        ],
+      }),
+      node.terminal('done', 'succeeded'),
+    )
+    .build();
+  assertHasDiagnostic(t, 'CONSUMES_AS_DUP');
+});
+
+test('rule 14: two nodes producing the same name → PRODUCES_NAME_DUP (warning)', () => {
+  const t = template('df')
+    .specVersion('1.0')
+    .entry('a')
+    .domain('approved')
+    .add(
+      node.agent('a', 'role:x', 'b', { produces: { name: 'plan' } }),
+      node.agent('b', 'role:y', 'done', { produces: { name: 'plan' } }),
+      node.terminal('done', 'succeeded'),
+    )
+    .build();
+  assert.equal(assertHasDiagnostic(t, 'PRODUCES_NAME_DUP').severity, 'warning');
+});
+
+const dfLoop = (ref: ConsumesRef) =>
+  template('df')
+    .specVersion('1.0')
+    .entry('a')
+    .domain('approved', 'blocker')
+    .scope('L', { cap: 2, parent: null })
+    .add(
+      node.agent('a', 'role:x', 'dev', { produces: { name: 'plan' } }),
+      node.agent('dev', 'role:y', 'r'),
+      node.choice('r', [on(allOf(verdictEq('blocker'), counterLt('L', 2)), 'rework'), otherwise('done')]),
+      node.agent('rework', 'role:z', 'dev', { consumes: [ref], incrementCounters: ['L'] }),
+      node.terminal('done', 'succeeded'),
+    )
+    .build();
+
+test('rule 14: a consumer in a loop the producer is not on → CONSUMES_STALE_RISK (warning)', () => {
+  assert.equal(assertHasDiagnostic(dfLoop({ node: 'a', as: 'plan' }), 'CONSUMES_STALE_RISK').severity, 'warning');
+});
+
+test('rule 14: staleOk suppresses CONSUMES_STALE_RISK', () => {
+  assertNoDiagnostic(dfLoop({ node: 'a', as: 'plan', staleOk: true }), 'CONSUMES_STALE_RISK');
+});
+
+test('rule 14: iteration:all suppresses CONSUMES_STALE_RISK', () => {
+  assertNoDiagnostic(dfLoop({ node: 'a', as: 'plan', iteration: 'all' }), 'CONSUMES_STALE_RISK');
+});
+
+test('rule 14: a producer inside the same loop is fresh (no stale risk, dominated)', () => {
+  const t = template('df')
+    .specVersion('1.0')
+    .entry('a')
+    .domain('approved', 'blocker')
+    .scope('L', { cap: 2, parent: null })
+    .add(
+      node.agent('a', 'role:x', 'cr'),
+      node.agent('cr', 'role:r', 'router', { produces: { name: 'review' } }),
+      node.choice('router', [on(allOf(verdictEq('blocker'), counterLt('L', 2)), 'rework'), otherwise('done')]),
+      node.agent('rework', 'role:z', 'cr', { consumes: [{ node: 'cr', as: 'review' }], incrementCounters: ['L'] }),
+      node.terminal('done', 'succeeded'),
+    )
+    .build();
+  assertNoDiagnostic(t, 'CONSUMES_STALE_RISK');
+  assertNoDiagnostic(t, 'CONSUMES_NOT_DOMINATED');
+});
+
+test('rule 14: consuming a sibling parallel branch → CONSUMES_CROSS_PARALLEL_UNSAFE', () => {
+  const t = template('df')
+    .specVersion('1.0')
+    .entry('fork')
+    .domain('approved')
+    .add(
+      node.parallel('fork', [
+        { id: 'b1', entry: 'p1' },
+        { id: 'b2', entry: 'p2' },
+      ], 'j'),
+      node.agent('p1', 'role:x', 'j', { produces: { name: 'plan' } }),
+      node.agent('p2', 'role:y', 'j', { consumes: [{ node: 'p1', as: 'plan' }] }),
+      node.join('j', joinAll(), 'done'),
+      node.terminal('done', 'succeeded'),
+    )
+    .build();
+  assertHasDiagnostic(t, 'CONSUMES_CROSS_PARALLEL_UNSAFE');
 });

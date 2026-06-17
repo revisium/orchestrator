@@ -18,7 +18,7 @@ import type { AttemptResult } from '../worker/runner.js';
 import type { RouteDecision, RouteRoleBinding } from './route-contract.js';
 import type { Decision as GateDecision } from './await-human.js';
 import type { IntegratorInput, IntegratorOutput, IntegratorBlocked } from '../runners/integrator.js';
-import { template, node } from '../pipeline-core/kit/index.js';
+import { template, node, on, otherwise, verdictEq, allOf, counterLt } from '../pipeline-core/kit/index.js';
 
 const RUN_ID = 'run-dd-001';
 
@@ -57,6 +57,10 @@ type Recorder = {
   failed: string[];
   integrateCalls: number;
   events: string[];
+  /** Persisted step outputs (0016 dataflow). */
+  outputs: Array<{ nodeId: string; ordinal: number; name: string; payload: unknown }>;
+  /** Hydrated `inputs` the adapter passed to each step, keyed by stepKey (0016 consumes). */
+  inputsByStep: Record<string, unknown>;
 };
 
 /**
@@ -73,27 +77,35 @@ function buildAdapter(opts: {
   /** Override the live preflight (default: ok). Lets a test drive a preflight block. */
   preflight?: () => { ok: true } | { needsHuman: true; lesson: string } | Promise<{ ok: true } | { needsHuman: true; lesson: string }>;
 }) {
-  const rec: Recorder = { gates: [], completed: [], blocked: [], failed: [], integrateCalls: 0, events: [] };
+  const rec: Recorder = { gates: [], completed: [], blocked: [], failed: [], integrateCalls: 0, events: [], outputs: [], inputsByStep: {} };
   const visits = new Map<string, number>();
 
   const runStepFn = async (
     _runId: string,
     _role: string,
     stepKey: string,
-    _input: unknown,
+    input: unknown,
   ): Promise<AttemptResult> => {
-    const n = visits.get(stepKey) ?? 0;
-    visits.set(stepKey, n + 1);
-    if (opts.needsHumanNodes?.has(stepKey)) {
+    // The adapter ordinal-suffixes the stepKey on loop re-entries (0016 §4.1: `nodeId#2`); the verdict
+    // script + visit count are keyed by the NODE (a verdict is a property of the role, not the iteration).
+    const nodeId = stepKey.includes('#') ? stepKey.slice(0, stepKey.indexOf('#')) : stepKey;
+    const n = visits.get(nodeId) ?? 0;
+    visits.set(nodeId, n + 1);
+    // Capture hydrated consumes (0016) so a test can assert an upstream output reached this step.
+    if (input !== null && typeof input === 'object' && 'inputs' in (input as Record<string, unknown>)) {
+      rec.inputsByStep[nodeId] = (input as Record<string, unknown>).inputs;
+    }
+    if (opts.needsHumanNodes?.has(nodeId)) {
       return { output: { verdict: 'BLOCKER' }, nextSteps: [], costs: [], needsHuman: true, lesson: 'parked' };
     }
-    const entry = opts.verdicts?.[stepKey];
+    const entry = opts.verdicts?.[nodeId];
     const verdict = Array.isArray(entry) ? (entry[Math.min(n, entry.length - 1)] ?? 'approved') : (entry ?? 'approved');
-    return { output: { verdict }, nextSteps: [], costs: [] };
+    return { output: { verdict, from: nodeId }, nextSteps: [], costs: [] };
   };
 
   const deps: DataDrivenTaskDeps = {
     appendEvent: async (e) => { rec.events.push(`${e.type}:${e.stepKey}`); },
+    appendRunOutput: async (o) => { rec.outputs.push({ nodeId: o.nodeId, ordinal: o.ordinal, name: o.name, payload: o.payload }); },
     awaitHuman: async (_runId, topic): Promise<GateDecision> => {
       rec.gates.push(topic);
       return (opts.gate ?? (() => ({ decision: 'approve' })))(topic);
@@ -295,4 +307,100 @@ test('SEL4: a serialized (string) template_json is parsed + validated', () => {
   const got = templateFromExecutionPolicy({ template_json: JSON.stringify(template) });
   assert.ok(got);
   assert.equal(got.pipelineId, 'feature-development');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 0016 dataflow — produces/consumes hydration, fail-loud missing input, loop ordinals.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('DD-DF1: a producing node persists its output and a consumer is hydrated with it', async () => {
+  const tmpl = template('df-dd')
+    .specVersion('1.0')
+    .entry('analyst')
+    .domain('approved')
+    .add(
+      node.agent('analyst', 'role:analyst', 'developer', { resultSchema: 'schema:plan', produces: { name: 'plan' } }),
+      node.agent('developer', 'role:developer', 'done', {
+        resultSchema: 'schema:change',
+        consumes: [{ node: 'analyst', as: 'plan' }],
+      }),
+      node.terminal('done', 'succeeded'),
+    )
+    .build();
+  const { run, rec } = buildAdapter({ template: tmpl });
+  const result = await run();
+  assert.equal(result.status, 'succeeded');
+  // analyst's output persisted once at ordinal 1.
+  assert.deepEqual(
+    rec.outputs.map((o) => ({ nodeId: o.nodeId, ordinal: o.ordinal, name: o.name })),
+    [{ nodeId: 'analyst', ordinal: 1, name: 'plan' }],
+  );
+  // developer received the analyst's output under the declared `as` key.
+  assert.deepEqual(rec.inputsByStep['developer'], { plan: { verdict: 'approved', from: 'analyst' } });
+});
+
+test('DD-DF4: a missing required input fails the run (revo.InputMissing) WITHOUT invoking the consumer', async () => {
+  // iteration:3 can never be satisfied (analyst produces ordinal 1) → fail-loud wiring fault.
+  const tmpl = template('df-missing')
+    .specVersion('1.0')
+    .entry('analyst')
+    .domain('approved')
+    .add(
+      node.agent('analyst', 'role:analyst', 'developer', { resultSchema: 'schema:plan', produces: { name: 'plan' } }),
+      node.agent('developer', 'role:developer', 'done', {
+        resultSchema: 'schema:change',
+        consumes: [{ node: 'analyst', as: 'plan', iteration: 3 }],
+      }),
+      node.terminal('done', 'succeeded'),
+    )
+    .build();
+  const { run, rec } = buildAdapter({ template: tmpl });
+  const result = await run();
+  assert.equal(result.status, 'failed', 'a missing required input fails the run');
+  assert.ok(
+    rec.events.some((e) => e.startsWith('step_failed:')),
+    'a dedicated step_failed event is emitted for the missing input',
+  );
+  assert.equal(rec.inputsByStep['developer'], undefined, 'the consumer agent is never invoked');
+});
+
+test('DD-DF5: an optional missing input is omitted and the consumer still runs', async () => {
+  const tmpl = template('df-opt')
+    .specVersion('1.0')
+    .entry('analyst')
+    .domain('approved')
+    .add(
+      node.agent('analyst', 'role:analyst', 'developer', { resultSchema: 'schema:plan', produces: { name: 'plan' } }),
+      node.agent('developer', 'role:developer', 'done', {
+        resultSchema: 'schema:change',
+        consumes: [{ node: 'analyst', as: 'missing', iteration: 9, optional: true }],
+      }),
+      node.terminal('done', 'succeeded'),
+    )
+    .build();
+  const { run } = buildAdapter({ template: tmpl });
+  assert.equal((await run()).status, 'succeeded', 'optional missing input does not block');
+});
+
+test('DD-DF6: run_outputs ordinals increment across a rework loop (append-only history)', async () => {
+  const tmpl = template('df-loop')
+    .specVersion('1.0')
+    .entry('a')
+    .domain('approved', 'blocker')
+    .scope('L', { cap: 2, parent: null })
+    .add(
+      node.agent('a', 'role:analyst', 'dev', { produces: { name: 'plan' } }),
+      node.agent('dev', 'role:developer', 'router', { produces: { name: 'change' } }),
+      node.choice('router', [on(allOf(verdictEq('blocker'), counterLt('L', 2)), 'rework'), otherwise('done')]),
+      node.agent('rework', 'role:developer', 'router', { produces: { name: 'change' }, incrementCounters: ['L'] }),
+      node.terminal('done', 'succeeded'),
+    )
+    .build();
+  const { run, rec } = buildAdapter({ template: tmpl, verdicts: { dev: 'blocker', rework: 'blocker' } });
+  await run();
+  assert.deepEqual(
+    rec.outputs.filter((o) => o.nodeId === 'rework').map((o) => o.ordinal),
+    [1, 2],
+    'each loop iteration appends a distinct-ordinal output',
+  );
 });
