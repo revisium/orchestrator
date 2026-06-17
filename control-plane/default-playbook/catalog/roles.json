@@ -1,0 +1,56 @@
+[
+  {
+    "id": "orchestrator",
+    "path": "prompts/orchestrator.md",
+    "surface": "any",
+    "rights": "read-only",
+    "allowed_tools": ["Read", "Grep", "Glob"],
+    "default_model_level": "deep",
+    "runner_id": "claude-code"
+  },
+  {
+    "id": "analyst",
+    "path": "prompts/analyst.md",
+    "surface": "any",
+    "rights": "read-only",
+    "allowed_tools": ["Read", "Grep", "Glob"],
+    "default_model_level": "deep",
+    "runner_id": "claude-code"
+  },
+  {
+    "id": "reviewer",
+    "path": "prompts/reviewer.md",
+    "surface": "any",
+    "rights": "read-only",
+    "allowed_tools": ["Read", "Grep", "Glob"],
+    "default_model_level": "deep",
+    "runner_id": "claude-code"
+  },
+  {
+    "id": "developer",
+    "path": "prompts/developer.md",
+    "surface": "any",
+    "rights": "write-working-tree",
+    "allowed_tools": ["Read", "Grep", "Glob", "Edit", "Write", "Bash"],
+    "default_model_level": "standard",
+    "runner_id": "claude-code"
+  },
+  {
+    "id": "integrator",
+    "path": "prompts/integrator.md",
+    "surface": "repo",
+    "rights": "git-gh",
+    "allowed_tools": ["Read", "Bash"],
+    "default_model_level": "standard",
+    "runner_id": "revo-integrator"
+  },
+  {
+    "id": "watcher",
+    "path": "prompts/watcher.md",
+    "surface": "repo",
+    "rights": "read-only",
+    "allowed_tools": ["Read", "Grep", "Glob", "Bash"],
+    "default_model_level": "cheap",
+    "runner_id": "claude-code"
+  }
+]
