@@ -57,6 +57,8 @@ type EffectOpts = {
   resultSchema?: string;
   incrementCounters?: string[];
   displayName?: string;
+  produces?: AgentNode['produces'];
+  consumes?: AgentNode['consumes'];
 };
 
 export const node = {
@@ -122,6 +124,8 @@ function effect(opts: EffectOpts) {
     ...(opts.resultSchema ? { resultSchema: opts.resultSchema } : {}),
     ...(opts.incrementCounters ? { incrementCounters: opts.incrementCounters } : {}),
     ...(opts.displayName ? { displayName: opts.displayName } : {}),
+    ...(opts.produces ? { produces: opts.produces } : {}),
+    ...(opts.consumes ? { consumes: opts.consumes } : {}),
   };
 }
 

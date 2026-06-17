@@ -102,6 +102,23 @@ export type NodeKind = (typeof NODE_KINDS)[number];
 /** Common envelope on every node (§1). `id` is permanent — never reused/repurposed. */
 export type NodeEnvelope = { id: string; displayName?: string };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 0016 §3 Dataflow — declarative step-output produce/consume (content channel, distinct from routing).
+// The CORE only validates these statically (§7); the adapter persists/hydrates at runtime (0016 §5/§6).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Names this node's single output artifact (v1: one named output per node). */
+export type ProducesDecl = { name: string };
+
+/** A declarative reference to an earlier node's output, hydrated into the consumer's prompt (0016 §3). */
+export type ConsumesRef = {
+  node: string; //                                      producing node id (any earlier node, not just predecessor)
+  as: string; //                                        key in the hydrated "## Inputs" section
+  iteration?: 'latest' | 'all' | number; //             default 'latest' (max ordinal); 'all' = history; N = that ordinal
+  optional?: boolean; //                                default false → a missing required input is fail-loud (0016 §6)
+  staleOk?: boolean; //                                 ack a loop-freshness risk (suppresses CONSUMES_STALE_RISK, §7)
+};
+
 /** Fields shared by the two effect-running kinds (`agent`/`script`) — §3 next/catch, §6/§7 policy. */
 export type EffectNodeFields = {
   next: string;
@@ -110,6 +127,8 @@ export type EffectNodeFields = {
   onFailure?: FailurePolicy; //                         default 'abort' (§6)
   escalateTo?: string; //                               required when onFailure === 'escalate' (§6)
   incrementCounters?: string[]; //                      loop-entry increment trigger (§7)
+  produces?: ProducesDecl; //                           0016 §3 — names this node's output artifact
+  consumes?: ConsumesRef[]; //                          0016 §3 — earlier-node outputs hydrated into this node
 };
 
 /** `agent` — run a generic ROLE capability → `invokeRole`. */
@@ -351,6 +370,14 @@ export const DIAGNOSTIC_CODES = [
   // grammar / shape sanity (feeds rules 2/4/9 — a malformed Condition can't be evaluated)
   'CONDITION_BAD_OP',
   'CONDITION_BAD_SHAPE',
+  // 14 dataflow (produces/consumes, 0016 §7)
+  'CONSUMES_NODE_UNRESOLVED', //                          consumes.node is not a node id
+  'CONSUMES_PRODUCER_MISSING', //                         referenced node declares no produces / cannot produce
+  'CONSUMES_NOT_DOMINATED', //                            producer does not dominate the consumer (error req / warn opt)
+  'CONSUMES_STALE_RISK', //                               loop re-enterable without the producer + latest, no staleOk (warning)
+  'CONSUMES_CROSS_PARALLEL_UNSAFE', //                    producer/consumer in unsafely-related parallel branches
+  'CONSUMES_AS_DUP', //                                   two refs on one node share the same `as` key
+  'PRODUCES_NAME_DUP', //                                 two nodes share a produces.name (warning — grammar keys by node)
   // 13 diff classifier
   'DIFF_UNCLASSIFIED',
   'DIFF_NODE_DELETED',
