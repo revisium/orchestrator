@@ -118,22 +118,30 @@ test('K3: routing composes the pipeline from data — the embedded role appears 
 // CLASSIFIED as a post-integrator status role purely from its `kind: 'status'` in playbook data — with
 // zero change to any code id-list. (K1/K3 above only prove a RECOGNIZED id, pr-watcher.)
 
-test('K4: an UNRECOGNIZED-id role (pr-poller) classified post-integrator via kind runs and completes', { skip: e2eSkip }, async () => {
+test('K4: an UNRECOGNIZED-id role (pr-poller) placed post-integrator in the template runs and completes', { skip: e2eSkip }, async () => {
   const run = await startPrPollRun(); // default: every role PASS, incl the unknown-id pr-poller
   const terminal = await approveUntilTerminal(h.api, run.runId); // approve plan + merge
   assert.equal(terminal.state, 'completed');
-  // The run reaching completion proves validatePostIntegratorBindings ACCEPTED pr-poller via its kind —
-  // an unknown id without kind would throw ROUTE_UNSUPPORTED before the run could complete.
+  // The run completing proves the data-driven engine resolved the `role:pr-poller` capability handle to
+  // its route binding by id alone (the engine holds ZERO role-ids — its post-integrator placement is the
+  // template's node ordering, not a hardcoded classifier as in the removed engine).
   await assertEventsPresent(h.api, run.runId, ['integrate_succeeded', 'run_completed']);
   const roles = executedRoles(h, run.runId).map(([role]) => role);
-  assert.ok(roles.includes('pr-poller'), 'the unknown-id pr-poller executed (classified from kind, no code change)');
+  assert.ok(roles.includes('pr-poller'), 'the unknown-id pr-poller executed (resolved as a capability handle, no code change)');
 
-  // Runtime ordering: integrate_succeeded must precede pr-poller's post-integrator step (not merely both present).
+  // Runtime ordering: integrate_succeeded must precede the pr-poller agent step (not merely both
+  // present). The data-driven engine keys a step by its NODE id, so we identify the pr-poller step by
+  // the ROLE recorded in the event payload (payload.role = the resolved role binding) — robust to the
+  // template's node naming.
   const events = await h.api.getRunEvents({ runId: run.runId, limit: 50 });
   const integrateIdx = events.findIndex((e) => e.type === 'integrate_succeeded');
-  const pollerStepIdx = events.findIndex(
-    (e) => e.type === 'step_succeeded' && (e.payload as { stepKey?: unknown } | undefined)?.stepKey === 'pr-poller',
-  );
+  const pollerStepIdx = events.findIndex((e) => {
+    if (e.type !== 'step_succeeded') return false;
+    const role = (e.payload as { role?: unknown } | undefined)?.role;
+    // payload.role is the resolved role binding (the installed row id, playbook-prefixed) — match its
+    // suffix so the assertion is robust to the install prefix and the template's node naming.
+    return typeof role === 'string' && role.endsWith('pr-poller');
+  });
   assert.ok(integrateIdx >= 0, 'integrate_succeeded was emitted');
   assert.ok(pollerStepIdx >= 0, "pr-poller's step_succeeded was emitted");
   assert.ok(integrateIdx < pollerStepIdx, 'the status role ran AFTER the integrator at runtime');

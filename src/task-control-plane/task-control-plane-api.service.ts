@@ -177,21 +177,6 @@ function assertProductionRunnerBinding(runnerId: string, runnerSource: RouteRole
   );
 }
 
-function isPreDeveloperAnalysisRole(roleId: string): boolean {
-  return ['analyst', 'architect', 'reviewer', 'knowledge-engineer'].includes(roleId);
-}
-
-function insertBeforeFirstDeveloperRole(selected: string[], roleId: string): void {
-  const developerIndex = selected.findIndex((selectedRole) =>
-    ['developer', 'developer-backend', 'developer-frontend', 'knowledge-engineer'].includes(selectedRole)
-  );
-  if (developerIndex < 0) {
-    selected.push(roleId);
-    return;
-  }
-  selected.splice(developerIndex, 0, roleId);
-}
-
 @Injectable()
 export class TaskControlPlaneApiService {
   constructor(
@@ -360,30 +345,26 @@ export class TaskControlPlaneApiService {
     const route = input.route ?? await this.routeForRun(run);
     const existingStatus = await this.dbos.getWorkflowStatus(input.runId);
 
-    // PARALLEL SELECTION (0015 slice 2): a pipeline carrying a state-machine template (specVersion +
-    // nodes in its execution_policy) routes to the DATA-DRIVEN workflow; everything else keeps the
-    // existing hardcoded developTask path UNCHANGED. A present-but-invalid template throws (fail-loud).
+    // CUTOVER (plan 0015 slice 3): the data-driven engine is the SOLE pipeline engine. EVERY pipeline
+    // routes to the data-driven workflow, executing the state-machine template carried in its
+    // execution_policy (template_json). A pipeline lacking a valid template FAILS LOUD here
+    // (PIPELINE_NOT_DATA_DRIVEN) rather than silently no-op-ing — there is no hardcoded fallback engine.
+    // A present-but-malformed/invalid template likewise throws (templateFromExecutionPolicy).
     const template = templateFromExecutionPolicy(route.executionPolicy);
-    if (template) {
-      const handle = await this.pipeline.startDataDrivenTask(input.runId, { route, template });
-      return {
-        runId: input.runId,
-        workflowID: handle.workflowID,
-        alreadyStarted: existingStatus !== null,
-        route,
-        engine: 'data-driven' as const,
-      };
+    if (!template) {
+      throw new ControlPlaneError(
+        'VALIDATION_FAILURE',
+        `PIPELINE_NOT_DATA_DRIVEN: pipeline ${route.pipelineId} carries no state-machine template ` +
+          `(execution_policy.template_json); the data-driven engine is the only engine`,
+      );
     }
-
-    const handle = await this.pipeline.startDevelopTask(input.runId, {
-      runnerMode: input.runnerMode,
-      route,
-    });
+    const handle = await this.pipeline.startDataDrivenTask(input.runId, { route, template });
     return {
       runId: input.runId,
       workflowID: handle.workflowID,
       alreadyStarted: existingStatus !== null,
       route,
+      engine: 'data-driven' as const,
     };
   }
 
@@ -756,6 +737,10 @@ export class TaskControlPlaneApiService {
   ): Promise<RouteRoleBinding[]> {
     const roles = (await this.roles.listRoles()).filter((role) => role.playbookId === playbookId);
     const byPlaybookRole = new Map(roles.map((role) => [role.playbookRoleId || role.name, role]));
+    // The route selects WHICH roles a pipeline binds (capability handles the data-driven engine
+    // resolves). Order is no longer load-bearing — the data-driven template owns node sequencing — so
+    // alternative-group selections simply append (the old `insertBeforeFirstDeveloperRole` phase-order
+    // hardcode is removed with the rest of the hardcoded engine, plan 0015 slice 3).
     const selected = [...pipeline.requiredRoles];
     for (const group of pipeline.alternativeRoles) {
       const match = group.roles.find((roleId) => byPlaybookRole.has(roleId));
@@ -765,10 +750,7 @@ export class TaskControlPlaneApiService {
           `pipeline ${pipeline.pipelineId} alternative group ${group.group_id} has no installed role`,
         );
       }
-      if (!selected.includes(match)) {
-        if (isPreDeveloperAnalysisRole(match)) insertBeforeFirstDeveloperRole(selected, match);
-        else selected.push(match);
-      }
+      if (!selected.includes(match)) selected.push(match);
     }
     for (const roleId of selected) {
       if (!byPlaybookRole.has(roleId)) {

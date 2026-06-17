@@ -1,9 +1,10 @@
 /**
  * data-driven-task.workflow.ts — the DBOS effect-adapter for a DATA-DRIVEN pipeline (plan 0015 §10).
  *
- * Runs the pure `pipeline-core` graph on REAL DBOS, PARALLEL to the hardcoded `develop-task.workflow`.
- * The hardcoded path is untouched; selection routes a pipeline that carries a state-machine template
- * (`specVersion` + `nodes`) here, everything else to `developTask` (see TaskControlPlaneApiService).
+ * Runs the pure `pipeline-core` graph on REAL DBOS. As of slice 3 this is the SOLE pipeline engine:
+ * selection routes EVERY pipeline here (TaskControlPlaneApiService), executing the state-machine
+ * template pinned for the run; a pipeline without a valid template FAILS LOUD at selection. The old
+ * hardcoded `developTask` workflow + its role→phase classifiers were removed.
  *
  * INVARIANT: `src/pipeline/*` imports NO `@dbos-inc/dbos-sdk` (M1 — DBOS sealed). All DBOS interaction
  * goes through the generic DbosService verbs (registerStep/registerWorkflow/awaitDecision) injected as
@@ -41,7 +42,7 @@ import {
 } from '../pipeline-core/index.js';
 import type { AttemptResult } from '../worker/runner.js';
 import type { ExecutionProfile, RouteDecision, RouteRoleBinding } from './route-contract.js';
-import { runnerUsesRealIntegrator } from './route-contract.js';
+import { runnerNeedsLivePreflight, runnerUsesRealIntegrator } from './route-contract.js';
 import type { IntegratorInput, IntegratorOutput, IntegratorBlocked } from '../runners/integrator.js';
 import type { AppendEventInput } from '../run/append-event.js';
 import type { Decision as GateDecision } from './await-human.js';
@@ -69,8 +70,19 @@ export type DataDrivenTaskOpts = {
 
 const MAX_STEPS = 1_000; // a VALID template terminates; guards a data/loop authoring mistake at runtime.
 
-/** A reserved engine error code (matched only by a node's `catch`, §3/§6). */
+/**
+ * Reserved engine error codes (matched only by a node's `catch`, §3/§6).
+ *
+ * A built-in script (the integrator) has TWO distinct failure modes the routing data discriminates:
+ *  - `revo.ScriptBlocked` — the script needs a human (nothing-to-integrate, ambiguous PRs, a refused
+ *    pinned identity, a non-JSON `pr view`). NOT a crash; a `catch` routes it to a `blocked` terminal,
+ *    and the adapter surfaces the human-readable lesson on a `pipeline_blocked` event (parity with the
+ *    old engine's `blockPipeline({ reason:'integrate' })`).
+ *  - `revo.ScriptFailed` — the script THREW (a gh/push error). A `catch` routes it to a `failed`
+ *    terminal (parity with the old engine's top-level catch → failRun).
+ */
 const REVO_SCRIPT_FAILED = 'revo.ScriptFailed' as const;
+const REVO_SCRIPT_BLOCKED = 'revo.ScriptBlocked' as const;
 const REVO_RESULT_INVALID = 'revo.ResultInvalid' as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -141,7 +153,7 @@ function resultSatisfiesSchema(node: Node, result: AttemptResult): boolean {
   return Array.isArray(output);
 }
 
-// ── Dep shapes (C1 — mirrors makeDevelopTask) ─────────────────────────────────
+// ── Dep shapes (C1 — the run-lifecycle + effect verbs the adapter calls) ──────
 
 /** Dependencies for the dataDrivenTask builder. */
 export type DataDrivenTaskDeps = {
@@ -168,6 +180,12 @@ export type DataDrivenTaskDeps = {
   integrateFn: (input: IntegratorInput) => Promise<IntegratorOutput | IntegratorBlocked>;
   /** Stub integrator — pure (script). */
   runStub: (input: IntegratorInput) => IntegratorOutput;
+  /**
+   * Live preflight — memoized DBOS step (B5/B7). Clean check + base invariant, evaluated ONCE before
+   * any live runner/integrator effect. Skipped entirely when no binding resolves to a live runner
+   * (the same gate the old engine used). A `needsHuman` result blocks the run (pipeline_blocked).
+   */
+  preflightFn: (taskId: string, base: string) => Promise<{ ok: true } | { needsHuman: true; lesson: string }>;
 };
 
 /**
@@ -205,7 +223,7 @@ export function makeDataDrivenTask(
   ) => Promise<AttemptResult>,
   deps: DataDrivenTaskDeps,
 ) {
-  const { appendEvent, awaitHuman, completeRun, failRun, blockRun, loadRunTaskContext, integrateFn, runStub } = deps;
+  const { appendEvent, awaitHuman, completeRun, failRun, blockRun, loadRunTaskContext, integrateFn, runStub, preflightFn } = deps;
 
   return async function dataDrivenTaskImpl(
     runId: string,
@@ -216,7 +234,7 @@ export function makeDataDrivenTask(
     } catch (err) {
       // TERMINAL failure: mark the Revisium run-row `failed` (idempotent, event-first) before
       // re-throwing so DBOS still records the workflow ERROR (progress truth) and the run-row stops
-      // lying. Mirrors makeDevelopTask's top-level catch (0008 #2).
+      // lying. The run's terminal-failure surfacing contract (0008 #2).
       const reason = err instanceof Error ? err.message : String(err);
       try {
         await failRun(runId, reason);
@@ -240,6 +258,18 @@ export function makeDataDrivenTask(
     }
 
     const { taskId, title, base } = await loadRunTaskContext(runId);
+
+    // B5/B7 — live preflight: one memoized DBOS step, evaluated exactly once BEFORE the graph runs.
+    // Skipped entirely when every selected binding resolves to a stub/script runner (mirrors the old
+    // engine's gate). A `needsHuman` preflight blocks the run (clean/base invariant unmet) and surfaces
+    // the lesson — the run never enters the graph. This is an engine-level guard (infrastructure), not a
+    // template node: it is cross-cutting and identical for every pinned pipeline (zero role-ids/shapes).
+    if (route.roleBindings.some((b) => runnerNeedsLivePreflight(b.resolvedRunnerId))) {
+      const pf = await preflightFn(taskId, base);
+      if ('needsHuman' in pf) {
+        return await blockWithLesson(runId, taskId, 'preflight', pf.lesson, 0);
+      }
+    }
 
     // Capability resolution map (GENERIC — no role-ids in the engine): roleRef/scriptRef → route binding.
     // The route's bindings are authoritative for runner dispatch (and durable on recovery via the DBOS
@@ -324,7 +354,13 @@ export function makeDataDrivenTask(
       }
       case 'invokeScript': {
         const scriptResult = await invokeScript(runId, decision, { taskId, title, base }, bindingByRef);
-        if (scriptResult.failed) {
+        // A blocked script (needsHuman) routes via revo.ScriptBlocked → a `blocked` terminal; a thrown
+        // script routes via revo.ScriptFailed → a `failed` terminal (§6 catch). The lesson-bearing
+        // pipeline_blocked is emitted inside invokeScript for the block path (parity with the old engine).
+        if (scriptResult.outcome === 'blocked') {
+          return { lastResult: { outcome: 'failed', errorCode: REVO_SCRIPT_BLOCKED }, lastVerdict: 'blocked', stepDelta: 1 };
+        }
+        if (scriptResult.outcome === 'failed') {
           return { lastResult: { outcome: 'failed', errorCode: REVO_SCRIPT_FAILED }, lastVerdict: 'failed', stepDelta: 1 };
         }
         return { lastResult: { outcome: 'succeeded' }, stepDelta: 1 };
@@ -397,15 +433,22 @@ export function makeDataDrivenTask(
   /**
    * invokeScript → the built-in system SCRIPT library. The only built-in v1 script is the integrator
    * (`script:integrator`); it dispatches to the real integrator (live) or the stub (script) exactly as
-   * the hardcoded path does — runner-wins via the resolved binding (D7). A needsHuman/throw is a
-   * `revo.ScriptFailed` (§6 — routed by the node's `catch`).
+   * the hardcoded path does — runner-wins via the resolved binding (D7).
+   *
+   * Two distinct outcomes the routing data discriminates (parity with the old engine):
+   *  - `blocked`: the integrator needs a human (nothing to integrate, ambiguous PRs, refused identity,
+   *    non-JSON pr view). We emit a `pipeline_blocked` event carrying the human-readable lesson (so the
+   *    human sees WHY — the persist boundary redacts any token), then the node's `catch[revo.ScriptBlocked]`
+   *    routes to a `blocked` terminal.
+   *  - `failed`: the integrator THREW (a gh/push error). `catch[revo.ScriptFailed]` routes to a `failed`
+   *    terminal; the run's top-level catch failRuns (the thrown reason is recorded, redacted).
    */
   async function invokeScript(
     runId: string,
     decision: Extract<Decision, { type: 'invokeScript' }>,
     ctx: { taskId: string; title: string; base: string },
     bindingByRef: Map<string, RouteRoleBinding>,
-  ): Promise<{ failed: boolean }> {
+  ): Promise<{ outcome: 'ok' | 'blocked' | 'failed' }> {
     const binding = bindingByRef.get(decision.scriptRef) ?? bindingByRef.get('script:integrator');
     const integratorInput: IntegratorInput = { runId, taskId: ctx.taskId, title: ctx.title, base: ctx.base };
     let result: IntegratorOutput | IntegratorBlocked;
@@ -424,18 +467,20 @@ export function makeDataDrivenTask(
         type: 'step_failed',
         payload: { scriptRef: decision.scriptRef, error: err instanceof Error ? err.message : String(err) },
       });
-      return { failed: true };
+      return { outcome: 'failed' };
     }
     if ('needsHuman' in result) {
+      // Surface the blocking reason as pipeline_blocked (the persist boundary redacts any token, D15) so
+      // the human sees WHY the integrator could not proceed — exactly as the old engine's blockPipeline.
       await appendEvent({
         runId,
         taskId: ctx.taskId,
         stepId: '',
-        stepKey: decision.nodeId,
-        type: 'step_failed',
-        payload: { scriptRef: decision.scriptRef, lesson: result.lesson },
+        stepKey: 'pipeline',
+        type: 'pipeline_blocked',
+        payload: { reason: 'integrate', lesson: result.lesson, nodeId: decision.nodeId },
       });
-      return { failed: true };
+      return { outcome: 'blocked' };
     }
     await appendEvent({
       runId,
@@ -445,7 +490,7 @@ export function makeDataDrivenTask(
       type: 'integrate_succeeded',
       payload: { prUrl: result.prUrl, branch: result.branch, prNumber: result.prNumber },
     });
-    return { failed: false };
+    return { outcome: 'ok' };
   }
 
   /** Terminal: finish the run in Revisium per the core's terminal status. */
@@ -471,6 +516,31 @@ export function makeDataDrivenTask(
       await failRun(runId, `data-driven pipeline reached a failed terminal (lastVerdict=${verdict})`);
     }
     return { runId, status, verdict, steps };
+  }
+
+  /**
+   * Block the run early with a human-readable lesson (the engine-level preflight guard — there is no
+   * graph node for it). Emits a lesson-bearing `pipeline_blocked` (token-redacted at the persist
+   * boundary) + marks the Revisium run-row blocked, then returns a `blocked` result WITHOUT entering the
+   * graph. Mirrors the old engine's `blockPipeline({ reason })`.
+   */
+  async function blockWithLesson(
+    runId: string,
+    taskId: string,
+    reason: string,
+    lesson: string,
+    steps: number,
+  ): Promise<DataDrivenResult> {
+    await appendEvent({
+      runId,
+      taskId,
+      stepId: '',
+      stepKey: 'pipeline',
+      type: 'pipeline_blocked',
+      payload: { reason, lesson },
+    });
+    await blockRun(runId, { actor: 'pipeline', source: `data-driven-${reason}`, reason });
+    return { runId, status: 'blocked', verdict: 'blocked', steps };
   }
 }
 

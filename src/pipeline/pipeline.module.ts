@@ -5,7 +5,7 @@ import { RunnerModule } from '../runners/runner.module.js';
 import { PipelineService } from './develop-task.workflow.js';
 
 /**
- * PipelineModule — registers PipelineService, which registers the developTask
+ * PipelineModule — registers PipelineService, which registers the data-driven pipeline
  * workflow + runStep step + dev-tasks queue with DBOS in its constructor.
  *
  * Imports RunnerModule so RUN_AGENT + IntegratorService are injectable.
