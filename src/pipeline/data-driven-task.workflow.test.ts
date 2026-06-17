@@ -17,7 +17,8 @@ import type { Template } from '../pipeline-core/index.js';
 import type { AttemptResult } from '../worker/runner.js';
 import type { RouteDecision, RouteRoleBinding } from './route-contract.js';
 import type { Decision as GateDecision } from './await-human.js';
-import type { IntegratorInput, IntegratorOutput } from '../runners/integrator.js';
+import type { IntegratorInput, IntegratorOutput, IntegratorBlocked } from '../runners/integrator.js';
+import { template, node } from '../pipeline-core/kit/index.js';
 
 const RUN_ID = 'run-dd-001';
 
@@ -67,6 +68,10 @@ function buildAdapter(opts: {
   gate?: (topic: 'plan' | 'merge') => GateDecision;
   needsHumanNodes?: Set<string>;
   template?: Template;
+  /** Override the integrator result (default: success). Lets a test drive needsHuman / throw. */
+  integrate?: (input: IntegratorInput) => IntegratorOutput | IntegratorBlocked | Promise<IntegratorOutput | IntegratorBlocked>;
+  /** Override the live preflight (default: ok). Lets a test drive a preflight block. */
+  preflight?: () => { ok: true } | { needsHuman: true; lesson: string } | Promise<{ ok: true } | { needsHuman: true; lesson: string }>;
 }) {
   const rec: Recorder = { gates: [], completed: [], blocked: [], failed: [], integrateCalls: 0, events: [] };
   const visits = new Map<string, number>();
@@ -97,14 +102,18 @@ function buildAdapter(opts: {
     failRun: async (_runId, reason) => { rec.failed.push(reason); return null; },
     blockRun: async (_runId, o) => { rec.blocked.push({ reason: o?.reason }); return null; },
     loadRunTaskContext: async () => ({ taskId: 'task-1', title: 'T', base: 'master', repoRef: '' }),
-    integrateFn: async (input: IntegratorInput): Promise<IntegratorOutput> => {
+    integrateFn: async (input: IntegratorInput): Promise<IntegratorOutput | IntegratorBlocked> => {
       rec.integrateCalls++;
+      if (opts.integrate) return opts.integrate(input);
       return { prUrl: `https://example/pr/${input.taskId}`, branch: 'feat/x', prNumber: 1 };
     },
     runStub: (input: IntegratorInput): IntegratorOutput => {
       rec.integrateCalls++;
       return { prUrl: 'stub://pr/placeholder', branch: `feat/${input.taskId}-stub`, prNumber: 0 };
     },
+    // The test route binds the integrator to revo-integrator (a live runner), so preflight runs. By
+    // default it passes (these tests exercise the graph, not preflight); a test can override it.
+    preflightFn: async () => (opts.preflight ? opts.preflight() : { ok: true }),
   };
 
   const fn = makeDataDrivenTask(runStepFn, deps);
@@ -191,6 +200,71 @@ test('DD6: an invalid pinned template fails the run loudly (defense-in-depth val
   const { run, rec } = buildAdapter({ template: broken });
   await assert.rejects(() => run(), /PINNED_TEMPLATE_INVALID/);
   assert.equal(rec.failed.length, 1, 'the top-level catch failRuns the run');
+});
+
+// ── Integrator script: block (needsHuman) vs fail (throw) discrimination + preflight ──
+//
+// A minimal template whose integrator carries BOTH catch arms (the slice-3 shape): a needsHuman
+// integrator → revo.ScriptBlocked → blocked terminal (surface the reason); a throwing integrator →
+// revo.ScriptFailed → failed terminal. (The `featureDevelopment()` fixture only catches ScriptFailed.)
+function integratorTemplate(): Template {
+  return template('integrator-modes')
+    .title('integrator block-vs-fail')
+    .entry('developer')
+    .domain('approved')
+    .add(
+      node.agent('developer', 'role:developer', 'integrator', { resultSchema: 'schema:change', onFailure: 'abort' }),
+      node.script('integrator', 'script:integrator', 'mergedEnd', {
+        resultSchema: 'schema:integration',
+        onFailure: 'route',
+        catch: [
+          { onError: 'revo.ScriptBlocked', goto: 'blockedEnd' },
+          { onError: 'revo.ScriptFailed', goto: 'failedEnd' },
+        ],
+      }),
+      node.terminal('mergedEnd', 'succeeded'),
+      node.terminal('failedEnd', 'failed'),
+      node.terminal('blockedEnd', 'blocked'),
+    )
+    .build();
+}
+
+test('DD7: an integrator that needsHuman BLOCKS the run (revo.ScriptBlocked → blocked terminal + lesson)', async () => {
+  const { run, rec } = buildAdapter({
+    template: integratorTemplate(),
+    integrate: () => ({ needsHuman: true, lesson: 'nothing to integrate — branch not ahead' }),
+  });
+  const result = await run();
+  assert.equal(result.status, 'blocked', 'a needsHuman integrator blocks (does NOT fail)');
+  assert.equal(rec.blocked.length, 1, 'blockRun called for the blocked terminal');
+  assert.equal(rec.failed.length, 0, 'failRun not called — needsHuman is a block, not a failure');
+  assert.ok(
+    rec.events.includes('pipeline_blocked:pipeline'),
+    'the blocking reason is surfaced as pipeline_blocked (lesson visible to the human)',
+  );
+});
+
+test('DD8: an integrator that THROWS fails the run (revo.ScriptFailed → failed terminal)', async () => {
+  const { run, rec } = buildAdapter({
+    template: integratorTemplate(),
+    integrate: () => { throw new Error('git push rejected: non-fast-forward'); },
+  });
+  const result = await run();
+  assert.equal(result.status, 'failed', 'a throwing integrator fails the run');
+  assert.equal(rec.failed.length, 1, 'failRun called for the failed terminal');
+  assert.equal(rec.blocked.length, 0);
+});
+
+test('DD9: a live preflight that needsHuman blocks the run BEFORE the graph runs (no steps)', async () => {
+  const { run, rec } = buildAdapter({
+    template: integratorTemplate(),
+    preflight: () => ({ needsHuman: true, lesson: 'target repo is not clean; commit/stash and retry' }),
+  });
+  const result = await run();
+  assert.equal(result.status, 'blocked', 'preflight needsHuman blocks the run');
+  assert.equal(rec.blocked.length, 1, 'blockRun called');
+  assert.equal(rec.integrateCalls, 0, 'the integrator never ran (blocked at preflight)');
+  assert.ok(rec.events.includes('pipeline_blocked:pipeline'), 'preflight block surfaces pipeline_blocked');
 });
 
 // ── Selection helper (templateFromExecutionPolicy) ────────────────────────────

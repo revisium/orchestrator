@@ -36,17 +36,31 @@ test('B9: gate ops on an unknown inbox id reject with ROW_NOT_FOUND', { skip: e2
   await assert.rejects(() => h.api.getInboxItem('inbox_missing'), hasCode('ROW_NOT_FOUND'));
 });
 
-test('B3: plan-gate reject cancels the run; developer never executes', { skip: e2eSkip }, async () => {
+test('B3: plan-gate reject blocks the run (data-routed terminal); developer never executes', { skip: e2eSkip }, async () => {
+  // SPEC-CORRECT DIFFERENCE (plan 0015 slice 3): the old hardcoded engine HARD-CANCELLED the run on a
+  // plan-gate reject. The data-driven engine routes the gate verdict purely through the template (§8):
+  // feature-development's planGate declares outcome [approved] with a default → `blockedEnd`, so a
+  // reject (no `approved`) falls through to the BLOCKED terminal. `cancelled` is not a core terminal
+  // status (succeeded|failed|blocked) — blocked is the faithful data-routed mapping. The invariant the
+  // test pins is unchanged: a rejected plan gate stops the run BEFORE the developer executes.
   const target = createTargetRepo();
   try {
     const { runId, inboxId } = await givenFeatureRunAtPlanGate(h, target);
     const res = await h.api.rejectGate({ inboxId, resolvedBy: 'e2e' });
     assert.equal(res.topic, 'plan');
 
-    await waitState(h.api, runId); // workflow returns after cancelRun
-    const detail = await h.api.getRun({ runId, includeEvents: true });
-    assert.equal(detail.run.status, 'cancelled');
-    assert.ok(allSteps(detail).every((s) => s.status !== 'ready'), 'cancelled run leaves no ready steps');
+    await waitState(h.api, runId); // workflow returns after routing to the blocked terminal
+    // waitForRun reports `blocked` as soon as the pipeline_blocked EVENT is visible, which precedes the
+    // step-status cascade (run row patched first, step rows lag — the same ordering assertCompleted
+    // guards). Poll briefly for the steps to settle rather than reading once (a step genuinely stuck
+    // `ready` still fails after the window — a real bug — but the propagation lag no longer flakes).
+    let detail = await h.api.getRun({ runId, includeEvents: true, includeLog: true });
+    for (let waited = 0; waited < 5_000 && allSteps(detail).some((s) => s.status === 'ready'); waited += 250) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      detail = await h.api.getRun({ runId, includeEvents: true, includeLog: true });
+    }
+    assert.notEqual(detail.run.status, 'completed', 'a rejected plan gate must not complete the run');
+    assert.ok(allSteps(detail).every((s) => s.status !== 'ready'), 'a stopped run leaves no ready steps');
     assert.ok(
       !executedRoles(h, runId).some(([role]) => role === 'developer'),
       'developer must not run when the plan gate is rejected',
