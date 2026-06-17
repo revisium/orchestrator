@@ -773,7 +773,6 @@ export class TaskControlPlaneApiService {
         runnerId: role.runner,
         resolvedRunnerId: resolved.runnerId,
         runnerSource: resolved.source,
-        ...(role.kind ? { kind: role.kind } : {}),
       };
     });
   }

@@ -20,30 +20,8 @@ export type PlaybookImportRows = {
   catalogHash: string;
 };
 
-const RUNTIME_NAME_MAP: Record<string, string> = {
-  analyst: 'analyst',
-  architect: 'architect',
-  developer: 'developer',
-  reviewer: 'reviewer',
-  watcher: 'pr-watcher',
-  'deploy-watcher': 'deploy-watcher',
-  'qa-backend': 'qa-backend',
-  'qa-frontend': 'qa-frontend',
-};
-
 const ROW_ID_MAX_LENGTH = 64;
 const ROW_ID_HASH_LENGTH = 12;
-
-const RIGHTS_MAP: Record<string, { allowedTools: string[] }> = {
-  'read-only': { allowedTools: ['Read', 'Grep', 'Glob'] },
-  'write-working-tree': {
-    allowedTools: ['Read', 'Grep', 'Glob', 'Edit', 'Write', 'Bash'],
-  },
-  'qa-live': { allowedTools: ['Read', 'Bash'] },
-  'deploy-read': { allowedTools: ['Read', 'Bash'] },
-  'git-gh': { allowedTools: ['Read', 'Bash'] },
-  'deterministic-script': { allowedTools: ['Read', 'Bash'] },
-};
 
 export type MapPlaybookRowsOptions = {
   root: string;
@@ -119,18 +97,6 @@ export function scopedImportRowId(playbookId: string, itemId: string): string {
   return `${prefix}-${digest}`;
 }
 
-export function runtimeRoleName(roleId: string): string {
-  return RUNTIME_NAME_MAP[roleId] ?? roleId;
-}
-
-export function mapRights(rights: string): { allowedTools: string[] } {
-  const mapped = RIGHTS_MAP[rights];
-  if (!mapped) {
-    throw new PlaybookError('PLAYBOOK_INVALID_CATALOG', `Unsupported playbook role rights: ${rights}`);
-  }
-  return { allowedTools: [...mapped.allowedTools] };
-}
-
 function mapRole(root: string, playbookId: string, role: RoleCatalogRecord, now: string): VersionedRow {
   if (role.runnerId === 'stub-agent') {
     throw new PlaybookError(
@@ -138,10 +104,8 @@ function mapRole(root: string, playbookId: string, role: RoleCatalogRecord, now:
       `Production playbook role ${role.id} must not bind runner_id stub-agent; use an execution profile override for test stubs`,
     );
   }
-  const rights = mapRights(role.rights);
   const requiredPrompt = !role.runnerId.startsWith('revo-');
   const prompt = composeRolePrompt(root, role, requiredPrompt);
-  const runtimeName = runtimeRoleName(role.id);
   const importedRoleId = scopedImportRowId(playbookId, role.id);
   return {
     table: 'roles',
@@ -154,16 +118,15 @@ function mapRole(root: string, playbookId: string, role: RoleCatalogRecord, now:
       effort: role.defaultModelLevel === 'cheap' ? 'low' : 'high',
       runner: role.runnerId,
       runner_id: role.runnerId,
-      // Classification axis (routing), persisted top-level only — deliberately NOT mirrored into
-      // scope_rules (which feeds the catalog hash). Omitted entirely when unset so kind-less rows keep
-      // their existing serialized shape/hash (D6).
-      ...(role.kind ? { kind: role.kind } : {}),
-      allowed_tools: rights.allowedTools,
+      // allowedTools is passed through verbatim from the catalog (a role declares its tools as data;
+      // there is no rights→tools table in code).
+      allowed_tools: [...role.allowedTools],
+      // A playbook role's id IS its runtime id (identity passthrough; no name-translation table in code).
       scope_rules: JSON.stringify({
         surface: role.surface,
         rights: role.rights,
         playbook_role_id: role.id,
-        runtime_role_id: runtimeName,
+        runtime_role_id: role.id,
         runner_id: role.runnerId,
       }),
       playbook_id: playbookId,

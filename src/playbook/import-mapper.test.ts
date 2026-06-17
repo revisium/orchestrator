@@ -3,14 +3,9 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { mapPlaybookRows, runtimeRoleName, scopedImportRowId } from './import-mapper.js';
+import { mapPlaybookRows, scopedImportRowId } from './import-mapper.js';
 import type { PlaybookManifest } from './manifest.js';
 import type { PlaybookCatalogs } from './catalog-loader.js';
-
-test('runtimeRoleName: maps watcher to current pr-watcher runtime name', () => {
-  assert.equal(runtimeRoleName('watcher'), 'pr-watcher');
-  assert.equal(runtimeRoleName('developer-backend'), 'developer-backend');
-});
 
 test('scopedImportRowId: returns Revisium-safe scoped row ids', () => {
   assert.equal(scopedImportRowId('pb', 'developer-backend'), 'pb-developer-backend');
@@ -50,6 +45,7 @@ test('mapPlaybookRows: maps roles and pipelines into versioned rows', () => {
         path: 'roles/watcher/ROLE.md',
         surface: 'repo',
         rights: 'read-only',
+        allowedTools: ['Read', 'Grep', 'Glob'],
         defaultModelLevel: 'cheap',
         runnerId: 'claude-code',
         wrappers: {},
@@ -83,17 +79,17 @@ test('mapPlaybookRows: maps roles and pipelines into versioned rows', () => {
   assert.equal(rows.roles[0]?.data.name, 'watcher');
   assert.equal(rows.roles[0]?.data.runner, 'claude-code');
   assert.equal(rows.roles[0]?.data.runner_id, 'claude-code');
-  assert.match(String(rows.roles[0]?.data.scope_rules), /"runtime_role_id":"pr-watcher"/);
+  // A playbook role's id IS its runtime id (identity passthrough — no name-translation table in code).
+  assert.match(String(rows.roles[0]?.data.scope_rules), /"runtime_role_id":"watcher"/);
+  assert.deepEqual(rows.roles[0]?.data.allowed_tools, ['Read', 'Grep', 'Glob']);
   assert.equal(rows.pipelines[0]?.rowId, 'pb-feature-development');
   assert.deepEqual(rows.pipelines[0]?.data.route_gates, []);
   assert.equal(rows.catalogHash.length, 64);
 });
 
-test('mapPlaybookRows: persists role kind top-level only when set, omits it otherwise', () => {
+test('mapPlaybookRows: passes allowedTools through verbatim from the catalog', () => {
   const root = mkdtempSync(join(tmpdir(), 'revo-playbook-map-'));
-  mkdirSync(join(root, 'roles', 'pr-poller'), { recursive: true });
   mkdirSync(join(root, 'roles', 'developer'), { recursive: true });
-  writeFileSync(join(root, 'roles', 'pr-poller', 'ROLE.md'), '# Poller\n');
   writeFileSync(join(root, 'roles', 'developer', 'ROLE.md'), '# Developer\n');
   const manifest: PlaybookManifest = {
     id: 'pb',
@@ -111,20 +107,11 @@ test('mapPlaybookRows: persists role kind top-level only when set, omits it othe
     catalogs: {
       roles: [
         {
-          id: 'pr-poller',
-          path: 'roles/pr-poller/ROLE.md',
-          surface: 'any',
-          rights: 'read-only',
-          defaultModelLevel: 'cheap',
-          runnerId: 'claude-code',
-          wrappers: {},
-          kind: 'status',
-        },
-        {
           id: 'developer',
           path: 'roles/developer/ROLE.md',
           surface: 'any',
           rights: 'write-working-tree',
+          allowedTools: ['Read', 'Edit', 'Write', 'Bash', 'Grep', 'Glob'],
           defaultModelLevel: 'standard',
           runnerId: 'claude-code',
           wrappers: {},
@@ -135,10 +122,9 @@ test('mapPlaybookRows: persists role kind top-level only when set, omits it othe
     now: '2026-06-13T00:00:00.000Z',
   });
 
-  assert.equal(rows.roles[0]?.data.kind, 'status');
-  assert.equal('kind' in (rows.roles[1]?.data ?? {}), false);
-  // kind is a top-level routing axis only — never duplicated into scope_rules (D6).
-  assert.doesNotMatch(String(rows.roles[0]?.data.scope_rules), /"kind"/);
+  assert.deepEqual(rows.roles[0]?.data.allowed_tools, ['Read', 'Edit', 'Write', 'Bash', 'Grep', 'Glob']);
+  // no `kind` field is ever persisted (the role-kind machinery was removed in slice 4).
+  assert.equal('kind' in (rows.roles[0]?.data ?? {}), false);
 });
 
 test('mapPlaybookRows: normalizes canonical gate labels to workflow gate ids', () => {
@@ -167,6 +153,7 @@ test('mapPlaybookRows: normalizes canonical gate labels to workflow gate ids', (
           path: 'roles/developer/ROLE.md',
           surface: 'any',
           rights: 'write-working-tree',
+          allowedTools: ['Read', 'Edit', 'Write', 'Bash'],
           defaultModelLevel: 'standard',
           runnerId: 'claude-code',
           wrappers: {},
@@ -215,6 +202,7 @@ test('mapPlaybookRows: runner_id, not rights, selects the runtime runner', () =>
           path: 'roles/integrator/ROLE.md',
           surface: 'repo',
           rights: 'git-gh',
+          allowedTools: ['Read', 'Bash'],
           defaultModelLevel: 'standard',
           runnerId: 'revo-integrator',
           wrappers: {},
@@ -254,6 +242,7 @@ test('mapPlaybookRows: rejects production stub-agent role bindings', () => {
             path: 'roles/developer/ROLE.md',
             surface: 'any',
             rights: 'write-working-tree',
+            allowedTools: ['Read', 'Edit', 'Write', 'Bash'],
             defaultModelLevel: 'standard',
             runnerId: 'stub-agent',
             wrappers: {},

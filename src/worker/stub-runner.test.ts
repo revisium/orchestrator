@@ -44,35 +44,19 @@ function makeRole(name: string): Role {
   };
 }
 
-test('stubRunAgent: architect returns one developer next step', async () => {
-  const result = await stubRunAgent({
-    role: makeRole('architect'),
-    profile: PROFILE,
-    context: 'some context',
-    attemptId: 'attempt-1',
-    step: STEP,
-  });
+test('stubRunAgent: emits a passing verdict regardless of role (generic stub)', async () => {
+  for (const role of ['architect', 'developer', 'reviewer', 'integrator', 'tester']) {
+    const result = await stubRunAgent({
+      role: makeRole(role),
+      profile: PROFILE,
+      context: 'some context',
+      attemptId: 'attempt-1',
+      step: { ...STEP, role },
+    });
 
-  assert.equal(result.nextSteps.length, 1);
-  assert.equal(result.nextSteps[0]?.role, 'developer');
-  assert.equal(result.nextSteps[0]?.taskId, STEP.taskId);
-  assert.equal(result.nextSteps[0]?.kind, 'implement');
-});
-
-test('stubRunAgent: developer returns one reviewer next step', async () => {
-  const devStep: Step = { ...STEP, id: 'step-dev-1', role: 'developer' };
-  const result = await stubRunAgent({
-    role: makeRole('developer'),
-    profile: PROFILE,
-    context: 'some context',
-    attemptId: 'attempt-2',
-    step: devStep,
-  });
-
-  // Updated in 0003: stub now teaches the full architect→developer→reviewer→integrator chain.
-  assert.equal(result.nextSteps.length, 1);
-  assert.equal(result.nextSteps[0]?.role, 'reviewer');
-  assert.equal(result.nextSteps[0]?.kind, 'review');
+    assert.equal((result.output as Record<string, unknown>).verdict, 'PASS', `${role} → PASS`);
+    assert.equal(result.nextSteps.length, 0, `${role} → no nextSteps (engine sequences from the template)`);
+  }
 });
 
 test('stubRunAgent: returns zero costs', async () => {
@@ -112,16 +96,4 @@ test('stubRunAgent: echo output includes role name and step id', async () => {
   assert.ok(echo.includes('role=architect'), 'output should contain role name');
   assert.ok(echo.includes(`step=${STEP.id}`), 'output should contain step id');
   assert.ok(echo.includes('contextSize=5'), 'output should contain context size');
-});
-
-test('stubRunAgent: other roles return no next steps (loop is dumb)', async () => {
-  const result = await stubRunAgent({
-    role: makeRole('tester'),
-    profile: PROFILE,
-    context: 'ctx',
-    attemptId: 'attempt-1',
-    step: { ...STEP, role: 'tester' },
-  });
-
-  assert.equal(result.nextSteps.length, 0, 'roles other than architect produce no nextSteps in stub');
 });

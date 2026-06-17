@@ -615,7 +615,7 @@ test('TaskControlPlaneApiService.simulateRoute binds every required playbook rol
   assert.deepEqual(route.roleBindings.map((item) => item.rowId), ['pb-architect', 'pb-analyst', 'pb-watcher']);
 });
 
-test('TaskControlPlaneApiService.simulateRoute threads role kind onto the binding', async () => {
+test('TaskControlPlaneApiService.simulateRoute binds an unknown-id role purely from pipeline data (no kind)', async () => {
   const api = makeApi({
     rolesService: {
       async listRoles() {
@@ -639,7 +639,6 @@ test('TaskControlPlaneApiService.simulateRoute threads role kind onto the bindin
             rights: 'read-only',
             playbookId: 'pb',
             playbookRoleId: 'pr-poller',
-            kind: 'status' as const,
           },
         ];
       },
@@ -662,12 +661,13 @@ test('TaskControlPlaneApiService.simulateRoute threads role kind onto the bindin
     },
   });
 
-  const route = await api.simulateRoute({ title: 'route kind', pipeline: 'poll' });
+  const route = await api.simulateRoute({ title: 'route poll', pipeline: 'poll' });
 
+  // The binding resolves the unknown-id role by id alone; the route carries NO role `kind` (the
+  // role-kind machinery was removed in slice 4 — the data-driven engine reads no `kind`).
   const pollerBinding = route.roleBindings.find((item) => item.roleId === 'pr-poller');
-  const developerBinding = route.roleBindings.find((item) => item.roleId === 'developer');
-  assert.equal(pollerBinding?.kind, 'status');
-  assert.equal(developerBinding?.kind, undefined);
+  assert.ok(pollerBinding, 'pr-poller binds purely from the pipeline data');
+  assert.equal('kind' in (pollerBinding ?? {}), false, 'no kind is threaded onto any binding');
 });
 
 test('TaskControlPlaneApiService.simulateRoute binds canonical feature-development roles and gates', async () => {

@@ -96,60 +96,24 @@ test('RolesService uses head transport mode', () => {
   assert.ok(svc instanceof RolesService);
 });
 
-test('RolesService.listRoles surfaces a valid persisted kind', async () => {
+test('RolesService.listRoles maps persisted row fields into a summary', async () => {
   const transport = fakeHeadTransport({}, {
     listRows: {
       roles: [
-        { id: 'pb-pr-poller', data: { name: 'pr-poller', model_level: 'cheap', runner_id: 'claude-code', kind: 'status' } },
+        {
+          id: 'pb-developer',
+          data: {
+            name: 'developer', model_level: 'standard', runner_id: 'claude-code', surface: 'any',
+            rights: 'write-working-tree', playbook_id: 'pb', playbook_role_id: 'developer',
+          },
+        },
       ],
     },
   });
   const svc = makeRolesService(transport);
   const roles = await svc.listRoles();
-  assert.equal(roles[0]?.kind, 'status');
-});
-
-test('RolesService.listRoles leaves kind undefined when the row has none (id-fallback path)', async () => {
-  const transport = fakeHeadTransport({}, {
-    listRows: {
-      roles: [
-        { id: 'pb-developer', data: { name: 'developer', model_level: 'standard', runner_id: 'claude-code' } },
-      ],
-    },
-  });
-  const svc = makeRolesService(transport);
-  const roles = await svc.listRoles();
-  assert.equal(roles[0]?.kind, undefined);
-});
-
-test('RolesService.listRoles throws VALIDATION_FAILURE on a non-empty invalid kind (corrupt row, not id-fallback)', async () => {
-  const transport = fakeHeadTransport({}, {
-    listRows: {
-      roles: [
-        { id: 'pb-pr-poller', data: { name: 'pr-poller', model_level: 'cheap', runner_id: 'claude-code', kind: 'staus' } },
-      ],
-    },
-  });
-  const svc = makeRolesService(transport);
-  await assert.rejects(
-    () => svc.listRoles(),
-    (err: unknown) => err instanceof ControlPlaneError && err.code === 'VALIDATION_FAILURE',
-  );
-});
-
-test('RolesService.listRoles throws VALIDATION_FAILURE on a NON-STRING kind (corrupt row never coerced to absent)', async () => {
-  // A non-string `kind` (e.g. 42, null, {}) must not be str()-coerced to '' and treated as "absent" — that
-  // would silently route the role via the id-fallback. The persisted source-of-truth boundary surfaces it loud.
-  const transport = fakeHeadTransport({}, {
-    listRows: {
-      roles: [
-        { id: 'pb-pr-poller', data: { name: 'pr-poller', model_level: 'cheap', runner_id: 'claude-code', kind: 42 } },
-      ],
-    },
-  });
-  const svc = makeRolesService(transport);
-  await assert.rejects(
-    () => svc.listRoles(),
-    (err: unknown) => err instanceof ControlPlaneError && err.code === 'VALIDATION_FAILURE',
-  );
+  assert.equal(roles[0]?.id, 'pb-developer');
+  assert.equal(roles[0]?.name, 'developer');
+  assert.equal(roles[0]?.runner, 'claude-code');
+  assert.equal(roles[0]?.playbookRoleId, 'developer');
 });

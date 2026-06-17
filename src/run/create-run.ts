@@ -78,9 +78,7 @@ function compactUtcStamp(date: Date): string {
   ].join('');
 }
 
-export const KNOWN_ROLES = ['architect', 'developer', 'reviewer', 'integrator', 'pr-watcher'] as const;
-export type KnownRole = (typeof KNOWN_ROLES)[number];
-const DEFAULT_ROLE: KnownRole = 'architect';
+const DEFAULT_ROLE = 'architect';
 const maxRoleRowIdLength = 64;
 
 const maxSlugLength = 21;
@@ -137,7 +135,7 @@ function normalizeInput(input: CreateRunInput): NormalizedInput {
   const role = input.role?.trim() || DEFAULT_ROLE;
   if (!isValidRoleRowId(role)) {
     throw new Error(
-      `role must be a known legacy role or an installed playbook role row id (${maxRoleRowIdLength} chars max, A-Z a-z 0-9 _ -)`,
+      `role must be a well-formed role row id (${maxRoleRowIdLength} chars max, A-Z a-z 0-9 _ -)`,
     );
   }
 
@@ -170,10 +168,12 @@ function normalizeInput(input: CreateRunInput): NormalizedInput {
   };
 }
 
+// A role row id is generic data: any well-formed id (charset + length) is accepted. Roles are data,
+// not a code allow-list — the route binds an installed role row id and the data-driven engine resolves
+// it as an opaque capability handle (it holds ZERO role-ids). A hyphen is NOT required (a bare id like
+// `developer` is valid).
 function isValidRoleRowId(role: string): boolean {
-  if ((KNOWN_ROLES as readonly string[]).includes(role)) return true;
   if (role.length === 0 || role.length > maxRoleRowIdLength) return false;
-  if (!role.includes('-')) return false;
   return /^[A-Za-z0-9_-]+$/.test(role);
 }
 

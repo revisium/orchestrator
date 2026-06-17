@@ -27,7 +27,7 @@ import {
 // One shared host; the agent is scripted per-run so we can choose the embedded role's verdict.
 
 const PIPELINE = 'feature-pr-watch'; // fixture pipeline: orchestrator, analyst, reviewer, developer, integrator, pr-watcher
-const PIPELINE_POLL = 'feature-pr-poll'; // mirrors feature-pr-watch but with an UNKNOWN-id pr-poller (kind:status) post-integrator
+const PIPELINE_POLL = 'feature-pr-poll'; // mirrors feature-pr-watch but with an UNKNOWN-id pr-poller post-integrator
 const STUB_INTEGRATOR = { runnerOverrides: { 'revo-integrator': 'stub-agent' } }; // integrate w/o git/gh
 
 let h: RunHarness;
@@ -114,9 +114,11 @@ test('K3: routing composes the pipeline from data — the embedded role appears 
   );
 });
 
-// K4/K5 — the NEW capability (0014): a role whose id is UNKNOWN to every hardcoded classifier is
-// CLASSIFIED as a post-integrator status role purely from its `kind: 'status'` in playbook data — with
-// zero change to any code id-list. (K1/K3 above only prove a RECOGNIZED id, pr-watcher.)
+// K4/K5 — a role whose id is UNKNOWN to any historical classifier runs as a post-integrator node
+// purely from its placement in the TEMPLATE (the data-driven engine resolves `role:pr-poller` as an
+// opaque capability handle by id; it holds ZERO role-ids and reads no role `kind`). The post-integrator
+// placement is the template's node ordering, not a code classifier. (K1/K3 prove a recognized id,
+// pr-watcher; K4/K5 prove an unrecognized id needs no code change at all.)
 
 test('K4: an UNRECOGNIZED-id role (pr-poller) placed post-integrator in the template runs and completes', { skip: e2eSkip }, async () => {
   const run = await startPrPollRun(); // default: every role PASS, incl the unknown-id pr-poller
@@ -147,14 +149,16 @@ test('K4: an UNRECOGNIZED-id role (pr-poller) placed post-integrator in the temp
   assert.ok(integrateIdx < pollerStepIdx, 'the status role ran AFTER the integrator at runtime');
 });
 
-test('K5: routing threads kind to the binding — pr-poller binds kind:status, ordered after integrator', { skip: e2eSkip }, async () => {
+test('K5: routing binds the unknown-id pr-poller from data, ordered after integrator (no kind in the binding)', { skip: e2eSkip }, async () => {
   const route = (await h.api.simulateRoute({ title: 'route', pipeline: PIPELINE_POLL })) as unknown as {
     pipelineId: string;
     roles: string[];
-    roleBindings: Array<{ roleId: string; kind?: string }>;
+    roleBindings: Array<{ roleId: string } & Record<string, unknown>>;
   };
   assert.equal(route.pipelineId, PIPELINE_POLL);
-  assert.equal(route.roleBindings.find((b) => b.roleId === 'pr-poller')?.kind, 'status'); // kind threaded to binding
+  const pollerBinding = route.roleBindings.find((b) => b.roleId === 'pr-poller');
+  assert.ok(pollerBinding, 'pr-poller is bound purely from the fixture pipeline data');
+  assert.equal('kind' in pollerBinding, false, 'the binding carries NO kind (the role-kind machinery was removed)');
   assert.ok(
     route.roles.indexOf('pr-poller') > route.roles.indexOf('integrator'),
     'pr-poller is still ordered after the integrator (post-integrator phase)',
