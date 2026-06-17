@@ -3,12 +3,23 @@ import { join } from 'node:path';
 import { Command } from 'commander';
 import { isHealthy, repoRoot, resolvePorts, revisiumUri } from '../config.js';
 import { applyAdditiveSchemaMigration } from '../../control-plane/schema-migration.js';
-import { seedDefaultPlaybook } from '../../control-plane/seed-default-playbook.js';
+import {
+  seedDefaultPlaybook,
+  type SeedDefaultPlaybookResult,
+} from '../../control-plane/seed-default-playbook.js';
 import { withRevisiumService } from './revisium-context.js';
 
 type BootstrapOptions = {
   commit?: boolean;
 };
+
+/** Run the default-playbook seed against the live draft scope (needs a running daemon). */
+async function runDefaultPlaybookSeed(): Promise<SeedDefaultPlaybookResult> {
+  return withRevisiumService(
+    (await import('../../revisium/playbooks.service.js')).PlaybooksService,
+    (service) => seedDefaultPlaybook(service),
+  );
+}
 
 /**
  * Install the BUILT-IN DEFAULT playbook (slice 5, plan 0015) so a fresh control-plane has a working
@@ -16,24 +27,27 @@ type BootstrapOptions = {
  * playbook source, NOT engine code). Idempotent + best-effort: a fresh bootstrap installs it once;
  * re-running is a no-op. A seed failure must NOT fail the schema bootstrap (the schema is the
  * critical artifact) — it is reported so the operator can re-run `revo playbook install`.
+ *
+ * `runSeed`/`log` are injected (defaulting to the live daemon seed + stderr) so the logging policy is
+ * unit-testable without a daemon — the codebase's CLI-helper pattern (see `pollWorkflowState`).
  */
-async function seedDefaultPlaybookBestEffort(): Promise<void> {
+export async function seedDefaultPlaybookBestEffort(
+  runSeed: () => Promise<SeedDefaultPlaybookResult> = runDefaultPlaybookSeed,
+  log: (message: string) => void = (message) => console.error(message),
+): Promise<void> {
   try {
-    const outcome = await withRevisiumService(
-      (await import('../../revisium/playbooks.service.js')).PlaybooksService,
-      (service) => seedDefaultPlaybook(service),
-    );
+    const outcome = await runSeed();
     if (outcome.status === 'installed') {
       const { result } = outcome;
-      console.error(
+      log(
         `Seeded default playbook ${result.playbookId} ` +
           `(${result.roles} roles, ${result.pipelines} pipelines).`,
       );
     } else if (outcome.status === 'already-installed') {
-      console.error('Default playbook already installed — skipping seed.');
+      log('Default playbook already installed — skipping seed.');
     }
   } catch (err) {
-    console.error(
+    log(
       `Default playbook seed failed (schema bootstrap still applied): ${String(err)}. ` +
         'Re-run with `revo playbook install control-plane/default-playbook --commit`.',
     );

@@ -27,6 +27,7 @@ import type {
 import { validateTemplate } from '../pipeline-core/index.js';
 import {
   seedDefaultPlaybook,
+  createDaemonInstaller,
   DEFAULT_PLAYBOOK_ID,
   DEFAULT_PLAYBOOK_SOURCE,
   type DefaultPlaybookInstaller,
@@ -192,4 +193,36 @@ test('seedDefaultPlaybook: rethrows a non-benign install failure', async () => {
     async install() { throw new Error('PLAYBOOK_INVALID_CATALOG: boom'); },
   };
   await assert.rejects(() => seedDefaultPlaybook(installer, DEFAULT_PLAYBOOK_SOURCE), /PLAYBOOK_INVALID_CATALOG/);
+});
+
+test('seedDefaultPlaybook: throws a clear error when the source directory is missing', async () => {
+  let installs = 0;
+  const installer: DefaultPlaybookInstaller = {
+    async listPlaybooks() { return []; },
+    async install() { installs += 1; return STUB_RESULT; },
+  };
+  const missing = join(DEFAULT_PLAYBOOK_SOURCE, '__does_not_exist__');
+  await assert.rejects(
+    () => seedDefaultPlaybook(installer, missing),
+    /default playbook source not found/,
+  );
+  assert.equal(installs, 0, 'must not attempt an install when the source is absent');
+});
+
+// ---------------------------------------------------------------------------
+// 5. createDaemonInstaller wires the live-daemon adapter (presence reader + real installer).
+// ---------------------------------------------------------------------------
+test('createDaemonInstaller: forwards listPlaybooks and exposes an install function', async () => {
+  const present = [{ id: DEFAULT_PLAYBOOK_ID }];
+  const installer = createDaemonInstaller(async () => present);
+  assert.equal(typeof installer.install, 'function', 'install is backed by the real PlaybookInstaller');
+  assert.deepEqual(await installer.listPlaybooks(), present, 'listPlaybooks delegates to the injected reader');
+});
+
+test('createDaemonInstaller: seed skips install when the reader reports the default present', async () => {
+  // Drives seedDefaultPlaybook through the daemon adapter's listPlaybooks without touching a daemon:
+  // the presence reader short-circuits before install() (which WOULD need the live draft scope).
+  const installer = createDaemonInstaller(async () => [{ id: DEFAULT_PLAYBOOK_ID }]);
+  const outcome = await seedDefaultPlaybook(installer, DEFAULT_PLAYBOOK_SOURCE);
+  assert.equal(outcome.status, 'already-installed');
 });
