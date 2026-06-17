@@ -12,6 +12,7 @@ import { failRun, type FailRunResult } from '../run/fail-run.js';
 import { completeRun, type CompleteRunResult } from '../run/complete-run.js';
 import { blockRun, type BlockRunResult } from '../run/block-run.js';
 import { appendRunEvent, appendRunCost, appendRunAttempt, type AppendEventInput, type AppendCostInput, type AppendAttemptInput } from '../run/append-event.js';
+import { appendRunOutput as appendRunOutputRow, type RunOutputRow } from '../run/run-outputs.js';
 import { REVISIUM_TRANSPORT_DRAFT } from './tokens.js';
 
 /**
@@ -218,5 +219,13 @@ export class RunService {
    */
   appendAttempt(input: AppendAttemptInput): Promise<void> {
     return appendRunAttempt(this.da, input);
+  }
+
+  /**
+   * appendRunOutput — write an idempotent step-output dataflow row to the draft run_outputs table.
+   * Wraps the run-outputs module over the service's draft da (0016 §5).
+   */
+  appendRunOutput(input: RunOutputRow): Promise<void> {
+    return appendRunOutputRow(this.da, input);
   }
 }
