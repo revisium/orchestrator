@@ -77,6 +77,13 @@ export async function applyAdditiveSchemaMigration(input: {
     try {
       currentSchema = await draft.getTableSchema(table.id);
     } catch {
+      // Table absent on an upgraded control-plane (e.g. `run_outputs`, added in 0016). The previous
+      // code only PATCHED existing tables, so a brand-new table would never land on an already-
+      // bootstrapped control-plane. Create it from the bootstrap schema (fresh bootstrap already
+      // creates every config table; this covers the upgrade path).
+      await draft.createTable(table.id, table.schema);
+      updatedTables.push(table.id);
+      patchCount += 1;
       continue;
     }
     const patches = computeAdditiveSchemaPatches(currentSchema, table.schema);

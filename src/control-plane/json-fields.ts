@@ -12,6 +12,7 @@ const jsonFields: Partial<Record<RuntimeTable, readonly string[]>> = {
   steps: ['input', 'output'],
   events: ['payload'],
   inbox: ['context', 'answer'],
+  run_outputs: ['payload'],
 };
 
 function fieldsFor(table: RuntimeTable): readonly string[] {

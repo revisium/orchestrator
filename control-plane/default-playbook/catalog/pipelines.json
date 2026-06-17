@@ -46,15 +46,41 @@
             "roleRef": "role:analyst",
             "next": "planReviewer",
             "onFailure": "abort",
-            "resultSchema": "schema:plan"
+            "resultSchema": "schema:plan",
+            "produces": { "name": "plan" },
+            "incrementCounters": ["planReviewLoop"]
           },
           "planReviewer": {
             "id": "planReviewer",
             "kind": "agent",
             "roleRef": "role:reviewer",
-            "next": "planGate",
+            "next": "planReviewRouter",
             "onFailure": "abort",
-            "resultSchema": "schema:reviewVerdict"
+            "resultSchema": "schema:reviewVerdict",
+            "consumes": [{ "node": "analyst", "as": "plan" }]
+          },
+          "planReviewRouter": {
+            "id": "planReviewRouter",
+            "kind": "choice",
+            "branches": [
+              {
+                "when": { "op": "verdict.in", "value": ["approved", "clean"] },
+                "goto": "planGate"
+              },
+              {
+                "when": {
+                  "op": "all",
+                  "of": [
+                    { "op": "verdict.in", "value": ["blocker", "changes_requested"] },
+                    { "op": "counter.lt", "scope": "planReviewLoop", "value": 4 }
+                  ]
+                },
+                "goto": "analyst"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ]
           },
           "planGate": {
             "id": "planGate",
@@ -82,7 +108,8 @@
             "roleRef": "role:developer",
             "next": "codeReview",
             "onFailure": "abort",
-            "resultSchema": "schema:change"
+            "resultSchema": "schema:change",
+            "consumes": [{ "node": "analyst", "as": "plan" }]
           },
           "codeReview": {
             "id": "codeReview",
@@ -265,6 +292,10 @@
           "enforcement": "strict"
         },
         "scopes": {
+          "planReviewLoop": {
+            "cap": 4,
+            "parent": null
+          },
           "codeReviewLoop": {
             "cap": 3,
             "parent": null

@@ -16,6 +16,7 @@ type TableStore = {
   events: ControlPlaneRow[];
   inbox: ControlPlaneRow[];
   cost_ledger: ControlPlaneRow[];
+  run_outputs: ControlPlaneRow[];
 };
 
 function createFakeDataAccess(
@@ -35,6 +36,7 @@ function createFakeDataAccess(
     events: [],
     inbox: [],
     cost_ledger: [],
+    run_outputs: [],
     ...store,
   };
 

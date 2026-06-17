@@ -6,6 +6,7 @@ export const runtimeTables = [
   'events',
   'inbox',
   'cost_ledger',
+  'run_outputs',
 ] as const;
 
 export type RuntimeTable = (typeof runtimeTables)[number];
