@@ -813,6 +813,62 @@
         },
         "required": []
       }
+    },
+    {
+      "id": "run_outputs",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "default": "",
+            "description": "Deterministic: out_<fnv1a64Hex(runId|nodeId|ordinal)>"
+          },
+          "run_id": {
+            "type": "string",
+            "default": ""
+          },
+          "node_id": {
+            "type": "string",
+            "default": ""
+          },
+          "ordinal": {
+            "type": "number",
+            "default": 0,
+            "description": "Adapter-owned per-(run,node) execution ordinal; 1,2,3 across loop iterations (0016 §4.1)"
+          },
+          "name": {
+            "type": "string",
+            "default": "",
+            "description": "Artifact name from the node's produces.name, e.g. plan"
+          },
+          "schema_ref": {
+            "type": "string",
+            "default": "",
+            "description": "resultSchema the payload was shape-checked against, e.g. schema:plan"
+          },
+          "payload": {
+            "type": "string",
+            "default": "",
+            "description": "Serialized JSON content, secret-redacted + size-capped at the adapter boundary"
+          },
+          "payload_ref": {
+            "type": "string",
+            "default": "",
+            "description": "Set instead of payload when the content exceeds the inline cap (0016 §8)"
+          },
+          "attempt_id": {
+            "type": "string",
+            "default": ""
+          },
+          "produced_at": {
+            "type": "string",
+            "default": ""
+          }
+        },
+        "required": []
+      }
     }
   ],
   "rows": [
