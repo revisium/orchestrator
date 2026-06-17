@@ -1,0 +1,5 @@
+{
+  "name": "@revisium/orchestrator-default-playbook",
+  "version": "0.1.0",
+  "description": "Built-in default agent playbook (roles + data-driven pipelines) seeded by `revo bootstrap` so a fresh control-plane has a working pipeline out-of-the-box."
+}

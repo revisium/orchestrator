@@ -7,7 +7,53 @@ import { waitForGate } from './drive.js';
 /** Playbook id installed by {@link givenInstalledPlaybook}. */
 export const PLAYBOOK_ID = 'revisium-agent-playbook';
 
+/**
+ * Playbook id of the BUILT-IN DEFAULT playbook (slice 5) that `revo bootstrap` seeds out-of-the-box.
+ * Distinct from {@link PLAYBOOK_ID} (the e2e fixture) — Group M targets THIS to prove the shipped default.
+ */
+export const DEFAULT_PLAYBOOK_ID = 'revisium-default';
+
 const STUB_OVERRIDE = { runnerOverrides: { 'claude-code': 'stub-agent' } };
+
+/** Stub BOTH the agent and the (script) integrator — a self-contained run with no real git/gh. */
+const STUB_OVERRIDE_FULL = { runnerOverrides: { 'claude-code': 'stub-agent', 'revo-integrator': 'stub-agent' } };
+
+/**
+ * Create + start a run on the SEEDED DEFAULT playbook's `feature-development` pipeline (slice 5). Both
+ * the agent and the integrator are stubbed so the run reaches the plan + merge gates without real
+ * claude/git/gh; the default `feature-development` routes a PASS verdict (→ `approved`) past both the
+ * code-review and post-integrator-watcher routers, so the deterministic agent drives it to completion.
+ */
+export async function startDefaultFeatureRun(h: RunHarness, repo: string = process.cwd()) {
+  const created = await h.api.createRun({
+    repo,
+    title: 'E2E seeded default feature-development run',
+    description: 'Group M — the bootstrap-SEEDED default pipeline on real DBOS/Revisium.',
+    scope: 'seeded-default e2e',
+    playbookId: DEFAULT_PLAYBOOK_ID,
+    pipelineId: 'feature-development',
+    executionProfile: STUB_OVERRIDE_FULL,
+    start: true,
+  });
+  if (!('workflow' in created)) throw new Error('start:true must return workflow metadata');
+  return created;
+}
+
+/** Create + start a run on the SEEDED DEFAULT playbook's `local-change` pipeline (developer-only, no gate). */
+export async function startDefaultLocalChangeRun(h: RunHarness, repo: string = process.cwd()) {
+  const created = await h.api.createRun({
+    repo,
+    title: 'E2E seeded default local-change run',
+    description: 'Group M — the bootstrap-SEEDED local-change pipeline on real DBOS/Revisium.',
+    scope: 'seeded-default e2e',
+    playbookId: DEFAULT_PLAYBOOK_ID,
+    pipelineId: 'local-change',
+    executionProfile: STUB_OVERRIDE,
+    start: true,
+  });
+  if (!('workflow' in created)) throw new Error('start:true must return workflow metadata');
+  return created;
+}
 
 /**
  * Install the agent playbook into the control-plane (roles + pipelines).
@@ -32,6 +78,27 @@ export async function givenInstalledPlaybook(h: RunHarness): Promise<void> {
   } catch (err) {
     // Belt-and-suspenders: tolerate a concurrent/duplicate commit ("revision is not a draft");
     // re-throw anything that is not an already-installed signal.
+    if (!/not a draft|already|nothing to commit|ROW_CONFLICT/i.test(String(err))) throw err;
+  }
+}
+
+/**
+ * Ensure the BUILT-IN DEFAULT playbook (slice 5) is installed. `revo bootstrap` seeds it
+ * out-of-the-box (so a fresh e2e control-plane already has it), but a REUSED test home that predates
+ * this slice may not — so this self-heals by installing from the committed source if absent. It does
+ * NOT install the e2e fixture: Group M tests the SHIPPED default, distinct from {@link PLAYBOOK_ID}.
+ */
+export async function givenSeededDefaultPlaybook(h: RunHarness): Promise<void> {
+  const installed = await h.api.listPlaybooks();
+  if (installed.some((p) => p.id === DEFAULT_PLAYBOOK_ID)) return;
+  const { repoRoot } = await import('../../config.js');
+  const { join } = await import('node:path');
+  const source = join(repoRoot, 'control-plane', 'default-playbook');
+  try {
+    const install = await h.api.installPlaybook({ source, name: DEFAULT_PLAYBOOK_ID, commit: true });
+    assert.equal(install.playbookId, DEFAULT_PLAYBOOK_ID);
+    assert.ok(install.pipelines >= 2, 'default playbook install must load the seeded pipelines');
+  } catch (err) {
     if (!/not a draft|already|nothing to commit|ROW_CONFLICT/i.test(String(err))) throw err;
   }
 }
