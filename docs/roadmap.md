@@ -81,7 +81,9 @@ Slices 0001–0008 predate the ladder and are untagged. See [vision.md](./vision
   the differentiating "agent memory" angle.
 - **Pollers + review threads:** Sonar / CodeRabbit / CI poll + comment sorter (reuse `src/poller/pr-readiness.ts`);
   PR-comment processing gates D2.
-- **Worktree isolation** for parallel runs touching the same repo.
+- ~~**Worktree isolation** for parallel runs touching the same repo.~~ ✅ LANDED (plan 0017) — each live
+  run executes in its own per-run git worktree (developer + integrator); concurrent same-repo runs are
+  isolated and the user's base checkout is never mutated.
 - **Single process:** extract `startRevisium()` to boot Revisium in-process (ADR-0001 deferred option). `revo up`
   as one process gates D2.
 - **Post-MVP cleanup:** delete the legacy step-lifecycle verbs (`claimNextStep`/`startAttempt`/`writeResult`/

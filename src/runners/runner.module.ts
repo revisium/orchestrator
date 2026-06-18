@@ -8,6 +8,7 @@ import { Module } from '@nestjs/common';
 import { RevisiumModule } from '../revisium/revisium.module.js';
 import { ClaudeCodeService } from './claude-code.service.js';
 import { IntegratorService } from './integrator.js';
+import { WorktreeService } from './worktree.service.js';
 import { PROCESS_EXECUTOR, RUN_AGENT } from './tokens.js';
 import { spawnExecutor } from '../worker/process-executor.js';
 import { stubRunAgent } from '../worker/stub-runner.js';
@@ -18,6 +19,7 @@ import { createRunAgent } from '../worker/runner-dispatch.js';
   providers: [
     ClaudeCodeService,
     IntegratorService,
+    WorktreeService,
     { provide: PROCESS_EXECUTOR, useValue: spawnExecutor },
     {
       provide: RUN_AGENT,
@@ -26,6 +28,6 @@ import { createRunAgent } from '../worker/runner-dispatch.js';
       inject: [ClaudeCodeService],
     },
   ],
-  exports: [RUN_AGENT, IntegratorService],
+  exports: [RUN_AGENT, IntegratorService, WorktreeService],
 })
 export class RunnerModule {}

@@ -126,6 +126,10 @@ function buildAdapter(opts: {
     // The test route binds the integrator to revo-integrator (a live runner), so preflight runs. By
     // default it passes (these tests exercise the graph, not preflight); a test can override it.
     preflightFn: async () => (opts.preflight ? opts.preflight() : { ok: true }),
+    // Per-run worktree lifecycle (plan 0017) — fakes here record create/release ordering via events;
+    // the live runner binding means both fire (create after preflight, release in the terminal finally).
+    createWorktreeFn: async () => { rec.events.push('worktree_create:pipeline'); return { worktreePath: '/fake/worktree' }; },
+    releaseWorktreeFn: async () => { rec.events.push('worktree_release:pipeline'); },
   };
 
   const fn = makeDataDrivenTask(runStepFn, deps);

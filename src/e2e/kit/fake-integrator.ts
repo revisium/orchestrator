@@ -25,6 +25,7 @@ export function createFakeIntegrator(runs: RunService, execGh: ExecGhFn): Integr
     execGit,
     execGh,
     resolveTaskCwd: runs.makeResolveTaskCwd(),
+    resolveRunCwd: runs.makeResolveRunCwd(),
   };
   return {
     runIntegrate: (input): Promise<IntegratorOutput | IntegratorBlocked> => integrate(input, deps),

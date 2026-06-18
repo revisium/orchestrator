@@ -3,10 +3,17 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmdirSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmdirSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { resolveRepoCwdFromRef, makeResolveCwd, makeResolveTaskCwd } from './resolve-cwd.js';
+import {
+  resolveRepoCwdFromRef,
+  makeResolveCwd,
+  makeResolveTaskCwd,
+  makeResolveRunCwd,
+  worktreePathFor,
+  worktreeMarkerFor,
+} from './resolve-cwd.js';
 import type { ControlPlaneDataAccess } from './data-access.js';
 import type { Step } from './steps.js';
 
@@ -161,15 +168,15 @@ test('resolveRepoCwdFromRef: symlink inside base pointing OUTSIDE → rejected (
 
 // ─── makeResolveCwd (STEP-level) ─────────────────────────────────────────────
 
-test('makeResolveCwd: reads tasks.repo_ref via da and resolves', async () => {
-  // Use /tmp which always exists as the absolute ref
-  const resolver = makeResolveCwd(fakeDA('/tmp'));
+test('makeResolveCwd: no worktree → reads tasks.repo_ref via da and resolves (base fallback)', async () => {
+  // A fresh empty data dir → no worktree for FAKE_STEP.runId → falls back to repo_ref ('/tmp').
+  const resolver = makeResolveCwd(fakeDA('/tmp'), makeTmpDir());
   const result = await resolver(FAKE_STEP);
   assert.equal(result, '/tmp');
 });
 
 test('makeResolveCwd: missing task → throws lesson-bearing error', async () => {
-  const resolver = makeResolveCwd(missingDA());
+  const resolver = makeResolveCwd(missingDA(), makeTmpDir());
   await assert.rejects(
     () => resolver(FAKE_STEP),
     /not found — cannot resolve a working directory/,
@@ -189,5 +196,32 @@ test('makeResolveTaskCwd: missing task → throws', async () => {
   await assert.rejects(
     () => resolver('missing-task'),
     /not found — cannot resolve a working directory/,
+  );
+});
+
+// ─── makeResolveRunCwd (RUN-level, worktree-aware — plan 0017) ────────────────
+
+test('makeResolveRunCwd: a valid worktree at the run path → resolves THERE (not repo_ref)', async () => {
+  const dataDir = makeTmpDir();
+  const wt = worktreePathFor(dataDir, 'run-1');
+  mkdirSync(wt, { recursive: true });
+  writeFileSync(join(wt, '.git'), 'gitdir: /elsewhere\n'); // a linked worktree carries a .git FILE
+  const resolver = makeResolveRunCwd(fakeDA('/tmp'), dataDir);
+  assert.equal(await resolver('run-1', 'task-1'), wt);
+});
+
+test('makeResolveRunCwd: no worktree + no marker (non-live) → base repo_ref fallback', async () => {
+  const resolver = makeResolveRunCwd(fakeDA('/tmp'), makeTmpDir());
+  assert.equal(await resolver('run-1', 'task-1'), '/tmp');
+});
+
+test('makeResolveRunCwd: live marker present but worktree missing → FAILS LOUD (no base fallback)', async () => {
+  const dataDir = makeTmpDir();
+  mkdirSync(worktreePathFor(dataDir, 'run-x').replace(/run-x$/, ''), { recursive: true });
+  writeFileSync(worktreeMarkerFor(dataDir, 'run-x'), 'run-x\n'); // marker says live; no worktree dir
+  const resolver = makeResolveRunCwd(fakeDA('/tmp'), dataDir);
+  await assert.rejects(
+    () => resolver('run-x', 'task-1'),
+    /expects an isolated worktree .* but it is missing or invalid/,
   );
 });

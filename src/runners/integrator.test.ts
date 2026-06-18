@@ -35,6 +35,12 @@ function makeResolveTaskCwd(cwd = FAKE_CWD): (taskId: string) => Promise<string>
   return async () => cwd;
 }
 
+// plan 0017: integrate() resolves cwd by runId via resolveRunCwd. In these unit tests the worktree is
+// the same FAKE_CWD (the test's real git repo) — they exercise integrate's git logic, not isolation.
+function makeResolveRunCwd(cwd = FAKE_CWD): (runId: string, taskId: string) => Promise<string> {
+  return async () => cwd;
+}
+
 const BASE_INPUT: IntegratorInput = {
   runId: 'run-001',
   taskId: 'task-001',
@@ -83,6 +89,7 @@ test('preflightLive: clean + on correct base → { ok: true }', async () => {
     },
     execGh: neverGh,
     resolveTaskCwd: makeResolveTaskCwd(),
+    resolveRunCwd: makeResolveRunCwd(),
   };
 
   const result = await preflightLive('task-001', 'master', deps);
@@ -98,6 +105,7 @@ test('preflightLive: dirty repo → needsHuman (not clean)', async () => {
     },
     execGh: neverGh,
     resolveTaskCwd: makeResolveTaskCwd(),
+    resolveRunCwd: makeResolveRunCwd(),
   };
 
   const result = await preflightLive('task-001', 'master', deps);
@@ -130,6 +138,7 @@ test('preflightLive: clean feature branch based on origin/base → { ok: true }'
     },
     execGh: neverGh,
     resolveTaskCwd: makeResolveTaskCwd(),
+    resolveRunCwd: makeResolveRunCwd(),
   };
 
   const result = await preflightLive('task-001', 'master', deps);
@@ -160,6 +169,7 @@ test('preflightLive: clean feature branch not based on origin/base → needsHuma
     },
     execGh: neverGh,
     resolveTaskCwd: makeResolveTaskCwd(),
+    resolveRunCwd: makeResolveRunCwd(),
   };
 
   const result = await preflightLive('task-001', 'master', deps);
@@ -179,6 +189,7 @@ test('preflightLive: clean base branch but HEAD sha differs from origin/master �
     },
     execGh: neverGh,
     resolveTaskCwd: makeResolveTaskCwd(),
+    resolveRunCwd: makeResolveRunCwd(),
   };
 
   const result = await preflightLive('task-001', 'master', deps);
@@ -193,6 +204,7 @@ test('preflightLive: fetch failure → needsHuman (no-base lesson)', async () =>
     },
     execGh: neverGh,
     resolveTaskCwd: makeResolveTaskCwd(),
+    resolveRunCwd: makeResolveRunCwd(),
   };
 
   const result = await preflightLive('task-001', 'master', deps);
@@ -233,6 +245,7 @@ test('integrate: git@github.com SSH remote → parses owner/repo', async () => {
       throw new Error(`unexpected gh: ${args.join(' ')}`);
     },
     resolveTaskCwd: makeResolveTaskCwd(),
+    resolveRunCwd: makeResolveRunCwd(),
   };
 
   const result = await integrate(BASE_INPUT, deps);
@@ -272,6 +285,7 @@ test('integrate: https GitHub remote → parses owner/repo', async () => {
       throw new Error(`unexpected gh: ${args.join(' ')}`);
     },
     resolveTaskCwd: makeResolveTaskCwd(),
+    resolveRunCwd: makeResolveRunCwd(),
   };
 
   await integrate(BASE_INPUT, deps);
@@ -286,6 +300,7 @@ test('integrate: missing/unparseable remote → { needsHuman }', async () => {
     },
     execGh: neverGh,
     resolveTaskCwd: makeResolveTaskCwd(),
+    resolveRunCwd: makeResolveRunCwd(),
   };
 
   const result = await integrate(BASE_INPUT, deps);
@@ -320,6 +335,7 @@ test('M4: gh pr list returns existing PR → reuse url, no pr create called', as
       throw new Error(`unexpected gh: ${args.join(' ')}`);
     },
     resolveTaskCwd: makeResolveTaskCwd(),
+    resolveRunCwd: makeResolveRunCwd(),
   };
 
   const result = await integrate(BASE_INPUT, deps);
@@ -356,6 +372,7 @@ test('M4: gh pr list returns 0 → creates PR', async () => {
       throw new Error(`unexpected gh: ${args.join(' ')}`);
     },
     resolveTaskCwd: makeResolveTaskCwd(),
+    resolveRunCwd: makeResolveRunCwd(),
   };
 
   const result = await integrate(BASE_INPUT, deps);
@@ -394,6 +411,7 @@ test('M4: >1 matching PR → { needsHuman } naming candidates, no duplicate crea
       throw new Error(`unexpected gh: ${args.join(' ')}`);
     },
     resolveTaskCwd: makeResolveTaskCwd(),
+    resolveRunCwd: makeResolveRunCwd(),
   };
 
   const result = await integrate(BASE_INPUT, deps);
@@ -434,6 +452,7 @@ test('B4 replay: branch exists + index clean + ahead → push + PR (no second co
       throw new Error(`unexpected gh: ${args.join(' ')}`);
     },
     resolveTaskCwd: makeResolveTaskCwd(),
+    resolveRunCwd: makeResolveRunCwd(),
   };
 
   const result = await integrate(BASE_INPUT, deps);
@@ -459,6 +478,7 @@ test('B4 replay: branch exists + index clean + NOT ahead → { needsHuman: nothi
     },
     execGh: neverGh,
     resolveTaskCwd: makeResolveTaskCwd(),
+    resolveRunCwd: makeResolveRunCwd(),
   };
 
   const result = await integrate(BASE_INPUT, deps);
@@ -489,6 +509,7 @@ test('B4 replay: existing PR found on replay → same url, no duplicate create',
       throw new Error(`unexpected gh: ${args.join(' ')}`);
     },
     resolveTaskCwd: makeResolveTaskCwd(),
+    resolveRunCwd: makeResolveRunCwd(),
   };
 
   const result = await integrate(BASE_INPUT, deps);
@@ -526,6 +547,7 @@ test('commit message: no Co-Authored-By, no summary footer', async () => {
       throw new Error(`unexpected gh: ${args.join(' ')}`);
     },
     resolveTaskCwd: makeResolveTaskCwd(),
+    resolveRunCwd: makeResolveRunCwd(),
   };
 
   await integrate(BASE_INPUT, deps);
@@ -556,6 +578,7 @@ test('m1: gh pr view returns non-JSON after create → needsHuman (never stub://
       throw new Error(`unexpected gh: ${args.join(' ')}`);
     },
     resolveTaskCwd: makeResolveTaskCwd(),
+    resolveRunCwd: makeResolveRunCwd(),
   };
 
   const result = await integrate(BASE_INPUT, deps);
@@ -597,6 +620,7 @@ test('m3: SSH remote with dotted repo name (my.repo) → parsed correctly', () =
       throw new Error(`unexpected gh: ${args.join(' ')}`);
     },
     resolveTaskCwd: makeResolveTaskCwd(),
+    resolveRunCwd: makeResolveRunCwd(),
   };
 
   return integrate(BASE_INPUT, deps).then((result) => {
@@ -632,6 +656,7 @@ test('m3: HTTPS remote with dotted repo name → parsed correctly', () => {
       throw new Error(`unexpected gh: ${args.join(' ')}`);
     },
     resolveTaskCwd: makeResolveTaskCwd(),
+    resolveRunCwd: makeResolveRunCwd(),
   };
 
   return integrate(BASE_INPUT, deps).then((result) => {
@@ -662,6 +687,7 @@ test('m4: countAhead swallows unknown-revision error (branch not yet known) → 
     },
     execGh: neverGh,
     resolveTaskCwd: makeResolveTaskCwd(),
+    resolveRunCwd: makeResolveRunCwd(),
   };
 
   const result = await integrate(BASE_INPUT, deps);
@@ -686,6 +712,7 @@ test('m4: countAhead rethrows transient errors (lock file, OOM) for DBOS retry',
     },
     execGh: neverGh,
     resolveTaskCwd: makeResolveTaskCwd(),
+    resolveRunCwd: makeResolveRunCwd(),
   };
 
   await assert.rejects(
@@ -725,6 +752,7 @@ function makeRemoteOnlyDeps(remoteUrl: string): IntegratorDeps {
       throw new Error(`unexpected gh: ${args.join(' ')}`);
     },
     resolveTaskCwd: makeResolveTaskCwd(),
+    resolveRunCwd: makeResolveRunCwd(),
   };
 }
 
@@ -799,6 +827,7 @@ test('transient gh error (non-not-found) → throws for DBOS retry', async () =>
       throw new Error('rate limit exceeded');
     },
     resolveTaskCwd: makeResolveTaskCwd(),
+    resolveRunCwd: makeResolveRunCwd(),
   };
 
   await assert.rejects(

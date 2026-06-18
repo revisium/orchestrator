@@ -1,6 +1,30 @@
-import { writeFileSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AttemptResult, RunAgent } from '../../worker/runner.js';
+import { getConfig } from '../../config.js';
+import { worktreePathFor, worktreeMarkerFor, isWorktreeDir } from '../../control-plane/resolve-cwd.js';
+
+/**
+ * Worktree-aware developer write dir (plan 0017): when the run has an isolated worktree, the fake
+ * developer must write THERE (the integrator commits from the worktree), not the registered base
+ * checkout — otherwise the integrator sees no diff. Falls back to the registered path for non-live
+ * (stub) scenarios that have no worktree.
+ */
+function resolveWriteDir(runId: string, registered: string | undefined): string | undefined {
+  if (!registered) return undefined;
+  const dataDir = getConfig().dataDir;
+  const wt = worktreePathFor(dataDir, runId);
+  if (isWorktreeDir(wt)) return wt;
+  // Mirror resolveRunCwd's fail-loud: a live marker with no worktree means isolation broke — refuse to
+  // dirty the shared base checkout (which would mask the failure) rather than silently falling back.
+  if (existsSync(worktreeMarkerFor(dataDir, runId))) {
+    throw new Error(
+      `fake developer: live run ${runId} expects an isolated worktree at ${wt} but it is missing — ` +
+        `refusing to write into the shared base checkout`,
+    );
+  }
+  return registered;
+}
 
 /** One recorded agent invocation — lets tests assert who ran with which runner (scoped by runId). */
 export type AgentCall = { role: string; runner: string; attemptId: string; runId: string; context: string };
@@ -40,7 +64,7 @@ function runBehavior(
   if (behavior.kind === 'throw') {
     throw new Error(behavior.message ?? `scripted failure from ${ctx.logicalRole}`);
   }
-  const writeRepo = ctx.logicalRole === 'developer' ? sink.developerWrites.get(ctx.runId) : undefined;
+  const writeRepo = ctx.logicalRole === 'developer' ? resolveWriteDir(ctx.runId, sink.developerWrites.get(ctx.runId)) : undefined;
   if (writeRepo && behavior.kind !== 'needsHuman') {
     writeFileSync(join(writeRepo, `developer-${ctx.attemptId}.txt`), `change from ${ctx.attemptId}\n`);
   }
@@ -119,7 +143,7 @@ export function deterministicAgent(
   return async ({ role, profile, attemptId, step, context }): Promise<AttemptResult> => {
     const logicalRole = role.playbookRoleId ?? role.name;
     agentCalls.push({ role: logicalRole, runner: role.runner, attemptId, runId: step.runId, context });
-    const writeRepo = logicalRole === 'developer' ? developerWrites.get(step.runId) : undefined;
+    const writeRepo = logicalRole === 'developer' ? resolveWriteDir(step.runId, developerWrites.get(step.runId)) : undefined;
     if (writeRepo) {
       writeFileSync(join(writeRepo, `developer-${attemptId}.txt`), `change from ${attemptId}\n`);
     }
