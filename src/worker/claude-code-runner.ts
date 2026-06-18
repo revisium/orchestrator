@@ -4,7 +4,6 @@ import { RunAgentError } from './runner.js';
 import type { ArtifactStore, ProcessArtifactSnapshot } from './artifact-store.js';
 import type { Step, CostRecord } from '../control-plane/steps.js';
 import type { ModelProfile } from '../control-plane/definitions.js';
-import { noopWorktreeManager, type WorktreeManager } from './worktree-manager.js';
 import {
   AGENT_RESULT_SCHEMA,
   STRUCTURED_RESULT_NOTE,
@@ -21,8 +20,7 @@ import {
 
 export type ClaudeCodeRunnerDeps = {
   executor: ProcessExecutor;
-  resolveCwd: (step: Step) => Promise<string>; // injected; the default (reads task repo_ref) is wired in revo work
-  worktreeManager?: WorktreeManager; // default no isolation; opt-in wiring lives in revo work
+  resolveCwd: (step: Step) => Promise<string>; // worktree-aware (plan 0017): the run's isolated worktree for live runs
   timeoutMs?: number; // default 10 min
   command?: string; // default 'claude'
   artifactStore?: ArtifactStore;
@@ -124,9 +122,9 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
 
   return async ({ role, profile, context, attemptId, step }) => {
     // attemptId is already minted by startAttempt (loop) — consumed here, never re-minted.
-    const baseCwd = await deps.resolveCwd(step);
-    const manager = deps.worktreeManager ?? noopWorktreeManager;
-    const cwd = await manager.create(step.id, baseCwd);
+    // cwd is worktree-aware (plan 0017): for a live run, resolveCwd returns the run's isolated worktree
+    // (keyed by step.runId); per-run worktree lifecycle is owned by the workflow, NOT the runner.
+    const cwd = await deps.resolveCwd(step);
     // 0008 #5: per-role data overrides the hardcoded defaults (timeout + permission mode).
     const timeoutMs = role.timeoutMs ?? fallbackTimeoutMs;
     const permissionMode = role.permissionMode ?? 'default';
@@ -205,12 +203,6 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
       if (err instanceof RunAgentError) throw err;
       const processSnapshot = processArtifact?.finish({ error: String(err) });
       throw runnerError(String(err), processSnapshot);
-    } finally {
-      try {
-        await manager.release(cwd);
-      } catch (err) {
-        console.warn(`Warning: worktree release failed for ${cwd}: ${String(err)}`);
-      }
     }
   };
 }

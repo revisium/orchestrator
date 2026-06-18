@@ -226,6 +226,15 @@ export type DataDrivenTaskDeps = {
    * (the same gate the old engine used). A `needsHuman` result blocks the run (pipeline_blocked).
    */
   preflightFn: (taskId: string, base: string) => Promise<{ ok: true } | { needsHuman: true; lesson: string }>;
+  /**
+   * Per-run worktree lifecycle (plan 0017) — memoized DBOS steps. `createWorktreeFn` is create-if-absent
+   * (idempotent on replay), called ONCE after a passing live preflight and before any live effect.
+   * `releaseWorktreeFn` is best-effort + idempotent, called from the workflow `finally` at every terminal
+   * (succeeded/failed/blocked) — never while parked at a gate (the workflow stays alive across `recv`).
+   * Both are no-ops for non-live runs (no worktree is created for stub/script).
+   */
+  createWorktreeFn: (runId: string, taskId: string, title: string, base: string) => Promise<{ worktreePath: string }>;
+  releaseWorktreeFn: (runId: string, taskId: string) => Promise<void>;
 };
 
 /**
@@ -263,7 +272,7 @@ export function makeDataDrivenTask(
   ) => Promise<AttemptResult>,
   deps: DataDrivenTaskDeps,
 ) {
-  const { appendEvent, appendRunOutput, awaitHuman, completeRun, failRun, blockRun, loadRunTaskContext, integrateFn, runStub, preflightFn } = deps;
+  const { appendEvent, appendRunOutput, awaitHuman, completeRun, failRun, blockRun, loadRunTaskContext, integrateFn, runStub, preflightFn, createWorktreeFn, releaseWorktreeFn } = deps;
 
   /** Resolve a node's `consumes` from the workflow-local output accumulator — NOT live Revisium reads
    *  (0016 §6 / consensus M4: a live read on replay can see rows written past the replay point). */
@@ -361,12 +370,47 @@ export function makeDataDrivenTask(
     // engine's gate). A `needsHuman` preflight blocks the run (clean/base invariant unmet) and surfaces
     // the lesson — the run never enters the graph. This is an engine-level guard (infrastructure), not a
     // template node: it is cross-cutting and identical for every pinned pipeline (zero role-ids/shapes).
-    if (route.roleBindings.some((b) => runnerNeedsLivePreflight(b.resolvedRunnerId))) {
+    const live = route.roleBindings.some((b) => runnerNeedsLivePreflight(b.resolvedRunnerId));
+    if (live) {
+      // Preflight runs against the BASE checkout (resolveTaskCwd), BEFORE the worktree exists — its
+      // fetch + clean/freshness checks protect the user's base repo. Ordering is load-bearing.
       const pf = await preflightFn(taskId, base);
       if ('needsHuman' in pf) {
         return await blockWithLesson(runId, taskId, 'preflight', pf.lesson, 0);
       }
     }
+
+    // Per-run worktree (plan 0017): create AFTER a passing preflight and BEFORE any live effect, so all
+    // repo-touching steps (developer/rework + integrator) resolve to the isolated worktree (keyed by
+    // runId) — never the shared base checkout. Skipped for non-live runs. The `finally` releases it at
+    // EVERY terminal (success/throw/blocked-return); it does NOT run while parked at a gate (awaitHuman
+    // suspends the live workflow via `recv`, so runBody never returns there). Release must be guarded so
+    // an even-on-create failure cannot leak the worktree (codex: not finish()-only).
+    if (live) {
+      await createWorktreeFn(runId, taskId, title, base);
+    }
+    try {
+      return await runGraph(runId, opts, taskId, title, base);
+    } finally {
+      if (live) {
+        try {
+          await releaseWorktreeFn(runId, taskId);
+        } catch (releaseErr) {
+          console.warn(`[data-driven] worktree release for ${runId} failed (orphan; pruned later): ${String(releaseErr)}`);
+        }
+      }
+    }
+  }
+
+  /** The pipeline-core interpretation loop, extracted so the worktree `finally` in runBody wraps it. */
+  async function runGraph(
+    runId: string,
+    opts: DataDrivenTaskOpts,
+    taskId: string,
+    title: string,
+    base: string,
+  ): Promise<DataDrivenResult> {
+    const { route, template } = opts;
 
     // Capability resolution map (GENERIC — no role-ids in the engine): roleRef/scriptRef → route binding.
     // The route's bindings are authoritative for runner dispatch (and durable on recovery via the DBOS

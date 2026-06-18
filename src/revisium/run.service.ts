@@ -4,7 +4,8 @@ import { createControlPlaneDataAccessForTransport } from '../control-plane/data-
 import { ControlPlaneError } from '../control-plane/errors.js';
 import { fnv1a64Hex } from '../control-plane/steps.js';
 import type { Step } from '../control-plane/steps.js';
-import { makeResolveCwd, makeResolveTaskCwd } from '../control-plane/resolve-cwd.js';
+import { makeResolveCwd, makeResolveTaskCwd, makeResolveRunCwd } from '../control-plane/resolve-cwd.js';
+import { getConfig } from '../config.js';
 import { createRunWorkflow, type CreateRunInput, type CreateRunResult } from '../run/create-run.js';
 import { listRuns, showRun, listRunEvents, listRunAttempts, getRunFailure, type RunSummary, type RunDetail, type EventSummary, type AttemptSummary } from '../run/inspect-run.js';
 import { cancelRun, type CancelRunResult } from '../run/cancel-run.js';
@@ -148,18 +149,27 @@ export class RunService {
   }
 
   /**
-   * makeResolveCwd — STEP-level cwd resolver (M3).
-   * Returns (step: Step) => Promise<string>; reads tasks.repo_ref via the draft da.
-   * Used by ClaudeCodeService.
+   * makeResolveCwd — STEP-level cwd resolver (M3, worktree-aware as of plan 0017).
+   * Returns (step: Step) => Promise<string>; resolves the run's isolated worktree (keyed by step.runId)
+   * for live runs, else the shared base checkout (tasks.repo_ref). Used by ClaudeCodeService.
    */
   makeResolveCwd(base = process.cwd()): (step: Step) => Promise<string> {
-    return makeResolveCwd(this.da, base);
+    return makeResolveCwd(this.da, getConfig().dataDir, base);
   }
 
   /**
-   * makeResolveTaskCwd — TASK-level cwd resolver (M3).
+   * makeResolveRunCwd — RUN-level worktree-aware resolver (plan 0017).
+   * Returns (runId, taskId) => Promise<string>; resolves the run's isolated worktree, FAILS LOUD for a
+   * live run whose worktree is missing, else the base checkout. Used by the integrator (run-keyed).
+   */
+  makeResolveRunCwd(base = process.cwd()): (runId: string, taskId: string) => Promise<string> {
+    return makeResolveRunCwd(this.da, getConfig().dataDir, base);
+  }
+
+  /**
+   * makeResolveTaskCwd — TASK-level cwd resolver (M3) — the BASE checkout.
    * Returns (taskId: string) => Promise<string>; reads tasks.repo_ref via the draft da.
-   * Used by IntegratorService + the live preflight (no Step available).
+   * Used by the live preflight (runs against the base repo BEFORE the worktree exists) + worktree setup.
    */
   makeResolveTaskCwd(base = process.cwd()): (taskId: string) => Promise<string> {
     return makeResolveTaskCwd(this.da, base);

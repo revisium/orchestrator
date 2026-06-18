@@ -28,6 +28,7 @@ import { RolesService } from '../revisium/roles.service.js';
 import { RunService } from '../revisium/run.service.js';
 import { InboxService } from '../revisium/inbox.service.js';
 import { IntegratorService } from '../runners/integrator.js';
+import { WorktreeService } from '../runners/worktree.service.js';
 import { redactTokens } from '../runners/gh-identity.js';
 import { RUN_AGENT } from '../runners/tokens.js';
 import { buildContext } from '../worker/build-context.js';
@@ -339,6 +340,7 @@ export class PipelineService {
     private readonly runService: RunService,
     private readonly inboxService: InboxService,
     private readonly integratorService: IntegratorService,
+    private readonly worktreeService: WorktreeService,
     @Inject(RUN_AGENT) runAgentToken: RunAgent,
   ) {
     this.runAgent = runAgentToken;
@@ -372,6 +374,17 @@ export class PipelineService {
       this.integratorService.runPreflight.bind(this.integratorService),
     );
 
+    // Register the per-run worktree lifecycle as memoized DBOS steps (plan 0017). `ensure` is
+    // create-if-absent (idempotent on replay); `release` is best-effort + idempotent.
+    const createWorktreeFn = this.dbos.registerStep(
+      'PipelineService.worktreeCreate',
+      this.worktreeService.ensure,
+    );
+    const releaseWorktreeFn = this.dbos.registerStep(
+      'PipelineService.worktreeRelease',
+      this.worktreeService.release,
+    );
+
     // Build the awaitHuman factory — DBOS-free, depends on injected service verbs.
     const awaitHuman = makeAwaitHuman({
       pushInbox: (item, id) => this.inboxService.pushInbox(item, { id }),
@@ -399,6 +412,8 @@ export class PipelineService {
       integrateFn,
       runStub: this.integratorService.runStub,
       preflightFn,
+      createWorktreeFn,
+      releaseWorktreeFn,
     };
     this.dataDrivenTaskFn = this.dbos.registerWorkflow(
       'PipelineService.dataDrivenTask',

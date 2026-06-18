@@ -9,11 +9,14 @@ import {
   PLAYBOOK_ID,
   startLocalChangeRun,
   startStubbedFeatureRun,
+  startFeatureRun,
   createTargetRepo,
   type TargetRepo,
   waitState,
   waitForGate,
   approveUntilTerminal,
+  assertPrOpened,
+  git,
 } from './kit/index.js';
 
 // Group J — CONCURRENCY. The dev-tasks queue runs up to REVO_DEV_TASKS_CONCURRENCY (8 under
@@ -23,10 +26,10 @@ import {
 // gates/terminal verbs of different runs resolve independently. One shared host; runs are launched
 // concurrently with Promise.all.
 //
-// NOT covered (documented gap): two CONCURRENT runs against the SAME target repo are unsafe — the
-// integrator shares one working tree (no worktree isolation yet, a deferred feature), so real git
-// ops race. That is a real-git timing race, not a behaviour we can mock; an e2e for it must wait
-// for worktree isolation. Every test here uses a distinct repo (or the stub integrator).
+// SAME-REPO concurrency (plan 0017): two concurrent LIVE runs against ONE target repo are now SAFE —
+// each run executes in its own isolated git worktree (under the data dir), so the developer + the real
+// integrator never share a working tree. J6 proves it: two runs, one repo, both reach an open PR on
+// distinct branches while the user's base checkout stays clean on master.
 
 let h: RunHarness;
 
@@ -128,5 +131,37 @@ test('J5: concurrent mixed terminals — approve one gate, reject another — ea
     assert.equal(await countEvents(kill.runId, 'pipeline_blocked') >= 1, true, 'the rejected run emitted pipeline_blocked');
   } finally {
     targets.forEach((t) => t.cleanup());
+  }
+});
+
+test('J6: two concurrent LIVE runs on the SAME repo are isolated by per-run worktrees (plan 0017)', { skip: e2eSkip }, async () => {
+  // The whole point of worktree isolation: the real integrator + developer of two runs against ONE
+  // target repo never share a working tree. Both must reach an open PR on a DISTINCT branch, and the
+  // user's base checkout must stay clean on master (never switched/dirtied by either run).
+  const target = createTargetRepo();
+  try {
+    const [runA, runB] = await Promise.all([startFeatureRun(h, target), startFeatureRun(h, target)]);
+    assert.notEqual(runA.runId, runB.runId, 'two distinct runs');
+    assert.notEqual(runA.taskId, runB.taskId, 'two distinct tasks → two distinct feature branches');
+
+    const [termA, termB] = await Promise.all([
+      approveUntilTerminal(h.api, runA.runId),
+      approveUntilTerminal(h.api, runB.runId),
+    ]);
+    assert.equal(termA.state, 'completed', 'run A completes despite sharing the repo with run B');
+    assert.equal(termB.state, 'completed', 'run B completes despite sharing the repo with run A');
+
+    const branchA = assertPrOpened(h, runA.taskId);
+    const branchB = assertPrOpened(h, runB.taskId);
+    assert.notEqual(branchA, branchB, 'each run opened a PR on its own branch');
+
+    // The base checkout is untouched — neither run switched it off master nor left a dirty tree.
+    assert.equal(git(target.worktree, ['branch', '--show-current']).trim(), 'master', 'base stays on master');
+    assert.equal(git(target.worktree, ['status', '--porcelain']).trim(), '', 'base stays clean');
+    // Both feature branches were pushed to origin (from their respective worktrees), each one commit ahead.
+    assert.equal(git(target.worktree, ['rev-list', '--count', `origin/master..origin/${branchA}`]).trim(), '1');
+    assert.equal(git(target.worktree, ['rev-list', '--count', `origin/master..origin/${branchB}`]).trim(), '1');
+  } finally {
+    target.cleanup();
   }
 });

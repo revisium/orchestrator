@@ -76,7 +76,11 @@ export type ExecFn = (args: string[], cwd: string) => string;
 export type IntegratorDeps = {
   execGit: ExecFn;
   execGh: ExecGhFn;
+  /** BASE checkout resolver (keyed by taskId) — used by the live preflight (runs before the worktree). */
   resolveTaskCwd: (taskId: string) => Promise<string>;
+  /** RUN worktree resolver (keyed by runId, plan 0017) — used by integrate() so the commit/push happen
+   *  in the run's isolated worktree, never the shared base checkout. */
+  resolveRunCwd: (runId: string, taskId: string) => Promise<string>;
 };
 
 export type IntegratorInput = {
@@ -112,8 +116,9 @@ function slugify(title: string): string {
     .slice(0, SLUG_MAX);
 }
 
-/** Derive deterministic feature branch name from taskId + title. */
-function branchName(taskId: string, title: string): string {
+/** Derive deterministic feature branch name from taskId + title. Exported so the worktree manager
+ *  checks out the SAME branch the integrator commits/pushes on (plan 0017). */
+export function branchName(taskId: string, title: string): string {
   const slug = slugify(title) || slugify(taskId) || 'task';
   return `feat/${taskId}-${slug}`;
 }
@@ -397,8 +402,11 @@ export async function integrate(
   input: IntegratorInput,
   deps: IntegratorDeps,
 ): Promise<IntegratorOutput | IntegratorBlocked> {
-  const { execGit: git, execGh: gh, resolveTaskCwd: resolveCwd } = deps;
-  const cwd = await resolveCwd(input.taskId);
+  const { execGit: git, execGh: gh, resolveRunCwd } = deps;
+  // Resolve the run's ISOLATED worktree (plan 0017) — it is already checked out on `branch`, so the
+  // branchExists→switch path below is a no-op and the dirty-tree `switch -c origin/<base>` (which
+  // failed when the base checkout carried prior-run changes) is never taken.
+  const cwd = await resolveRunCwd(input.runId, input.taskId);
   const branch = branchName(input.taskId, input.title);
 
   // 1. Derive owner/repo
@@ -477,6 +485,7 @@ export class IntegratorService {
     this.deps = {
       execGit: defaultExecGit,
       resolveTaskCwd: this.runService.makeResolveTaskCwd(),
+      resolveRunCwd: this.runService.makeResolveRunCwd(),
     };
   }
 

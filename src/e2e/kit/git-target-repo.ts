@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import type { ExecFn } from '../../runners/integrator.js';
 
 /** Run a real `git` command in `cwd` and return stdout. */
@@ -28,13 +28,43 @@ function setReportedRemote(worktree: string, url: string): void {
   }
 }
 
+function safeRealpath(p: string): string {
+  try {
+    return realpathSync(p);
+  } catch {
+    return p;
+  }
+}
+
+/**
+ * Resolve the synthetic origin URL for a cwd. The remote is registered against the BASE checkout, but
+ * the integrator now runs in the run's linked worktree (plan 0017 — under the data dir). When the cwd
+ * isn't a registered base, resolve it to its base repo via git's common dir (`<base>/.git`) and look up
+ * the registration there. Default: a synthetic GitHub URL so owner/repo parsing works without a real remote.
+ */
+function resolveReportedRemote(cwd: string): string {
+  const direct = reportedRemote.get(cwd) ?? reportedRemote.get(safeRealpath(cwd));
+  if (direct) return direct;
+  try {
+    const commonDir = execFileSync('git', ['rev-parse', '--git-common-dir'], {
+      encoding: 'utf8', cwd, timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+    const baseWorktree = dirname(isAbsolute(commonDir) ? commonDir : join(cwd, commonDir));
+    const mapped = reportedRemote.get(baseWorktree) ?? reportedRemote.get(safeRealpath(baseWorktree));
+    if (mapped) return mapped;
+  } catch {
+    /* not a worktree / no common dir — fall through to the default */
+  }
+  return 'git@github.com:e2e/repo.git';
+}
+
 /**
  * `ExecFn` for the integrator: real git, except `remote get-url origin` returns the URL registered
- * for the cwd (default: a synthetic GitHub URL) so owner/repo parsing works without a real remote.
+ * for the cwd (or its base repo when run from a linked worktree); default: a synthetic GitHub URL.
  */
 export const execGit: ExecFn = (args, cwd) => {
   if (args[0] === 'remote' && args[1] === 'get-url' && args[2] === 'origin') {
-    return `${reportedRemote.get(cwd) ?? 'git@github.com:e2e/repo.git'}\n`;
+    return `${resolveReportedRemote(cwd)}\n`;
   }
   return execFileSync('git', args, {
     encoding: 'utf8',

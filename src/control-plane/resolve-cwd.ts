@@ -11,7 +11,7 @@
  *   • a relative '../…' escape   → traversal guard (only relative refs are guarded; an ABSOLUTE
  *                                   ref is taken as the literal target repo, existence-checked).
  */
-import { resolve, isAbsolute, relative, sep } from 'node:path';
+import { resolve, isAbsolute, relative, sep, join } from 'node:path';
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import type { ControlPlaneDataAccess } from './data-access.js';
 import { toStr, type Step } from './steps.js';
@@ -70,20 +70,88 @@ async function readRepoRef(da: ControlPlaneDataAccess, taskId: string): Promise<
   return toStr(task.data.repo_ref);
 }
 
+// ─── Per-run worktree isolation (plan 0017) ────────────────────────────────────
+
 /**
- * STEP-level resolver (M3) — shape expected by claude runner: (step: Step) => Promise<string>.
- * Reads tasks.repo_ref for the step's taskId via the data-access layer.
+ * Deterministic per-run worktree path: `<dataDir>/worktrees/<runId>`. COMPUTED, never stored —
+ * preserving invariant #1 (no durable state in local files; the durable artifact is the pushed
+ * branch + DBOS progress, the worktree is execution scratch). Sited under the data dir, NOT inside
+ * the target repo, so a live worktree never pollutes the target's own `git status`.
  */
-export function makeResolveCwd(
-  da: ControlPlaneDataAccess,
-  base = process.cwd(),
-): (step: Step) => Promise<string> {
-  return async (step) => resolveRepoCwdFromRef(await readRepoRef(da, step.taskId), base);
+export function worktreePathFor(dataDir: string, runId: string): string {
+  return join(dataDir, 'worktrees', runId);
 }
 
 /**
- * TASK-level resolver (M3) — shape expected by the integrator + live preflight: (taskId: string) => Promise<string>.
- * Uses the same core as makeResolveCwd over one shared readRepoRef.
+ * Live-run worktree marker: `<dataDir>/worktrees/<runId>.live`. Its presence means "this run is live
+ * and MUST resolve to its worktree". It lets the run resolver FAIL LOUD when a live run's worktree is
+ * missing/lost instead of silently falling back to the shared base checkout (which would re-introduce
+ * the exact cross-run corruption worktree isolation exists to prevent). Written at create, removed at
+ * release.
+ */
+export function worktreeMarkerFor(dataDir: string, runId: string): string {
+  return join(dataDir, 'worktrees', `${runId}.live`);
+}
+
+/** A path is a usable git worktree iff it exists and carries a `.git` pointer (a file for a linked worktree). */
+export function isWorktreeDir(path: string): boolean {
+  return existsSync(path) && existsSync(join(path, '.git'));
+}
+
+/**
+ * RUN-level resolver (plan 0017) — the cwd for every repo-touching LIVE effect (developer/rework steps
+ * + the integrator). Prefers the run's isolated worktree; FAILS LOUD for a live run whose worktree is
+ * missing (marker present, worktree gone); falls back to the shared base checkout ONLY for non-live
+ * runs (script/stub do no real git, so no worktree/marker is ever created for them).
+ */
+export async function resolveRunCwd(
+  da: ControlPlaneDataAccess,
+  dataDir: string,
+  runId: string,
+  taskId: string,
+  base = process.cwd(),
+): Promise<string> {
+  const wt = worktreePathFor(dataDir, runId);
+  if (isWorktreeDir(wt)) return wt;
+  if (existsSync(worktreeMarkerFor(dataDir, runId))) {
+    throw new Error(
+      `resolveRunCwd: live run ${runId} expects an isolated worktree at ${JSON.stringify(wt)} ` +
+        `but it is missing or invalid — refusing to fall back to the shared base checkout`,
+    );
+  }
+  return resolveRepoCwdFromRef(await readRepoRef(da, taskId), base);
+}
+
+/**
+ * STEP-level resolver (M3, plan 0017) — shape expected by the claude runner: (step) => Promise<string>.
+ * Now WORKTREE-AWARE: resolves to the run's isolated worktree (keyed by step.runId) for live runs,
+ * else the shared base checkout. Reads tasks.repo_ref via the data-access layer for the fallback.
+ */
+export function makeResolveCwd(
+  da: ControlPlaneDataAccess,
+  dataDir: string,
+  base = process.cwd(),
+): (step: Step) => Promise<string> {
+  return (step) => resolveRunCwd(da, dataDir, step.runId, step.taskId, base);
+}
+
+/**
+ * RUN-level resolver shape for the integrator: (runId, taskId) => Promise<string>. Same contract as
+ * the step resolver but keyed explicitly by runId (concurrent runs share a taskId, so the integrator
+ * MUST resolve by runId or two runs collide on one tree).
+ */
+export function makeResolveRunCwd(
+  da: ControlPlaneDataAccess,
+  dataDir: string,
+  base = process.cwd(),
+): (runId: string, taskId: string) => Promise<string> {
+  return (runId, taskId) => resolveRunCwd(da, dataDir, runId, taskId, base);
+}
+
+/**
+ * TASK-level resolver (M3) — the BASE checkout, keyed by taskId: (taskId: string) => Promise<string>.
+ * Used by the LIVE PREFLIGHT, which must run against the user's base checkout BEFORE the worktree is
+ * created (its fetch + clean/freshness checks protect the base repo). NOT worktree-aware by design.
  */
 export function makeResolveTaskCwd(
   da: ControlPlaneDataAccess,
