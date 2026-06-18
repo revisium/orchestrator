@@ -471,12 +471,12 @@ export type ConfirmMergeOutput = {
   prUrl: string;
 };
 
-/** PR view shape for the merge decision. */
+/** PR view shape for the merge decision. NOTE: gh has NO `merged` JSON field — `state` is the source
+ *  of truth (OPEN | MERGED | CLOSED). Requesting `--json merged` errors ("Unknown JSON field"). */
 type PrMergeView = {
   number: number;
   url: string;
   state: string;
-  merged: boolean;
   mergeStateStatus: string;
 };
 
@@ -507,7 +507,7 @@ export async function confirmMerge(
   const { ownerRepo } = ownerRepoResult;
 
   const view = (): PrMergeView => {
-    const raw = gh(['pr', 'view', branch, '--repo', ownerRepo, '--json', 'number,url,state,merged,mergeStateStatus']);
+    const raw = gh(['pr', 'view', branch, '--repo', ownerRepo, '--json', 'number,url,state,mergeStateStatus']);
     try {
       return JSON.parse(raw) as PrMergeView;
     } catch {
@@ -516,7 +516,7 @@ export async function confirmMerge(
   };
 
   const pr = view();
-  if (pr.merged) return { merged: true, prNumber: pr.number, prUrl: pr.url };
+  if (pr.state === 'MERGED') return { merged: true, prNumber: pr.number, prUrl: pr.url };
 
   if (pr.state !== 'OPEN') {
     return { needsHuman: true, lesson: `PR #${pr.number} is ${pr.state} (not OPEN) and not merged — resolve manually` };
@@ -532,11 +532,11 @@ export async function confirmMerge(
     };
   }
 
-  // Merge (squash) — idempotent: a replay re-views first (step 1) and short-circuits on `merged`.
+  // Merge (squash) — idempotent: a replay re-views first (step 1) and short-circuits on state MERGED.
   gh(['pr', 'merge', branch, '--repo', ownerRepo, '--squash', '--delete-branch']);
 
   const after = view();
-  if (after.merged) return { merged: true, prNumber: after.number, prUrl: after.url };
+  if (after.state === 'MERGED') return { merged: true, prNumber: after.number, prUrl: after.url };
   return { needsHuman: true, lesson: `PR #${after.number} merge did not take effect (state=${after.state}) — verify manually` };
 }
 

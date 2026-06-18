@@ -52,12 +52,11 @@ function ghBehavior(scenario: GhScenario, args: string[], mergedBranches: Set<st
   }
   if (args[0] === 'pr' && args[1] === 'view') {
     if (scenario === 'pr-view-non-json') return 'not json — gh glitch';
-    const merged = mergedBranches.has(branchArg(args));
+    // Mirror REAL gh: there is NO `merged` JSON field — `state` (OPEN|MERGED|CLOSED) is the truth.
     return JSON.stringify({
       url: PR_URL,
       number: 1,
-      state: merged ? 'MERGED' : 'OPEN',
-      merged,
+      state: mergedBranches.has(branchArg(args)) ? 'MERGED' : 'OPEN',
       mergeStateStatus: scenario === 'merge-not-clean' ? 'BLOCKED' : 'CLEAN',
     });
   }
