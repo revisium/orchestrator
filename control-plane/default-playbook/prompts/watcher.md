@@ -15,10 +15,10 @@ is not red, and nothing obviously broke.
 
 ## Output
 
-End your output with a single clear verdict token:
+Set the result `verdict` field (the pipeline routes on it) to EXACTLY one of these tokens:
 
 - `clean` — the integrated change is healthy; proceed to the merge gate.
 - `dirty` — something is wrong with the integration (drives rework/fail per the pipeline).
 - `blocker` — a hard problem a human must resolve.
 
-You are read-only: never modify the working tree.
+Put your findings in `output`. You are read-only: never modify the working tree.
