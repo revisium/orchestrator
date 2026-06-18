@@ -105,8 +105,12 @@ test('feature-development: plan→merge approve completes and opens a PR', { ski
     await assertEventsPresent(h.api, run.runId, ['gate_signaled', 'integrate_succeeded', 'run_completed']);
 
     const branch = assertPrOpened(h, run.taskId);
-    assert.equal(git(target.worktree, ['branch', '--show-current']).trim(), branch);
-    assert.equal(git(target.worktree, ['rev-list', '--count', 'origin/master..HEAD']).trim(), '1');
+    // plan 0017 (per-run worktree isolation): the developer + integrator work in the run's ISOLATED
+    // worktree (under the data dir), so the user's base checkout is never switched/dirtied — it stays
+    // on master and clean. The feature branch + its single commit are pushed to origin FROM the worktree.
+    assert.equal(git(target.worktree, ['branch', '--show-current']).trim(), 'master', 'base checkout stays on master');
+    assert.equal(git(target.worktree, ['status', '--porcelain']).trim(), '', 'base checkout stays clean');
+    assert.equal(git(target.worktree, ['rev-list', '--count', `origin/master..origin/${branch}`]).trim(), '1');
 
     await assertUsage(h.api, run.runId, { inputTokens: 50, outputTokens: 25, costAmount: 0.005 });
   } finally {

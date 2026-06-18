@@ -45,7 +45,6 @@
     "smoke:step-lifecycle": "tsx scripts/smoke-step-lifecycle.ts",
     "smoke:worker-loop": "tsx scripts/smoke-worker-loop.ts",
     "smoke:claude-runner": "tsx scripts/smoke-claude-runner.ts",
-    "smoke:worktree-isolation": "tsx scripts/smoke-worktree-isolation.ts",
     "smoke:pr-poller": "tsx scripts/smoke-pr-poller.ts",
     "smoke:mvp": "tsx scripts/smoke-mvp.ts",
     "test": "tsx --test $(find src -name '*.test.ts' | sort)",

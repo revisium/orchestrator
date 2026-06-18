@@ -7,6 +7,7 @@ import { RunService } from '../../revisium/run.service.js';
 import { InboxService } from '../../revisium/inbox.service.js';
 import { PlaybooksService } from '../../revisium/playbooks.service.js';
 import { PipelineService } from '../../pipeline/develop-task.workflow.js';
+import { WorktreeService } from '../../runners/worktree.service.js';
 import { TaskControlPlaneApiService } from '../../task-control-plane/task-control-plane-api.service.js';
 import type { RunAgent } from '../../worker/runner.js';
 import type { IntegratorService } from '../../runners/integrator.js';
@@ -73,7 +74,8 @@ export async function createRunHarness(opts: RunHarnessOptions = {}): Promise<Ru
     ? opts.agent({ agentCalls, developerWrites })
     : deterministicAgent(agentCalls, developerWrites);
 
-  const pipeline = new PipelineService(dbos, roles, runs, inbox, integrator, agent);
+  const worktrees = new WorktreeService(runs);
+  const pipeline = new PipelineService(dbos, roles, runs, inbox, integrator, worktrees, agent);
   const api = new TaskControlPlaneApiService(runs, inbox, roles, playbooks, pipeline, dbos);
 
   await lifecycle.onApplicationBootstrap();
