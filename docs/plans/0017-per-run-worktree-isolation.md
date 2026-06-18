@@ -67,7 +67,7 @@ Removed: the per-step `src/worker/worktree-manager.ts` + the stale `scripts/smok
 
 The pipeline tail now ensures the worktree is reclaimed only once its branch is actually in the base:
 
-```
+```text
 watcherRouter →(clean)→ mergeGate (human approve) →(approved)→ confirmMerge (script)
 confirmMerge →(merged)→ mergedEnd        (succeeded → worktree released)
 confirmMerge →(ScriptBlocked)→ blockedEnd (worktree KEPT for rework / manual merge)
