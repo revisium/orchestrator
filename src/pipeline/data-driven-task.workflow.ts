@@ -386,10 +386,12 @@ export function makeDataDrivenTask(
     // EVERY terminal (success/throw/blocked-return); it does NOT run while parked at a gate (awaitHuman
     // suspends the live workflow via `recv`, so runBody never returns there). Release must be guarded so
     // an even-on-create failure cannot leak the worktree (codex: not finish()-only).
-    if (live) {
-      await createWorktreeFn(runId, taskId, title, base);
-    }
     try {
+      // Create INSIDE the try so the `finally` release also cleans up a create that partially built the
+      // worktree before throwing (codex/CodeRabbit: never leak a worktree on a create-time failure).
+      if (live) {
+        await createWorktreeFn(runId, taskId, title, base);
+      }
       return await runGraph(runId, opts, taskId, title, base);
     } finally {
       if (live) {

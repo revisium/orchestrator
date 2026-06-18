@@ -126,17 +126,19 @@ export function releaseRunWorktree(opts: ReleaseRunWorktreeOpts): void {
       execGit(['worktree', 'remove', '--force', worktreePath], baseRepoCwd);
     }
   } catch {
-    // ignore — fall through to prune + best-effort dir removal
-  }
-  try {
-    execGit(['worktree', 'prune'], baseRepoCwd);
-  } catch {
-    // ignore — prune is housekeeping only
+    // ignore — fall through to a best-effort dir removal, then prune the admin entry
   }
   try {
     if (existsSync(worktreePath)) rmSync(worktreePath, { recursive: true, force: true });
   } catch {
     // ignore
+  }
+  // Prune AFTER any manual removal so the `.git/worktrees/<id>` admin entry is cleaned in both the
+  // `git worktree remove` path and the manual-rm fallback path.
+  try {
+    execGit(['worktree', 'prune'], baseRepoCwd);
+  } catch {
+    // ignore — prune is housekeeping only
   }
   try {
     rmSync(worktreeMarkerFor(dataDir, runId), { force: true });
@@ -145,10 +147,9 @@ export function releaseRunWorktree(opts: ReleaseRunWorktreeOpts): void {
   }
 }
 
+// The live marker is the signal that makes resolveRunCwd FAIL LOUD on a lost worktree. If it cannot be
+// written we must NOT proceed silently (a later lost worktree would then fall back to the shared base
+// checkout, masking the isolation failure) — throw so the create step fails and the run surfaces it.
 function writeMarker(dataDir: string, runId: string): void {
-  try {
-    writeFileSync(worktreeMarkerFor(dataDir, runId), `${runId}\n`, 'utf8');
-  } catch {
-    // ignore — the marker is a fail-loud hint; absence only weakens the loud-fail, not correctness
-  }
+  writeFileSync(worktreeMarkerFor(dataDir, runId), `${runId}\n`, 'utf8');
 }

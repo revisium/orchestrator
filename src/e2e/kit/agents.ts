@@ -1,8 +1,8 @@
-import { writeFileSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AttemptResult, RunAgent } from '../../worker/runner.js';
 import { getConfig } from '../../config.js';
-import { worktreePathFor, isWorktreeDir } from '../../control-plane/resolve-cwd.js';
+import { worktreePathFor, worktreeMarkerFor, isWorktreeDir } from '../../control-plane/resolve-cwd.js';
 
 /**
  * Worktree-aware developer write dir (plan 0017): when the run has an isolated worktree, the fake
@@ -12,8 +12,18 @@ import { worktreePathFor, isWorktreeDir } from '../../control-plane/resolve-cwd.
  */
 function resolveWriteDir(runId: string, registered: string | undefined): string | undefined {
   if (!registered) return undefined;
-  const wt = worktreePathFor(getConfig().dataDir, runId);
-  return isWorktreeDir(wt) ? wt : registered;
+  const dataDir = getConfig().dataDir;
+  const wt = worktreePathFor(dataDir, runId);
+  if (isWorktreeDir(wt)) return wt;
+  // Mirror resolveRunCwd's fail-loud: a live marker with no worktree means isolation broke — refuse to
+  // dirty the shared base checkout (which would mask the failure) rather than silently falling back.
+  if (existsSync(worktreeMarkerFor(dataDir, runId))) {
+    throw new Error(
+      `fake developer: live run ${runId} expects an isolated worktree at ${wt} but it is missing — ` +
+        `refusing to write into the shared base checkout`,
+    );
+  }
+  return registered;
 }
 
 /** One recorded agent invocation — lets tests assert who ran with which runner (scoped by runId). */

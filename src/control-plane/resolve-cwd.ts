@@ -12,7 +12,7 @@
  *                                   ref is taken as the literal target repo, existence-checked).
  */
 import { resolve, isAbsolute, relative, sep, join } from 'node:path';
-import { existsSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, realpathSync, statSync } from 'node:fs';
 import type { ControlPlaneDataAccess } from './data-access.js';
 import { toStr, type Step } from './steps.js';
 
@@ -78,7 +78,16 @@ async function readRepoRef(da: ControlPlaneDataAccess, taskId: string): Promise<
  * branch + DBOS progress, the worktree is execution scratch). Sited under the data dir, NOT inside
  * the target repo, so a live worktree never pollutes the target's own `git status`.
  */
+/** Guard a value used as a single filesystem path segment — refuse separators / traversal so a
+ *  malformed runId can never make a worktree path escape `<dataDir>/worktrees/` (release rm's it). */
+function assertPathSegment(value: string, label: string): void {
+  if (value === '' || value === '.' || value === '..' || value.includes('/') || value.includes('\\') || value.includes('..') || value.includes('\0')) {
+    throw new Error(`${label} ${JSON.stringify(value)} must be a single safe path segment`);
+  }
+}
+
 export function worktreePathFor(dataDir: string, runId: string): string {
+  assertPathSegment(runId, 'runId');
   return join(dataDir, 'worktrees', runId);
 }
 
@@ -90,12 +99,21 @@ export function worktreePathFor(dataDir: string, runId: string): string {
  * release.
  */
 export function worktreeMarkerFor(dataDir: string, runId: string): string {
+  assertPathSegment(runId, 'runId');
   return join(dataDir, 'worktrees', `${runId}.live`);
 }
 
-/** A path is a usable git worktree iff it exists and carries a `.git` pointer (a file for a linked worktree). */
+/**
+ * A path is a usable LINKED git worktree iff it is a directory carrying a `.git` POINTER FILE (a linked
+ * worktree's `.git` is a file `gitdir: …`, never a directory). Requiring a file rejects a normal clone's
+ * `.git` directory and stale/corrupt paths, so a live run never silently runs effects in an invalid tree.
+ */
 export function isWorktreeDir(path: string): boolean {
-  return existsSync(path) && existsSync(join(path, '.git'));
+  try {
+    return statSync(path).isDirectory() && lstatSync(join(path, '.git')).isFile();
+  } catch {
+    return false;
+  }
 }
 
 /**

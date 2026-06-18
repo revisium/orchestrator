@@ -34,9 +34,11 @@ resolves its cwd to it; the base checkout is never mutated.
   aware, keyed by runId) for the developer steps + the integrator. The run resolver **fails loud** for a
   live run whose worktree is missing (a `<runId>.live` marker is present but the worktree is gone) rather
   than silently falling back to the shared base checkout. Non-live (script/stub) runs resolve to the base.
-- **Integrator keyed by runId, not taskId** — concurrent runs share a taskId, so the integrator resolves
-  cwd via `input.runId`. Inside the worktree it is already on the feature branch, so its
-  `branchExists→switch` path is a no-op and the dirty-tree `switch -c origin/<base>` is never taken.
+- **Integrator keyed by runId, not taskId** — the worktree is per-RUN, so the integrator resolves cwd via
+  the unambiguous `input.runId` (each run has a distinct runId; the prior `resolveTaskCwd(taskId)` could
+  collide if the same task were ever re-run). Inside the worktree it is already on the feature branch, so
+  its `branchExists→switch` path is a no-op and the dirty-tree `switch -c origin/<base>` is never taken.
+  (In normal operation each `createRun` mints a distinct taskId too, as the J6 concurrency e2e asserts.)
 - **Replay/recovery:** create is create-if-absent (idempotent; preserves in-flight uncommitted dev work
   across a crash); release no-ops if absent; the runId→path mapping is computed, not stored (preserves
   invariant #1 — the durable artifact is the pushed branch + DBOS progress).
