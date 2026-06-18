@@ -463,6 +463,83 @@ export async function integrate(
   return { prUrl: prResult.prUrl, branch, prNumber: prResult.prNumber };
 }
 
+// ─── confirmMerge (script:confirmMerge) — gate worktree cleanup on a real merge ──
+
+export type ConfirmMergeOutput = {
+  merged: true;
+  prNumber: number;
+  prUrl: string;
+};
+
+/** PR view shape for the merge decision. */
+type PrMergeView = {
+  number: number;
+  url: string;
+  state: string;
+  merged: boolean;
+  mergeStateStatus: string;
+};
+
+/**
+ * confirmMerge — REAL (live only). Ensures the run's PR is actually merged before the run reaches its
+ * success terminal (so the worktree, released on `succeeded`, is cleaned only once the branch is in the
+ * base — truly disposable). Idempotent + replay-safe:
+ *
+ *  1. `gh pr view` the run's branch. Already `merged` (a human merged it) → succeed.
+ *  2. Not merged + OPEN + `mergeStateStatus === CLEAN` (CI green, no conflicts) → `gh pr merge --squash
+ *     --delete-branch`, then re-view to CONFIRM merged → succeed; otherwise block.
+ *  3. Not mergeable (not OPEN, or not CLEAN — red CI / conflicts / blocked) → block (needsHuman), which
+ *     routes to a `blocked` terminal and KEEPS the worktree for rework.
+ *
+ * Merge method is `--squash` by default; node-level parameterization (method/policy) is a deferred
+ * follow-up (run-time node params).
+ */
+export async function confirmMerge(
+  input: IntegratorInput,
+  deps: IntegratorDeps,
+): Promise<ConfirmMergeOutput | IntegratorBlocked> {
+  const { execGit: git, execGh: gh, resolveRunCwd } = deps;
+  const cwd = await resolveRunCwd(input.runId, input.taskId);
+  const branch = branchName(input.taskId, input.title);
+
+  const ownerRepoResult = resolveOwnerRepo(git, cwd);
+  if ('needsHuman' in ownerRepoResult) return ownerRepoResult;
+  const { ownerRepo } = ownerRepoResult;
+
+  const view = (): PrMergeView => {
+    const raw = gh(['pr', 'view', branch, '--repo', ownerRepo, '--json', 'number,url,state,merged,mergeStateStatus']);
+    try {
+      return JSON.parse(raw) as PrMergeView;
+    } catch {
+      throw new Error(`gh pr view returned non-JSON for ${branch}: ${raw.slice(0, 200)}`);
+    }
+  };
+
+  const pr = view();
+  if (pr.merged) return { merged: true, prNumber: pr.number, prUrl: pr.url };
+
+  if (pr.state !== 'OPEN') {
+    return { needsHuman: true, lesson: `PR #${pr.number} is ${pr.state} (not OPEN) and not merged — resolve manually` };
+  }
+  // Only auto-merge a CLEAN PR (CI green, no conflicts). Other states (BLOCKED/DIRTY/UNSTABLE/BEHIND…)
+  // require a human — block and keep the worktree for rework.
+  if (pr.mergeStateStatus !== 'CLEAN') {
+    return {
+      needsHuman: true,
+      lesson:
+        `PR #${pr.number} is not auto-mergeable (mergeStateStatus=${pr.mergeStateStatus}) — CI not green, ` +
+        `conflicts, or required reviews pending; merge it manually (or fix + re-run) then cleanup`,
+    };
+  }
+
+  // Merge (squash) — idempotent: a replay re-views first (step 1) and short-circuits on `merged`.
+  gh(['pr', 'merge', branch, '--repo', ownerRepo, '--squash', '--delete-branch']);
+
+  const after = view();
+  if (after.merged) return { merged: true, prNumber: after.number, prUrl: after.url };
+  return { needsHuman: true, lesson: `PR #${after.number} merge did not take effect (state=${after.state}) — verify manually` };
+}
+
 // ─── IntegratorService ─────────────────────────────────────────────────────────
 
 /** Default execGit implementation wrapping execFileSync with a resolved absolute path. */
@@ -510,6 +587,24 @@ export class IntegratorService {
   /** Stub integrator — script path; zero external effects. */
   runStub = (input: IntegratorInput): IntegratorOutput => {
     return stubIntegrate(input);
+  };
+
+  /**
+   * Real confirm-merge — live path. Same fail-loud pinned-gh handling as runIntegrate: refuse the
+   * ambient account, block if the pinned identity cannot be resolved.
+   */
+  runConfirmMerge = (input: IntegratorInput): Promise<ConfirmMergeOutput | IntegratorBlocked> => {
+    const pinned = resolvePinnedGh();
+    if ('needsHuman' in pinned) {
+      console.warn(`[confirm-merge] ${pinned.lesson}`);
+      return Promise.resolve(pinned);
+    }
+    return confirmMerge(input, { ...this.deps, execGh: pinned.execGh });
+  };
+
+  /** Stub confirm-merge — script path; zero external effects (treats the stub PR as merged). */
+  runConfirmStub = (input: IntegratorInput): ConfirmMergeOutput => {
+    return { merged: true, prNumber: 0, prUrl: `stub://pr/${input.taskId}/merged` };
   };
 
   /** Live preflight — clean check + base invariant. Arrow property for safe unbound registration. */

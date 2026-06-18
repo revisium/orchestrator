@@ -63,7 +63,35 @@ Removed: the per-step `src/worker/worktree-manager.ts` + the stale `scripts/smok
   base stays clean on master); `run-lifecycle.e2e.test.ts` updated (base checkout stays on master + clean;
   the branch + commit are pushed to origin from the worktree).
 
+## Follow-up shipped — confirm-merge gates worktree cleanup on a real merge
+
+The pipeline tail now ensures the worktree is reclaimed only once its branch is actually in the base:
+
+```
+watcherRouter →(clean)→ mergeGate (human approve) →(approved)→ confirmMerge (script)
+confirmMerge →(merged)→ mergedEnd        (succeeded → worktree released)
+confirmMerge →(ScriptBlocked)→ blockedEnd (worktree KEPT for rework / manual merge)
+confirmMerge →(ScriptFailed)→ failedEnd
+```
+
+- **`confirmMerge`** (`script:confirmMerge`, `integrator.ts`) is idempotent + gh-pinned: `gh pr view` →
+  already `merged` (a human merged it) → succeed; else OPEN + `mergeStateStatus===CLEAN` (green CI, no
+  conflicts) → `gh pr merge --squash --delete-branch` → re-view to confirm → succeed; otherwise block
+  with a lesson. Merge method is `--squash` (default); per-node parameterization is a deferred task.
+- **Cleanup semantics** (data-driven adapter `finally`): release the worktree on a **succeeded**
+  terminal (PR merged → branch in base → disposable) and on a throw (failure); **KEEP** it on a
+  **blocked** terminal so the developer can rework / merge manually in the same tree.
+- Dispatch reuses the integrator's runner binding (real on live, stub on script). Built-in scripts
+  (`script:integrator`, `script:confirmMerge`) resolve to the `integrator` required role.
+- **pnpm provisioning**: `createRunWorktree` runs `pnpm install --frozen-lockfile` in the worktree for a
+  pnpm repo (isolated + correct, cheap via the global store) instead of the shared `node_modules`
+  symlink; non-pnpm repos keep the symlink fallback (graceful when absent).
+
 ## Follow-ups (deferred)
+- **`cleanup_worktree` MCP tool + host-start orphan sweep** — explicit reclamation of a KEPT (blocked)
+  or orphaned (cancel/crash) worktree, plus a best-effort `git worktree prune` + age-GC on host start.
+  Keep-on-blocked means worktrees now accumulate for blocked runs until reclaimed.
+- **Per-node run-time parameterization** (e.g. confirmMerge's merge method/policy) as run params.
 
 - A data-model `lifecycle: { setup[], teardown[] }` template extension so worktree create/release become
   pipeline-expressed hooks (with `onTerminal`/`runOnWorkflowError`/`skipOnParkedGate`) rather than adapter-

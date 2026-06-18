@@ -89,6 +89,61 @@ test('createRunWorktree: no node_modules in base → no symlink, no throw (grace
   }
 });
 
+/** Commit + push a tracked file to the base's master so it lands in fresh worktrees. */
+function commitToBase(baseRepo: string, file: string, content: string): void {
+  execFileSync('bash', ['-c', `printf '%s' ${JSON.stringify(content)} > ${JSON.stringify(file)}`], { cwd: baseRepo });
+  git(['add', '-A'], baseRepo);
+  git(['commit', '-m', `add ${file}`], baseRepo);
+  git(['push', 'origin', 'master'], baseRepo);
+}
+
+test('createRunWorktree: pnpm repo → runs `pnpm install --frozen-lockfile` in the worktree, no symlink', () => {
+  const { root, baseRepo, dataDir } = setup();
+  try {
+    commitToBase(baseRepo, 'pnpm-lock.yaml', "lockfileVersion: '9.0'\n");
+    const calls: Array<{ args: string[]; cwd: string }> = [];
+    const { worktreePath } = createRunWorktree({
+      runId: 'run-pnpm', baseRepoCwd: baseRepo, base: 'master', branch: 'feat/pnpm', dataDir,
+      execInstall: (args, cwd) => { calls.push({ args, cwd }); },
+    });
+    assert.deepEqual(calls, [{ args: ['install', '--frozen-lockfile'], cwd: worktreePath }], 'pnpm install ran in the worktree');
+    assert.ok(!existsSync(join(worktreePath, 'node_modules')), 'no symlink when pnpm install handled deps');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('createRunWorktree: pnpm install failure → falls back to the node_modules symlink', () => {
+  const { root, baseRepo, dataDir } = setup();
+  try {
+    commitToBase(baseRepo, 'pnpm-lock.yaml', "lockfileVersion: '9.0'\n");
+    mkdirSync(join(baseRepo, 'node_modules'), { recursive: true });
+    const { worktreePath } = createRunWorktree({
+      runId: 'run-pnpm-fail', baseRepoCwd: baseRepo, base: 'master', branch: 'feat/pnpmf', dataDir,
+      execInstall: () => { throw new Error('pnpm not found'); },
+    });
+    assert.ok(lstatSync(join(worktreePath, 'node_modules')).isSymbolicLink(), 'fell back to symlink on install failure');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('createRunWorktree: non-pnpm repo → does NOT invoke the installer (symlink path)', () => {
+  const { root, baseRepo, dataDir } = setup();
+  try {
+    mkdirSync(join(baseRepo, 'node_modules'), { recursive: true });
+    let installCalled = false;
+    const { worktreePath } = createRunWorktree({
+      runId: 'run-npm', baseRepoCwd: baseRepo, base: 'master', branch: 'feat/npm', dataDir,
+      execInstall: () => { installCalled = true; },
+    });
+    assert.equal(installCalled, false, 'no pnpm-lock.yaml → installer not invoked');
+    assert.ok(lstatSync(join(worktreePath, 'node_modules')).isSymbolicLink(), 'symlinked the base node_modules');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('releaseRunWorktree: removes the worktree + marker, idempotent', () => {
   const { root, baseRepo, dataDir } = setup();
   try {

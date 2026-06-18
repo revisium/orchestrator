@@ -12,12 +12,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeDataDrivenTask, type DataDrivenTaskDeps } from './data-driven-task.workflow.js';
 import { templateFromExecutionPolicy } from './data-driven-template.js';
-import { featureDevelopment } from '../pipeline-core/kit/fixtures.js';
+import { featureDevelopment, confirmMergeFlow } from '../pipeline-core/kit/fixtures.js';
 import type { Template } from '../pipeline-core/index.js';
 import type { AttemptResult } from '../worker/runner.js';
 import type { RouteDecision, RouteRoleBinding } from './route-contract.js';
 import type { Decision as GateDecision } from './await-human.js';
-import type { IntegratorInput, IntegratorOutput, IntegratorBlocked } from '../runners/integrator.js';
+import type { IntegratorInput, IntegratorOutput, IntegratorBlocked, ConfirmMergeOutput } from '../runners/integrator.js';
 import { template, node, on, otherwise, verdictEq, allOf, counterLt } from '../pipeline-core/kit/index.js';
 
 const RUN_ID = 'run-dd-001';
@@ -56,6 +56,7 @@ type Recorder = {
   blocked: Array<{ reason?: string }>;
   failed: string[];
   integrateCalls: number;
+  confirmMergeCalls: number;
   events: string[];
   /** Persisted step outputs (0016 dataflow). */
   outputs: Array<{ nodeId: string; ordinal: number; name: string; payload: unknown }>;
@@ -76,8 +77,10 @@ function buildAdapter(opts: {
   integrate?: (input: IntegratorInput) => IntegratorOutput | IntegratorBlocked | Promise<IntegratorOutput | IntegratorBlocked>;
   /** Override the live preflight (default: ok). Lets a test drive a preflight block. */
   preflight?: () => { ok: true } | { needsHuman: true; lesson: string } | Promise<{ ok: true } | { needsHuman: true; lesson: string }>;
+  /** Override confirmMerge (default: merged). Lets a test drive a not-merged block. */
+  confirmMerge?: (input: IntegratorInput) => ConfirmMergeOutput | IntegratorBlocked | Promise<ConfirmMergeOutput | IntegratorBlocked>;
 }) {
-  const rec: Recorder = { gates: [], completed: [], blocked: [], failed: [], integrateCalls: 0, events: [], outputs: [], inputsByStep: {} };
+  const rec: Recorder = { gates: [], completed: [], blocked: [], failed: [], integrateCalls: 0, confirmMergeCalls: 0, events: [], outputs: [], inputsByStep: {} };
   const visits = new Map<string, number>();
 
   const runStepFn = async (
@@ -130,6 +133,13 @@ function buildAdapter(opts: {
     // the live runner binding means both fire (create after preflight, release in the terminal finally).
     createWorktreeFn: async () => { rec.events.push('worktree_create:pipeline'); return { worktreePath: '/fake/worktree' }; },
     releaseWorktreeFn: async () => { rec.events.push('worktree_release:pipeline'); },
+    // confirmMerge (plan 0017 follow-up): default fake reports merged; a test can override via opts.confirmMerge.
+    confirmMergeFn: async (input: IntegratorInput) => {
+      rec.confirmMergeCalls++;
+      if (opts.confirmMerge) return opts.confirmMerge(input);
+      return { merged: true as const, prNumber: 1, prUrl: `https://example/pr/${input.taskId}/merged` };
+    },
+    runConfirmStub: (input: IntegratorInput) => ({ merged: true as const, prNumber: 0, prUrl: `stub://pr/${input.taskId}/merged` }),
   };
 
   const fn = makeDataDrivenTask(runStepFn, deps);
@@ -407,4 +417,28 @@ test('DD-DF6: run_outputs ordinals increment across a rework loop (append-only h
     [1, 2],
     'each loop iteration appends a distinct-ordinal output',
   );
+});
+
+// ─── confirmMerge node (plan 0017 follow-up) ─────────────────────────────────
+
+test('confirmMerge: merged → succeeded terminal, worktree released', async () => {
+  const { run, rec } = buildAdapter({ template: confirmMergeFlow() }); // default fake → merged
+  const r = await run();
+  assert.equal(r.status, 'succeeded');
+  assert.equal(rec.confirmMergeCalls, 1, 'confirmMerge ran once');
+  assert.ok(rec.events.includes('merge_confirmed:confirmMerge'), 'emitted merge_confirmed');
+  assert.ok(rec.events.includes('worktree_create:pipeline'));
+  assert.ok(rec.events.includes('worktree_release:pipeline'), 'worktree released on merged/succeeded');
+});
+
+test('confirmMerge: not merged (block) → blocked terminal, worktree KEPT', async () => {
+  const { run, rec } = buildAdapter({
+    template: confirmMergeFlow(),
+    confirmMerge: () => ({ needsHuman: true, lesson: 'PR not auto-mergeable (mergeStateStatus=BLOCKED)' }),
+  });
+  const r = await run();
+  assert.equal(r.status, 'blocked');
+  assert.equal(rec.confirmMergeCalls, 1, 'confirmMerge ran once');
+  assert.ok(rec.events.includes('worktree_create:pipeline'));
+  assert.ok(!rec.events.includes('worktree_release:pipeline'), 'worktree KEPT on blocked (rework / manual merge)');
 });
