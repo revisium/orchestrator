@@ -77,6 +77,34 @@ export function featureDevelopment(): Template {
     .build();
 }
 
+/**
+ * confirmMergeFlow — minimal fixture exercising the `script:confirmMerge` node (plan 0017 follow-up):
+ * entry → confirmMerge → mergedEnd, with catch routing a block to `blockedEnd` and a throw to `failedEnd`.
+ * Used to assert the adapter routes a merged result to a SUCCEEDED terminal (worktree released) and a
+ * not-merged block to a BLOCKED terminal (worktree kept).
+ */
+export function confirmMergeFlow(): Template {
+  return template('confirm-merge-flow')
+    .title('confirmMerge → merged (succeeded) / not-merged (blocked) — plan 0017 test fixture')
+    .specVersion('1.0')
+    .entry('confirmMerge')
+    .domain('approved', 'clean', 'blocker', 'changes_requested')
+    .add(
+      node.script('confirmMerge', 'script:confirmMerge', 'mergedEnd', {
+        resultSchema: 'schema:integration',
+        onFailure: 'route',
+        catch: [
+          { onError: 'revo.ScriptBlocked', goto: 'blockedEnd' },
+          { onError: 'revo.ScriptFailed', goto: 'failedEnd' },
+        ],
+      }),
+      node.terminal('mergedEnd', 'succeeded'),
+      node.terminal('blockedEnd', 'blocked'),
+      node.terminal('failedEnd', 'failed'),
+    )
+    .build();
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // §13 footnote — local-change (orchestrator + developer, NO humanGate).
 // ─────────────────────────────────────────────────────────────────────────────

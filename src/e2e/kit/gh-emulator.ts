@@ -14,10 +14,20 @@ export type GhScenario =
   | 'pr-already-exists' //  list→[one open PR on master] → integrator reuses it, no `pr create`
   | 'ambiguous-prs' //      list→[two open PRs on master] → integrator needsHuman (ambiguous)
   | 'pr-view-non-json' //   create succeeds but `pr view` returns non-JSON → needsHuman (never stub://)
+  | 'merge-not-clean' //    `pr view` → OPEN but mergeStateStatus≠CLEAN → confirmMerge blocks (keeps worktree)
   | 'gh-error' //           every gh call throws (rate-limit / network family) → DBOS retries the step
   | 'gh-token-leak'; //     throws an error embedding a gho_ token → asserts redaction in the lesson
 
-function ghBehavior(scenario: GhScenario, args: string[]): string {
+/** Branch from a `gh pr <view|merge> <branch> …` argv (integrator/confirmMerge pass it as args[2]). */
+function branchArg(args: string[]): string {
+  return args[2] ?? '';
+}
+
+/**
+ * @param mergedBranches stateful set so a `pr merge` flips a later `pr view` to MERGED — lets confirmMerge
+ *   do view→merge→re-view within one emulator instance (plan 0017). The fake never touches real git.
+ */
+function ghBehavior(scenario: GhScenario, args: string[], mergedBranches: Set<string>): string {
   if (scenario === 'gh-error') {
     throw new Error('gh: API rate limit exceeded for installation (e2e gh-error scenario)');
   }
@@ -35,17 +45,31 @@ function ghBehavior(scenario: GhScenario, args: string[]): string {
     return JSON.stringify([]);
   }
   if (args[0] === 'pr' && args[1] === 'create') return `${PR_URL}\n`;
+  if (args[0] === 'pr' && args[1] === 'merge') {
+    // confirmMerge: record the merge so the verifying re-view reports MERGED.
+    mergedBranches.add(branchArg(args));
+    return '';
+  }
   if (args[0] === 'pr' && args[1] === 'view') {
-    return scenario === 'pr-view-non-json' ? 'not json — gh glitch' : JSON.stringify({ url: PR_URL, number: 1 });
+    if (scenario === 'pr-view-non-json') return 'not json — gh glitch';
+    const merged = mergedBranches.has(branchArg(args));
+    return JSON.stringify({
+      url: PR_URL,
+      number: 1,
+      state: merged ? 'MERGED' : 'OPEN',
+      merged,
+      mergeStateStatus: scenario === 'merge-not-clean' ? 'BLOCKED' : 'CLEAN',
+    });
   }
   throw new Error(`unexpected gh call: ${args.join(' ')}`);
 }
 
 /** Single-scenario fake `gh`, recording argv into `calls`. (Default harness gh = `happy`.) */
 export function createGhEmulator(calls: string[][], scenario: GhScenario = 'happy'): ExecGhFn {
+  const mergedBranches = new Set<string>();
   return (args: string[]): string => {
     calls.push(args);
-    return ghBehavior(scenario, args);
+    return ghBehavior(scenario, args, mergedBranches);
   };
 }
 
@@ -55,10 +79,11 @@ export function createGhEmulator(calls: string[][], scenario: GhScenario = 'happ
  * scenario in `scenarios` (keyed by taskId) before starting it; unregistered runs get `happy`.
  */
 export function routedGhEmulator(scenarios: Map<string, GhScenario>, calls: string[][]): ExecGhFn {
+  const mergedBranches = new Set<string>();
   return (args: string[]): string => {
     calls.push(args);
     const taskId = [...scenarios.keys()].find((id) => args.some((a) => a.startsWith(`feat/${id}-`)));
     const scenario = (taskId !== undefined ? scenarios.get(taskId) : undefined) ?? 'happy';
-    return ghBehavior(scenario, args);
+    return ghBehavior(scenario, args, mergedBranches);
   };
 }

@@ -580,7 +580,7 @@
                   "op": "verdict.eq",
                   "value": "approved"
                 },
-                "goto": "mergedEnd"
+                "goto": "confirmMerge"
               },
               {
                 "default": "mergedEnd"
@@ -601,6 +601,24 @@
             "id": "blockedEnd",
             "kind": "terminal",
             "status": "blocked"
+          },
+          "confirmMerge": {
+            "id": "confirmMerge",
+            "kind": "script",
+            "scriptRef": "script:confirmMerge",
+            "next": "mergedEnd",
+            "catch": [
+              {
+                "onError": "revo.ScriptBlocked",
+                "goto": "blockedEnd"
+              },
+              {
+                "onError": "revo.ScriptFailed",
+                "goto": "failedEnd"
+              }
+            ],
+            "onFailure": "route",
+            "resultSchema": "schema:integration"
           }
         },
         "title": "Feature development — plan + merge gates, bounded code-review + watcher rework",
@@ -1539,7 +1557,9 @@
             "next": "planGate",
             "onFailure": "abort",
             "resultSchema": "schema:plan",
-            "produces": { "name": "plan" }
+            "produces": {
+              "name": "plan"
+            }
           },
           "planGate": {
             "id": "planGate",
@@ -1576,7 +1596,12 @@
             "next": "codeReview",
             "onFailure": "abort",
             "resultSchema": "schema:change",
-            "consumes": [{ "node": "analyst", "as": "plan" }]
+            "consumes": [
+              {
+                "node": "analyst",
+                "as": "plan"
+              }
+            ]
           },
           "codeReview": {
             "id": "codeReview",

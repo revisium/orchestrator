@@ -9,6 +9,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import {
   integrate,
+  confirmMerge,
   stubIntegrate,
   preflightLive,
   resolveExecutable,
@@ -959,4 +960,66 @@ test('parseOwnerRepo: non-github host → null', () => {
 
 test('parseOwnerRepo: bare owner/repo (no scheme/host) → null', () => {
   assert.equal(parseOwnerRepo('o/repo'), null);
+});
+
+// ─── confirmMerge (plan 0017 follow-up: gate cleanup on a real merge) ─────────
+
+const MERGE_INPUT: IntegratorInput = { runId: 'r1', taskId: 't1', title: 'T', base: 'master' };
+
+function prView(state: string, merged: boolean, mergeStateStatus: string, number = 7): string {
+  return JSON.stringify({ number, url: `https://gh/pr/${number}`, state, merged, mergeStateStatus });
+}
+
+/** Deps for confirmMerge: a git that reports a github origin, plus the supplied scripted gh. */
+function confirmDeps(execGh: ExecGhFn): IntegratorDeps {
+  const execGit: ExecFn = (args) =>
+    args[0] === 'remote' && args[1] === 'get-url' ? 'git@github.com:e2e/repo.git\n' : '';
+  return {
+    execGit,
+    execGh,
+    resolveTaskCwd: makeResolveTaskCwd(),
+    resolveRunCwd: makeResolveRunCwd(),
+  };
+}
+
+test('confirmMerge: already merged → merged, never calls `pr merge`', async () => {
+  const calls: string[][] = [];
+  const gh: ExecGhFn = (a) => { calls.push(a); return prView('MERGED', true, 'CLEAN'); };
+  const r = await confirmMerge(MERGE_INPUT, confirmDeps(gh));
+  assert.deepEqual(r, { merged: true, prNumber: 7, prUrl: 'https://gh/pr/7' });
+  assert.ok(!calls.some((a) => a[1] === 'merge'), 'no pr merge when already merged');
+});
+
+test('confirmMerge: OPEN + CLEAN → squash-merges then confirms merged', async () => {
+  const calls: string[][] = [];
+  let views = 0;
+  const gh: ExecGhFn = (a) => {
+    calls.push(a);
+    if (a[1] === 'view') { views++; return views === 1 ? prView('OPEN', false, 'CLEAN') : prView('MERGED', true, 'CLEAN'); }
+    return '';
+  };
+  const r = await confirmMerge(MERGE_INPUT, confirmDeps(gh));
+  assert.equal('merged' in r && r.merged, true);
+  const merge = calls.find((a) => a[1] === 'merge');
+  assert.ok(merge && merge.includes('--squash') && merge.includes('--delete-branch'), 'squash + delete-branch merge');
+});
+
+test('confirmMerge: OPEN but not CLEAN (red CI / conflicts) → blocked, no merge', async () => {
+  const calls: string[][] = [];
+  const gh: ExecGhFn = (a) => { calls.push(a); return prView('OPEN', false, 'BLOCKED'); };
+  const r = await confirmMerge(MERGE_INPUT, confirmDeps(gh));
+  assert.ok('needsHuman' in r, 'blocked when not CLEAN');
+  assert.ok(!calls.some((a) => a[1] === 'merge'), 'never auto-merges a non-CLEAN PR');
+});
+
+test('confirmMerge: closed and not merged → blocked', async () => {
+  const gh: ExecGhFn = () => prView('CLOSED', false, 'UNKNOWN');
+  const r = await confirmMerge(MERGE_INPUT, confirmDeps(gh));
+  assert.ok('needsHuman' in r);
+});
+
+test('confirmMerge: merge does not take effect (still not merged) → blocked', async () => {
+  const gh: ExecGhFn = (a) => (a[1] === 'view' ? prView('OPEN', false, 'CLEAN') : '');
+  const r = await confirmMerge(MERGE_INPUT, confirmDeps(gh));
+  assert.ok('needsHuman' in r, 'blocked if the post-merge re-view is still not merged');
 });
