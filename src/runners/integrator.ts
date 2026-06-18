@@ -472,11 +472,13 @@ export type ConfirmMergeOutput = {
 };
 
 /** PR view shape for the merge decision. NOTE: gh has NO `merged` JSON field — `state` is the source
- *  of truth (OPEN | MERGED | CLOSED). Requesting `--json merged` errors ("Unknown JSON field"). */
+ *  of truth (OPEN | MERGED | CLOSED). Requesting `--json merged` errors ("Unknown JSON field").
+ *  `isDraft` matters because the integrator opens PRs as DRAFT, and `gh pr merge` refuses a draft. */
 type PrMergeView = {
   number: number;
   url: string;
   state: string;
+  isDraft: boolean;
   mergeStateStatus: string;
 };
 
@@ -507,7 +509,7 @@ export async function confirmMerge(
   const { ownerRepo } = ownerRepoResult;
 
   const view = (): PrMergeView => {
-    const raw = gh(['pr', 'view', branch, '--repo', ownerRepo, '--json', 'number,url,state,mergeStateStatus']);
+    const raw = gh(['pr', 'view', branch, '--repo', ownerRepo, '--json', 'number,url,state,isDraft,mergeStateStatus']);
     try {
       return JSON.parse(raw) as PrMergeView;
     } catch {
@@ -530,6 +532,12 @@ export async function confirmMerge(
         `PR #${pr.number} is not auto-mergeable (mergeStateStatus=${pr.mergeStateStatus}) — CI not green, ` +
         `conflicts, or required reviews pending; merge it manually (or fix + re-run) then cleanup`,
     };
+  }
+
+  // The integrator opens the PR as a DRAFT (human review at the merge gate); `gh pr merge` refuses a
+  // draft, so mark it ready first (the approved merge gate IS that review). Idempotent: a no-op once ready.
+  if (pr.isDraft) {
+    gh(['pr', 'ready', branch, '--repo', ownerRepo]);
   }
 
   // Merge (squash) — idempotent: a replay re-views first (step 1) and short-circuits on state MERGED.
