@@ -18,7 +18,9 @@ reviewer can check against. The plan is the artifact a human approves at the pla
 
 ## Output
 
-Emit a structured plan. End your output with a single clear verdict token:
+Put the full ordered plan (problem, scope, files to change, steps, risks, verification) in the result
+`output` — the plan reviewer and the developer receive it verbatim as their input. Set the `verdict` field
+to EXACTLY one of:
 
 - `approved` — the task is well understood and the plan is ready for a developer.
 - `changes_requested` — the request is ambiguous or under-specified; explain what is missing.
