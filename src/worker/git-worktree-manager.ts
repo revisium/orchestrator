@@ -28,15 +28,24 @@ import {
   worktreeMarkerFor,
   isWorktreeDir,
 } from '../control-plane/resolve-cwd.js';
+import { resolveExecutable } from '../runners/integrator.js';
 
 /** Synchronous git executor in a given cwd (injectable for tests). */
 export type WorktreeExecGit = (args: string[], cwd: string) => string;
 
 const GIT_TIMEOUT_MS = 60_000;
 
-/** Default git executor — bare `git` resolved via PATH by execFileSync. */
+// Resolve `git` to an ABSOLUTE path once (mirrors the integrator's defaultExecGit): execFileSync is
+// never handed a bare command name resolved against a mutable PATH at spawn time.
+let _gitAbsPath: string | undefined;
+function gitAbsPath(): string {
+  if (_gitAbsPath === undefined) _gitAbsPath = resolveExecutable('git');
+  return _gitAbsPath;
+}
+
+/** Default git executor — runs the absolute `git` binary in `cwd`. */
 function defaultExecGit(args: string[], cwd: string): string {
-  return execFileSync('git', args, { encoding: 'utf8', cwd, timeout: GIT_TIMEOUT_MS });
+  return execFileSync(gitAbsPath(), args, { encoding: 'utf8', cwd, timeout: GIT_TIMEOUT_MS });
 }
 
 export type CreateRunWorktreeOpts = {
