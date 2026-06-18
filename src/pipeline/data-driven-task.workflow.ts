@@ -43,7 +43,7 @@ import {
 import type { AttemptResult } from '../worker/runner.js';
 import type { ExecutionProfile, RouteDecision, RouteRoleBinding } from './route-contract.js';
 import { runnerNeedsLivePreflight, runnerUsesRealIntegrator } from './route-contract.js';
-import type { IntegratorInput, IntegratorOutput, IntegratorBlocked } from '../runners/integrator.js';
+import type { IntegratorInput, IntegratorOutput, IntegratorBlocked, ConfirmMergeOutput } from '../runners/integrator.js';
 import type { AppendEventInput } from '../run/append-event.js';
 import type { RunOutputRow } from '../run/run-outputs.js';
 import type { Decision as GateDecision } from './await-human.js';
@@ -220,6 +220,10 @@ export type DataDrivenTaskDeps = {
   integrateFn: (input: IntegratorInput) => Promise<IntegratorOutput | IntegratorBlocked>;
   /** Stub integrator — pure (script). */
   runStub: (input: IntegratorInput) => IntegratorOutput;
+  /** Real confirm-merge — DBOS step (live): ensures the PR is merged before the success terminal. */
+  confirmMergeFn: (input: IntegratorInput) => Promise<ConfirmMergeOutput | IntegratorBlocked>;
+  /** Stub confirm-merge — pure (script). */
+  runConfirmStub: (input: IntegratorInput) => ConfirmMergeOutput;
   /**
    * Live preflight — memoized DBOS step (B5/B7). Clean check + base invariant, evaluated ONCE before
    * any live runner/integrator effect. Skipped entirely when no binding resolves to a live runner
@@ -272,7 +276,7 @@ export function makeDataDrivenTask(
   ) => Promise<AttemptResult>,
   deps: DataDrivenTaskDeps,
 ) {
-  const { appendEvent, appendRunOutput, awaitHuman, completeRun, failRun, blockRun, loadRunTaskContext, integrateFn, runStub, preflightFn, createWorktreeFn, releaseWorktreeFn } = deps;
+  const { appendEvent, appendRunOutput, awaitHuman, completeRun, failRun, blockRun, loadRunTaskContext, integrateFn, runStub, confirmMergeFn, runConfirmStub, preflightFn, createWorktreeFn, releaseWorktreeFn } = deps;
 
   /** Resolve a node's `consumes` from the workflow-local output accumulator — NOT live Revisium reads
    *  (0016 §6 / consensus M4: a live read on replay can see rows written past the replay point). */
@@ -382,19 +386,22 @@ export function makeDataDrivenTask(
 
     // Per-run worktree (plan 0017): create AFTER a passing preflight and BEFORE any live effect, so all
     // repo-touching steps (developer/rework + integrator) resolve to the isolated worktree (keyed by
-    // runId) — never the shared base checkout. Skipped for non-live runs. The `finally` releases it at
-    // EVERY terminal (success/throw/blocked-return); it does NOT run while parked at a gate (awaitHuman
-    // suspends the live workflow via `recv`, so runBody never returns there). Release must be guarded so
-    // an even-on-create failure cannot leak the worktree (codex: not finish()-only).
+    // runId) — never the shared base checkout. Skipped for non-live runs. The `finally` releases it at a
+    // SUCCEEDED terminal (the PR is merged via confirmMerge → branch is in base → worktree disposable) and
+    // on a throw (failure); it KEEPS the worktree on a `blocked` terminal (confirmMerge blocks when the PR
+    // isn't merged yet — the tree must survive for rework / a manual merge; reclaimed by cleanup_worktree
+    // + the host-start sweep). It does NOT run while parked at a gate (awaitHuman suspends the live
+    // workflow via `recv`, so runBody never returns there). Create is INSIDE the try so the release also
+    // cleans up a create that partially built the worktree before throwing (codex/CodeRabbit).
+    let result: DataDrivenResult | undefined;
     try {
-      // Create INSIDE the try so the `finally` release also cleans up a create that partially built the
-      // worktree before throwing (codex/CodeRabbit: never leak a worktree on a create-time failure).
       if (live) {
         await createWorktreeFn(runId, taskId, title, base);
       }
-      return await runGraph(runId, opts, taskId, title, base);
+      result = await runGraph(runId, opts, taskId, title, base);
+      return result;
     } finally {
-      if (live) {
+      if (live && result?.status !== 'blocked') {
         try {
           await releaseWorktreeFn(runId, taskId);
         } catch (releaseErr) {
@@ -617,15 +624,19 @@ export function makeDataDrivenTask(
     bindingByRef: Map<string, RouteRoleBinding>,
     stepKey: string,
   ): Promise<{ outcome: 'ok'; pointer: unknown } | { outcome: 'blocked' } | { outcome: 'failed' }> {
+    const isConfirmMerge = decision.scriptRef === 'script:confirmMerge';
     const binding = bindingByRef.get(decision.scriptRef) ?? bindingByRef.get('script:integrator');
     const integratorInput: IntegratorInput = { runId, taskId: ctx.taskId, title: ctx.title, base: ctx.base };
-    let result: IntegratorOutput | IntegratorBlocked;
+    // A script node whose resolved runner mechanically performs the merge uses the REAL script;
+    // otherwise the pure stub (zero git/gh). Absent a binding (template-only script), default to stub.
+    const useReal = !!binding && runnerUsesRealIntegrator(binding.resolvedRunnerId);
+    let result: IntegratorOutput | ConfirmMergeOutput | IntegratorBlocked;
     try {
-      // A script node whose resolved runner mechanically performs the merge uses the real integrator;
-      // otherwise the pure stub (zero git/gh). Absent a binding (template-only script), default to stub.
-      result = binding && runnerUsesRealIntegrator(binding.resolvedRunnerId)
-        ? await integrateFn(integratorInput)
-        : runStub(integratorInput);
+      if (isConfirmMerge) {
+        result = useReal ? await confirmMergeFn(integratorInput) : runConfirmStub(integratorInput);
+      } else {
+        result = useReal ? await integrateFn(integratorInput) : runStub(integratorInput);
+      }
     } catch (err) {
       await appendEvent({
         runId,
@@ -639,26 +650,39 @@ export function makeDataDrivenTask(
     }
     if ('needsHuman' in result) {
       // Surface the blocking reason as pipeline_blocked (the persist boundary redacts any token, D15) so
-      // the human sees WHY the integrator could not proceed — exactly as the old engine's blockPipeline.
+      // the human sees WHY the script could not proceed — exactly as the old engine's blockPipeline.
       await appendEvent({
         runId,
         taskId: ctx.taskId,
         stepId: '',
         stepKey: 'pipeline',
         type: 'pipeline_blocked',
-        payload: { reason: 'integrate', lesson: result.lesson, nodeId: decision.nodeId },
+        payload: { reason: isConfirmMerge ? 'confirm-merge' : 'integrate', lesson: result.lesson, nodeId: decision.nodeId },
       });
       return { outcome: 'blocked' };
     }
+    if (isConfirmMerge) {
+      const merged = result as ConfirmMergeOutput;
+      await appendEvent({
+        runId,
+        taskId: ctx.taskId,
+        stepId: '',
+        stepKey,
+        type: 'merge_confirmed',
+        payload: { prNumber: merged.prNumber, prUrl: merged.prUrl },
+      });
+      return { outcome: 'ok', pointer: { merged: true, prNumber: merged.prNumber, prUrl: merged.prUrl } };
+    }
+    const integrated = result as IntegratorOutput;
     await appendEvent({
       runId,
       taskId: ctx.taskId,
       stepId: '',
       stepKey,
       type: 'integrate_succeeded',
-      payload: { prUrl: result.prUrl, branch: result.branch, prNumber: result.prNumber },
+      payload: { prUrl: integrated.prUrl, branch: integrated.branch, prNumber: integrated.prNumber },
     });
-    return { outcome: 'ok', pointer: { prUrl: result.prUrl, branch: result.branch, prNumber: result.prNumber } };
+    return { outcome: 'ok', pointer: { prUrl: integrated.prUrl, branch: integrated.branch, prNumber: integrated.prNumber } };
   }
 
   /** Terminal: finish the run in Revisium per the core's terminal status. */

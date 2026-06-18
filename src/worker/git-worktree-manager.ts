@@ -48,6 +48,47 @@ function defaultExecGit(args: string[], cwd: string): string {
   return execFileSync(gitAbsPath(), args, { encoding: 'utf8', cwd, timeout: GIT_TIMEOUT_MS });
 }
 
+const INSTALL_TIMEOUT_MS = 300_000;
+
+/** A package-manager install executor in a given cwd (injectable for tests). */
+export type WorktreeExecInstall = (args: string[], cwd: string) => void;
+
+/** Default pnpm install executor — runs the absolute `pnpm` binary. Throws if pnpm is unavailable
+ *  (the caller treats a throw as "fall back to the node_modules symlink"). */
+function defaultExecInstall(args: string[], cwd: string): void {
+  execFileSync(resolveExecutable('pnpm'), args, { cwd, timeout: INSTALL_TIMEOUT_MS, stdio: 'ignore' });
+}
+
+/**
+ * Provision the worktree's dependencies so the developer/tests can build & run.
+ *
+ * Why pnpm gets a real install (not the symlink): pnpm's `node_modules` is a virtual store of symlinks
+ * into `node_modules/.pnpm` wired to the project layout; symlinking the base's `node_modules` into a
+ * worktree at a different path shares a MUTABLE tree across runs (one install/postinstall leaks into
+ * the base and parallel runs). A `pnpm install --frozen-lockfile` in the worktree is cheap (hard-links
+ * from the global content-addressed store, no re-download) and yields a correct, ISOLATED tree from the
+ * committed `pnpm-lock.yaml`. Non-pnpm repos keep the best-effort base-`node_modules` symlink.
+ */
+function provisionDeps(worktreePath: string, baseRepoCwd: string, execInstall: WorktreeExecInstall): void {
+  if (existsSync(join(worktreePath, 'pnpm-lock.yaml'))) {
+    try {
+      execInstall(['install', '--frozen-lockfile'], worktreePath);
+      return; // isolated install succeeded — do NOT also symlink
+    } catch {
+      // pnpm unavailable / install failed — fall through to the symlink fallback below
+    }
+  }
+  try {
+    const baseModules = join(baseRepoCwd, 'node_modules');
+    const wtModules = join(worktreePath, 'node_modules');
+    if (existsSync(baseModules) && !existsSync(wtModules)) {
+      symlinkSync(baseModules, wtModules, 'dir');
+    }
+  } catch {
+    // ignore — the developer simply runs without provisioned node_modules
+  }
+}
+
 export type CreateRunWorktreeOpts = {
   runId: string;
   /** The BASE target-repo checkout (where `git worktree add` runs from). */
@@ -58,6 +99,7 @@ export type CreateRunWorktreeOpts = {
   branch: string;
   dataDir: string;
   execGit?: WorktreeExecGit;
+  execInstall?: WorktreeExecInstall;
 };
 
 /**
@@ -67,13 +109,14 @@ export type CreateRunWorktreeOpts = {
  *    it (replay / recovery: never clobber in-flight developer work).
  * 2. Else: fetch `origin/<base>`, then `git worktree add -B <branch> <path> origin/<base>` (create-or-
  *    reset the feature branch and check it out in the new worktree).
- * 3. Best-effort symlink the base repo's `node_modules` into the worktree (so the developer can run
- *    tests/tsc) — skipped gracefully when the base has none / is not a Node repo.
+ * 3. Provision deps (provisionDeps): `pnpm install --frozen-lockfile` for a pnpm repo, else a
+ *    best-effort base-`node_modules` symlink — so the developer can build/test in the isolated tree.
  * 4. Write the `<runId>.live` marker (fail-loud signal for the resolver).
  */
 export function createRunWorktree(opts: CreateRunWorktreeOpts): { worktreePath: string } {
   const { runId, baseRepoCwd, base, branch, dataDir } = opts;
   const execGit = opts.execGit ?? defaultExecGit;
+  const execInstall = opts.execInstall ?? defaultExecInstall;
   const worktreePath = worktreePathFor(dataDir, runId);
 
   if (isWorktreeDir(worktreePath)) {
@@ -87,16 +130,8 @@ export function createRunWorktree(opts: CreateRunWorktreeOpts): { worktreePath: 
   // -B: create-or-reset <branch> at origin/<base> and check it out in the new linked worktree.
   execGit(['worktree', 'add', '-B', branch, worktreePath, `origin/${base}`], baseRepoCwd);
 
-  // Best-effort node_modules symlink (graceful for non-Node / depless targets).
-  try {
-    const baseModules = join(baseRepoCwd, 'node_modules');
-    const wtModules = join(worktreePath, 'node_modules');
-    if (existsSync(baseModules) && !existsSync(wtModules)) {
-      symlinkSync(baseModules, wtModules, 'dir');
-    }
-  } catch {
-    // ignore — the developer simply runs without a symlinked node_modules
-  }
+  // Provision dependencies (pnpm install for a pnpm repo, else node_modules symlink) — best-effort.
+  provisionDeps(worktreePath, baseRepoCwd, execInstall);
 
   writeMarker(dataDir, runId);
   return { worktreePath };

@@ -368,6 +368,13 @@ export class PipelineService {
       this.integratorService.runIntegrate.bind(this.integratorService),
     );
 
+    // Register the REAL confirm-merge as a DBOS step (plan 0017 follow-up: gate worktree cleanup on a
+    // real merge). Idempotent (re-views before merging) → replay-safe.
+    const confirmMergeFn = this.dbos.registerStep(
+      'PipelineService.confirmMerge',
+      this.integratorService.runConfirmMerge.bind(this.integratorService),
+    );
+
     // Register the live preflight as a memoized DBOS step (B5/B7).
     const preflightFn = this.dbos.registerStep(
       'PipelineService.preflightLive',
@@ -411,6 +418,8 @@ export class PipelineService {
       loadRunTaskContext: this.runService.loadRunTaskContext.bind(this.runService),
       integrateFn,
       runStub: this.integratorService.runStub,
+      confirmMergeFn,
+      runConfirmStub: this.integratorService.runConfirmStub,
       preflightFn,
       createWorktreeFn,
       releaseWorktreeFn,

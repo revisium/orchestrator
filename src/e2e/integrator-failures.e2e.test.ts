@@ -1,5 +1,8 @@
 import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
+import { getConfig } from '../config.js';
+import { worktreePathFor } from '../control-plane/resolve-cwd.js';
 import {
   RUN_REAL_E2E,
   e2eSkip,
@@ -127,6 +130,25 @@ test('D10: a non-JSON `pr view` after create blocks at integrate (never a stub P
     const run = await startFeature(target, { gh: 'pr-view-non-json' });
     await approveUntilTerminal(h.api, run.runId);
     await assertBlocked(h.api, run.runId);
+  } finally {
+    target.cleanup();
+  }
+});
+
+test('D20: confirmMerge blocks when the PR is not auto-mergeable — run blocked, worktree KEPT (plan 0017)', { skip: e2eSkip }, async () => {
+  const target = createTargetRepo();
+  try {
+    // gh reports the PR OPEN but mergeStateStatus≠CLEAN (red CI / conflicts) → confirmMerge refuses to
+    // auto-merge and blocks; both gates are approved on the way there.
+    const run = await startFeature(target, { gh: 'merge-not-clean' });
+    await approveUntilTerminal(h.api, run.runId); // approve plan + merge; confirmMerge then blocks
+    await assertBlocked(h.api, run.runId);
+    await assertEventsPresent(h.api, run.runId, ['integrate_succeeded', 'pipeline_blocked']);
+    // The worktree is KEPT (NOT released) on a blocked terminal so the human can rework / merge manually.
+    assert.ok(
+      existsSync(worktreePathFor(getConfig().dataDir, run.runId)),
+      'worktree must survive a confirm-merge block for rework',
+    );
   } finally {
     target.cleanup();
   }

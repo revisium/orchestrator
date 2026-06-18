@@ -1,5 +1,8 @@
 import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
+import { getConfig } from '../config.js';
+import { worktreePathFor } from '../control-plane/resolve-cwd.js';
 import {
   RUN_REAL_E2E,
   e2eSkip,
@@ -102,7 +105,8 @@ test('feature-development: plan→merge approve completes and opens a PR', { ski
 
     await assertCompleted(h.api, run.runId);
     await assertAttemptVerdicts(h.api, run.runId, ['PASS', 'PASS', 'PASS', 'PASS', 'PASS']);
-    await assertEventsPresent(h.api, run.runId, ['gate_signaled', 'integrate_succeeded', 'run_completed']);
+    // confirmMerge (plan 0017 follow-up) ran after the merge gate and reported the PR merged.
+    await assertEventsPresent(h.api, run.runId, ['gate_signaled', 'integrate_succeeded', 'merge_confirmed', 'run_completed']);
 
     const branch = assertPrOpened(h, run.taskId);
     // plan 0017 (per-run worktree isolation): the developer + integrator work in the run's ISOLATED
@@ -111,6 +115,8 @@ test('feature-development: plan→merge approve completes and opens a PR', { ski
     assert.equal(git(target.worktree, ['branch', '--show-current']).trim(), 'master', 'base checkout stays on master');
     assert.equal(git(target.worktree, ['status', '--porcelain']).trim(), '', 'base checkout stays clean');
     assert.equal(git(target.worktree, ['rev-list', '--count', `origin/master..origin/${branch}`]).trim(), '1');
+    // On a SUCCEEDED terminal (PR merged) the run worktree is released.
+    assert.ok(!existsSync(worktreePathFor(getConfig().dataDir, run.runId)), 'worktree released after merge/succeeded');
 
     await assertUsage(h.api, run.runId, { inputTokens: 50, outputTokens: 25, costAmount: 0.005 });
   } finally {

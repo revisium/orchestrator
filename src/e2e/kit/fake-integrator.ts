@@ -1,7 +1,9 @@
 import {
   integrate,
+  confirmMerge,
   preflightLive,
   stubIntegrate,
+  type ConfirmMergeOutput,
   type IntegratorBlocked,
   type IntegratorDeps,
   type IntegratorInput,
@@ -30,6 +32,8 @@ export function createFakeIntegrator(runs: RunService, execGh: ExecGhFn): Integr
   return {
     runIntegrate: (input): Promise<IntegratorOutput | IntegratorBlocked> => integrate(input, deps),
     runStub: (input): IntegratorOutput => stubIntegrate(input),
+    runConfirmMerge: (input): Promise<ConfirmMergeOutput | IntegratorBlocked> => confirmMerge(input, deps),
+    runConfirmStub: (input): ConfirmMergeOutput => ({ merged: true, prNumber: 0, prUrl: `stub://pr/${input.taskId}/merged` }),
     runPreflight: (taskId, base): Promise<{ ok: true } | IntegratorBlocked> =>
       preflightLive(taskId, base, deps),
   } as IntegratorService;
@@ -57,6 +61,8 @@ export function routedIntegrator(
       return base.runIntegrate(input);
     },
     runStub: base.runStub,
+    runConfirmMerge: base.runConfirmMerge,
+    runConfirmStub: base.runConfirmStub,
     runPreflight: base.runPreflight,
   } as IntegratorService;
 }

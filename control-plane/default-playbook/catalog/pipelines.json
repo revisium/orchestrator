@@ -258,12 +258,30 @@
                   "op": "verdict.eq",
                   "value": "approved"
                 },
-                "goto": "mergedEnd"
+                "goto": "confirmMerge"
               },
               {
                 "default": "blockedEnd"
               }
             ]
+          },
+          "confirmMerge": {
+            "id": "confirmMerge",
+            "kind": "script",
+            "scriptRef": "script:confirmMerge",
+            "next": "mergedEnd",
+            "catch": [
+              {
+                "onError": "revo.ScriptBlocked",
+                "goto": "blockedEnd"
+              },
+              {
+                "onError": "revo.ScriptFailed",
+                "goto": "failedEnd"
+              }
+            ],
+            "onFailure": "route",
+            "resultSchema": "schema:integration"
           },
           "mergedEnd": {
             "id": "mergedEnd",

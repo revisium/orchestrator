@@ -100,14 +100,19 @@ const declaredRoleIds = new Set(roleCatalog.map((r) => r.id));
 
 /** Walk a template's nodes and collect every `<kind>:<id>` capability handle referenced. */
 function capabilityRoleIds(template: { nodes: Record<string, Record<string, unknown>> }): string[] {
+  // Built-in system scripts have no role of their own — they resolve to whichever binding runs the
+  // merge (the `integrator` required role): `script:integrator` (open PR) and `script:confirmMerge`
+  // (verify/auto-merge, plan 0017). Map them to `integrator` so the coverage check is satisfied.
+  const BUILT_IN_SCRIPTS = new Set(['integrator', 'confirmMerge']);
   const ids = new Set<string>();
   for (const node of Object.values(template.nodes)) {
     for (const key of ['roleRef', 'scriptRef'] as const) {
       const ref = node[key];
       // A handle is `role:<id>` / `script:<id>`; the engine resolves the suffix against role bindings.
-      // The canonical `script:integrator` resolves to whichever binding runs the merge — accept it as
-      // satisfied by an `integrator` required role (the default binds one).
-      if (typeof ref === 'string' && ref.includes(':')) ids.add(ref.slice(ref.indexOf(':') + 1));
+      if (typeof ref === 'string' && ref.includes(':')) {
+        const suffix = ref.slice(ref.indexOf(':') + 1);
+        ids.add(ref.startsWith('script:') && BUILT_IN_SCRIPTS.has(suffix) ? 'integrator' : suffix);
+      }
     }
   }
   return [...ids];
