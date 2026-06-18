@@ -26,8 +26,10 @@ function branchArg(args: string[]): string {
 /**
  * @param mergedBranches stateful set so a `pr merge` flips a later `pr view` to MERGED — lets confirmMerge
  *   do view→merge→re-view within one emulator instance (plan 0017). The fake never touches real git.
+ * @param readyBranches stateful set modelling draft→ready: a PR is created DRAFT (the integrator uses
+ *   `--draft`); `gh pr ready` clears it. `gh pr merge` of a still-draft branch errors (as real gh does).
  */
-function ghBehavior(scenario: GhScenario, args: string[], mergedBranches: Set<string>): string {
+function ghBehavior(scenario: GhScenario, args: string[], mergedBranches: Set<string>, readyBranches: Set<string>): string {
   if (scenario === 'gh-error') {
     throw new Error('gh: API rate limit exceeded for installation (e2e gh-error scenario)');
   }
@@ -45,19 +47,29 @@ function ghBehavior(scenario: GhScenario, args: string[], mergedBranches: Set<st
     return JSON.stringify([]);
   }
   if (args[0] === 'pr' && args[1] === 'create') return `${PR_URL}\n`;
+  if (args[0] === 'pr' && args[1] === 'ready') {
+    // confirmMerge marks the draft ready before merging.
+    readyBranches.add(branchArg(args));
+    return '';
+  }
   if (args[0] === 'pr' && args[1] === 'merge') {
+    // Real gh refuses to merge a draft — model that so a missing `pr ready` is caught.
+    if (!readyBranches.has(branchArg(args))) {
+      throw new Error('gh: Pull Request is still a draft (mergePullRequest)');
+    }
     // confirmMerge: record the merge so the verifying re-view reports MERGED.
     mergedBranches.add(branchArg(args));
     return '';
   }
   if (args[0] === 'pr' && args[1] === 'view') {
     if (scenario === 'pr-view-non-json') return 'not json — gh glitch';
-    const merged = mergedBranches.has(branchArg(args));
+    // Mirror REAL gh: there is NO `merged` JSON field — `state` (OPEN|MERGED|CLOSED) is the truth.
+    // A freshly-created PR is a draft until `gh pr ready`.
     return JSON.stringify({
       url: PR_URL,
       number: 1,
-      state: merged ? 'MERGED' : 'OPEN',
-      merged,
+      state: mergedBranches.has(branchArg(args)) ? 'MERGED' : 'OPEN',
+      isDraft: !readyBranches.has(branchArg(args)),
       mergeStateStatus: scenario === 'merge-not-clean' ? 'BLOCKED' : 'CLEAN',
     });
   }
@@ -67,9 +79,10 @@ function ghBehavior(scenario: GhScenario, args: string[], mergedBranches: Set<st
 /** Single-scenario fake `gh`, recording argv into `calls`. (Default harness gh = `happy`.) */
 export function createGhEmulator(calls: string[][], scenario: GhScenario = 'happy'): ExecGhFn {
   const mergedBranches = new Set<string>();
+  const readyBranches = new Set<string>();
   return (args: string[]): string => {
     calls.push(args);
-    return ghBehavior(scenario, args, mergedBranches);
+    return ghBehavior(scenario, args, mergedBranches, readyBranches);
   };
 }
 
@@ -80,10 +93,11 @@ export function createGhEmulator(calls: string[][], scenario: GhScenario = 'happ
  */
 export function routedGhEmulator(scenarios: Map<string, GhScenario>, calls: string[][]): ExecGhFn {
   const mergedBranches = new Set<string>();
+  const readyBranches = new Set<string>();
   return (args: string[]): string => {
     calls.push(args);
     const taskId = [...scenarios.keys()].find((id) => args.some((a) => a.startsWith(`feat/${id}-`)));
     const scenario = (taskId !== undefined ? scenarios.get(taskId) : undefined) ?? 'happy';
-    return ghBehavior(scenario, args, mergedBranches);
+    return ghBehavior(scenario, args, mergedBranches, readyBranches);
   };
 }
