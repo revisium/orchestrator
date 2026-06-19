@@ -42,8 +42,6 @@
     "smoke:control-plane": "tsx scripts/smoke-control-plane-data-access.ts",
     "smoke:create-run": "tsx scripts/smoke-create-run.ts",
     "smoke:inspect-run": "tsx scripts/smoke-inspect-run.ts",
-    "smoke:step-lifecycle": "tsx scripts/smoke-step-lifecycle.ts",
-    "smoke:worker-loop": "tsx scripts/smoke-worker-loop.ts",
     "smoke:claude-runner": "tsx scripts/smoke-claude-runner.ts",
     "smoke:pr-poller": "tsx scripts/smoke-pr-poller.ts",
     "test": "tsx --test $(find src -name '*.test.ts' | sort)",

@@ -127,7 +127,6 @@ const BASELINE_IMPORTERS = new Set([
   srcPath('control-plane', 'client-transport.ts'),
   srcPath('control-plane', 'data-access.ts'),
   srcPath('control-plane', 'schema-migration.ts'),
-  srcPath('control-plane', 'steps.ts'),
   srcPath('control-plane', 'versioned-meaning.ts'),
   srcPath('run', 'inspect-run.ts'),
   // Named legacy exception (§3.9): worker loop, slated for deletion (ADR-0001).
