@@ -33,7 +33,7 @@ The control plane is one Revisium project (`admin/control-plane/master`) — the
 | `routing_policy` | **Versioned** | edited via commit; loop reads `head` |
 | `task_runs` | Runtime | draft writes, never committed |
 | `tasks` | Runtime | draft writes, never committed |
-| `steps` | Runtime (**hot**) | draft writes, never committed |
+| `steps` | **Retired** (runtime) | not written/read by the runtime (audit §3.1); table stays defined, unused |
 | `attempts` | Runtime | draft writes, never committed |
 | `events` | Runtime (append-only) | draft writes, never committed |
 | `inbox` | Runtime | draft writes, never committed |

@@ -56,6 +56,7 @@ test('B3: plan-gate reject blocks the run (data-routed terminal); developer neve
       await new Promise((resolve) => setTimeout(resolve, 250));
       detail = await h.api.getRun({ runId, includeEvents: true, includeLog: true });
     }
+    assert.notEqual(detail.run.status, 'running', 'the rejected-plan run must settle, not hang in running (no false pass on timeout)');
     assert.notEqual(detail.run.status, 'completed', 'a rejected plan gate must not complete the run');
     assert.ok(
       !executedRoles(h, runId).some(([role]) => role === 'developer'),

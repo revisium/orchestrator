@@ -392,7 +392,7 @@ async function createRun(options: CreateOptions, app?: INestApplicationContext):
     });
     console.log(`created run ${result.runId}`);
     console.log(`task ${result.taskId}`);
-      console.log(`event ${result.eventId}`);
+    console.log(`event ${result.eventId}`);
     const pipelineId = 'workflow' in result ? result.workflow.route.pipelineId : result.route.pipelineId;
     console.log(`pipeline: ${pipelineId}`);
     console.log('status: ready (draft only, not committed)');
