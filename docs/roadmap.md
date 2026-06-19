@@ -95,7 +95,10 @@ Slices 0001–0008 predate the ladder and are untagged. See [vision.md](./vision
   isolated and the user's base checkout is never mutated.
 - **Single process:** extract `startRevisium()` to boot Revisium in-process (ADR-0001 deferred option). `revo up`
   as one process gates D2.
-- **Post-MVP cleanup:** delete the dead step-lifecycle verbs (`claimNextStep`/`startAttempt`/`writeResult`/
-  `failStep`/`recoverInFlight`/`createSteps`) — superseded by DBOS. The dumb loop (`src/worker/loop.ts`) is
-  already gone; what remains is retiring the phantom `steps`/`attempts` runtime path (the data-driven engine
-  never advances those rows).
+- **Post-MVP cleanup — mostly DONE.** The dumb loop (`src/worker/loop.ts`) and the dead step-lifecycle verbs
+  (`claimNextStep`/`startAttempt`/`writeResult`/`failStep`/`recoverInFlight`/`createSteps`) are deleted (#85), and
+  the phantom `steps` runtime path is retired (#86): no live path writes or reads a `steps` row anymore.
+  `attempts` is **KEPT** — legitimate per-attempt provenance (`get_run_log` / verdict assertions), not duplication.
+  **Only remaining:** drop the now-unused `steps` TABLE from `control-plane/bootstrap.config.json` (deferred — a
+  schema drop on existing control-planes is riskier than retiring the writes; the table is marked DEPRECATED in the
+  config + [control-plane-schema.md](./control-plane-schema.md) until then).

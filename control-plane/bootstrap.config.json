@@ -149,6 +149,7 @@
       "id": "steps",
       "schema": {
         "type": "object",
+        "description": "DEPRECATED/unused — runtime path retired (audit §3.1, #86); no live path writes or reads a steps row (DBOS owns progress). Table drop deferred — a schema drop on existing control-planes is riskier than retiring the writes; tracked in docs/roadmap.md → Post-MVP cleanup.",
         "additionalProperties": false,
         "properties": {
           "id": {
