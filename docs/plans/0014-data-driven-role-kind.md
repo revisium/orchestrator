@@ -1,6 +1,8 @@
 # Plan 0014 — Data-driven role `kind` (kind-aware role *classification* within the existing route order)
 
-> **Status: Ready to execute.** Stage: post-MVP "method is data" hardening (first slice).
+> **Status: Landed** (#67). Stage: post-MVP "method is data" hardening (first slice). The `kind`-aware
+> classification this slice added was later subsumed by the full data-driven engine (plan 0015), which removed the
+> hardcoded role→phase route entirely.
 > **Depends on:** [0009](./0009-playbook-install.md) (playbook install: roles/pipelines as versioned data),
 > Group K e2e (`src/e2e/extensibility.e2e.test.ts`) + the self-contained fixture (`src/e2e/fixtures/playbook`).
 > **Realizes:** a role declares an optional `kind` in `catalog/roles.json`; that `kind` threads through

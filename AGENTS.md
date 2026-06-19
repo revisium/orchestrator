@@ -18,8 +18,11 @@ Read [`docs/architecture-overview.md`](./docs/architecture-overview.md) and
 [`docs/adr/0001-execution-engine-and-host.md`](./docs/adr/0001-execution-engine-and-host.md) first — they hold the
 invariants you must not break.
 
-> The pre-pivot "thin dumb loop" code (`src/worker/loop.ts`, step-lifecycle verbs) still exists but is **legacy**,
-> superseded by DBOS; do not extend it. See the roadmap.
+> The pre-pivot "thin dumb loop" (`src/worker/loop.ts`) has been **removed**. The step-lifecycle verbs in
+> `src/control-plane/steps.ts` (`claimNextStep`/`startAttempt`/`writeResult`/`failStep`/`recoverInFlight`/
+> `createSteps`) still exist but are **dead** — superseded by DBOS; do not extend or wire them. The rest of
+> `src/worker/` (`build-context`, `runner`, runners, `git-worktree-manager`, …) is **live** and reused as-is.
+> See the roadmap.
 
 ## Local facts
 

@@ -1,18 +1,22 @@
 # Control-plane schema
 
-> **Partially superseded by the DBOS pivot ([ADR-0001](./adr/0001-execution-engine-and-host.md)) — target state,
-> not yet implemented.** **Today** `steps` and `attempts` are still core to the runtime (`src/control-plane/
-> tables.ts`, `steps.ts`, the worker loop) — they are *not* removed yet. **The target:** execution progress moves
-> out of Revisium into DBOS's own Postgres, and `steps`/`attempts` (with their lease/recover/backoff fields) are
-> dropped in the post-MVP cleanup after slices 0001–0006 land. What stays in Revisium either way: `playbooks`,
-> `roles`, `pipelines`, `model_profiles`, `routing_policy` (versioned), and `tasks`, `task_runs`, `events`, `inbox`, `cost_ledger`
-> (runtime, draft). Read the `steps`/`attempts` sections below as describing the current-but-to-be-retired tables.
+> **Partially superseded by the DBOS pivot ([ADR-0001](./adr/0001-execution-engine-and-host.md),
+> [ADR-0002](./adr/0002-data-driven-pipeline-state-machine.md)) — target state, not yet fully implemented.**
+> **Today** `steps` and `attempts` rows still exist in Revisium (`src/control-plane/tables.ts`, `steps.ts`), but
+> the data-driven engine does **not** use them for progress: DBOS owns progress (the `pipeline-core` graph
+> cursor), and the step-lifecycle verbs that once advanced `steps` are now **dead** (`claimNextStep`/… — see the
+> roadmap cleanup item). The rows are written by surrounding run/inbox code and surfaced read-only by
+> inspect/digest. **The target:** execution progress lives only in DBOS's own Postgres, and `steps`/`attempts`
+> (with their lease/recover/backoff fields) are retired in a cleanup. What stays in Revisium either way:
+> `playbooks`, `roles`, `pipelines`, `model_profiles`, `routing_policy` (versioned), and `tasks`, `task_runs`,
+> `events`, `inbox`, `cost_ledger` (runtime, draft). Read the `steps`/`attempts` sections below as describing the
+> current-but-to-be-retired tables.
 
 > **Status: verified.** The source of truth for the schema is `control-plane/bootstrap.config.json`; this doc is
 > the human-readable reference.
 > **Depends on:** [architecture-overview.md](./architecture-overview.md) (the versioning boundary) ·
 > `control-plane/bootstrap.config.json` (authoritative schema).
-> **Realized by:** [plans/0001-revisium-daemon-and-bootstrap.md](./plans/0001-revisium-daemon-and-bootstrap.md).
+> **Realized by:** [plans/0001-nest-host-and-dbos-bootstrap.md](./plans/0001-nest-host-and-dbos-bootstrap.md).
 
 The control plane is one Revisium project (`admin/control-plane/master`) — the "exchange bus." Twelve tables.
 
