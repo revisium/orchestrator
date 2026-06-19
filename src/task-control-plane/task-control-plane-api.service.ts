@@ -26,7 +26,7 @@ import { RunService } from '../revisium/run.service.js';
 import { PrReadinessService, type GetPrReadinessInput } from './pr-readiness.service.js';
 
 const execFileAsync = promisify(execFile);
-const GATE_TOPICS = new Set<string>(['plan', 'merge']);
+const GATE_TOPICS = new Set<string>(['plan', 'merge', 'question']);
 const BUILTIN_RUNNERS = new Set(['claude-code', 'codex', 'script', 'stub-agent', 'revo-integrator', 'revo-merger', 'revo-deterministic']);
 
 export type RunnerModeInput = RunnerMode;
@@ -66,12 +66,12 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
-function gateTopic(item: InboxItem): 'plan' | 'merge' | null {
+function gateTopic(item: InboxItem): 'plan' | 'merge' | 'question' | null {
   if (item.kind !== 'approval' || !item.runId) return null;
   const context = asRecord(item.context);
   const topic = context?.topic;
   if (typeof topic !== 'string' || !GATE_TOPICS.has(topic)) return null;
-  return topic as 'plan' | 'merge';
+  return topic as 'plan' | 'merge' | 'question';
 }
 
 async function git(cwd: string, args: string[]): Promise<GitResult> {
@@ -585,7 +585,7 @@ export class TaskControlPlaneApiService {
     };
   }
 
-  private async signalGate(item: InboxItem, topic: 'plan' | 'merge', answer: unknown, inboxId: string) {
+  private async signalGate(item: InboxItem, topic: 'plan' | 'merge' | 'question', answer: unknown, inboxId: string) {
     const eventBase = {
       runId: item.runId,
       taskId: item.taskId,

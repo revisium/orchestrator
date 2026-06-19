@@ -15,6 +15,7 @@ import { existsSync, statSync } from 'node:fs';
 import { join, delimiter } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import type { ExecGhFn } from '../poller/pr-readiness.js';
+import { collectPrReadiness, type ReviewThread } from '../poller/pr-readiness-core.js';
 import { RunService } from '../revisium/run.service.js';
 import { resolveGhAccount, resolvePinnedGh } from './gh-identity.js';
 
@@ -88,6 +89,8 @@ export type IntegratorInput = {
   taskId: string;
   title: string;
   base: string;
+  /** Hydrated `consumes` for a script node that needs upstream data (plan 0018: respondThreads ← triage). */
+  triage?: unknown;
 };
 
 export type IntegratorOutput = {
@@ -548,6 +551,186 @@ export async function confirmMerge(
   return { needsHuman: true, lesson: `PR #${after.number} merge did not take effect (state=${after.state}) — verify manually` };
 }
 
+// ─── pollPr (script:pollPr) — observe + classify PR feedback (plan 0018) ──────
+
+/** One failing CI check carried in prFeedback (name + conclusion + the run details link). */
+export type CiFailure = { name: string; conclusion: string; detailsUrl?: string };
+
+/** One unresolved review thread carried in prFeedback (the GraphQL node id is the resolve handle). */
+export type PrReviewThread = { threadId: string; path?: string; line?: number; author?: string; body: string };
+
+/** The classified feedback `pollPr` produces (the 0016 dataflow output consumed downstream). */
+export type PrFeedback = {
+  prNumber: number;
+  headSha: string;
+  /** review_changes (unresolved threads) > ci_changes (failing checks) > clean (nothing actionable). */
+  verdict: 'review_changes' | 'ci_changes' | 'clean';
+  ciFailures: CiFailure[];
+  reviewThreads: PrReviewThread[];
+};
+
+/** Default polling bounds — pr-readiness parity (20 polls × 30s), overridable via env so the e2e suite
+ *  doesn't real-sleep; also injectable (deps.maxPolls/pollIntervalMs) so unit tests run instantly. */
+function envInt(name: string, fallback: number): number {
+  const n = Number.parseInt(process.env[name] ?? '', 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+/** Injectable timing + collector seam so the unit tests drive pollPr without real gh/sleep. */
+export type PollPrDeps = IntegratorDeps & {
+  /** Resolve PR readiness (defaults to the live `collectPrReadiness`). */
+  collect?: (repo: string, branch: string, base: string, execGh: ExecGhFn) => Promise<PollPrReadiness>;
+  /** Sleep between polls (defaults to a real timer). */
+  sleep?: (ms: number) => Promise<void>;
+  /** Max poll attempts before a pending block (defaults to {@link POLL_PR_MAX_POLLS}). */
+  maxPolls?: number;
+  /** Inter-poll interval in ms (defaults to {@link POLL_PR_INTERVAL_MS}). */
+  pollIntervalMs?: number;
+};
+
+/** The slice of `collectPrReadiness` pollPr reads — CI terminal/pass/fail + unresolved review threads. */
+export type PollPrReadiness = {
+  pr: { number: number | null; headSha: string };
+  checks: { pending: string[]; fail: string[]; list: Array<{ name: string; result: string }> };
+  reviewThreads: { items: ReviewThread[] };
+};
+
+function defaultCollect(repo: string, branch: string, base: string, execGh: ExecGhFn): Promise<PollPrReadiness> {
+  // pollPr classifies by CI checks + unresolved review THREADS only — it does not read the PR comment
+  // feed, so suppress the `api repos/.../{reviews,comments}` calls (`includeComments: false`). Those
+  // extra calls are pure overhead here and the review-thread query already carries the actionable
+  // feedback the loop acts on.
+  return collectPrReadiness({ repo, headBranch: branch, baseBranch: base, includeReviewThreads: true, includeComments: false }, execGh).then(
+    (r): PollPrReadiness => ({
+      pr: { number: r.pr.number, headSha: r.pr.headSha },
+      checks: { pending: r.checks.pending, fail: r.checks.fail, list: r.checks.list },
+      reviewThreads: { items: r.reviewThreads.items },
+    }),
+  );
+}
+
+const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * pollPr — REAL (live only). Polls `collectPrReadiness` until CI is terminal (no pending checks) or a
+ * timeout, then classifies the feedback by TYPE (plan 0018): unresolved review threads → review_changes;
+ * else failing checks → ci_changes; else clean. A timeout with checks still pending → block (human).
+ * Replay-safe at the DBOS-step boundary (memoized result), idempotent (read-only gh).
+ */
+export async function pollPr(
+  input: IntegratorInput,
+  deps: PollPrDeps,
+): Promise<PrFeedback | IntegratorBlocked> {
+  const { execGit: git, execGh: gh, resolveRunCwd } = deps;
+  const collect = deps.collect ?? defaultCollect;
+  const sleep = deps.sleep ?? defaultSleep;
+  // Read env at CALL time (not module load) so the e2e harness can shrink the poll budget regardless
+  // of import order; prod default stays 20 × 30s.
+  const maxPolls = deps.maxPolls ?? envInt('REVO_POLL_PR_MAX_POLLS', 20);
+  const intervalMs = deps.pollIntervalMs ?? envInt('REVO_POLL_PR_INTERVAL_MS', 30_000);
+
+  const cwd = await resolveRunCwd(input.runId, input.taskId);
+  const branch = branchName(input.taskId, input.title);
+
+  const ownerRepoResult = resolveOwnerRepo(git, cwd);
+  if ('needsHuman' in ownerRepoResult) return ownerRepoResult;
+  const { ownerRepo } = ownerRepoResult;
+
+  let readiness: PollPrReadiness | undefined;
+  for (let i = 0; i < maxPolls; i++) {
+    readiness = await collect(ownerRepo, branch, input.base, gh);
+    // Terminal once nothing is pending and at least one check has registered (matches pr-readiness).
+    if (readiness.checks.pending.length === 0 && readiness.checks.list.length > 0) break;
+    readiness = undefined;
+    if (i < maxPolls - 1) await sleep(intervalMs);
+  }
+
+  if (!readiness) {
+    return {
+      needsHuman: true,
+      lesson: `pollPr timed out after ${maxPolls} polls — CI checks still pending or none registered for ${branch}`,
+    };
+  }
+
+  const reviewThreads: PrReviewThread[] = readiness.reviewThreads.items.map((t) => ({
+    threadId: t.id,
+    path: t.path,
+    line: t.line,
+    author: t.author,
+    body: t.body,
+  }));
+  const ciFailures: CiFailure[] = readiness.checks.list
+    .filter((c) => readiness.checks.fail.includes(c.name))
+    .map((c) => ({ name: c.name, conclusion: c.result }));
+
+  // Decision order (plan 0018): review threads first, then CI, else clean.
+  const verdict: PrFeedback['verdict'] =
+    reviewThreads.length > 0 ? 'review_changes' : ciFailures.length > 0 ? 'ci_changes' : 'clean';
+
+  return {
+    prNumber: readiness.pr.number ?? 0,
+    headSha: readiness.pr.headSha,
+    verdict,
+    ciFailures,
+    reviewThreads,
+  };
+}
+
+// ─── respondThreads (script:respondThreads) — reply + resolve (plan 0018) ─────
+
+/** One triage item the analyst produced — the per-thread decision + the reply to post. */
+export type TriageItem = {
+  threadId: string;
+  decision: 'fix' | 'wontfix' | 'question';
+  guidance?: string;
+  replyText?: string;
+};
+
+/** The triage object consumed by respondThreads (the analyst's `triage` output, 0016 dataflow). */
+export type Triage = { items: TriageItem[]; ciGuidance?: string; needsHuman?: boolean };
+
+export type RespondThreadsOutput = { replied: number; resolved: number };
+
+function asTriage(value: unknown): Triage {
+  if (value === null || typeof value !== 'object') return { items: [] };
+  const items = (value as { items?: unknown }).items;
+  return { items: Array.isArray(items) ? (items as TriageItem[]) : [] };
+}
+
+/**
+ * respondThreads — REAL (live only). For each triaged thread we acted on (decision fix OR wontfix —
+ * plan 0018 decision #2), reply in the thread then resolve it, via the gh-pinned GraphQL API
+ * (`addPullRequestReviewThreadReply` then `resolveReviewThread`). Question items are skipped (they go to
+ * the question gate, not auto-resolved). Idempotent: resolving an already-resolved thread is a no-op for
+ * the loop (a reopened/new comment is caught by the next pollPr).
+ */
+export async function respondThreads(
+  triage: Triage,
+  deps: Pick<IntegratorDeps, 'execGh'>,
+): Promise<RespondThreadsOutput> {
+  const { execGh: gh } = deps;
+  let replied = 0;
+  let resolved = 0;
+  for (const item of triage.items) {
+    if (item.decision !== 'fix' && item.decision !== 'wontfix') continue; // skip questions
+    const body = item.replyText ?? (item.decision === 'wontfix' ? 'Acknowledged; not changing.' : 'Addressed.');
+    gh([
+      'api', 'graphql',
+      '-f', 'query=mutation($id:ID!,$body:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$id,body:$body}){clientMutationId}}',
+      '-f', `id=${item.threadId}`,
+      '-f', `body=${body}`,
+    ]);
+    replied++;
+    gh([
+      'api', 'graphql',
+      '-f', 'query=mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id isResolved}}}',
+      '-f', `id=${item.threadId}`,
+    ]);
+    resolved++;
+  }
+  return { replied, resolved };
+}
+
 // ─── IntegratorService ─────────────────────────────────────────────────────────
 
 /** Default execGit implementation wrapping execFileSync with a resolved absolute path. */
@@ -618,5 +801,41 @@ export class IntegratorService {
   /** Live preflight — clean check + base invariant. Arrow property for safe unbound registration. */
   runPreflight = (taskId: string, base: string): Promise<{ ok: true } | IntegratorBlocked> => {
     return preflightLive(taskId, base, this.deps);
+  };
+
+  /**
+   * Real pollPr — live path. Same fail-loud pinned-gh handling as runIntegrate (the review/CI poll reads
+   * the PR via the pinned account, never the ambient one). Blocks if the pinned identity is unresolved.
+   */
+  runPollPr = (input: IntegratorInput): Promise<PrFeedback | IntegratorBlocked> => {
+    const pinned = resolvePinnedGh();
+    if ('needsHuman' in pinned) {
+      console.warn(`[poll-pr] ${pinned.lesson}`);
+      return Promise.resolve(pinned);
+    }
+    return pollPr(input, { ...this.deps, execGh: pinned.execGh });
+  };
+
+  /** Stub pollPr — script path; zero external effects (reports a clean PR so the loop converges to merge). */
+  runPollStub = (_input: IntegratorInput): PrFeedback => {
+    return { prNumber: 0, headSha: 'stub', verdict: 'clean', ciFailures: [], reviewThreads: [] };
+  };
+
+  /**
+   * Real respondThreads — live path. Same fail-loud pinned-gh handling: refuse the ambient account.
+   * The consumed `triage` rides in IntegratorInput.triage (hydrated by the adapter from run_outputs).
+   */
+  runRespondThreads = (input: IntegratorInput): Promise<RespondThreadsOutput | IntegratorBlocked> => {
+    const pinned = resolvePinnedGh();
+    if ('needsHuman' in pinned) {
+      console.warn(`[respond-threads] ${pinned.lesson}`);
+      return Promise.resolve(pinned);
+    }
+    return respondThreads(asTriage(input.triage), { execGh: pinned.execGh });
+  };
+
+  /** Stub respondThreads — script path; zero external effects (no threads to reply/resolve). */
+  runRespondStub = (_input: IntegratorInput): RespondThreadsOutput => {
+    return { replied: 0, resolved: 0 };
   };
 }

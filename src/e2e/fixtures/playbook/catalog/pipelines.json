@@ -322,6 +322,7 @@
       "orchestrator",
       "analyst",
       "reviewer",
+      "triager",
       "developer",
       "integrator",
       "watcher"
@@ -385,7 +386,12 @@
             "approved",
             "clean",
             "blocker",
-            "changes_requested"
+            "changes_requested",
+            "review_changes",
+            "ci_changes",
+            "fix",
+            "wontfix",
+            "question"
           ]
         },
         "nodes": {
@@ -395,7 +401,10 @@
             "roleRef": "role:analyst",
             "next": "planReviewer",
             "onFailure": "abort",
-            "resultSchema": "schema:plan"
+            "resultSchema": "schema:plan",
+            "produces": {
+              "name": "plan"
+            }
           },
           "planReviewer": {
             "id": "planReviewer",
@@ -495,7 +504,7 @@
             "id": "integrator",
             "kind": "script",
             "scriptRef": "script:integrator",
-            "next": "watcherPost",
+            "next": "pollPr",
             "catch": [
               {
                 "onError": "revo.ScriptBlocked",
@@ -508,64 +517,6 @@
             ],
             "onFailure": "route",
             "resultSchema": "schema:integration"
-          },
-          "watcherPost": {
-            "id": "watcherPost",
-            "kind": "agent",
-            "roleRef": "role:watcher",
-            "next": "watcherRouter",
-            "onFailure": "abort",
-            "resultSchema": "schema:watchVerdict"
-          },
-          "watcherRouter": {
-            "id": "watcherRouter",
-            "kind": "choice",
-            "branches": [
-              {
-                "when": {
-                  "op": "verdict.in",
-                  "value": [
-                    "approved",
-                    "clean"
-                  ]
-                },
-                "goto": "mergeGate"
-              },
-              {
-                "when": {
-                  "op": "all",
-                  "of": [
-                    {
-                      "op": "verdict.in",
-                      "value": [
-                        "blocker",
-                        "changes_requested"
-                      ]
-                    },
-                    {
-                      "op": "counter.lt",
-                      "scope": "watcherLoop",
-                      "value": 3
-                    }
-                  ]
-                },
-                "goto": "watcherRework"
-              },
-              {
-                "default": "blockedEnd"
-              }
-            ]
-          },
-          "watcherRework": {
-            "id": "watcherRework",
-            "kind": "agent",
-            "roleRef": "role:developer",
-            "next": "integrator",
-            "onFailure": "abort",
-            "resultSchema": "schema:change",
-            "incrementCounters": [
-              "watcherLoop"
-            ]
           },
           "mergeGate": {
             "id": "mergeGate",
@@ -619,9 +570,242 @@
             ],
             "onFailure": "route",
             "resultSchema": "schema:integration"
+          },
+          "pollPr": {
+            "id": "pollPr",
+            "kind": "script",
+            "scriptRef": "script:pollPr",
+            "next": "prRouter",
+            "onFailure": "route",
+            "resultSchema": "schema:prFeedback",
+            "produces": {
+              "name": "prFeedback"
+            },
+            "catch": [
+              {
+                "onError": "revo.ScriptBlocked",
+                "goto": "blockedEnd"
+              },
+              {
+                "onError": "revo.ScriptFailed",
+                "goto": "failedEnd"
+              }
+            ]
+          },
+          "prRouter": {
+            "id": "prRouter",
+            "kind": "choice",
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "clean"
+                },
+                "goto": "mergeGate"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "review_changes"
+                },
+                "goto": "triage"
+              },
+              {
+                "when": {
+                  "op": "all",
+                  "of": [
+                    {
+                      "op": "verdict.eq",
+                      "value": "ci_changes"
+                    },
+                    {
+                      "op": "counter.lt",
+                      "scope": "ciLoop",
+                      "value": 3
+                    }
+                  ]
+                },
+                "goto": "ciRework"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ]
+          },
+          "ciRework": {
+            "id": "ciRework",
+            "kind": "agent",
+            "roleRef": "role:developer",
+            "next": "integrator",
+            "onFailure": "abort",
+            "resultSchema": "schema:change",
+            "incrementCounters": [
+              "ciLoop"
+            ],
+            "consumes": [
+              {
+                "node": "pollPr",
+                "as": "feedback"
+              }
+            ]
+          },
+          "triage": {
+            "id": "triage",
+            "kind": "agent",
+            "roleRef": "role:triager",
+            "next": "triageRouter",
+            "onFailure": "abort",
+            "resultSchema": "schema:triage",
+            "produces": {
+              "name": "triage"
+            },
+            "consumes": [
+              {
+                "node": "analyst",
+                "as": "plan",
+                "staleOk": true
+              },
+              {
+                "node": "pollPr",
+                "as": "feedback"
+              }
+            ]
+          },
+          "triageRouter": {
+            "id": "triageRouter",
+            "kind": "choice",
+            "branches": [
+              {
+                "when": {
+                  "op": "all",
+                  "of": [
+                    {
+                      "op": "verdict.eq",
+                      "value": "question"
+                    },
+                    {
+                      "op": "counter.lt",
+                      "scope": "questionLoop",
+                      "value": 3
+                    }
+                  ]
+                },
+                "goto": "questionGate"
+              },
+              {
+                "when": {
+                  "op": "all",
+                  "of": [
+                    {
+                      "op": "verdict.eq",
+                      "value": "fix"
+                    },
+                    {
+                      "op": "counter.lt",
+                      "scope": "reviewLoop",
+                      "value": 3
+                    }
+                  ]
+                },
+                "goto": "reviewRework"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "wontfix"
+                },
+                "goto": "respondThreads"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ]
+          },
+          "questionGate": {
+            "id": "questionGate",
+            "kind": "humanGate",
+            "reason": "review-question",
+            "outcomes": [
+              "approved",
+              "changes_requested"
+            ],
+            "incrementCounters": [
+              "questionLoop"
+            ],
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "approved"
+                },
+                "goto": "triage"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ]
+          },
+          "reviewRework": {
+            "id": "reviewRework",
+            "kind": "agent",
+            "roleRef": "role:developer",
+            "next": "reviewIntegrator",
+            "onFailure": "abort",
+            "resultSchema": "schema:change",
+            "incrementCounters": [
+              "reviewLoop"
+            ],
+            "consumes": [
+              {
+                "node": "triage",
+                "as": "triage"
+              }
+            ]
+          },
+          "reviewIntegrator": {
+            "id": "reviewIntegrator",
+            "kind": "script",
+            "scriptRef": "script:integrator",
+            "next": "respondThreads",
+            "onFailure": "route",
+            "resultSchema": "schema:integration",
+            "catch": [
+              {
+                "onError": "revo.ScriptBlocked",
+                "goto": "blockedEnd"
+              },
+              {
+                "onError": "revo.ScriptFailed",
+                "goto": "failedEnd"
+              }
+            ]
+          },
+          "respondThreads": {
+            "id": "respondThreads",
+            "kind": "script",
+            "scriptRef": "script:respondThreads",
+            "next": "pollPr",
+            "onFailure": "route",
+            "resultSchema": "schema:respond",
+            "consumes": [
+              {
+                "node": "triage",
+                "as": "triage"
+              }
+            ],
+            "catch": [
+              {
+                "onError": "revo.ScriptBlocked",
+                "goto": "blockedEnd"
+              },
+              {
+                "onError": "revo.ScriptFailed",
+                "goto": "failedEnd"
+              }
+            ]
           }
         },
-        "title": "Feature development — plan + merge gates, bounded code-review + watcher rework",
+        "title": "Feature development — plan + merge gates, bounded code-review rework, and a PR review-feedback loop (plan 0018)",
         "policy": {
           "conflicts": [
             [
@@ -636,7 +820,15 @@
             "cap": 3,
             "parent": null
           },
-          "watcherLoop": {
+          "ciLoop": {
+            "cap": 3,
+            "parent": null
+          },
+          "reviewLoop": {
+            "cap": 3,
+            "parent": null
+          },
+          "questionLoop": {
             "cap": 3,
             "parent": null
           }

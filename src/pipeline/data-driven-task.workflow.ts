@@ -43,7 +43,7 @@ import {
 import type { AttemptResult } from '../worker/runner.js';
 import type { ExecutionProfile, RouteDecision, RouteRoleBinding } from './route-contract.js';
 import { runnerNeedsLivePreflight, runnerUsesRealIntegrator } from './route-contract.js';
-import type { IntegratorInput, IntegratorOutput, IntegratorBlocked, ConfirmMergeOutput } from '../runners/integrator.js';
+import type { IntegratorInput, IntegratorOutput, IntegratorBlocked, ConfirmMergeOutput, PrFeedback, RespondThreadsOutput } from '../runners/integrator.js';
 import type { AppendEventInput } from '../run/append-event.js';
 import type { RunOutputRow } from '../run/run-outputs.js';
 import type { Decision as GateDecision } from './await-human.js';
@@ -201,7 +201,7 @@ export type DataDrivenTaskDeps = {
   /** Reuse of the gate park/resume (DBOS recv/send) — the SAME mechanism the hardcoded path uses. */
   awaitHuman: (
     runId: string,
-    topic: 'plan' | 'merge',
+    topic: 'plan' | 'merge' | 'question',
     title: string,
     summary: unknown,
   ) => Promise<GateDecision>;
@@ -224,6 +224,14 @@ export type DataDrivenTaskDeps = {
   confirmMergeFn: (input: IntegratorInput) => Promise<ConfirmMergeOutput | IntegratorBlocked>;
   /** Stub confirm-merge — pure (script). */
   runConfirmStub: (input: IntegratorInput) => ConfirmMergeOutput;
+  /** Real pollPr — DBOS step (live): observe + classify PR feedback (plan 0018). Produces prFeedback. */
+  pollPrFn: (input: IntegratorInput) => Promise<PrFeedback | IntegratorBlocked>;
+  /** Stub pollPr — pure (script): reports a clean PR so the loop converges to the merge gate. */
+  runPollStub: (input: IntegratorInput) => PrFeedback;
+  /** Real respondThreads — DBOS step (live): reply + resolve the triaged threads (plan 0018). */
+  respondThreadsFn: (input: IntegratorInput) => Promise<RespondThreadsOutput | IntegratorBlocked>;
+  /** Stub respondThreads — pure (script): no threads to reply/resolve. */
+  runRespondStub: (input: IntegratorInput) => RespondThreadsOutput;
   /**
    * Live preflight — memoized DBOS step (B5/B7). Clean check + base invariant, evaluated ONCE before
    * any live runner/integrator effect. Skipped entirely when no binding resolves to a live runner
@@ -254,9 +262,19 @@ function gateVerdict(decision: GateDecision, outcomes: string[]): string | undef
   return outcomes.length > 1 ? outcomes.at(-1) : undefined;
 }
 
-/** Stable gate topic from a node's reason (plan-review → 'plan', merge-review → 'merge', else 'plan'). */
-function gateTopicFor(reason: string): 'plan' | 'merge' {
-  return /merge/i.test(reason) ? 'merge' : 'plan';
+/**
+ * Stable gate topic from a node's reason. The topic is the DBOS recv channel AND part of the gate
+ * inbox id (`runId|topic`), so DISTINCT gates in one pipeline MUST map to DISTINCT topics — otherwise
+ * a second gate's `recv` collides with the first's already-consumed message and the run hangs (plan
+ * 0018: the `review-question` gate would otherwise reuse the `plan` topic of the plan gate).
+ *   merge-review   → 'merge'
+ *   review-question→ 'question'
+ *   (anything else)→ 'plan'  (the plan-review gate)
+ */
+function gateTopicFor(reason: string): 'plan' | 'merge' | 'question' {
+  if (/merge/i.test(reason)) return 'merge';
+  if (/question/i.test(reason)) return 'question';
+  return 'plan';
 }
 
 /**
@@ -276,7 +294,7 @@ export function makeDataDrivenTask(
   ) => Promise<AttemptResult>,
   deps: DataDrivenTaskDeps,
 ) {
-  const { appendEvent, appendRunOutput, awaitHuman, completeRun, failRun, blockRun, loadRunTaskContext, integrateFn, runStub, confirmMergeFn, runConfirmStub, preflightFn, createWorktreeFn, releaseWorktreeFn } = deps;
+  const { appendEvent, appendRunOutput, awaitHuman, completeRun, failRun, blockRun, loadRunTaskContext, integrateFn, runStub, confirmMergeFn, runConfirmStub, pollPrFn, runPollStub, respondThreadsFn, runRespondStub, preflightFn, createWorktreeFn, releaseWorktreeFn } = deps;
 
   /** Resolve a node's `consumes` from the workflow-local output accumulator — NOT live Revisium reads
    *  (0016 §6 / consensus M4: a live read on replay can see rows written past the replay point). */
@@ -527,7 +545,17 @@ export function makeDataDrivenTask(
       case 'invokeScript': {
         const node = resolveNode(template, decision.nodeId);
         const ordinal = nextOrdinal(ctx.effectOrdinalByNode, node.id);
-        const scriptResult = await invokeScript(runId, decision, { taskId, title, base }, bindingByRef, stepKeyFor(node.id, ordinal));
+        // A script node may `consumes` upstream data (plan 0018: respondThreads ← triage). Hydrate it
+        // from the workflow-local accumulator (same seam as agents), fail-loud on a missing required input.
+        const resolved = resolveConsumes(node, ctx.outputsByNode);
+        if ('missing' in resolved) {
+          await appendEvent({
+            runId, taskId, stepId: '', stepKey: stepKeyFor(node.id, ordinal), type: 'step_failed',
+            payload: { nodeId: node.id, error: `${REVO_INPUT_MISSING}: required input ${resolved.missing} was not produced` },
+          });
+          return { lastResult: { outcome: 'failed', errorCode: REVO_INPUT_MISSING }, lastVerdict: 'failed', stepDelta: 1 };
+        }
+        const scriptResult = await invokeScript(runId, decision, { taskId, title, base }, bindingByRef, stepKeyFor(node.id, ordinal), resolved.inputs);
         // A blocked script (needsHuman) routes via revo.ScriptBlocked → a `blocked` terminal; a thrown
         // script routes via revo.ScriptFailed → a `failed` terminal (§6 catch). The lesson-bearing
         // pipeline_blocked is emitted inside invokeScript for the block path (parity with the old engine).
@@ -538,7 +566,10 @@ export function makeDataDrivenTask(
           return { lastResult: { outcome: 'failed', errorCode: REVO_SCRIPT_FAILED }, lastVerdict: 'failed', stepDelta: 1 };
         }
         await recordOutput(runId, node, ordinal, scriptResult.pointer, ctx.outputsByNode);
-        return { lastResult: { outcome: 'succeeded' }, stepDelta: 1 };
+        // A classifying script (pollPr, plan 0018) surfaces a DOMAIN verdict so the next `choice` can
+        // route on it (§8). Scripts with a single fixed `next` (integrator/confirmMerge) carry none.
+        const sv = scriptResult.verdict;
+        return { lastResult: { outcome: 'succeeded', ...(sv ? { verdict: sv } : {}) }, ...(sv ? { lastVerdict: sv } : {}), stepDelta: 1 };
       }
       case 'awaitGate': {
         const topic = gateTopicFor(decision.reason);
@@ -623,17 +654,26 @@ export function makeDataDrivenTask(
     ctx: { taskId: string; title: string; base: string },
     bindingByRef: Map<string, RouteRoleBinding>,
     stepKey: string,
-  ): Promise<{ outcome: 'ok'; pointer: unknown } | { outcome: 'blocked' } | { outcome: 'failed' }> {
+    inputs: Record<string, unknown>,
+  ): Promise<{ outcome: 'ok'; pointer: unknown; verdict?: string } | { outcome: 'blocked' } | { outcome: 'failed' }> {
     const isConfirmMerge = decision.scriptRef === 'script:confirmMerge';
+    const isPollPr = decision.scriptRef === 'script:pollPr';
+    const isRespondThreads = decision.scriptRef === 'script:respondThreads';
     const binding = bindingByRef.get(decision.scriptRef) ?? bindingByRef.get('script:integrator');
-    const integratorInput: IntegratorInput = { runId, taskId: ctx.taskId, title: ctx.title, base: ctx.base };
+    // respondThreads consumes `triage` (plan 0018) — ride the hydrated input on the integrator input so
+    // the live script can reply/resolve the triaged threads without a live Revisium read.
+    const integratorInput: IntegratorInput = { runId, taskId: ctx.taskId, title: ctx.title, base: ctx.base, ...(inputs.triage !== undefined ? { triage: inputs.triage } : {}) };
     // A script node whose resolved runner mechanically performs the merge uses the REAL script;
     // otherwise the pure stub (zero git/gh). Absent a binding (template-only script), default to stub.
     const useReal = !!binding && runnerUsesRealIntegrator(binding.resolvedRunnerId);
-    let result: IntegratorOutput | ConfirmMergeOutput | IntegratorBlocked;
+    let result: IntegratorOutput | ConfirmMergeOutput | PrFeedback | RespondThreadsOutput | IntegratorBlocked;
     try {
       if (isConfirmMerge) {
         result = useReal ? await confirmMergeFn(integratorInput) : runConfirmStub(integratorInput);
+      } else if (isPollPr) {
+        result = useReal ? await pollPrFn(integratorInput) : runPollStub(integratorInput);
+      } else if (isRespondThreads) {
+        result = useReal ? await respondThreadsFn(integratorInput) : runRespondStub(integratorInput);
       } else {
         result = useReal ? await integrateFn(integratorInput) : runStub(integratorInput);
       }
@@ -651,13 +691,14 @@ export function makeDataDrivenTask(
     if ('needsHuman' in result) {
       // Surface the blocking reason as pipeline_blocked (the persist boundary redacts any token, D15) so
       // the human sees WHY the script could not proceed — exactly as the old engine's blockPipeline.
+      const reason = isConfirmMerge ? 'confirm-merge' : isPollPr ? 'poll-pr' : isRespondThreads ? 'respond-threads' : 'integrate';
       await appendEvent({
         runId,
         taskId: ctx.taskId,
         stepId: '',
         stepKey: 'pipeline',
         type: 'pipeline_blocked',
-        payload: { reason: isConfirmMerge ? 'confirm-merge' : 'integrate', lesson: result.lesson, nodeId: decision.nodeId },
+        payload: { reason, lesson: result.lesson, nodeId: decision.nodeId },
       });
       return { outcome: 'blocked' };
     }
@@ -672,6 +713,32 @@ export function makeDataDrivenTask(
         payload: { prNumber: merged.prNumber, prUrl: merged.prUrl },
       });
       return { outcome: 'ok', pointer: { merged: true, prNumber: merged.prNumber, prUrl: merged.prUrl } };
+    }
+    if (isPollPr) {
+      // pollPr CLASSIFIES the feedback: its verdict (review_changes/ci_changes/clean) routes the prRouter
+      // choice (§8 — a script may emit a domain verdict the routing data acts on, same as an agent).
+      const feedback = result as PrFeedback;
+      await appendEvent({
+        runId,
+        taskId: ctx.taskId,
+        stepId: '',
+        stepKey,
+        type: 'pr_polled',
+        payload: { prNumber: feedback.prNumber, verdict: feedback.verdict, ciFailures: feedback.ciFailures.length, reviewThreads: feedback.reviewThreads.length },
+      });
+      return { outcome: 'ok', pointer: feedback, verdict: feedback.verdict };
+    }
+    if (isRespondThreads) {
+      const responded = result as RespondThreadsOutput;
+      await appendEvent({
+        runId,
+        taskId: ctx.taskId,
+        stepId: '',
+        stepKey,
+        type: 'threads_responded',
+        payload: { replied: responded.replied, resolved: responded.resolved },
+      });
+      return { outcome: 'ok', pointer: responded };
     }
     const integrated = result as IntegratorOutput;
     await appendEvent({

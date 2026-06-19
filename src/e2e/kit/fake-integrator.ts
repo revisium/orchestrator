@@ -2,6 +2,8 @@ import {
   integrate,
   confirmMerge,
   preflightLive,
+  pollPr,
+  respondThreads,
   stubIntegrate,
   type ConfirmMergeOutput,
   type IntegratorBlocked,
@@ -9,6 +11,9 @@ import {
   type IntegratorInput,
   type IntegratorOutput,
   type IntegratorService,
+  type PrFeedback,
+  type RespondThreadsOutput,
+  type Triage,
 } from '../../runners/integrator.js';
 import type { RunService } from '../../revisium/run.service.js';
 import type { ExecGhFn } from '../../poller/pr-readiness.js';
@@ -30,13 +35,21 @@ export function createFakeIntegrator(runs: RunService, execGh: ExecGhFn): Integr
     resolveRunCwd: runs.makeResolveRunCwd(),
   };
   return {
-    runIntegrate: (input): Promise<IntegratorOutput | IntegratorBlocked> => integrate(input, deps),
-    runStub: (input): IntegratorOutput => stubIntegrate(input),
-    runConfirmMerge: (input): Promise<ConfirmMergeOutput | IntegratorBlocked> => confirmMerge(input, deps),
-    runConfirmStub: (input): ConfirmMergeOutput => ({ merged: true, prNumber: 0, prUrl: `stub://pr/${input.taskId}/merged` }),
-    runPreflight: (taskId, base): Promise<{ ok: true } | IntegratorBlocked> =>
+    runIntegrate: (input: IntegratorInput): Promise<IntegratorOutput | IntegratorBlocked> => integrate(input, deps),
+    runStub: (input: IntegratorInput): IntegratorOutput => stubIntegrate(input),
+    runConfirmMerge: (input: IntegratorInput): Promise<ConfirmMergeOutput | IntegratorBlocked> => confirmMerge(input, deps),
+    runConfirmStub: (input: IntegratorInput): ConfirmMergeOutput => ({ merged: true, prNumber: 0, prUrl: `stub://pr/${input.taskId}/merged` }),
+    runPreflight: (taskId: string, base: string): Promise<{ ok: true } | IntegratorBlocked> =>
       preflightLive(taskId, base, deps),
-  } as IntegratorService;
+    // plan 0018 — pollPr/respondThreads against the fake gh. pollPr's sleep is a no-op + a small poll cap
+    // so the e2e gh emulator converges fast (CI/threads flip deterministically per call).
+    runPollPr: (input: IntegratorInput): Promise<PrFeedback | IntegratorBlocked> =>
+      pollPr(input, { ...deps, sleep: () => Promise.resolve(), maxPolls: 30 }),
+    runPollStub: (_input: IntegratorInput): PrFeedback => ({ prNumber: 0, headSha: 'stub', verdict: 'clean', ciFailures: [], reviewThreads: [] }),
+    runRespondThreads: (input: IntegratorInput): Promise<RespondThreadsOutput | IntegratorBlocked> =>
+      respondThreads((input.triage as Triage) ?? { items: [] }, deps),
+    runRespondStub: (_input: IntegratorInput): RespondThreadsOutput => ({ replied: 0, resolved: 0 }),
+  } as unknown as IntegratorService;
 }
 
 /** Per-run mocked integrate outcomes. preflight/stub still delegate to the real fake integrator. */
@@ -64,5 +77,9 @@ export function routedIntegrator(
     runConfirmMerge: base.runConfirmMerge,
     runConfirmStub: base.runConfirmStub,
     runPreflight: base.runPreflight,
-  } as IntegratorService;
+    runPollPr: base.runPollPr,
+    runPollStub: base.runPollStub,
+    runRespondThreads: base.runRespondThreads,
+    runRespondStub: base.runRespondStub,
+  } as unknown as IntegratorService;
 }
