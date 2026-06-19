@@ -118,7 +118,7 @@ function buildAdapter(opts: {
   const deps: DataDrivenTaskDeps = {
     appendEvent: async (e) => { rec.events.push(`${e.type}:${e.stepKey}`); },
     appendRunOutput: async (o) => { rec.outputs.push({ nodeId: o.nodeId, ordinal: o.ordinal, name: o.name, payload: o.payload }); },
-    awaitHuman: async (_runId, topic): Promise<GateDecision> => {
+    awaitHuman: async (_runId, topic, _gateKey, _title, _summary): Promise<GateDecision> => {
       rec.gates.push(topic);
       return (opts.gate ?? (() => ({ decision: 'approve' })))(topic);
     },
