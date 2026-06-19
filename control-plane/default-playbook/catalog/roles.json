@@ -52,5 +52,14 @@
     "allowed_tools": ["Read", "Grep", "Glob", "Bash"],
     "default_model_level": "cheap",
     "runner_id": "claude-code"
+  },
+  {
+    "id": "triager",
+    "path": "prompts/triager.md",
+    "surface": "repo",
+    "rights": "read-only",
+    "allowed_tools": ["Read", "Grep", "Glob", "Bash"],
+    "default_model_level": "deep",
+    "runner_id": "claude-code"
   }
 ]

@@ -12,10 +12,15 @@ import {
   confirmMerge,
   stubIntegrate,
   preflightLive,
+  pollPr,
+  respondThreads,
   resolveExecutable,
   parseOwnerRepo,
   type IntegratorInput,
   type IntegratorDeps,
+  type PollPrDeps,
+  type PollPrReadiness,
+  type Triage,
   type ExecFn,
 } from './integrator.js';
 import type { ExecGhFn } from '../poller/pr-readiness.js';
@@ -1028,4 +1033,147 @@ test('confirmMerge: merge does not take effect (still not merged) → blocked', 
   const gh: ExecGhFn = (a) => (a[1] === 'view' ? prView('OPEN', 'CLEAN') : '');
   const r = await confirmMerge(MERGE_INPUT, confirmDeps(gh));
   assert.ok('needsHuman' in r, 'blocked if the post-merge re-view is still not merged');
+});
+
+// ─── pollPr (plan 0018: observe + classify by feedback type) ──────────────────
+
+const POLL_INPUT: IntegratorInput = { runId: 'r1', taskId: 't1', title: 'Add feature X', base: 'master' };
+
+/** A readiness with no pending checks (terminal) — `fail` ∩ list are the failing checks. */
+function readiness(opts: {
+  fail?: string[];
+  list?: Array<{ name: string; result: string }>;
+  threads?: PollPrReadiness['reviewThreads']['items'];
+  pending?: string[];
+  headSha?: string;
+}): PollPrReadiness {
+  return {
+    pr: { number: 5, headSha: opts.headSha ?? 'sha5' },
+    checks: { pending: opts.pending ?? [], fail: opts.fail ?? [], list: opts.list ?? [{ name: 'build', result: 'SUCCESS' }] },
+    reviewThreads: { items: opts.threads ?? [] },
+  };
+}
+
+/** pollPr deps that report a github origin + a scripted readiness collector (no real gh/sleep). */
+function pollDeps(collect: PollPrDeps['collect'], extra: Partial<PollPrDeps> = {}): PollPrDeps {
+  const execGit: ExecFn = (args) => (args[0] === 'remote' && args[1] === 'get-url' ? 'git@github.com:e2e/repo.git\n' : '');
+  return {
+    execGit,
+    execGh: neverGh,
+    resolveTaskCwd: makeResolveTaskCwd(),
+    resolveRunCwd: makeResolveRunCwd(),
+    collect,
+    sleep: () => Promise.resolve(),
+    maxPolls: 3,
+    ...extra,
+  };
+}
+
+test('pollPr: unresolved review threads win over CI failures → review_changes', async () => {
+  const collect = async (): Promise<PollPrReadiness> =>
+    readiness({ fail: ['build'], list: [{ name: 'build', result: 'FAILURE' }], threads: [
+      { id: 'T1', isResolved: false, isOutdated: false, body: 'fix this', path: 'a.ts', line: 3, author: 'cr' },
+    ] });
+  const r = await pollPr(POLL_INPUT, pollDeps(collect));
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) {
+    assert.equal(r.verdict, 'review_changes', 'review threads outrank CI failures');
+    assert.equal(r.reviewThreads.length, 1);
+    assert.equal(r.reviewThreads[0]?.threadId, 'T1', 'the GraphQL node id is carried as threadId');
+    assert.equal(r.ciFailures.length, 1, 'CI failures still collected (for downstream)');
+  }
+});
+
+test('pollPr: CI failures with no review threads → ci_changes', async () => {
+  const collect = async (): Promise<PollPrReadiness> =>
+    readiness({ fail: ['build', 'lint'], list: [{ name: 'build', result: 'FAILURE' }, { name: 'lint', result: 'FAILURE' }] });
+  const r = await pollPr(POLL_INPUT, pollDeps(collect));
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) {
+    assert.equal(r.verdict, 'ci_changes');
+    assert.deepEqual(r.ciFailures.map((c) => c.name), ['build', 'lint']);
+    assert.equal(r.reviewThreads.length, 0);
+  }
+});
+
+test('pollPr: all green, no threads → clean', async () => {
+  const collect = async (): Promise<PollPrReadiness> => readiness({});
+  const r = await pollPr(POLL_INPUT, pollDeps(collect));
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) assert.equal(r.verdict, 'clean');
+});
+
+test('pollPr: checks pending until terminal → polls then classifies', async () => {
+  let calls = 0;
+  const collect = async (): Promise<PollPrReadiness> => {
+    calls++;
+    return calls < 2 ? readiness({ pending: ['build'], list: [{ name: 'build', result: 'IN_PROGRESS' }] }) : readiness({});
+  };
+  const r = await pollPr(POLL_INPUT, pollDeps(collect));
+  assert.ok(!('needsHuman' in r) && r.verdict === 'clean', 'converges once CI is terminal');
+  assert.equal(calls, 2, 'polled until checks went terminal');
+});
+
+test('pollPr: timeout with checks still pending → needsHuman (block)', async () => {
+  const collect = async (): Promise<PollPrReadiness> => readiness({ pending: ['build'], list: [{ name: 'build', result: 'IN_PROGRESS' }] });
+  const r = await pollPr(POLL_INPUT, pollDeps(collect, { maxPolls: 2 }));
+  assert.ok('needsHuman' in r, 'a poll timeout with pending checks blocks for a human');
+  assert.ok(r.lesson.includes('timed out'), `lesson: ${r.lesson}`);
+});
+
+test('pollPr: unparseable origin → needsHuman (no poll)', async () => {
+  let polled = false;
+  const collect = async (): Promise<PollPrReadiness> => { polled = true; return readiness({}); };
+  const deps = pollDeps(collect);
+  deps.execGit = () => { throw new Error('fatal: not a git repo'); };
+  const r = await pollPr(POLL_INPUT, deps);
+  assert.ok('needsHuman' in r, 'no parseable remote blocks before polling');
+  assert.equal(polled, false, 'never polled when the remote is unparseable');
+});
+
+// ─── respondThreads (plan 0018: reply + resolve the triaged threads) ──────────
+
+/** Capture the gh GraphQL mutations respondThreads issues. */
+function captureGh(calls: string[][]): ExecGhFn {
+  return (args) => { calls.push(args); return JSON.stringify({ data: {} }); };
+}
+
+test('respondThreads: fix + wontfix each reply then resolve; question is skipped', async () => {
+  const calls: string[][] = [];
+  const triage: Triage = {
+    items: [
+      { threadId: 'T1', decision: 'fix', replyText: 'fixed in abc123' },
+      { threadId: 'T2', decision: 'wontfix', replyText: 'out of scope' },
+      { threadId: 'T3', decision: 'question', replyText: 'should not post' },
+    ],
+  };
+  const r = await respondThreads(triage, { execGh: captureGh(calls) });
+  assert.deepEqual(r, { replied: 2, resolved: 2 }, 'only fix + wontfix are acted on (question skipped)');
+
+  const mutations = calls.filter((a) => a[0] === 'api' && a[1] === 'graphql');
+  const replies = mutations.filter((a) => a.some((s) => s.includes('addPullRequestReviewThreadReply')));
+  const resolves = mutations.filter((a) => a.some((s) => s.includes('resolveReviewThread')));
+  assert.equal(replies.length, 2, 'two replies posted (fix + wontfix)');
+  assert.equal(resolves.length, 2, 'two threads resolved (fix + wontfix)');
+
+  // The reply + resolve target the thread by its GraphQL node id (threadId), and never T3 (question).
+  const ids: string[] = mutations.flatMap((a) => a.filter((s) => /^id=T/.test(s)));
+  assert.ok(ids.every((s) => ['id=T1', 'id=T2'].includes(s)), `only acted-on thread ids: ${ids.join(',')}`);
+  assert.ok(!ids.some((s) => s === 'id=T3'), 'a question thread is never replied/resolved');
+});
+
+test('respondThreads: a fix reply precedes its resolve (reply-then-resolve order)', async () => {
+  const calls: string[][] = [];
+  const triage: Triage = { items: [{ threadId: 'T1', decision: 'fix', replyText: 'done' }] };
+  await respondThreads(triage, { execGh: captureGh(calls) });
+  const replyIdx = calls.findIndex((a) => a.some((s) => s.includes('addPullRequestReviewThreadReply')));
+  const resolveIdx = calls.findIndex((a) => a.some((s) => s.includes('resolveReviewThread')));
+  assert.ok(replyIdx >= 0 && resolveIdx > replyIdx, 'reply is posted before the thread is resolved');
+});
+
+test('respondThreads: empty triage → no gh calls', async () => {
+  const calls: string[][] = [];
+  const r = await respondThreads({ items: [] }, { execGh: captureGh(calls) });
+  assert.deepEqual(r, { replied: 0, resolved: 0 });
+  assert.equal(calls.length, 0, 'no threads → no gh mutations');
 });

@@ -127,7 +127,11 @@ test('J5: concurrent mixed terminals — approve one gate, reject another — ea
     await waitState(h.api, kill.runId); // let the reject settle the run (waitForRun reports a blocked run as a settled non-gate state)
     const killed = await h.api.getRun({ runId: kill.runId });
     assert.notEqual(killed.run.status, 'completed'); // plan-gate reject blocks the run (B3), even concurrently with another's approval
-    assert.equal(await countEvents(keep.runId, 'run_completed'), 1);
+    // `merge_confirmed` is written by the confirmMerge step BEFORE the terminal, so it is durable once
+    // the run completes; `run_completed` (written AT the terminal) lags the DBOS-workflow SUCCESS that
+    // wait_for_run reports, so reading it immediately races on the fast stub path. terminal.state above
+    // already asserts completion; here we assert the approved run merged exactly once.
+    assert.equal(await countEvents(keep.runId, 'merge_confirmed'), 1);
     assert.equal(await countEvents(kill.runId, 'pipeline_blocked') >= 1, true, 'the rejected run emitted pipeline_blocked');
   } finally {
     targets.forEach((t) => t.cleanup());

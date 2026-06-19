@@ -375,6 +375,17 @@ export class PipelineService {
       this.integratorService.runConfirmMerge.bind(this.integratorService),
     );
 
+    // Register the REAL pollPr + respondThreads as DBOS steps (plan 0018: the PR review-feedback loop).
+    // pollPr observes + classifies; respondThreads replies + resolves. Both gh-pinned + idempotent.
+    const pollPrFn = this.dbos.registerStep(
+      'PipelineService.pollPr',
+      this.integratorService.runPollPr.bind(this.integratorService),
+    );
+    const respondThreadsFn = this.dbos.registerStep(
+      'PipelineService.respondThreads',
+      this.integratorService.runRespondThreads.bind(this.integratorService),
+    );
+
     // Register the live preflight as a memoized DBOS step (B5/B7).
     const preflightFn = this.dbos.registerStep(
       'PipelineService.preflightLive',
@@ -420,6 +431,10 @@ export class PipelineService {
       runStub: this.integratorService.runStub,
       confirmMergeFn,
       runConfirmStub: this.integratorService.runConfirmStub,
+      pollPrFn,
+      runPollStub: this.integratorService.runPollStub,
+      respondThreadsFn,
+      runRespondStub: this.integratorService.runRespondStub,
       preflightFn,
       createWorktreeFn,
       releaseWorktreeFn,

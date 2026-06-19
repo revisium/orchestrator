@@ -105,6 +105,100 @@ export function confirmMergeFlow(): Template {
     .build();
 }
 
+/**
+ * featureDevelopmentPrReview — the plan 0018 PR review-feedback loop, transcribed to a typed Template.
+ * Mirrors the seeded `feature-development` tail: after the integrator opens the PR, `pollPr` observes +
+ * classifies (review_changes > ci_changes > clean); review comments go through analyst `triage`
+ * (fix/wontfix/question) with a separate question gate; CI failures loop the developer; fixes are
+ * re-pushed BEFORE `respondThreads` replies + resolves (so the reply carries the fix sha). Used by the
+ * data-driven adapter unit tests; the live JSON template (default + e2e fixture) carries the same tail.
+ */
+export function featureDevelopmentPrReview(): Template {
+  return template('feature-development-pr-review')
+    .title('Feature development with a PR review-feedback loop (plan 0018)')
+    .specVersion('1.0')
+    .entry('analyst')
+    .domain('approved', 'changes_requested', 'blocker', 'clean', 'review_changes', 'ci_changes', 'fix', 'wontfix', 'question')
+    .policy({ conflicts: [['developer', 'reviewer']], enforcement: 'strict' })
+    .scope('codeReviewLoop', { cap: 3, parent: null })
+    .scope('ciLoop', { cap: 3, parent: null })
+    .scope('reviewLoop', { cap: 3, parent: null })
+    .scope('questionLoop', { cap: 3, parent: null })
+    .add(
+      node.agent('analyst', 'role:analyst', 'planGate', { resultSchema: 'schema:plan', onFailure: 'abort', produces: { name: 'plan' } }),
+      node.humanGate('planGate', 'plan-review', ['approved', 'changes_requested'], [
+        on(verdictEq('approved'), 'developer'),
+        on(verdictEq('changes_requested'), 'analyst'),
+        otherwise('blockedEnd'),
+      ]),
+      node.agent('developer', 'role:developer', 'codeReview', { resultSchema: 'schema:change', onFailure: 'abort' }),
+      node.agent('codeReview', 'role:reviewer', 'codeReviewRouter', { resultSchema: 'schema:reviewVerdict', onFailure: 'abort' }),
+      node.choice('codeReviewRouter', [
+        on(verdictEq('approved'), 'integrator'),
+        on(allOf(verdictEq('blocker'), counterLt('codeReviewLoop', 3)), 'reworkDeveloper'),
+        otherwise('blockedEnd'),
+      ]),
+      node.agent('reworkDeveloper', 'role:developer', 'codeReview', { resultSchema: 'schema:change', incrementCounters: ['codeReviewLoop'], onFailure: 'abort' }),
+      node.script('integrator', 'script:integrator', 'pollPr', {
+        resultSchema: 'schema:integration', onFailure: 'route',
+        catch: [{ onError: 'revo.ScriptFailed', goto: 'failedEnd' }],
+      }),
+      // ── plan 0018 — observe the PR, classify, route by feedback type ──
+      node.script('pollPr', 'script:pollPr', 'prRouter', {
+        resultSchema: 'schema:prFeedback', onFailure: 'route', produces: { name: 'prFeedback' },
+        catch: [{ onError: 'revo.ScriptBlocked', goto: 'blockedEnd' }, { onError: 'revo.ScriptFailed', goto: 'failedEnd' }],
+      }),
+      node.choice('prRouter', [
+        on(verdictEq('clean'), 'mergeGate'),
+        on(verdictEq('review_changes'), 'triage'),
+        on(allOf(verdictEq('ci_changes'), counterLt('ciLoop', 3)), 'ciRework'),
+        otherwise('blockedEnd'),
+      ]),
+      node.agent('ciRework', 'role:developer', 'integrator', {
+        resultSchema: 'schema:change', incrementCounters: ['ciLoop'], onFailure: 'abort',
+        consumes: [{ node: 'pollPr', as: 'feedback' }],
+      }),
+      node.agent('triage', 'role:triager', 'triageRouter', {
+        resultSchema: 'schema:triage', onFailure: 'abort', produces: { name: 'triage' },
+        consumes: [{ node: 'analyst', as: 'plan', staleOk: true }, { node: 'pollPr', as: 'feedback' }],
+      }),
+      node.choice('triageRouter', [
+        on(allOf(verdictEq('question'), counterLt('questionLoop', 3)), 'questionGate'),
+        on(allOf(verdictEq('fix'), counterLt('reviewLoop', 3)), 'reviewRework'),
+        on(verdictEq('wontfix'), 'respondThreads'),
+        otherwise('blockedEnd'),
+      ]),
+      node.humanGate('questionGate', 'review-question', ['approved', 'changes_requested'], [
+        on(verdictEq('approved'), 'triage'),
+        otherwise('blockedEnd'),
+      ], { incrementCounters: ['questionLoop'] }),
+      node.agent('reviewRework', 'role:developer', 'reviewIntegrator', {
+        resultSchema: 'schema:change', incrementCounters: ['reviewLoop'], onFailure: 'abort',
+        consumes: [{ node: 'triage', as: 'triage' }],
+      }),
+      node.script('reviewIntegrator', 'script:integrator', 'respondThreads', {
+        resultSchema: 'schema:integration', onFailure: 'route',
+        catch: [{ onError: 'revo.ScriptBlocked', goto: 'blockedEnd' }, { onError: 'revo.ScriptFailed', goto: 'failedEnd' }],
+      }),
+      node.script('respondThreads', 'script:respondThreads', 'pollPr', {
+        resultSchema: 'schema:respond', onFailure: 'route', consumes: [{ node: 'triage', as: 'triage' }],
+        catch: [{ onError: 'revo.ScriptBlocked', goto: 'blockedEnd' }, { onError: 'revo.ScriptFailed', goto: 'failedEnd' }],
+      }),
+      node.humanGate('mergeGate', 'merge-review', ['approved', 'changes_requested'], [
+        on(verdictEq('approved'), 'confirmMerge'),
+        otherwise('blockedEnd'),
+      ]),
+      node.script('confirmMerge', 'script:confirmMerge', 'mergedEnd', {
+        resultSchema: 'schema:integration', onFailure: 'route',
+        catch: [{ onError: 'revo.ScriptBlocked', goto: 'blockedEnd' }, { onError: 'revo.ScriptFailed', goto: 'failedEnd' }],
+      }),
+      node.terminal('mergedEnd', 'succeeded'),
+      node.terminal('failedEnd', 'failed'),
+      node.terminal('blockedEnd', 'blocked'),
+    )
+    .build();
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // §13 footnote — local-change (orchestrator + developer, NO humanGate).
 // ─────────────────────────────────────────────────────────────────────────────

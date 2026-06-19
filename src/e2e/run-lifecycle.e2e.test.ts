@@ -82,7 +82,8 @@ test('feature-development: plan→merge approve completes and opens a PR', { ski
     playbookId: PLAYBOOK_ID,
     pipeline: 'feature-development',
   });
-  assert.deepEqual(featureRoute.roles, ['orchestrator', 'analyst', 'reviewer', 'developer', 'integrator', 'watcher']);
+  // plan 0018 adds the `triager` role (it runs only on the review-feedback path, not this happy path).
+  assert.deepEqual(featureRoute.roles, ['orchestrator', 'analyst', 'reviewer', 'triager', 'developer', 'integrator', 'watcher']);
 
   const target = createTargetRepo();
   try {
@@ -93,6 +94,7 @@ test('feature-development: plan→merge approve completes and opens a PR', { ski
         ['orchestrator', 'stub-agent'],
         ['analyst', 'stub-agent'],
         ['reviewer', 'stub-agent'],
+        ['triager', 'stub-agent'],
         ['developer', 'stub-agent'],
         ['integrator', 'revo-integrator'],
         ['watcher', 'stub-agent'],
@@ -104,9 +106,11 @@ test('feature-development: plan→merge approve completes and opens a PR', { ski
     assert.deepEqual(terminal.approvedTopics, ['plan', 'merge']);
 
     await assertCompleted(h.api, run.runId);
-    await assertAttemptVerdicts(h.api, run.runId, ['PASS', 'PASS', 'PASS', 'PASS', 'PASS']);
-    // confirmMerge (plan 0017 follow-up) ran after the merge gate and reported the PR merged.
-    await assertEventsPresent(h.api, run.runId, ['gate_signaled', 'integrate_succeeded', 'merge_confirmed', 'run_completed']);
+    // analyst → planReviewer → developer → codeReview → integrator → (pollPr clean) → merge. FOUR PASS
+    // agent attempts (the old watcher agent node was replaced by the deterministic pollPr script, 0018).
+    await assertAttemptVerdicts(h.api, run.runId, ['PASS', 'PASS', 'PASS', 'PASS']);
+    // pollPr observes the PR (clean → merge gate) and confirmMerge reports the PR merged.
+    await assertEventsPresent(h.api, run.runId, ['gate_signaled', 'integrate_succeeded', 'pr_polled', 'merge_confirmed', 'run_completed']);
 
     const branch = assertPrOpened(h, run.taskId);
     // plan 0017 (per-run worktree isolation): the developer + integrator work in the run's ISOLATED
@@ -118,7 +122,7 @@ test('feature-development: plan→merge approve completes and opens a PR', { ski
     // On a SUCCEEDED terminal (PR merged) the run worktree is released.
     assert.ok(!existsSync(worktreePathFor(getConfig().dataDir, run.runId)), 'worktree released after merge/succeeded');
 
-    await assertUsage(h.api, run.runId, { inputTokens: 50, outputTokens: 25, costAmount: 0.005 });
+    await assertUsage(h.api, run.runId, { inputTokens: 40, outputTokens: 20, costAmount: 0.004 });
   } finally {
     target.cleanup();
   }

@@ -80,8 +80,10 @@ test('M1: a seeded feature-development run drives plan→merge to completed on r
   const run = await startDefaultFeatureRun(h);
   assert.equal((run.workflow as { engine?: string }).engine, 'data-driven', 'the seeded pipeline routes to the data-driven engine');
 
-  // analyst → planReviewer → planGate → developer → codeReview → integrator(script) → watcherPost →
-  // watcherRouter(approved) → mergeGate. Approving both gates drives it to the `succeeded` terminal.
+  // analyst → planReviewer → planGate → developer → codeReview → integrator(script) → pollPr(clean) →
+  // prRouter(clean) → mergeGate → confirmMerge. Approving both gates drives it to the `succeeded`
+  // terminal. (The pollPr poll is a stub here — runnerOverrides stub the integrator → pollPr reports
+  // clean — so the run skips the triage/CI-rework loop and goes straight to the merge gate.)
   const terminal = await approveUntilTerminal(h.api, run.runId);
   assert.equal(terminal.state, 'completed');
   assert.deepEqual(terminal.approvedTopics, ['plan', 'merge'], 'both seeded humanGate nodes opened in order');
@@ -89,9 +91,10 @@ test('M1: a seeded feature-development run drives plan→merge to completed on r
   // The script integrator node ran (stub → integrate_succeeded) and the run completed — via the adapter.
   await assertEventsPresent(h.api, run.runId, ['integrate_succeeded', 'run_completed']);
 
-  // Every capability handle in the seeded template resolved to its route binding and executed.
+  // Every capability handle on the (clean) happy path resolved to its route binding and executed. The
+  // triager runs only on the review-feedback path (a review comment), so it is not exercised here.
   const roles = executedRoles(h, run.runId).map(([role]) => role);
-  for (const roleId of ['analyst', 'developer', 'reviewer', 'watcher']) {
+  for (const roleId of ['analyst', 'developer', 'reviewer']) {
     assert.ok(roles.includes(roleId), `${roleId} executed via its resolved capability handle`);
   }
 });
