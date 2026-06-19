@@ -561,7 +561,8 @@ export type PrReviewThread = { threadId: string; path?: string; line?: number; a
 
 /** The classified feedback `pollPr` produces (the 0016 dataflow output consumed downstream). */
 export type PrFeedback = {
-  prNumber: number;
+  /** null when no PR could be identified (error paths) — never the invalid sentinel 0 (GitHub PRs start at 1). */
+  prNumber: number | null;
   headSha: string;
   /** review_changes (unresolved threads) > ci_changes (failing checks) > clean (nothing actionable). */
   verdict: 'review_changes' | 'ci_changes' | 'clean';
@@ -668,7 +669,7 @@ export async function pollPr(
     reviewThreads.length > 0 ? 'review_changes' : ciFailures.length > 0 ? 'ci_changes' : 'clean';
 
   return {
-    prNumber: readiness.pr.number ?? 0,
+    prNumber: readiness.pr.number ?? null,
     headSha: readiness.pr.headSha,
     verdict,
     ciFailures,
@@ -691,10 +692,23 @@ export type Triage = { items: TriageItem[]; ciGuidance?: string; needsHuman?: bo
 
 export type RespondThreadsOutput = { replied: number; resolved: number };
 
-function asTriage(value: unknown): Triage {
+const TRIAGE_DECISIONS = new Set(['fix', 'wontfix', 'question']);
+
+/** Coerce the analyst's (LLM-produced, untrusted-shape) triage output to a Triage, dropping malformed
+ *  items so respondThreads never throws on a null/garbled entry (CodeRabbit). */
+export function asTriage(value: unknown): Triage {
   if (value === null || typeof value !== 'object') return { items: [] };
-  const items = (value as { items?: unknown }).items;
-  return { items: Array.isArray(items) ? (items as TriageItem[]) : [] };
+  const raw = (value as { items?: unknown }).items;
+  const items: TriageItem[] = Array.isArray(raw)
+    ? raw.filter(
+        (it): it is TriageItem =>
+          it !== null &&
+          typeof it === 'object' &&
+          typeof (it as { threadId?: unknown }).threadId === 'string' &&
+          TRIAGE_DECISIONS.has((it as { decision?: unknown }).decision as string),
+      )
+    : [];
+  return { items };
 }
 
 /**
@@ -818,7 +832,7 @@ export class IntegratorService {
 
   /** Stub pollPr — script path; zero external effects (reports a clean PR so the loop converges to merge). */
   runPollStub = (_input: IntegratorInput): PrFeedback => {
-    return { prNumber: 0, headSha: 'stub', verdict: 'clean', ciFailures: [], reviewThreads: [] };
+    return { prNumber: null, headSha: 'stub', verdict: 'clean', ciFailures: [], reviewThreads: [] };
   };
 
   /**

@@ -4,6 +4,7 @@ import {
   preflightLive,
   pollPr,
   respondThreads,
+  asTriage,
   stubIntegrate,
   type ConfirmMergeOutput,
   type IntegratorBlocked,
@@ -45,9 +46,9 @@ export function createFakeIntegrator(runs: RunService, execGh: ExecGhFn): Integr
     // so the e2e gh emulator converges fast (CI/threads flip deterministically per call).
     runPollPr: (input: IntegratorInput): Promise<PrFeedback | IntegratorBlocked> =>
       pollPr(input, { ...deps, sleep: () => Promise.resolve(), maxPolls: 30 }),
-    runPollStub: (_input: IntegratorInput): PrFeedback => ({ prNumber: 0, headSha: 'stub', verdict: 'clean', ciFailures: [], reviewThreads: [] }),
+    runPollStub: (_input: IntegratorInput): PrFeedback => ({ prNumber: null, headSha: 'stub', verdict: 'clean', ciFailures: [], reviewThreads: [] }),
     runRespondThreads: (input: IntegratorInput): Promise<RespondThreadsOutput | IntegratorBlocked> =>
-      respondThreads((input.triage as Triage) ?? { items: [] }, deps),
+      respondThreads(asTriage(input.triage), deps),
     runRespondStub: (_input: IntegratorInput): RespondThreadsOutput => ({ replied: 0, resolved: 0 }),
   } as unknown as IntegratorService;
 }
