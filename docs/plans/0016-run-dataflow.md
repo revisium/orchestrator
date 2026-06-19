@@ -1,7 +1,7 @@
 # 0016 — Run dataflow: step outputs as data
 
-Status: **Revised after analyst + claude consensus (codex pending).** Verdict was **NEEDS-REVISION**;
-this v2 folds the findings in. Builds on [0015](./0015-pipeline-state-machine.md).
+Status: **Landed** (#76; verdict follow-up #77). The earlier NEEDS-REVISION findings were folded into this v2
+before implementation. Builds on [0015](./0015-pipeline-state-machine.md).
 Engine: `src/pipeline-core/` (pure) + `src/pipeline/data-driven-task.workflow.ts` (DBOS adapter).
 
 ## 0. Motivation — what's broken

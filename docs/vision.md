@@ -82,26 +82,28 @@ Today's alpha: tasks start via CLI (`revo run create --pipeline-id local-change 
 
 ## Capability map by stage
 
-**Now** — MVP, slices 0001–0008 (landed; see [roadmap.md](./roadmap.md)):
+**Now** — landed (MVP slices 0001–0008 + post-MVP hardening through plan 0018; see [roadmap.md](./roadmap.md)):
 
-- pipeline as code: architect → developer → reviewer → integrator, durable end-to-end;
+- pipeline as **data**: a versioned graph template executed by a generic durable engine — architect → developer →
+  reviewer → integrator, durable end-to-end (see [adr/0002](./adr/0002-data-driven-pipeline-state-machine.md));
 - plan and merge gates via the human inbox;
 - live Claude Code runner;
 - budgets and iteration caps as data;
-- per-attempt provenance (model, params, tokens, cost, verdict).
+- per-attempt provenance (model, params, tokens, cost, verdict);
+- playbook install/import — `revo playbook install` reading `@revisium/agent-playbook` catalogs;
+- MCP server — the orchestrator as tools inside the developer's agent;
+- PR review-feedback loop — observe CI/reviews, triage PR comments by type (CI failure → developer; review comment
+  → analyst, then fix + reply + resolve the thread; genuinely ambiguous → a human question gate) → merge gate.
 
 **Next:**
 
-- playbook install/import — `revo playbook install` reading `@revisium/agent-playbook` catalogs;
-- review threads — one primitive, three anchors: PR comments triaged by type (code fix → developer; question →
-  answer in-thread; design objection → escalate), pre-PR diff review in our own UI (Monaco), plan/ADR section
-  comments at the plan gate;
-- `revo up` — single process;
-- MCP server — the orchestrator as tools inside the developer's agent.
+- `revo up` — single process (boot Revisium in-process; the last MVP-onboarding gap).
 
 **Later:**
 
 - route proposal — the system suggests the pipeline/roles for a task; the human approves;
+- pre-PR diff review in our own UI (Monaco) + plan/ADR section comments at the plan gate — the UI-anchored half of
+  "review threads" (the PR-comment loop already landed; see **Now**);
 - policy editor UI on Revisium-admin — versioned, reviewable role/policy edits;
 - runs board — the cross-run picture: status, steps, spend;
 - domain memory — typed project tables that agents query;

@@ -1,6 +1,6 @@
 # Plan 0018 — PR review-feedback loop (observe CI + reviews → triage → fix → reply/resolve)
 
-**Status:** in progress.
+**Status:** Landed (#79–#81).
 
 ## Goal
 
