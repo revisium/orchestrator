@@ -202,6 +202,7 @@ export type DataDrivenTaskDeps = {
   awaitHuman: (
     runId: string,
     topic: 'plan' | 'merge' | 'question',
+    gateKey: string,
     title: string,
     summary: unknown,
   ) => Promise<GateDecision>;
@@ -573,7 +574,10 @@ export function makeDataDrivenTask(
       }
       case 'awaitGate': {
         const topic = gateTopicFor(decision.reason);
-        const human = await awaitHuman(runId, topic, `${decision.reason} approval`, {
+        // Per-entry gate key (nodeId#ordinal) so a re-entered gate (e.g. a question gate looped in the
+        // review phase) gets a DISTINCT inbox row instead of colliding on `runId|topic` (§3.2 audit).
+        const ordinal = nextOrdinal(ctx.effectOrdinalByNode, decision.nodeId);
+        const human = await awaitHuman(runId, topic, stepKeyFor(decision.nodeId, ordinal), `${decision.reason} approval`, {
           nodeId: decision.nodeId,
           outcomes: decision.outcomes,
         });
