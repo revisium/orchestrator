@@ -119,8 +119,6 @@ const RUN_C = makeRow('run-c', { id: 'run-c', title: 'Run C', status: 'ready', p
 const TASK_A = makeRow('task-a', { id: 'task-a', run_id: 'run-a', title: 'Task A', status: 'ready', role_hint: 'architect', created_at: T1, updated_at: T1 });
 const TASK_B = makeRow('task-b', { id: 'task-b', run_id: 'run-b', title: 'Task B', status: 'running', role_hint: 'developer', created_at: T2, updated_at: T2 });
 
-const STEP_A = makeRow('step-a', { id: 'step-a', task_id: 'task-a', run_id: 'run-a', role: 'architect', kind: 'plan_run', status: 'ready', attempt_count: 0, max_attempts: 3, created_at: T1, updated_at: T1 });
-const STEP_B = makeRow('step-b', { id: 'step-b', task_id: 'task-b', run_id: 'run-b', role: 'developer', kind: 'implement', status: 'running', attempt_count: 1, max_attempts: 3, created_at: T2, updated_at: T2 });
 
 const EVENT_A1 = makeRow('event-a1', { id: 'event-a1', run_id: 'run-a', task_id: 'task-a', step_id: 'step-a', type: 'run_created', actor: 'cli', created_at: T1 });
 const EVENT_A2 = makeRow('event-a2', { id: 'event-a2', run_id: 'run-a', task_id: 'task-a', step_id: 'step-a', type: 'step_claimed', actor: 'worker-1', created_at: T2 });
@@ -176,11 +174,10 @@ test('showRun returns null for unknown runId', async () => {
   assert.equal(await showRun(da, 'nonexistent'), null);
 });
 
-test('showRun groups steps under the correct task', async () => {
+test('showRun returns the run detail and its task (no steps surface)', async () => {
   const da = createFakeDataAccess({
     task_runs: [RUN_A, RUN_B],
     tasks: [TASK_A, TASK_B],
-    steps: [STEP_A, STEP_B],
   });
 
   const detail = await showRun(da, 'run-a');
@@ -193,16 +190,12 @@ test('showRun groups steps under the correct task', async () => {
   assert.deepEqual(detail.run.repos, ['repo1']);
   assert.equal(detail.tasks.length, 1);
   assert.equal(detail.tasks[0]?.taskId, 'task-a');
-  assert.equal(detail.tasks[0]?.steps.length, 1);
-  assert.equal(detail.tasks[0]?.steps[0]?.stepId, 'step-a');
-  assert.equal(detail.tasks[0]?.steps[0]?.role, 'architect');
 });
 
-test('showRun tasks for different run contain only their steps', async () => {
+test('showRun returns only the queried run task', async () => {
   const da = createFakeDataAccess({
     task_runs: [RUN_A, RUN_B],
     tasks: [TASK_A, TASK_B],
-    steps: [STEP_A, STEP_B],
   });
 
   const detail = await showRun(da, 'run-b');
@@ -210,15 +203,13 @@ test('showRun tasks for different run contain only their steps', async () => {
   assert.ok(detail !== null);
   assert.equal(detail.tasks.length, 1);
   assert.equal(detail.tasks[0]?.taskId, 'task-b');
-  assert.equal(detail.tasks[0]?.steps[0]?.stepId, 'step-b');
 });
 
-test('showRun passes run_id where predicate to tasks and steps listRows', async () => {
+test('showRun passes the run_id where predicate to the tasks listRows and never reads steps', async () => {
   const listRowsArgs: Array<[RuntimeTable, ListRowsOptions | undefined]> = [];
   const da = createFakeDataAccess({
     task_runs: [RUN_A],
     tasks: [TASK_A],
-    steps: [STEP_A],
   }, { listRowsArgs });
 
   await showRun(da, 'run-a');
@@ -228,17 +219,14 @@ test('showRun passes run_id where predicate to tasks and steps listRows', async 
   assert.equal(tasksCall[1]?.where?.data?.path, 'run_id');
   assert.equal(tasksCall[1]?.where?.data?.equals, 'run-a');
 
-  const stepsCall = listRowsArgs.find(([t]) => t === 'steps');
-  assert.ok(stepsCall, 'listRows called for steps');
-  assert.equal(stepsCall[1]?.where?.data?.path, 'run_id');
-  assert.equal(stepsCall[1]?.where?.data?.equals, 'run-a');
+  // The phantom `steps` table is retired (audit §3.1) — showRun must not read it.
+  assert.ok(!listRowsArgs.some(([t]) => t === 'steps'), 'showRun must not read the steps table');
 });
 
-test('showRun does not return tasks or steps from other runs', async () => {
+test('showRun does not return tasks from other runs', async () => {
   const da = createFakeDataAccess({
     task_runs: [RUN_A, RUN_B],
     tasks: [TASK_A, TASK_B],
-    steps: [STEP_A, STEP_B],
   });
 
   const detail = await showRun(da, 'run-a');
@@ -246,8 +234,6 @@ test('showRun does not return tasks or steps from other runs', async () => {
   assert.ok(detail !== null);
   assert.equal(detail.tasks.length, 1, 'only run-a tasks returned');
   assert.equal(detail.tasks[0]?.taskId, 'task-a');
-  const allStepIds = detail.tasks.flatMap((t) => t.steps.map((s) => s.stepId));
-  assert.deepEqual(allStepIds, ['step-a'], 'only run-a steps returned');
 });
 
 test('showRun calls assertReady', async () => {
@@ -321,7 +307,7 @@ test('listRunEvents does not return events from other runs', async () => {
 test('all inspect functions record zero writes', async () => {
   const writes: string[] = [];
   const da = createFakeDataAccess(
-    { task_runs: [RUN_A], tasks: [TASK_A], steps: [STEP_A], events: [EVENT_A1] },
+    { task_runs: [RUN_A], tasks: [TASK_A], events: [EVENT_A1] },
     { writes },
   );
 
@@ -362,20 +348,16 @@ test('formatRunList timestamp has no stray dot', () => {
   assert.ok(output.includes('2026-06-01T00:00:00Z'), 'correct timestamp format');
 });
 
-test('formatRunDetail includes run id, tasks, and step details', () => {
+test('formatRunDetail includes run id and task details', () => {
   const detail = {
     run: { runId: 'run-a', title: 'My run', status: 'ready', priority: 1, createdAt: '2026-06-01T00:00:00.000Z', description: 'desc', scope: 'sc', repos: ['repo1'] },
     tasks: [
-      { taskId: 'task-a', title: 'Task A', status: 'ready', roleHint: 'architect', steps: [
-        { stepId: 'step-a', role: 'architect', kind: 'plan_run', status: 'ready', attemptCount: 0, maxAttempts: 3 },
-      ]},
+      { taskId: 'task-a', title: 'Task A', status: 'ready', roleHint: 'architect' },
     ],
   };
   const output = formatRunDetail(detail);
   assert.ok(output.includes('run-a'));
   assert.ok(output.includes('task-a'));
-  assert.ok(output.includes('step-a'));
-  assert.ok(output.includes('plan_run'));
   assert.ok(output.includes('desc'));
   assert.ok(output.includes('repo1'));
 });

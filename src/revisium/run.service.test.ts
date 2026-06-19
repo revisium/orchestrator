@@ -57,9 +57,8 @@ test('RunService.createRun delegates to createRunWorkflow (writes task_runs+task
   });
   assert.ok(result.runId.startsWith('run_'));
   assert.ok(result.taskId.startsWith('task_'));
-  assert.ok(result.stepId.startsWith('step_'));
   assert.ok(result.eventId.startsWith('event_'));
-  assert.deepEqual(createdTables.sort(), ['events', 'steps', 'task_runs', 'tasks'].sort());
+  assert.deepEqual(createdTables.sort(), ['events', 'task_runs', 'tasks'].sort());
 });
 
 test('RunService.showRun returns null for unknown run', async () => {

@@ -5,8 +5,10 @@
 > **Today** `steps` and `attempts` rows still exist in Revisium (`src/control-plane/tables.ts`, `steps.ts`), but
 > the data-driven engine does **not** use them for progress: DBOS owns progress (the `pipeline-core` graph
 > cursor), and the step-lifecycle verbs that once advanced `steps` are now **dead** (`claimNextStep`/… — see the
-> roadmap cleanup item). The rows are written by surrounding run/inbox code and surfaced read-only by
-> inspect/digest. **The target:** execution progress lives only in DBOS's own Postgres, and `steps`/`attempts`
+> roadmap cleanup item). As of audit §3.1 the runtime writes **no** `steps` rows (`create-run` creates none;
+> `inbox`/terminal-status no longer park or patch them) and surfaces none (`inspect`/digest no longer read them) —
+> the `steps` table stays defined in the schema but is unused by the runtime. **The target:** execution progress
+> lives only in DBOS's own Postgres, and `steps`/`attempts`
 > (with their lease/recover/backoff fields) are retired in a cleanup. What stays in Revisium either way:
 > `playbooks`, `roles`, `pipelines`, `model_profiles`, `routing_policy` (versioned), and `tasks`, `task_runs`,
 > `events`, `inbox`, `cost_ledger` (runtime, draft). Read the `steps`/`attempts` sections below as describing the
@@ -62,7 +64,9 @@ Status: `pending → planning → ready → running → (completed | failed | aw
 ### `tasks` — a logical task inside a run
 `id, run_id, repo_ref, role_hint, title, status, depends_on[], scope, priority, created_at, updated_at`
 
-### `steps` — the atomic unit of work (HOT)
+### `steps` — RETIRED from the runtime path (audit §3.1)
+> The runtime no longer writes or reads `steps` rows (the data-driven engine owns progress in DBOS, not a step
+> queue). The schema below is retained for reference; the table stays defined but is unused by the runtime.
 `id, task_id, run_id, role, kind, status, input, output, model_profile, run_after, attempt_count, max_attempts,
 priority, lease_owner, lease_expires_at, dead_reason, created_at, updated_at`
 Status: `pending → ready → claimed → running → (succeeded | failed→ready | dead | awaiting_approval | skipped)`

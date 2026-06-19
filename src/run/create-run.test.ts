@@ -72,20 +72,19 @@ function byTable(rows: CreatedRow[], table: RuntimeTable): CreatedRow {
   return found;
 }
 
-test('creates run, task, step, and event rows in order after assertReady', async () => {
+test('creates run, task, and event rows in order after assertReady (no phantom step row)', async () => {
   const { access, calls, rows } = createFakeDataAccess();
 
   const result = await createRunWorkflow(access, baseInput);
 
-  assert.deepEqual(calls, ['assertReady', 'create:task_runs', 'create:tasks', 'create:steps', 'create:events']);
+  assert.deepEqual(calls, ['assertReady', 'create:task_runs', 'create:tasks', 'create:events']);
   assert.deepEqual(
     rows.map(({ table }) => table),
-    ['task_runs', 'tasks', 'steps', 'events'],
+    ['task_runs', 'tasks', 'events'],
   );
   assert.deepEqual(result, {
     runId: 'run_20260601T020304005Z_implement-plan-0003_abc123ef',
     taskId: 'task_20260601T020304005Z_implement-plan-0003_abc123ef',
-    stepId: 'step_20260601T020304005Z_implement-plan-0003_abc123ef',
     eventId: 'event_20260601T020304005Z_implement-plan-0003_abc123ef_created',
     status: 'ready',
   });
@@ -98,22 +97,6 @@ test('writes the exact ready skeleton fields without stringifying JSON-ish value
 
   assert.equal(byTable(rows, 'task_runs').data.status, 'ready');
   assert.equal(byTable(rows, 'tasks').data.status, 'ready');
-
-  const step = byTable(rows, 'steps').data;
-  assert.equal(step.status, 'ready');
-  assert.equal(step.kind, 'plan_run');
-  assert.equal(step.role, 'architect');
-  assert.equal(step.model_profile, 'standard');
-  assert.equal(typeof step.input, 'object');
-  assert.equal(step.output, null);
-  assert.deepEqual(step.input, {
-    title: 'Implement Plan 0003!',
-    description: 'Create run workflow',
-    scope: 'plan 0003',
-    repo: { input: 'agent-orchestrator', ref: 'agent-orchestrator', mode: 'name' },
-    run_id: result.runId,
-    task_id: result.taskId,
-  });
 
   const event = byTable(rows, 'events').data;
   assert.equal(event.type, 'run_created');
@@ -129,7 +112,7 @@ test('writes the exact ready skeleton fields without stringifying JSON-ish value
     pipeline_id: '',
     route_decision: {},
     execution_profile: {},
-    ids: { run_id: result.runId, task_id: result.taskId, step_id: result.stepId },
+    ids: { run_id: result.runId, task_id: result.taskId },
   });
 });
 
@@ -182,7 +165,8 @@ test('existing relative directory becomes absolute repoRef and structured path m
 
   assert.deepEqual(byTable(rows, 'task_runs').data.repos, [tempDir]);
   assert.equal(byTable(rows, 'tasks').data.repo_ref, tempDir);
-  assert.deepEqual((byTable(rows, 'steps').data.input as { repo: unknown }).repo, {
+  // The structured repo metadata now lives on the run_created event payload (no phantom step row).
+  assert.deepEqual((byTable(rows, 'events').data.payload as { repo: unknown }).repo, {
     input: relative,
     ref: tempDir,
     mode: 'path',
@@ -199,7 +183,7 @@ test('explicit missing paths fail before writes', async () => {
 });
 
 test('simulated later write failures report partial IDs and do not rollback', async () => {
-  const { access } = createFakeDataAccess({ failAt: 'steps' });
+  const { access } = createFakeDataAccess({ failAt: 'events' });
 
   await assert.rejects(
     () => createRunWorkflow(access, baseInput),
@@ -222,7 +206,6 @@ test('repeated calls with different suffixes create distinct row IDs', async () 
 
   assert.notEqual(first.runId, second.runId);
   assert.notEqual(first.taskId, second.taskId);
-  assert.notEqual(first.stepId, second.stepId);
   assert.notEqual(first.eventId, second.eventId);
 });
 
@@ -238,22 +221,20 @@ test('long titles keep generated event IDs within the endpoint row-id limit', as
   assert.equal(result.eventId, 'event_20260601T020304005Z_smoke-create-run-1780_abc123ef_created');
 });
 
-test('role override applies to both tasks.role_hint and steps.role', async () => {
+test('role override applies to tasks.role_hint', async () => {
   const { access, rows } = createFakeDataAccess();
 
   await createRunWorkflow(access, { ...baseInput, role: 'developer' });
 
   assert.equal(byTable(rows, 'tasks').data.role_hint, 'developer');
-  assert.equal(byTable(rows, 'steps').data.role, 'developer');
 });
 
-test('omitting role defaults both fields to architect', async () => {
+test('omitting role defaults tasks.role_hint to architect', async () => {
   const { access, rows } = createFakeDataAccess();
 
   await createRunWorkflow(access, { ...baseInput, role: undefined });
 
   assert.equal(byTable(rows, 'tasks').data.role_hint, 'architect');
-  assert.equal(byTable(rows, 'steps').data.role, 'architect');
 });
 
 test('a charset-invalid bare role rejects before assertReady or writes', async () => {
@@ -271,7 +252,7 @@ test('any well-formed role id is accepted (no KNOWN_ROLES allow-list; hyphen no 
   for (const role of ['architect', 'developer', 'reviewer', 'integrator', 'pr-watcher', 'tester']) {
     const { access, rows } = createFakeDataAccess();
     await createRunWorkflow(access, { ...baseInput, role });
-    assert.equal(byTable(rows, 'steps').data.role, role);
+    assert.equal(byTable(rows, 'tasks').data.role_hint, role);
   }
 });
 
@@ -281,7 +262,6 @@ test('installed playbook role row ids are accepted and written to role fields', 
   await createRunWorkflow(access, { ...baseInput, role: 'pb-developer' });
 
   assert.equal(byTable(rows, 'tasks').data.role_hint, 'pb-developer');
-  assert.equal(byTable(rows, 'steps').data.role, 'pb-developer');
 });
 
 test('unsafe installed role row ids reject before assertReady or writes', async () => {

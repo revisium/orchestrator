@@ -12,7 +12,6 @@ function makeFake(
     assertReadyError?: Error;
     throwConflictOnEvent?: boolean;
     taskRows?: ControlPlaneRow[];
-    stepRows?: ControlPlaneRow[];
   } = {},
 ) {
   const calls: string[] = [];
@@ -25,7 +24,6 @@ function makeFake(
     [
       ...runRows.map((r) => [`${String('task_runs')}:${r.rowId}`, { ...r.data }] as const),
       ...(opts.taskRows ?? []).map((r) => [`tasks:${r.rowId}`, { ...r.data }] as const),
-      ...(opts.stepRows ?? []).map((r) => [`steps:${r.rowId}`, { ...r.data }] as const),
     ],
   );
 
@@ -34,9 +32,7 @@ function makeFake(
       if (opts.assertReadyError) throw opts.assertReadyError;
     },
     async listRows(table, options) {
-      let source: ControlPlaneRow[] = [];
-      if (table === 'tasks') source = opts.taskRows ?? [];
-      if (table === 'steps') source = opts.stepRows ?? [];
+      const source: ControlPlaneRow[] = table === 'tasks' ? (opts.taskRows ?? []) : [];
       const start = options?.after
         ? source.findIndex((row) => row.cursor === options.after) + 1
         : 0;
@@ -143,19 +139,15 @@ test('C1: already-cancelled run skips task_runs patch but still returns result',
   assert.equal(runPatches.length, 0, 'task_runs must NOT be patched when already cancelled (C1)');
 });
 
-test('C1: already-cancelled replay reconciles stale steps to skipped', async () => {
+test('C1: already-cancelled replay reconciles stale tasks to cancelled', async () => {
   const taskRows: ControlPlaneRow[] = [
     { rowId: 'task-stale', data: { id: 'task-stale', run_id: 'run-a', status: 'running' } },
     { rowId: 'task-current', data: { id: 'task-current', run_id: 'run-a', status: 'cancelled' } },
     { rowId: 'task-other-run', data: { id: 'task-other-run', run_id: 'run-b', status: 'running' } },
   ];
-  const stepRows: ControlPlaneRow[] = [
-    { rowId: 'step-stale', data: { id: 'step-stale', run_id: 'run-a', status: 'cancelled' } },
-    { rowId: 'step-current', data: { id: 'step-current', run_id: 'run-a', status: 'skipped' } },
-  ];
   const { da, creates, patches } = makeFake(
     [RUN('cancelled')],
-    { taskRows, stepRows },
+    { taskRows },
   );
 
   const result = await cancelRun(da, 'run-a', { now: new Date('2026-06-04T00:00:00.000Z') });
@@ -169,12 +161,10 @@ test('C1: already-cancelled replay reconciles stale steps to skipped', async () 
   );
   assert.deepEqual(
     patches.map((patch) => `${patch.table}:${patch.rowId}`).sort(),
-    ['steps:step-stale', 'tasks:task-stale'],
+    ['tasks:task-stale'],
   );
   const taskPatch = patches.find((patch) => patch.table === 'tasks');
-  const stepPatch = patches.find((patch) => patch.table === 'steps');
   assert.ok(taskPatch?.ops.some((op) => op.op === 'replace' && op.path === 'status' && op.value === 'cancelled'));
-  assert.ok(stepPatch?.ops.some((op) => op.op === 'replace' && op.path === 'status' && op.value === 'skipped'));
 });
 
 // A10a (G3-note): UPDATED in place — old timestamp-id assertion replaced with deterministic id.

@@ -7,7 +7,7 @@ import { blockRun } from './block-run.js';
 
 function makeFake(
   runRows: ControlPlaneRow[],
-  opts: { taskRows?: ControlPlaneRow[]; stepRows?: ControlPlaneRow[] } = {},
+  opts: { taskRows?: ControlPlaneRow[] } = {},
 ) {
   const calls: string[] = [];
   const patches: Array<{ table: RuntimeTable; rowId: string; ops: PatchOperation[] }> = [];
@@ -16,17 +16,13 @@ function makeFake(
     [
       ...runRows.map((row) => [`task_runs:${row.rowId}`, { ...row.data }] as const),
       ...(opts.taskRows ?? []).map((row) => [`tasks:${row.rowId}`, { ...row.data }] as const),
-      ...(opts.stepRows ?? []).map((row) => [`steps:${row.rowId}`, { ...row.data }] as const),
     ],
   );
 
   const da: ControlPlaneDataAccess = {
     async assertReady() {},
     async listRows(table, options) {
-      const source =
-        table === 'tasks' ? (opts.taskRows ?? []) :
-          table === 'steps' ? (opts.stepRows ?? []) :
-            [];
+      const source = table === 'tasks' ? (opts.taskRows ?? []) : [];
       const start = options?.after
         ? source.findIndex((row) => row.cursor === options.after) + 1
         : 0;
@@ -71,10 +67,7 @@ test('blockRun writes run_blocked event first and moves rows out of ready', asyn
   const taskRows: ControlPlaneRow[] = [
     { rowId: 'task-a', data: { id: 'task-a', run_id: 'run-a', status: 'ready' } },
   ];
-  const stepRows: ControlPlaneRow[] = [
-    { rowId: 'step-a', data: { id: 'step-a', run_id: 'run-a', status: 'ready' } },
-  ];
-  const { da, calls, creates, patches } = makeFake([RUN('ready')], { taskRows, stepRows });
+  const { da, calls, creates, patches } = makeFake([RUN('ready')], { taskRows });
 
   const result = await blockRun(da, 'run-a', {
     now: new Date('2026-06-14T00:00:00Z'),
@@ -101,9 +94,5 @@ test('blockRun writes run_blocked event first and moves rows out of ready', asyn
   assert.ok(patches.some((patch) =>
     patch.table === 'tasks' &&
     patch.ops.some((op) => op.op === 'replace' && op.path === 'status' && op.value === 'paused'),
-  ));
-  assert.ok(patches.some((patch) =>
-    patch.table === 'steps' &&
-    patch.ops.some((op) => op.op === 'replace' && op.path === 'status' && op.value === 'skipped'),
   ));
 });

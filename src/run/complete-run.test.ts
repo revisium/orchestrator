@@ -8,7 +8,7 @@ import { completeRun } from './complete-run.js';
 
 function makeFake(
   runRows: ControlPlaneRow[],
-  opts: { throwConflictOnEvent?: boolean; taskRows?: ControlPlaneRow[]; stepRows?: ControlPlaneRow[] } = {},
+  opts: { throwConflictOnEvent?: boolean; taskRows?: ControlPlaneRow[] } = {},
 ) {
   const calls: string[] = [];
   const patches: Array<{ table: RuntimeTable; rowId: string; ops: PatchOperation[] }> = [];
@@ -18,17 +18,13 @@ function makeFake(
     [
       ...runRows.map((r) => [`task_runs:${r.rowId}`, { ...r.data }] as const),
       ...(opts.taskRows ?? []).map((r) => [`tasks:${r.rowId}`, { ...r.data }] as const),
-      ...(opts.stepRows ?? []).map((r) => [`steps:${r.rowId}`, { ...r.data }] as const),
     ],
   );
 
   const da: ControlPlaneDataAccess = {
     async assertReady() {},
     async listRows(table, options) {
-      const source =
-        table === 'tasks' ? (opts.taskRows ?? []) :
-          table === 'steps' ? (opts.stepRows ?? []) :
-            [];
+      const source = table === 'tasks' ? (opts.taskRows ?? []) : [];
       const start = options?.after
         ? source.findIndex((row) => row.cursor === options.after) + 1
         : 0;
@@ -114,19 +110,15 @@ test('completeRun: already-completed skips event and run patch when related rows
   assert.equal(patches.length, 0, 'no patch written when already completed');
 });
 
-test('completeRun: already-completed replay reconciles stale related task and step rows', async () => {
+test('completeRun: already-completed replay reconciles stale related task rows', async () => {
   const taskRows: ControlPlaneRow[] = [
     { rowId: 'task-stale', data: { id: 'task-stale', run_id: 'run-a', status: 'running' } },
     { rowId: 'task-current', data: { id: 'task-current', run_id: 'run-a', status: 'completed' } },
     { rowId: 'task-other-run', data: { id: 'task-other-run', run_id: 'run-b', status: 'running' } },
   ];
-  const stepRows: ControlPlaneRow[] = [
-    { rowId: 'step-stale', data: { id: 'step-stale', run_id: 'run-a', status: 'completed' } },
-    { rowId: 'step-current', data: { id: 'step-current', run_id: 'run-a', status: 'succeeded' } },
-  ];
   const { da, creates, patches } = makeFake(
     [RUN('completed')],
-    { taskRows, stepRows },
+    { taskRows },
   );
 
   const result = await completeRun(da, 'run-a', { now: new Date('2026-06-13T00:00:00Z') });
@@ -140,32 +132,12 @@ test('completeRun: already-completed replay reconciles stale related task and st
   );
   assert.deepEqual(
     patches.map((patch) => `${patch.table}:${patch.rowId}`).sort(),
-    ['steps:step-stale', 'tasks:task-stale'],
+    ['tasks:task-stale'],
   );
   for (const patch of patches) {
-    const expectedStatus = patch.table === 'steps' ? 'succeeded' : 'completed';
-    assert.ok(patch.ops.some((op) => op.op === 'replace' && op.path === 'status' && op.value === expectedStatus));
+    assert.ok(patch.ops.some((op) => op.op === 'replace' && op.path === 'status' && op.value === 'completed'));
     assert.ok(patch.ops.some((op) => op.op === 'replace' && op.path === 'updated_at' && op.value === '2026-06-13T00:00:00.000Z'));
   }
-});
-
-test('completeRun: terminal propagation preserves real terminal step outcomes', async () => {
-  const stepRows: ControlPlaneRow[] = [
-    { rowId: 'step-running', data: { id: 'step-running', run_id: 'run-a', status: 'running' } },
-    { rowId: 'step-ready', data: { id: 'step-ready', run_id: 'run-a', status: 'ready' } },
-    { rowId: 'step-failed', data: { id: 'step-failed', run_id: 'run-a', status: 'failed' } },
-    { rowId: 'step-skipped', data: { id: 'step-skipped', run_id: 'run-a', status: 'skipped' } },
-    { rowId: 'step-dead', data: { id: 'step-dead', run_id: 'run-a', status: 'dead' } },
-    { rowId: 'step-succeeded', data: { id: 'step-succeeded', run_id: 'run-a', status: 'succeeded' } },
-  ];
-  const { da, patches } = makeFake([RUN('ready')], { stepRows });
-
-  await completeRun(da, 'run-a', { now: new Date('2026-06-13T00:00:00Z') });
-
-  assert.deepEqual(
-    patches.filter((patch) => patch.table === 'steps').map((patch) => patch.rowId).sort(),
-    ['step-ready', 'step-running'],
-  );
 });
 
 test('completeRun: ROW_CONFLICT on replay still applies the status patch', async () => {
@@ -178,14 +150,13 @@ test('completeRun: ROW_CONFLICT on replay still applies the status patch', async
   assert.ok(patches.some((p) => p.table === 'task_runs'), 'status patch must be applied on conflict');
 });
 
-test('completeRun: paginates related task and step status propagation beyond 500 rows', async () => {
+test('completeRun: paginates related task status propagation beyond 500 rows', async () => {
   const relatedRows = (prefix: string): ControlPlaneRow[] => Array.from({ length: 501 }, (_, index) => ({
     rowId: `${prefix}-${index}`,
     cursor: `${prefix}-cursor-${index}`,
     data: { id: `${prefix}-${index}`, run_id: 'run-a', status: 'running' },
   }));
   const tasks = relatedRows('task');
-  const steps = relatedRows('step');
   const listCalls: Array<{ table: RuntimeTable; first?: number; after?: string }> = [];
   const patches: Array<{ table: RuntimeTable; rowId: string; ops: PatchOperation[] }> = [];
   let activePatches = 0;
@@ -195,7 +166,7 @@ test('completeRun: paginates related task and step status propagation beyond 500
     async assertReady() {},
     async listRows(table, options) {
       listCalls.push({ table, first: options?.first, after: options?.after });
-      const source = table === 'tasks' ? tasks : table === 'steps' ? steps : [];
+      const source = table === 'tasks' ? tasks : [];
       const start = options?.after
         ? source.findIndex((row) => row.cursor === options.after) + 1
         : 0;
@@ -228,24 +199,15 @@ test('completeRun: paginates related task and step status propagation beyond 500
     listCalls.map((call) => ({ table: call.table, first: call.first, after: call.after })),
     [
       { table: 'tasks', first: 500, after: undefined },
-      { table: 'steps', first: 500, after: undefined },
       { table: 'tasks', first: 500, after: 'task-cursor-499' },
-      { table: 'steps', first: 500, after: 'step-cursor-499' },
     ],
   );
   assert.equal(patches.filter((patch) => patch.table === 'tasks').length, 501);
-  assert.equal(patches.filter((patch) => patch.table === 'steps').length, 501);
   assert.equal(maxActivePatches, 20, 'related-row terminal patches must be concurrency bounded');
   assert.ok(
     patches
       .filter((patch) => patch.table === 'tasks')
       .every((patch) => patch.ops.some((op) => op.op === 'replace' && op.path === 'status' && op.value === 'completed')),
     'task propagation keeps the run terminal status',
-  );
-  assert.ok(
-    patches
-      .filter((patch) => patch.table === 'steps')
-      .every((patch) => patch.ops.some((op) => op.op === 'replace' && op.path === 'status' && op.value === 'succeeded')),
-    'completed run propagates to valid step status succeeded',
   );
 });

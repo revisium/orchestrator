@@ -303,8 +303,8 @@ async function withRunService<T>(fn: (svc: RunService) => Promise<T>): Promise<T
  * Tests: inject fakes directly, skipping NestJS context creation entirely.
  */
 export type CreateRunDeps = {
-  /** Create the run/task/step/event and return IDs. */
-  createRunFn: (input: CreateRunInput) => Promise<{ runId: string; taskId: string; stepId: string; status: string; eventId: string }>;
+  /** Create the run/task/event and return IDs. */
+  createRunFn: (input: CreateRunInput) => Promise<{ runId: string; taskId: string; status: string; eventId: string }>;
   /** Start the pipeline for a given runId (host-requiring). */
   runStart: (runId: string, opts: { stub: boolean; live: boolean; wait: boolean }) => Promise<void>;
   /** The host app context — present only on the host path. */
@@ -358,7 +358,6 @@ export async function createRunCore(
 
   console.log(`created run ${result.runId}`);
   console.log(`task ${result.taskId}`);
-  console.log(`step ${result.stepId} ${result.status}`);
   console.log(`event ${result.eventId}`);
   console.log('status: ready (draft only, not committed)');
 
@@ -393,8 +392,7 @@ async function createRun(options: CreateOptions, app?: INestApplicationContext):
     });
     console.log(`created run ${result.runId}`);
     console.log(`task ${result.taskId}`);
-    console.log(`step ${result.stepId} ${result.status}`);
-    console.log(`event ${result.eventId}`);
+      console.log(`event ${result.eventId}`);
     const pipelineId = 'workflow' in result ? result.workflow.route.pipelineId : result.route.pipelineId;
     console.log(`pipeline: ${pipelineId}`);
     console.log('status: ready (draft only, not committed)');
