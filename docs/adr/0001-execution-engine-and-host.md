@@ -58,6 +58,12 @@ hardcodes it. No second Postgres is bundled.
 *function*. This temporarily relaxes the "workflow = data" invariant in favour of proving the engine fast. Making
 the workflow generic (an "execute plan" that reads steps from Revisium data) is a tracked post-MVP goal.
 
+> **[UPDATED 2026-06-19 — delivered; superseded by [ADR-0002](./0002-data-driven-pipeline-state-machine.md)]**
+> The post-MVP goal stated here shipped (plan 0015, PRs #69–#75). The pipeline is now **data** — a versioned graph
+> template executed by a generic durable engine (a pure `pipeline-core` reducer + a thin DBOS effect-adapter) — and
+> it is the **sole** pipeline engine; the hardcoded workflow function and its role→phase classifiers were removed
+> (`19b6abb`). The "workflow = data" invariant is restored. See ADR-0002 for the design and consequences.
+
 ## Consequences
 
 - **Removed:** Q1 and Q3 (engine concern now); hand-rolled leasing/backoff/recovery; the dumb loop. The
@@ -70,7 +76,8 @@ the workflow generic (an "execute plan" that reads steps from Revisium data) is 
   compose, but the integration must be set up deliberately once (registering instance-bound workflows). Slice
   0001 proves it with a trivial durable workflow invoked from the CLI.
 - **Deferred, not closed:** embedding Revisium in the host process via an exported `startRevisium()` (one
-  process); REST + MCP adapters; workflow-as-data.
+  process); a REST adapter. *(Update 2026-06-19: the MCP adapter landed — plans 0011–0013; workflow-as-data
+  landed — plan 0015, see [ADR-0002](./0002-data-driven-pipeline-state-machine.md).)*
 
 ## Deferred options (revisit when MVP proves out)
 

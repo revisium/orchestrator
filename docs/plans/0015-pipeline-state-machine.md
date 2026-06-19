@@ -1,11 +1,14 @@
 # Plan 0015 — Data-driven pipeline state machine (design spec v2)
 
-> **Status:** Design spec, ready for review. Grounded in prior-art across durable-workflow / state-machine systems
-> (AWS Step Functions / Amazon States Language, BPMN, statecharts / SCXML / XState, Temporal, Argo / GitHub
-> Actions) and iterated through internal review. Folds in the 10 locked product-owner decisions and closes the
-> review findings (counter scope, verdict model, optional gate timeout, parallel shape + replay determinism,
+> **Status: Landed** (#69–#75: design doc #69, then staged slices #70 core / #72 adapter / #73 cutover /
+> #74 dead-code removal / #75 default pipeline). Grounded in prior-art across durable-workflow / state-machine
+> systems (AWS Step Functions / Amazon States Language, BPMN, statecharts / SCXML / XState, Temporal, Argo /
+> GitHub Actions) and iterated through internal review. Folds in the 10 locked product-owner decisions and closes
+> the review findings (counter scope, verdict model, optional gate timeout, parallel shape + replay determinism,
 > failure precedence, diff classifier).
-> **Delivery (decided):** this design doc → review → STAGED implementation slices behind the e2e net.
+> **Delivery:** this design doc → review → STAGED implementation slices behind the e2e net — all shipped; the
+> data-driven engine is now the **sole** pipeline engine. See
+> [adr/0002-data-driven-pipeline-state-machine.md](../adr/0002-data-driven-pipeline-state-machine.md).
 
 ## 0. Goal & invariants
 
