@@ -48,7 +48,7 @@
     "smoke:pr-poller": "tsx scripts/smoke-pr-poller.ts",
     "smoke:mvp": "tsx scripts/smoke-mvp.ts",
     "test": "tsx --test $(find src -name '*.test.ts' | sort)",
-    "test:e2e": "export REVO_E2E_REAL=1 REVO_DATA_DIR=~/.revisium-orchestrator-e2e REVO_PORT=19422 REVO_PG_PORT=15640 REVO_DEV_TASKS_CONCURRENCY=8 && tsx scripts/e2e-setup.ts && tsx --test --test-concurrency=1 src/e2e/*.e2e.test.ts",
+    "test:e2e": "export REVO_E2E_REAL=1 REVO_DATA_DIR=~/.revisium-orchestrator-e2e REVO_PORT=19422 REVO_PG_PORT=15640 REVO_DEV_TASKS_CONCURRENCY=8 REVO_POLL_PR_INTERVAL_MS=1 REVO_POLL_PR_MAX_POLLS=3 && tsx scripts/e2e-setup.ts && tsx --test --test-concurrency=1 src/e2e/*.e2e.test.ts",
     "test:cov": "mkdir -p coverage && node --import tsx --test --experimental-test-coverage --test-reporter=spec --test-reporter=lcov --test-reporter-destination=stdout --test-reporter-destination=coverage/lcov.info $(find src -name '*.test.ts' | sort)",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint:ci": "eslint . --max-warnings 0",

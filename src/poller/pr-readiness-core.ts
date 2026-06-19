@@ -371,7 +371,7 @@ export function collectCiChecks(
   return { pending, ci_passed, checks, pendingNames };
 }
 
-type ReviewThread = {
+export type ReviewThread = {
   id: string;
   isResolved: boolean;
   isOutdated: boolean;

@@ -68,7 +68,7 @@ test('default playbook: installs as revisium-default with feature-development + 
 
   assert.equal(result.playbookId, DEFAULT_PLAYBOOK_ID);
   assert.equal(result.committed, true);
-  assert.equal(result.roles, 6, `expected exactly 6 default roles (got ${result.roles})`);
+  assert.equal(result.roles, 7, `expected exactly 7 default roles (got ${result.roles})`);
   assert.equal(result.pipelines, 2, 'feature-development + local-change');
 
   const pipelineRowIds = fake.rows.filter((r) => r.table === 'pipelines').map((r) => r.rowId);
@@ -101,9 +101,11 @@ const declaredRoleIds = new Set(roleCatalog.map((r) => r.id));
 /** Walk a template's nodes and collect every `<kind>:<id>` capability handle referenced. */
 function capabilityRoleIds(template: { nodes: Record<string, Record<string, unknown>> }): string[] {
   // Built-in system scripts have no role of their own — they resolve to whichever binding runs the
-  // merge (the `integrator` required role): `script:integrator` (open PR) and `script:confirmMerge`
-  // (verify/auto-merge, plan 0017). Map them to `integrator` so the coverage check is satisfied.
-  const BUILT_IN_SCRIPTS = new Set(['integrator', 'confirmMerge']);
+  // merge (the `integrator` required role): `script:integrator` (open PR), `script:confirmMerge`
+  // (verify/auto-merge, plan 0017), and the plan 0018 PR review-feedback scripts `script:pollPr`
+  // (observe/classify) + `script:respondThreads` (reply/resolve). Map them to `integrator` (runner-wins)
+  // so the coverage check is satisfied.
+  const BUILT_IN_SCRIPTS = new Set(['integrator', 'confirmMerge', 'pollPr', 'respondThreads']);
   const ids = new Set<string>();
   for (const node of Object.values(template.nodes)) {
     for (const key of ['roleRef', 'scriptRef'] as const) {

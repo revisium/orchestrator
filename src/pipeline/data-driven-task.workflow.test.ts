@@ -12,12 +12,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeDataDrivenTask, type DataDrivenTaskDeps } from './data-driven-task.workflow.js';
 import { templateFromExecutionPolicy } from './data-driven-template.js';
-import { featureDevelopment, confirmMergeFlow } from '../pipeline-core/kit/fixtures.js';
+import { featureDevelopment, featureDevelopmentPrReview, confirmMergeFlow } from '../pipeline-core/kit/fixtures.js';
 import type { Template } from '../pipeline-core/index.js';
 import type { AttemptResult } from '../worker/runner.js';
 import type { RouteDecision, RouteRoleBinding } from './route-contract.js';
 import type { Decision as GateDecision } from './await-human.js';
-import type { IntegratorInput, IntegratorOutput, IntegratorBlocked, ConfirmMergeOutput } from '../runners/integrator.js';
+import type { IntegratorInput, IntegratorOutput, IntegratorBlocked, ConfirmMergeOutput, PrFeedback, RespondThreadsOutput } from '../runners/integrator.js';
 import { template, node, on, otherwise, verdictEq, allOf, counterLt } from '../pipeline-core/kit/index.js';
 
 const RUN_ID = 'run-dd-001';
@@ -33,8 +33,8 @@ function makeRoute(): RouteDecision {
     pipelineId: 'feature-development-dd',
     pipelineRowId: 'row',
     source: 'explicit',
-    roles: ['analyst', 'developer', 'reviewer', 'integrator', 'watcher'],
-    requiredRoles: ['analyst', 'developer', 'reviewer', 'integrator', 'watcher'],
+    roles: ['analyst', 'developer', 'reviewer', 'triager', 'integrator', 'watcher'],
+    requiredRoles: ['analyst', 'developer', 'reviewer', 'triager', 'integrator', 'watcher'],
     optionalRoles: [],
     routeGates: ['plan', 'merge'],
     executionPolicy: {},
@@ -43,6 +43,7 @@ function makeRoute(): RouteDecision {
       binding('analyst'),
       binding('developer'),
       binding('reviewer'),
+      binding('triager'),
       binding('integrator', 'revo-integrator'), // real-integrator runner → script:integrator resolves here
       binding('watcher'),
     ],
@@ -57,6 +58,10 @@ type Recorder = {
   failed: string[];
   integrateCalls: number;
   confirmMergeCalls: number;
+  pollPrCalls: number;
+  respondCalls: number;
+  /** The triage each respondThreads call consumed (asserts the 0016 script-consumes hydration). */
+  respondTriage: unknown[];
   events: string[];
   /** Persisted step outputs (0016 dataflow). */
   outputs: Array<{ nodeId: string; ordinal: number; name: string; payload: unknown }>;
@@ -70,7 +75,7 @@ type Recorder = {
  */
 function buildAdapter(opts: {
   verdicts?: Record<string, string | string[]>;
-  gate?: (topic: 'plan' | 'merge') => GateDecision;
+  gate?: (topic: 'plan' | 'merge' | 'question') => GateDecision;
   needsHumanNodes?: Set<string>;
   template?: Template;
   /** Override the integrator result (default: success). Lets a test drive needsHuman / throw. */
@@ -79,8 +84,12 @@ function buildAdapter(opts: {
   preflight?: () => { ok: true } | { needsHuman: true; lesson: string } | Promise<{ ok: true } | { needsHuman: true; lesson: string }>;
   /** Override confirmMerge (default: merged). Lets a test drive a not-merged block. */
   confirmMerge?: (input: IntegratorInput) => ConfirmMergeOutput | IntegratorBlocked | Promise<ConfirmMergeOutput | IntegratorBlocked>;
+  /** Override pollPr (default: clean). Lets a test drive review_changes / ci_changes / a block. */
+  pollPr?: (input: IntegratorInput) => PrFeedback | IntegratorBlocked | Promise<PrFeedback | IntegratorBlocked>;
+  /** Override respondThreads (default: replied/resolved 0). Lets a test capture the triage it consumed. */
+  respondThreads?: (input: IntegratorInput) => RespondThreadsOutput | IntegratorBlocked | Promise<RespondThreadsOutput | IntegratorBlocked>;
 }) {
-  const rec: Recorder = { gates: [], completed: [], blocked: [], failed: [], integrateCalls: 0, confirmMergeCalls: 0, events: [], outputs: [], inputsByStep: {} };
+  const rec: Recorder = { gates: [], completed: [], blocked: [], failed: [], integrateCalls: 0, confirmMergeCalls: 0, pollPrCalls: 0, respondCalls: 0, respondTriage: [], events: [], outputs: [], inputsByStep: {} };
   const visits = new Map<string, number>();
 
   const runStepFn = async (
@@ -140,6 +149,21 @@ function buildAdapter(opts: {
       return { merged: true as const, prNumber: 1, prUrl: `https://example/pr/${input.taskId}/merged` };
     },
     runConfirmStub: (input: IntegratorInput) => ({ merged: true as const, prNumber: 0, prUrl: `stub://pr/${input.taskId}/merged` }),
+    // pollPr (plan 0018): default fake reports a CLEAN PR so the loop converges to the merge gate.
+    pollPrFn: async (input: IntegratorInput): Promise<PrFeedback | IntegratorBlocked> => {
+      rec.pollPrCalls++;
+      if (opts.pollPr) return opts.pollPr(input);
+      return { prNumber: 1, headSha: 'sha', verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
+    },
+    runPollStub: (_input: IntegratorInput): PrFeedback => ({ prNumber: 0, headSha: 'stub', verdict: 'clean', ciFailures: [], reviewThreads: [] }),
+    // respondThreads (plan 0018): capture the consumed triage; default reports nothing to reply/resolve.
+    respondThreadsFn: async (input: IntegratorInput): Promise<RespondThreadsOutput | IntegratorBlocked> => {
+      rec.respondCalls++;
+      rec.respondTriage.push(input.triage);
+      if (opts.respondThreads) return opts.respondThreads(input);
+      return { replied: 0, resolved: 0 };
+    },
+    runRespondStub: (_input: IntegratorInput): RespondThreadsOutput => ({ replied: 0, resolved: 0 }),
   };
 
   const fn = makeDataDrivenTask(runStepFn, deps);
@@ -147,9 +171,10 @@ function buildAdapter(opts: {
   return { run: () => fn(RUN_ID, { route: makeRoute(), template }), rec };
 }
 
-test('DD1: happy path — analyst→plan→developer→review→integrate→watcher(clean)→merge → succeeded', async () => {
+test('DD1: happy path — analyst→plan→developer→review→integrate→pollPr(clean)→merge→confirmMerge → succeeded', async () => {
   const { run, rec } = buildAdapter({
-    verdicts: { codeReview: 'approved', watcherPost: 'clean' },
+    template: featureDevelopmentPrReview(),
+    verdicts: { codeReview: 'approved' },
     gate: () => ({ decision: 'approve' }),
   });
   const result = await run();
@@ -158,6 +183,8 @@ test('DD1: happy path — analyst→plan→developer→review→integrate→watc
   assert.equal(rec.completed.length, 1, 'completeRun called once');
   assert.equal(rec.integrateCalls, 1, 'the integrator script ran once (real integrator via runner-wins)');
   assert.ok(rec.events.includes('integrate_succeeded:integrator'), 'integrate_succeeded emitted at the script node');
+  assert.equal(rec.pollPrCalls, 1, 'pollPr observed the PR once (clean → merge gate)');
+  assert.equal(rec.confirmMergeCalls, 1, 'confirmMerge ran once at the success terminal');
   assert.equal(rec.blocked.length, 0);
   assert.equal(rec.failed.length, 0);
 });
@@ -183,7 +210,8 @@ test('DD3: plan-gate reject maps to the rework outcome — loops back to analyst
   // routes a gate verdict through the template (not a hardcoded cancel).
   let planSeen = 0;
   const { run, rec } = buildAdapter({
-    verdicts: { codeReview: 'approved', watcherPost: 'clean' },
+    template: featureDevelopmentPrReview(),
+    verdicts: { codeReview: 'approved' },
     gate: (topic) => {
       if (topic === 'plan') {
         planSeen++;
@@ -198,15 +226,90 @@ test('DD3: plan-gate reject maps to the rework outcome — loops back to analyst
   assert.equal(rec.gates.filter((g) => g === 'plan').length, 2, 'analyst re-ran and re-opened the plan gate');
 });
 
-test('DD4: watcher dirty → watcherRouter default → failed terminal', async () => {
+test('DD4: pollPr ci_changes → ciRework → re-integrate → pollPr(clean) → merge → succeeded', async () => {
+  // First poll reports a CI failure (ci_changes) → ciRework (developer) fixes it → integrator re-pushes →
+  // second poll is clean → merge gate → confirmMerge → succeeded. Proves the bounded CI rework loop.
+  let polls = 0;
   const { run, rec } = buildAdapter({
-    verdicts: { codeReview: 'approved', watcherPost: 'dirty' },
+    template: featureDevelopmentPrReview(),
+    verdicts: { codeReview: 'approved' },
     gate: () => ({ decision: 'approve' }),
+    pollPr: () => {
+      polls++;
+      return polls === 1
+        ? { prNumber: 1, headSha: 's1', verdict: 'ci_changes' as const, ciFailures: [{ name: 'build', conclusion: 'FAILURE' }], reviewThreads: [] }
+        : { prNumber: 1, headSha: 's2', verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
+    },
   });
   const result = await run();
-  assert.equal(result.status, 'failed', 'a non-clean watcher routes to the failed terminal');
-  assert.equal(rec.failed.length, 1, 'failRun called for the failed terminal');
-  assert.equal(rec.completed.length, 0);
+  assert.equal(result.status, 'succeeded');
+  assert.equal(rec.pollPrCalls, 2, 'polled twice (ci_changes then clean)');
+  assert.equal(rec.integrateCalls, 2, 'integrator ran for the initial PR + the CI re-push');
+  // ciRework consumed the prFeedback (0016) — its hydrated input carries the failing-check feedback.
+  const ciFeedback = (rec.inputsByStep['ciRework'] as { feedback?: { verdict?: string } } | undefined)?.feedback;
+  assert.equal(ciFeedback?.verdict, 'ci_changes', 'ciRework consumed pollPr prFeedback');
+});
+
+test('DD4b: pollPr ci_changes forever → cap → blocked terminal (ciLoop is DATA)', async () => {
+  const { run, rec } = buildAdapter({
+    template: featureDevelopmentPrReview(),
+    verdicts: { codeReview: 'approved' },
+    gate: () => ({ decision: 'approve' }),
+    pollPr: () => ({ prNumber: 1, headSha: 's', verdict: 'ci_changes' as const, ciFailures: [{ name: 'build', conclusion: 'FAILURE' }], reviewThreads: [] }),
+  });
+  const result = await run();
+  assert.equal(result.status, 'blocked', 'the CI loop blocks at its cap, not the agent');
+  assert.equal(rec.blocked.length, 1);
+  assert.equal(rec.confirmMergeCalls, 0, 'never reached the merge gate');
+});
+
+test('DD4c: pollPr review_changes → triage(fix) → reviewRework → integrate → respondThreads → pollPr(clean) → merge', async () => {
+  // A review comment routes to triage; the analyst returns `fix`; the developer reworks; the SAME PR is
+  // re-pushed (reviewIntegrator) BEFORE respondThreads replies/resolves; the next poll is clean → merge.
+  let polls = 0;
+  const { run, rec } = buildAdapter({
+    template: featureDevelopmentPrReview(),
+    verdicts: { codeReview: 'approved', triage: 'fix' },
+    gate: () => ({ decision: 'approve' }),
+    pollPr: () => {
+      polls++;
+      return polls === 1
+        ? { prNumber: 1, headSha: 's1', verdict: 'review_changes' as const, ciFailures: [], reviewThreads: [{ threadId: 'T1', body: 'fix this' }] }
+        : { prNumber: 1, headSha: 's2', verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
+    },
+  });
+  const result = await run();
+  assert.equal(result.status, 'succeeded');
+  assert.equal(rec.respondCalls, 1, 'respondThreads ran once (reply + resolve the fixed thread)');
+  assert.equal(rec.integrateCalls, 2, 'integrator ran for the initial PR + the review re-push (reviewIntegrator)');
+  // respondThreads consumed the triage produced by the analyst (0016 script-consumes hydration).
+  assert.ok(rec.respondTriage.length === 1 && rec.respondTriage[0] !== undefined, 'respondThreads consumed the triage');
+});
+
+test('DD4d: pollPr review_changes → triage(question) → questionGate(approve) → triage(wontfix) → respondThreads → pollPr(clean)', async () => {
+  // The analyst first marks a thread `question` → the question gate surfaces it; on approve the run loops
+  // back to triage, which now returns `wontfix` → respondThreads (reply+resolve, no push) → clean → merge.
+  const { run, rec } = buildAdapter({
+    template: featureDevelopmentPrReview(),
+    verdicts: { codeReview: 'approved', triage: ['question', 'wontfix'] },
+    gate: () => ({ decision: 'approve' }),
+    pollPr: (() => {
+      let polls = 0;
+      return () => {
+        polls++;
+        return polls === 1
+          ? { prNumber: 1, headSha: 's1', verdict: 'review_changes' as const, ciFailures: [], reviewThreads: [{ threadId: 'T1', body: 'why?' }] }
+          : { prNumber: 1, headSha: 's2', verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
+      };
+    })(),
+  });
+  const result = await run();
+  assert.equal(result.status, 'succeeded');
+  assert.ok(rec.gates.includes('plan') && rec.gates.includes('merge'), 'plan + merge gates opened');
+  // The question gate is the SEPARATE 'review-question' reason → its OWN 'question' topic (distinct from
+  // the plan gate's 'plan' topic, so the real DBOS recv channels never collide — plan 0018).
+  assert.equal(rec.respondCalls, 1, 'wontfix path replies + resolves via respondThreads');
+  assert.equal(rec.integrateCalls, 1, 'wontfix needs no re-push (integrator ran only for the initial PR)');
 });
 
 test('DD5: an effect that needsHuman → resultSchema/abort precedence → failed terminal (onFailure=abort)', async () => {

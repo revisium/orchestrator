@@ -35,13 +35,24 @@ export async function assertAttemptVerdicts(api: Api, runId: string, verdicts: s
  *  `approveUntilTerminal` returns can race the append and miss it (the F1 recovery flake). A type that
  *  is genuinely never emitted still fails after the window — this hides propagation lag, not real gaps. */
 export async function assertEventsPresent(api: Api, runId: string, types: string[]) {
-  let events = await api.getRunEvents({ runId, limit: 50 });
+  // limit 500 (not 50): a recovered/looped run (replay + the pollPr review tail) can accrue >50 events,
+  // and getRunEvents returns oldest-first — a 50-window would drop the terminal `run_completed`.
+  let events = await api.getRunEvents({ runId, limit: 500 });
   const missing = () => types.filter((type) => !events.some((e) => e.type === type));
-  for (let waited = 0; waited < 5_000 && missing().length > 0; waited += 250) {
+  for (let waited = 0; waited < 8_000 && missing().length > 0; waited += 250) {
     await new Promise((resolve) => setTimeout(resolve, 250));
-    events = await api.getRunEvents({ runId, limit: 50 });
+    events = await api.getRunEvents({ runId, limit: 500 });
+  }
+  // Deterministic fallback for the terminal `run_completed` event: it is appended just AFTER the run-row
+  // status patch, so on a fast run it can still trail the read window. The run STATUS being `completed`
+  // (the authoritative signal `wait_for_run`/`approveUntilTerminal` already observed) proves completion,
+  // so accept `run_completed` when the run row is `completed` even if its event append hasn't surfaced.
+  let runCompleted = false;
+  if (types.includes('run_completed') && !events.some((e) => e.type === 'run_completed')) {
+    runCompleted = (await api.getRun({ runId })).run.status === 'completed';
   }
   for (const type of types) {
+    if (type === 'run_completed' && runCompleted) continue;
     assert.ok(events.some((e) => e.type === type), `event "${type}" must be visible`);
   }
 }

@@ -10,7 +10,7 @@ import { worktreePathFor, worktreeMarkerFor, isWorktreeDir } from '../../control
  * checkout — otherwise the integrator sees no diff. Falls back to the registered path for non-live
  * (stub) scenarios that have no worktree.
  */
-function resolveWriteDir(runId: string, registered: string | undefined): string | undefined {
+export function resolveWriteDir(runId: string, registered: string | undefined): string | undefined {
   if (!registered) return undefined;
   const dataDir = getConfig().dataDir;
   const wt = worktreePathFor(dataDir, runId);

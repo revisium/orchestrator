@@ -182,6 +182,19 @@
     }
   },
   {
+    "id": "triager",
+    "path": "stub.md",
+    "surface": "repo",
+    "rights": "read-only",
+    "allowed_tools": ["Read", "Grep", "Glob", "Bash"],
+    "default_model_level": "deep",
+    "runner_id": "claude-code",
+    "wrappers": {
+      "codex": "adapters/codex/materialized/agents/triager.toml",
+      "claude_code": "adapters/claude-code/materialized/agents/triager.md"
+    }
+  },
+  {
     "id": "pr-watcher",
     "path": "stub.md",
     "surface": "any",

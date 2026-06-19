@@ -5,7 +5,7 @@
  * (Option A, §3.0). NestJS is lazily imported so the host-free path never loads it.
  *
  * 0004: `revo inbox resolve` is now gate-aware:
- *  - Gate row (kind==='approval' && runId && context.topic∈{'plan','merge'}):
+ *  - Gate row (kind==='approval' && runId && context.topic∈{'plan','merge','question'}):
  *    requires --approve|--reject → resolveInbox (table write) + signal (DBOS send)
  *    + park/terminal poll (same as run start). HOST-REQUIRING.
  *  - Non-gate row (question/alert/approval-without-topic): keep 0002 table-only
@@ -25,7 +25,7 @@ import { withRevisiumService } from './revisium-context.js';
 import { pollWorkflowState, type PollOpts } from './poll-workflow-state.js';
 
 /** Topics recognized as gate topics (must match AwaitHuman topics). */
-const GATE_TOPICS = new Set<string>(['plan', 'merge']);
+const GATE_TOPICS = new Set<string>(['plan', 'merge', 'question']);
 
 type ListOptions = {
   status?: string;

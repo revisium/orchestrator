@@ -56,7 +56,7 @@ export function makeAwaitHuman(deps: AwaitHumanDeps) {
 
   return async function awaitHumanImpl(
     runId: string,
-    topic: 'plan' | 'merge',
+    topic: 'plan' | 'merge' | 'question',
     title: string,
     summary: unknown,
   ): Promise<Decision> {
