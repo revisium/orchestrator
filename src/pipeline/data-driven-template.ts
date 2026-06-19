@@ -30,9 +30,9 @@ function looksLikeTemplate(value: unknown): value is Template {
  * Extract a data-driven template from a pipeline's executionPolicy, if present + valid.
  *
  * Returns the validated `Template` when the pipeline carries a clean state-machine spec, else `null`
- * (→ the run takes the existing hardcoded `develop-task` path). A present-but-INVALID template throws,
- * so a broken data-driven pipeline fails loudly at run start rather than silently degrading to the
- * hardcoded engine (which would mask the authoring bug).
+ * (→ the caller fails loud with `PIPELINE_NOT_DATA_DRIVEN`; the data-driven engine is the sole engine, so
+ * there is no legacy fallback path). A present-but-INVALID template throws, so a broken data-driven pipeline
+ * fails loudly at run start rather than silently degrading (which would mask the authoring bug).
  */
 export function templateFromExecutionPolicy(executionPolicy: unknown): Template | null {
   if (!isRecord(executionPolicy)) return null;

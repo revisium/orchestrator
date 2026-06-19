@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { ControlPlaneError } from '../control-plane/errors.js';
 import type { InboxItem } from '../control-plane/inbox.js';
 import type { DbosService } from '../engine/dbos.service.js';
-import type { PipelineService } from '../pipeline/develop-task.workflow.js';
+import type { PipelineService } from '../pipeline/pipeline.service.js';
 import type { InboxService } from '../revisium/inbox.service.js';
 import type { PlaybooksService } from '../revisium/playbooks.service.js';
 import type { RolesService } from '../revisium/roles.service.js';
