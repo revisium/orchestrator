@@ -57,12 +57,17 @@ export function makeAwaitHuman(deps: AwaitHumanDeps) {
   return async function awaitHumanImpl(
     runId: string,
     topic: 'plan' | 'merge' | 'question',
+    gateKey: string,
     title: string,
     summary: unknown,
   ): Promise<Decision> {
     // 1. FULLY deterministic inbox id (no timestamp) so replay/restart never creates a duplicate row.
-    //    fnv1a64Hex → 16 hex; `inbox_` + 16 = 22 chars ≤ 64 (mirrors append-event id derivation).
-    const inboxKey = runId + '|' + topic;
+    //    Keyed by the per-entry gateKey (`nodeId#ordinal`), NOT just the topic: a generic template can
+    //    re-enter the same gate node (e.g. a question gate inside the review loop) or declare two gates
+    //    with the same topic — a `runId|topic` key would collide on the 2nd, ROW_CONFLICT back to the
+    //    first (resolved) row, leaving the human no fresh item and the workflow parked on recv. The
+    //    gateKey disambiguates each entry. fnv1a64Hex → 16 hex; `inbox_`+16 = 22 chars ≤ 64.
+    const inboxKey = `${runId}|${gateKey}`;
     const inboxId = `inbox_${fnv1a64Hex(inboxKey)}`;
 
     // 2. Draft write: pending approval row. context carries the topic (OQ-2) so resolve can read it back.
@@ -85,7 +90,7 @@ export function makeAwaitHuman(deps: AwaitHumanDeps) {
       runId,
       taskId: '',
       stepId: '',
-      stepKey: `gate:${topic}`,
+      stepKey: `gate:${gateKey}`,
       type: 'gate_opened',
       payload: { topic },
     });

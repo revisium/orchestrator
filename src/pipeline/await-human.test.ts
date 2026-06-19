@@ -63,7 +63,7 @@ test('A1: awaitHuman pushes inbox with deterministic id, emits gate_opened, retu
   });
 
   const awaitHuman = makeAwaitHuman(deps);
-  const result = await awaitHuman(runId, topic, 'Plan approval', { phase: 'plan' });
+  const result = await awaitHuman(runId, topic, topic, 'Plan approval', { phase: 'plan' });
 
   // Decision returned correctly.
   assert.equal(result.decision, 'approve');
@@ -105,7 +105,7 @@ test('A1 (merge gate): awaitHuman works for merge topic too', async () => {
   const { deps, pushInboxCalls } = makeDeps({ decision: { decision: 'approve' } });
 
   const awaitHuman = makeAwaitHuman(deps);
-  await awaitHuman(runId, topic, 'Merge approval', { prUrl: 'stub://pr/1' });
+  await awaitHuman(runId, topic, topic, 'Merge approval', { prUrl: 'stub://pr/1' });
 
   assert.equal(pushInboxCalls[0]?.item.kind, 'approval');
   const expectedId = `inbox_${fnv1a64Hex(`${runId}|${topic}`)}`;
@@ -119,7 +119,7 @@ test('A2: awaitDecision returns null → awaitHuman returns fail-closed reject (
   const { deps } = makeDeps({ decision: null });
 
   const awaitHuman = makeAwaitHuman(deps);
-  const result = await awaitHuman(runId, 'plan', 'Plan approval', {});
+  const result = await awaitHuman(runId, 'plan', 'plan', 'Plan approval', {});
 
   assert.equal(result.decision, 'reject', 'null recv must produce reject (fail-closed)');
   const answer = result.answer as Record<string, unknown> | undefined;
@@ -157,13 +157,13 @@ test('A3 (G11): awaitHuman proceeds idempotently when pushInbox returns same id 
   const awaitHuman = makeAwaitHuman(deps);
 
   // First call.
-  const result1 = await awaitHuman(runId, topic, 'Plan approval', {});
+  const result1 = await awaitHuman(runId, topic, topic, 'Plan approval', {});
   assert.equal(result1.decision, 'approve', 'first call must resolve');
   assert.equal(pushCallCount, 1, 'pushInbox called once on first invocation');
   assert.equal(pushInboxCalls[0], expectedId, 'deterministic id on first call');
 
   // Second call (replay) — same args, same id returned, awaitHuman must not throw.
-  const result2 = await awaitHuman(runId, topic, 'Plan approval', {});
+  const result2 = await awaitHuman(runId, topic, topic, 'Plan approval', {});
   assert.equal(result2.decision, 'approve', 'replay must not throw and must resolve');
   assert.equal(pushCallCount, 2, 'pushInbox called again on replay (verb handles ROW_CONFLICT internally)');
   assert.equal(pushInboxCalls[1], expectedId, 'same deterministic id on replay');
@@ -183,8 +183,8 @@ test('deterministic id is the same across two calls with the same runId+topic', 
   };
 
   const awaitHuman = makeAwaitHuman(deps);
-  await awaitHuman(runId, 'plan', 'T', {});
-  await awaitHuman(runId, 'plan', 'T different', {});
+  await awaitHuman(runId, 'plan', 'plan', 'T', {});
+  await awaitHuman(runId, 'plan', 'plan', 'T different', {});
 
   assert.equal(ids[0], ids[1], 'same runId+topic must always produce the same id');
 });
@@ -199,8 +199,27 @@ test('deterministic id differs between plan and merge topics for the same runId'
   };
 
   const awaitHuman = makeAwaitHuman(deps);
-  await awaitHuman(runId, 'plan', 'T', {});
-  await awaitHuman(runId, 'merge', 'T', {});
+  await awaitHuman(runId, 'plan', 'plan', 'T', {});
+  await awaitHuman(runId, 'merge', 'merge', 'T', {});
 
   assert.notEqual(ids[0], ids[1], 'plan and merge must produce different ids (topic isolation E8)');
+});
+
+test('deterministic id differs per gateKey for the SAME topic (re-entered gate — §3.2 fix)', async () => {
+  // A generic template can re-enter the same gate node (e.g. a `question` gate looped in the review
+  // phase) — each entry must get its OWN inbox row, not collide on `runId|topic` and leave the 2nd
+  // entry with no fresh pending item (the workflow then parks on recv forever).
+  const runId = 'run-det3';
+  const ids: string[] = [];
+  const deps: AwaitHumanDeps = {
+    pushInbox: async (_item, id) => { ids.push(id); return id; },
+    awaitDecision: async <T>(_topic: string): Promise<T | null> => ({ decision: 'approve' } as T),
+    appendEvent: async () => undefined,
+  };
+
+  const awaitHuman = makeAwaitHuman(deps);
+  await awaitHuman(runId, 'question', 'questionGate#1', 'Q1', {});
+  await awaitHuman(runId, 'question', 'questionGate#2', 'Q2', {});
+
+  assert.notEqual(ids[0], ids[1], 'two entries of a same-topic gate must produce distinct inbox ids');
 });
