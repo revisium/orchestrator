@@ -23,12 +23,11 @@ export type CreateRunInput = {
 export type CreateRunResult = {
   runId: string;
   taskId: string;
-  stepId: string;
   eventId: string;
   status: 'ready';
 };
 
-export type CreatedRunIds = Partial<Pick<CreateRunResult, 'runId' | 'taskId' | 'stepId' | 'eventId'>>;
+export type CreatedRunIds = Partial<Pick<CreateRunResult, 'runId' | 'taskId' | 'eventId'>>;
 
 type NormalizedInput = {
   title: string;
@@ -184,7 +183,6 @@ function buildIds(input: NormalizedInput): CreateRunResult {
   return {
     runId: `run_${stem}`,
     taskId: `task_${stem}`,
-    stepId: `step_${stem}`,
     eventId: `event_${stem}_created`,
     status: 'ready',
   };
@@ -237,40 +235,14 @@ export async function createRunWorkflow(
     });
     createdIds.taskId = ids.taskId;
 
-    await dataAccess.createRow('steps', ids.stepId, {
-      id: ids.stepId,
-      task_id: ids.taskId,
-      run_id: ids.runId,
-      role: normalized.role,
-      kind: 'plan_run',
-      status: 'ready',
-      input: {
-        title: normalized.title,
-        description: normalized.description,
-        scope: normalized.scope,
-        repo: normalized.repoInfo,
-        run_id: ids.runId,
-        task_id: ids.taskId,
-      },
-      output: null,
-      model_profile: 'standard',
-      run_after: '',
-      attempt_count: 0,
-      max_attempts: 3,
-      priority: normalized.priority,
-      lease_owner: '',
-      lease_expires_at: '',
-      dead_reason: '',
-      created_at: nowIso,
-      updated_at: nowIso,
-    });
-    createdIds.stepId = ids.stepId;
-
+    // No `steps` row is written: the data-driven engine owns progress in DBOS and synthesizes the
+    // per-step `Step` in-memory (RunService.loadPipelineContext). The pre-pivot phantom `plan_run`
+    // step row (stuck at `ready` forever, never advanced) was retired here (audit §3.1).
     await dataAccess.createRow('events', ids.eventId, {
       id: ids.eventId,
       run_id: ids.runId,
       task_id: ids.taskId,
-      step_id: ids.stepId,
+      step_id: '',
       type: 'run_created',
       payload: {
         source: 'revo run create',
@@ -283,7 +255,7 @@ export async function createRunWorkflow(
         pipeline_id: normalized.pipelineId,
         route_decision: normalized.routeDecision,
         execution_profile: normalized.executionProfile,
-        ids: { run_id: ids.runId, task_id: ids.taskId, step_id: ids.stepId },
+        ids: { run_id: ids.runId, task_id: ids.taskId },
       },
       actor: 'cli',
       created_at: nowIso,

@@ -18,7 +18,7 @@ import { fnv1a64Hex } from '../control-plane/steps.js';
 
 function makeFake(
   runRows: ControlPlaneRow[],
-  opts: { throwConflictOnEvent?: boolean; taskRows?: ControlPlaneRow[]; stepRows?: ControlPlaneRow[] } = {},
+  opts: { throwConflictOnEvent?: boolean; taskRows?: ControlPlaneRow[] } = {},
 ) {
   const calls: string[] = [];
   const patches: Array<{ table: RuntimeTable; rowId: string; ops: PatchOperation[] }> = [];
@@ -28,16 +28,13 @@ function makeFake(
     [
       ...runRows.map((r) => [`task_runs:${r.rowId}`, { ...r.data }] as const),
       ...(opts.taskRows ?? []).map((r) => [`tasks:${r.rowId}`, { ...r.data }] as const),
-      ...(opts.stepRows ?? []).map((r) => [`steps:${r.rowId}`, { ...r.data }] as const),
     ],
   );
 
   const da: ControlPlaneDataAccess = {
     async assertReady() {},
     async listRows(table, options) {
-      let source: ControlPlaneRow[] = [];
-      if (table === 'tasks') source = opts.taskRows ?? [];
-      if (table === 'steps') source = opts.stepRows ?? [];
+      const source: ControlPlaneRow[] = table === 'tasks' ? (opts.taskRows ?? []) : [];
       const start = options?.after
         ? source.findIndex((row) => row.cursor === options.after) + 1
         : 0;
@@ -126,19 +123,15 @@ test('failRun: already-failed skips event and run patch when related rows are cu
   assert.equal(patches.length, 0, 'no related patches when related rows are current');
 });
 
-test('failRun: already-failed replay reconciles stale related task and step rows to failed', async () => {
+test('failRun: already-failed replay reconciles stale related task rows to failed', async () => {
   const taskRows: ControlPlaneRow[] = [
     { rowId: 'task-stale', data: { id: 'task-stale', run_id: 'run-a', status: 'running' } },
     { rowId: 'task-current', data: { id: 'task-current', run_id: 'run-a', status: 'failed' } },
     { rowId: 'task-other-run', data: { id: 'task-other-run', run_id: 'run-b', status: 'running' } },
   ];
-  const stepRows: ControlPlaneRow[] = [
-    { rowId: 'step-stale', data: { id: 'step-stale', run_id: 'run-a', status: 'running' } },
-    { rowId: 'step-current', data: { id: 'step-current', run_id: 'run-a', status: 'failed' } },
-  ];
   const { da, creates, patches } = makeFake(
     [RUN('failed')],
-    { taskRows, stepRows },
+    { taskRows },
   );
 
   const result = await failRun(da, 'run-a', 'again', { now: new Date('2026-06-11T00:00:00Z') });
@@ -152,7 +145,7 @@ test('failRun: already-failed replay reconciles stale related task and step rows
   );
   assert.deepEqual(
     patches.map((patch) => `${patch.table}:${patch.rowId}`).sort(),
-    ['steps:step-stale', 'tasks:task-stale'],
+    ['tasks:task-stale'],
   );
   for (const patch of patches) {
     assert.ok(patch.ops.some((op) => op.op === 'replace' && op.path === 'status' && op.value === 'failed'));

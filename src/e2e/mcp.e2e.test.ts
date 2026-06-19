@@ -202,7 +202,13 @@ test('H10: inspection tools reflect a completed run', { skip: e2eSkip }, async (
     await inv('start_run', { runId: created.runId });
     const settled = await inv<{ state: string }>('wait_for_run', { runId: created.runId, timeoutMs: 10_000, intervalMs: 500 });
     assert.equal(settled.state, 'completed');
-    const events = await inv<Array<{ type: string }>>('get_run_events', { runId: created.runId });
+    // Poll for the terminal `run_completed` event: it is appended just AFTER the run-row status patch,
+    // so a read taken the instant wait_for_run returns can race the append (terminal-event-visibility flake).
+    let events = await inv<Array<{ type: string }>>('get_run_events', { runId: created.runId });
+    for (let waited = 0; waited < 5_000 && !events.some((e) => e.type === 'run_completed'); waited += 250) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      events = await inv<Array<{ type: string }>>('get_run_events', { runId: created.runId });
+    }
     assert.ok(events.some((e) => e.type === 'run_completed'), 'get_run_events must show run_completed');
     const digest = await inv<{ run: { status: string } }>('get_run_digest', { runId: created.runId });
     assert.equal(digest.run.status, 'completed');

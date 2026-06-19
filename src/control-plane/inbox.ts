@@ -195,18 +195,12 @@ export async function pushInbox(
     });
   } catch (e) {
     // Idempotent on workflow-body replay (mirror append-event.ts:69-72). Same row already exists → no-op.
-    // Gate rows carry no stepId, so the step-park branch below is moot on conflict; return early.
     if (e instanceof ControlPlaneError && e.code === 'ROW_CONFLICT') return id;
     throw e;
   }
 
-  // Park the originating step (bare path — G6):
-  if (item.stepId) {
-    await da.patchRow('steps', item.stepId, [
-      { op: 'replace', path: 'status', value: 'awaiting_approval' },
-    ]);
-  }
-
+  // No `steps` row is parked: the data-driven engine carries no inbox stepId (await-human sets ''),
+  // so the legacy step-park is dead (audit §3.1). The DBOS workflow is parked by `DBOS.recv`, not a step row.
   return id;
 }
 
@@ -313,32 +307,8 @@ export async function resolveInbox(
   const resolvedInbox = status === 'pending' ? await da.getRow('inbox', itemId) : inbox;
   const effectiveAnswer = resolvedInbox?.data.answer ?? answer;
 
-  // (4) ALWAYS-RUN STEP COMPLETION (the resumable part).
-  // Runs on every call once inbox is known-resolved.
-  const stepId = typeof inbox.data.step_id === 'string' ? inbox.data.step_id : '';
-  if (!stepId) {
-    // alert-kind / step-less item (including gate rows): inbox flip is the whole resolve.
-    return { status, answer: effectiveAnswer };
-  }
-
-  // Re-read the originating step and idempotently complete the unblock.
-  const step = await da.getRow('steps', stepId);
-  if (step && step.data.status === 'awaiting_approval') {
-    // Still parked → flip to ready carrying the stored answer. Bare paths (G6).
-    await da.patchRow('steps', stepId, [
-      { op: 'replace', path: 'status', value: 'ready' },
-      { op: 'replace', path: 'input', value: effectiveAnswer },
-    ]);
-    return { status, answer: effectiveAnswer };
-  }
-
-  // step already ready (done state) → clean NO-OP (no warn, no duplicate).
-  if (step && step.data.status === 'ready') {
-    return { status, answer: effectiveAnswer };
-  }
-
-  // step is null OR in an unexpected state (cancelled / re-driven / superseded) →
-  // RESURRECTION GUARD: do NOT flip it. Leave the inbox resolved and console.warn.
-  console.warn(`resolveInbox: step ${stepId} no longer awaiting_approval; skipping unblock`);
+  // (4) The inbox flip is the WHOLE resolve. The data-driven engine carries no inbox stepId, so there
+  // is no originating `steps` row to unblock — the parked DBOS workflow resumes via `DBOS.send` on the
+  // signalled topic (the legacy step-unblock was retired — audit §3.1).
   return { status, answer: effectiveAnswer };
 }

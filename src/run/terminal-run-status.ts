@@ -20,8 +20,6 @@ const RELATED_ROW_PAGE_SIZE = 500;
 const RELATED_ROW_PATCH_CONCURRENCY = 20;
 
 export type TerminalRunStatus = 'cancelled' | 'failed' | 'completed' | 'paused';
-type TerminalStepStatus = 'skipped' | 'failed' | 'succeeded';
-const TERMINAL_STEP_STATUSES = new Set(['succeeded', 'failed', 'skipped', 'dead']);
 
 export type RecordTerminalParams = {
   /** Terminal status to set on task_runs. */
@@ -35,17 +33,6 @@ export type RecordTerminalParams = {
   /** Wall clock (injectable for tests). */
   now: Date;
 };
-
-function terminalStepStatusForRunStatus(status: TerminalRunStatus): TerminalStepStatus {
-  if (status === 'completed') return 'succeeded';
-  if (status === 'failed') return 'failed';
-  // A cancelled/paused run stops remaining work without claiming execution failure.
-  return 'skipped';
-}
-
-function isTerminalStepStatus(status: unknown): boolean {
-  return typeof status === 'string' && TERMINAL_STEP_STATUSES.has(status);
-}
 
 // Prisma path+equals accepts scalar values; the SDK types equals as an object due to generated types.
 function runIdWhere(runId: string): ListRowsOptions['where'] {
@@ -97,14 +84,9 @@ export async function recordTerminalRunStatus(
     { op: 'replace' as const, path: 'status', value: params.status },
     { op: 'replace' as const, path: 'updated_at', value: nowIso },
   ];
-  const stepStatus = terminalStepStatusForRunStatus(params.status);
-  const stepPatch = [
-    { op: 'replace' as const, path: 'status', value: stepStatus },
-    { op: 'replace' as const, path: 'updated_at', value: nowIso },
-  ];
   const eventId = `event_${fnv1a64Hex(`${runId}|${params.eventType}`)}`;
 
-  async function listRowsForRun(table: 'tasks' | 'steps') {
+  async function listRowsForRun(table: 'tasks') {
     const rows: ControlPlaneRow[] = [];
     let after: string | undefined;
     for (;;) {
@@ -122,24 +104,14 @@ export async function recordTerminalRunStatus(
   }
 
   async function patchRelatedTerminalRows(): Promise<void> {
-    const [tasks, steps] = await Promise.all([
-      listRowsForRun('tasks'),
-      listRowsForRun('steps'),
-    ]);
-    const patches: Array<{
-      table: 'tasks' | 'steps';
-      rowId: string;
-      patch: typeof taskPatch | typeof stepPatch;
-    }> = [
-      ...tasks
-        .filter((task) => task.data.run_id === runId && task.data.status !== params.status)
-        .map((task) => ({ table: 'tasks' as const, rowId: task.rowId, patch: taskPatch })),
-      ...steps
-        .filter((step) => step.data.run_id === runId && !isTerminalStepStatus(step.data.status) && step.data.status !== stepStatus)
-        .map((step) => ({ table: 'steps' as const, rowId: step.rowId, patch: stepPatch })),
-    ];
+    // Only `tasks` are cascaded to the terminal status. There is no `steps` row to patch — the
+    // data-driven engine writes none (audit §3.1); progress lives in DBOS, not a step row.
+    const tasks = await listRowsForRun('tasks');
+    const patches = tasks
+      .filter((task) => task.data.run_id === runId && task.data.status !== params.status)
+      .map((task) => ({ rowId: task.rowId, patch: taskPatch }));
     await runBounded(patches, RELATED_ROW_PATCH_CONCURRENCY, async (patch) => {
-      await da.patchRow(patch.table, patch.rowId, patch.patch);
+      await da.patchRow('tasks', patch.rowId, patch.patch);
     });
   }
 
