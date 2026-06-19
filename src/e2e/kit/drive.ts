@@ -1,18 +1,11 @@
 import assert from 'node:assert/strict';
 import type { TaskControlPlaneApiService } from '../../task-control-plane/task-control-plane-api.service.js';
 
-type RunDetail = Awaited<ReturnType<TaskControlPlaneApiService['getRun']>>;
-
 // Poll at 500ms: tighter intervals can observe a run as terminal before its DBOS workflow status /
 // step-status cascade settle, flaking `workflowStatus`/`no ready steps` assertions on slower CI.
 // A real run settles in a few seconds — if a wait needs >10s the run is stuck (a bug), so fail fast.
 const POLL_MS = 500;
 const WAIT_TIMEOUT_MS = 10_000;
-
-/** Flatten every step across a run's tasks. */
-export function allSteps(detail: RunDetail) {
-  return detail.tasks.flatMap((task) => task.steps);
-}
 
 /** Poll until the run settles (terminal or parked at a gate). Returns the wait state. */
 export function waitState(api: TaskControlPlaneApiService, runId: string, timeoutMs = WAIT_TIMEOUT_MS) {

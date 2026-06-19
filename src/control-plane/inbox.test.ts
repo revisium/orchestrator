@@ -3,10 +3,10 @@
  *
  * Covers:
  *  - pushInbox: inserts row with correct shape, seeds answer:null/resolved_by/resolved_at,
- *    parks step, skips step-park when no stepId, redacts secrets in context.
+ *    redacts secrets in context.
  *  - listInbox / getInbox: read delegation, null on missing.
- *  - resolveInbox: full happy-path, idempotency (double-resolve), resumability
- *    (crash-after-inbox-patch), resurrection guard, illegal-transition guard.
+ *  - resolveInbox: inbox flip to resolved, idempotency (double-resolve / already-resolved),
+ *    illegal-transition guard. (The originating-step park/unblock was retired — audit §3.1.)
  *  - Invariant: no @dbos-inc/* import in inbox.ts.
  */
 import test from 'node:test';
@@ -124,23 +124,10 @@ test('pushInbox seeds answer:null, resolved_by:"", resolved_at:"" (G10)', async 
   assert.equal(row.data.resolved_at, '');
 });
 
-test('pushInbox parks the originating step to awaiting_approval (bare path)', async () => {
+test('pushInbox writes no step row (no originating-step park — audit §3.1)', async () => {
   const { da, patchCalls } = makeFakeDa();
   await pushInbox(da, BASE_ITEM, { now: FIXED_NOW, idSuffix: FIXED_SUFFIX });
-
-  assert.equal(patchCalls.length, 1);
-  const patch = patchCalls[0];
-  assert.ok(patch);
-  assert.equal(patch.table, 'steps');
-  assert.equal(patch.rowId, 'step-1');
-  assert.deepEqual(patch.ops, [{ op: 'replace', path: 'status', value: 'awaiting_approval' }]);
-});
-
-test('pushInbox skips step-park when no stepId (alert-kind without step)', async () => {
-  const item: NewInboxItem = { kind: 'alert', title: 'Alert!', context: {} };
-  const { da, patchCalls } = makeFakeDa();
-  await pushInbox(da, item, { now: FIXED_NOW, idSuffix: FIXED_SUFFIX });
-  assert.equal(patchCalls.length, 0);
+  assert.equal(patchCalls.length, 0, 'pushInbox must not patch any step row');
 });
 
 test('pushInbox redacts secret-shaped context keys before write (edge 15)', async () => {
@@ -204,7 +191,7 @@ test('getInbox returns item when found and null when missing', async () => {
 
 // ─── resolveInbox — happy path ───────────────────────────────
 
-function makePendingInboxWithStep(inboxId = 'inbox-1', stepId = 'step-1') {
+function makePendingInbox(inboxId = 'inbox-1', stepId = 'step-1') {
   return makeFakeDa([
     {
       table: 'inbox',
@@ -217,20 +204,14 @@ function makePendingInboxWithStep(inboxId = 'inbox-1', stepId = 'step-1') {
         options: [],
       },
     },
-    {
-      table: 'steps',
-      rowId: stepId,
-      data: { id: stepId, status: 'awaiting_approval', input: null },
-    },
   ]);
 }
 
-test('resolveInbox happy-path: flips inbox to resolved and step to ready', async () => {
-  const { da, patchCalls } = makePendingInboxWithStep();
+test('resolveInbox happy-path: flips inbox to resolved', async () => {
+  const { da, patchCalls } = makePendingInbox();
   await resolveInbox(da, 'inbox-1', 'approve', 'alice', { now: FIXED_NOW });
 
   const inboxPatches = patchCalls.filter((p) => p.table === 'inbox');
-  const stepPatches = patchCalls.filter((p) => p.table === 'steps');
 
   assert.equal(inboxPatches.length, 1);
   const ip = inboxPatches[0];
@@ -239,14 +220,12 @@ test('resolveInbox happy-path: flips inbox to resolved and step to ready', async
   assert.ok(ip?.ops.some((o) => o.op === 'replace' && o.path === 'resolved_by' && o.value === 'alice'));
   assert.ok(ip?.ops.some((o) => o.op === 'replace' && o.path === 'resolved_at' && o.value === '2026-06-07T10:00:00.000Z'));
 
-  assert.equal(stepPatches.length, 1);
-  const sp = stepPatches[0];
-  assert.ok(sp?.ops.some((o) => o.op === 'replace' && o.path === 'status' && o.value === 'ready'));
-  assert.ok(sp?.ops.some((o) => o.op === 'replace' && o.path === 'input' && o.value === 'approve'));
+  // No step row is touched — the originating-step unblock was retired (audit §3.1).
+  assert.equal(patchCalls.filter((p) => p.table === 'steps').length, 0);
 });
 
 test('resolveInbox bare patch paths (G6): no JSON-Pointer slashes', async () => {
-  const { da, patchCalls } = makePendingInboxWithStep();
+  const { da, patchCalls } = makePendingInbox();
   await resolveInbox(da, 'inbox-1', 'yes', 'bob');
   for (const pc of patchCalls) {
     for (const op of pc.ops) {
@@ -265,12 +244,12 @@ test('resolveInbox unknown itemId throws ROW_NOT_FOUND (edge 13)', async () => {
   );
 });
 
-// ─── resolveInbox — G9 idempotency / resumability ────────────
+// ─── resolveInbox — G9 idempotency ───────────────────────────
 
-test('G9 double-resolve: step unblocked exactly once, no second inbox patch', async () => {
-  const { da, patchCalls } = makePendingInboxWithStep();
+test('G9 double-resolve: inbox patched exactly once, no second patch', async () => {
+  const { da, patchCalls } = makePendingInbox();
 
-  // First resolve — patches inbox + step.
+  // First resolve — patches inbox.
   await resolveInbox(da, 'inbox-1', 'approve', 'alice', { now: FIXED_NOW });
   const afterFirst = patchCalls.length;
 
@@ -280,87 +259,29 @@ test('G9 double-resolve: step unblocked exactly once, no second inbox patch', as
   const inboxPatchesTotal = patchCalls.filter((p) => p.table === 'inbox').length;
   assert.equal(inboxPatchesTotal, 1, 'inbox must only be patched once (no second patch on double-resolve)');
 
-  // Step was already flipped to `ready` after the first call → second call is a no-op.
-  const stepPatchesTotal = patchCalls.filter((p) => p.table === 'steps').length;
-  assert.equal(stepPatchesTotal, 1, 'step must be unblocked exactly once');
-
   assert.ok(patchCalls.length === afterFirst, 'second resolve must emit no new patches');
 });
 
-test('G9 resumability: crash-after-inbox-patch — retry completes the step unblock (edge 17b)', async () => {
-  // Simulate: inbox already resolved (crash happened after inbox-patch but before step-patch).
-  // The step is STILL awaiting_approval.
-  const inboxId = 'inbox-crash';
-  const stepId = 'step-crash';
-  const storedAnswer = 'stored-answer';
-
-  const { da, patchCalls } = makeFakeDa([
-    {
-      table: 'inbox',
-      rowId: inboxId,
-      data: {
-        id: inboxId, kind: 'approval', status: 'resolved',
-        title: 'T', run_id: 'run-1', task_id: 'task-1', step_id: stepId,
-        project_id: '', context: null,
-        // STORED answer from the first (crashed) resolve:
-        answer: storedAnswer,
-        resolved_by: 'alice', resolved_at: '2026-06-07T10:00:00.000Z',
-        created_at: '2026-06-07T09:00:00.000Z',
-        options: [],
-      },
-    },
-    {
-      table: 'steps',
-      rowId: stepId,
-      data: { id: stepId, status: 'awaiting_approval', input: null },
-    },
-  ]);
-
-  // Retry: caller passes a different answer but stored answer wins.
-  await resolveInbox(da, inboxId, 'caller-answer', 'bob', { now: FIXED_NOW });
-
-  const inboxPatches = patchCalls.filter((p) => p.table === 'inbox');
-  const stepPatches = patchCalls.filter((p) => p.table === 'steps');
-
-  // No inbox re-patch (already resolved).
-  assert.equal(inboxPatches.length, 0, 'no inbox re-patch on retry');
-
-  // Step MUST be unblocked with the STORED answer, not the caller's argument.
-  assert.equal(stepPatches.length, 1, 'step must be unblocked on retry');
-  const sp = stepPatches[0];
-  assert.ok(sp?.ops.some((o) => o.op === 'replace' && o.path === 'status' && o.value === 'ready'));
-  assert.ok(
-    sp?.ops.some((o) => o.op === 'replace' && o.path === 'input' && o.value === storedAnswer),
-    'stored answer must win over caller argument',
-  );
-});
-
-test('G9 double-resolve: already-ready step is a clean no-op (no warn, no duplicate)', async () => {
-  // inbox resolved, step already ready — double-resolve scenario where step is done.
+test('G9 double-resolve: already-resolved inbox is a clean no-op (no duplicate patch)', async () => {
+  // inbox already resolved — double-resolve scenario where the resolve is done.
   const inboxId = 'inbox-done';
-  const stepId = 'step-done';
   const { da, patchCalls } = makeFakeDa([
     {
       table: 'inbox',
       rowId: inboxId,
       data: {
         id: inboxId, kind: 'approval', status: 'resolved',
-        title: 'T', run_id: '', task_id: '', step_id: stepId,
+        title: 'T', run_id: '', task_id: '', step_id: '',
         project_id: '', context: null, answer: 'yes',
         resolved_by: 'alice', resolved_at: '2026-06-07T10:00:00.000Z',
         created_at: '', options: [],
       },
     },
-    {
-      table: 'steps',
-      rowId: stepId,
-      data: { id: stepId, status: 'ready', input: 'yes' },
-    },
   ]);
 
   await resolveInbox(da, inboxId, 'yes', 'alice', { now: FIXED_NOW });
 
-  assert.equal(patchCalls.length, 0, 'no patches when both inbox and step are already done');
+  assert.equal(patchCalls.length, 0, 'no patches when the inbox is already resolved');
 });
 
 // ─── resolveInbox — G5 state guards ──────────────────────────
@@ -385,92 +306,7 @@ test('G5 illegal transition: non-pending/non-resolved status throws VALIDATION_F
   );
 });
 
-test('G5 resurrection guard: step gone → inbox resolves but step not touched, console.warn emitted (edge 19)', async () => {
-  const inboxId = 'inbox-orphan';
-  const stepId = 'step-gone';
-  const { da, patchCalls } = makeFakeDa([
-    {
-      table: 'inbox',
-      rowId: inboxId,
-      data: {
-        id: inboxId, kind: 'approval', status: 'pending',
-        title: 'T', run_id: '', task_id: '', step_id: stepId,
-        project_id: '', context: null, answer: null,
-        resolved_by: '', resolved_at: '', created_at: '', options: [],
-      },
-    },
-    // step-gone is NOT in the store → getRow returns null
-  ]);
-
-  const warnMessages: unknown[] = [];
-  const origWarn = console.warn;
-  console.warn = (...args: unknown[]) => warnMessages.push(args[0]);
-
-  try {
-    await resolveInbox(da, inboxId, null, 'alice');
-  } finally {
-    console.warn = origWarn;
-  }
-
-  // Inbox was patched (status → resolved).
-  const inboxPatches = patchCalls.filter((p) => p.table === 'inbox');
-  assert.equal(inboxPatches.length, 1, 'inbox must still be resolved');
-
-  // Step was NOT patched (resurrection guard).
-  const stepPatches = patchCalls.filter((p) => p.table === 'steps');
-  assert.equal(stepPatches.length, 0, 'step must not be touched when gone');
-
-  // console.warn was called.
-  assert.ok(
-    warnMessages.some((m) => typeof m === 'string' && m.includes(stepId)),
-    'console.warn must mention the step id',
-  );
-});
-
-test('G5 resurrection guard: step in unexpected status → inbox resolves, step not touched, warn (edge 19)', async () => {
-  const inboxId = 'inbox-cancelled-step';
-  const stepId = 'step-cancelled';
-  const { da, patchCalls } = makeFakeDa([
-    {
-      table: 'inbox',
-      rowId: inboxId,
-      data: {
-        id: inboxId, kind: 'approval', status: 'pending',
-        title: 'T', run_id: '', task_id: '', step_id: stepId,
-        project_id: '', context: null, answer: null,
-        resolved_by: '', resolved_at: '', created_at: '', options: [],
-      },
-    },
-    {
-      table: 'steps',
-      rowId: stepId,
-      data: { id: stepId, status: 'cancelled', input: null },
-    },
-  ]);
-
-  const warnMessages: unknown[] = [];
-  const origWarn = console.warn;
-  console.warn = (...args: unknown[]) => warnMessages.push(args[0]);
-
-  try {
-    await resolveInbox(da, inboxId, null, 'alice');
-  } finally {
-    console.warn = origWarn;
-  }
-
-  const inboxPatches = patchCalls.filter((p) => p.table === 'inbox');
-  assert.equal(inboxPatches.length, 1, 'inbox must still be resolved');
-
-  const stepPatches = patchCalls.filter((p) => p.table === 'steps');
-  assert.equal(stepPatches.length, 0, 'cancelled step must not be touched');
-
-  assert.ok(
-    warnMessages.some((m) => typeof m === 'string' && m.includes(stepId)),
-    'console.warn must mention the step id',
-  );
-});
-
-test('G5 step-less inbox item: resolveInbox resolves inbox, no step patches', async () => {
+test('G5 resolveInbox resolves inbox without touching any step row', async () => {
   const { da, patchCalls } = makeFakeDa([
     {
       table: 'inbox',
@@ -616,7 +452,7 @@ test('A8 (G1): pushInbox with opts.id swallows ROW_CONFLICT and returns same id 
 // C2 fix: after patching, the function re-reads the inbox row and returns stored.data.answer —
 // not the raw caller argument — so concurrent/round-tripped values converge to what is recorded.
 test('A9 (G2+C2): resolveInbox on pending row returns stored (re-read) answer on first resolve', async () => {
-  const { da } = makePendingInboxWithStep();
+  const { da } = makePendingInbox();
 
   const result = await resolveInbox(da, 'inbox-1', 'approve', 'alice', { now: FIXED_NOW });
 
@@ -629,7 +465,6 @@ test('A9 (G2+C2): resolveInbox on pending row returns stored (re-read) answer on
 
 test('A9 (G2): resolveInbox on already-resolved row returns stored answer (not caller arg)', async () => {
   const inboxId = 'inbox-g2';
-  const stepId = 'step-g2';
   const storedAnswer = { decision: 'approve' };
 
   const { da } = makeFakeDa([
@@ -638,17 +473,12 @@ test('A9 (G2): resolveInbox on already-resolved row returns stored answer (not c
       rowId: inboxId,
       data: {
         id: inboxId, kind: 'approval', status: 'resolved',
-        title: 'T', run_id: 'run-g2', task_id: '', step_id: stepId,
+        title: 'T', run_id: 'run-g2', task_id: '', step_id: '',
         project_id: '', context: null,
         answer: storedAnswer,
         resolved_by: 'alice', resolved_at: '2026-06-07T10:00:00.000Z',
         created_at: '2026-06-07T09:00:00.000Z', options: [],
       },
-    },
-    {
-      table: 'steps',
-      rowId: stepId,
-      data: { id: stepId, status: 'ready', input: 'yes' },
     },
   ]);
 

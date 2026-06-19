@@ -9,21 +9,11 @@ export type RunSummary = {
   createdAt: string;
 };
 
-export type StepSummary = {
-  stepId: string;
-  role: string;
-  kind: string;
-  status: string;
-  attemptCount: number;
-  maxAttempts: number;
-};
-
 export type TaskSummary = {
   taskId: string;
   title: string;
   status: string;
   roleHint: string;
-  steps: StepSummary[];
 };
 
 export type RunDetail = {
@@ -96,23 +86,12 @@ function toRunDetail(row: ControlPlaneRow): RunDetail['run'] {
   };
 }
 
-function toTaskSummary(row: ControlPlaneRow): Omit<TaskSummary, 'steps'> {
+function toTaskSummary(row: ControlPlaneRow): TaskSummary {
   return {
     taskId: row.rowId,
     title: str(row.data.title),
     status: str(row.data.status),
     roleHint: str(row.data.role_hint),
-  };
-}
-
-function toStepSummary(row: ControlPlaneRow): StepSummary {
-  return {
-    stepId: row.rowId,
-    role: str(row.data.role),
-    kind: str(row.data.kind),
-    status: str(row.data.status),
-    attemptCount: num(row.data.attempt_count),
-    maxAttempts: num(row.data.max_attempts),
   };
 }
 
@@ -186,25 +165,9 @@ export async function showRun(da: ControlPlaneDataAccess, runId: string): Promis
     where,
   });
 
-  const steps = await da.listRows('steps', {
-    first: GLOBAL_CAP,
-    orderBy: [{ field: 'createdAt', direction: 'asc' }],
-    where,
-  });
-
-  const taskIds = new Set(tasks.map((t) => t.rowId));
-  const stepsByTaskId = new Map<string, StepSummary[]>();
-  for (const step of steps) {
-    const tid = str(step.data.task_id);
-    if (!taskIds.has(tid)) continue;
-    const list = stepsByTaskId.get(tid) ?? [];
-    list.push(toStepSummary(step));
-    stepsByTaskId.set(tid, list);
-  }
-
   return {
     run: toRunDetail(runRow),
-    tasks: tasks.map((t) => ({ ...toTaskSummary(t), steps: stepsByTaskId.get(t.rowId) ?? [] })),
+    tasks: tasks.map(toTaskSummary),
   };
 }
 
@@ -320,12 +283,6 @@ export function formatRunDetail(detail: RunDetail): string {
       `  status   ${task.status}`,
       `  role     ${task.roleHint}`,
     );
-    for (const step of task.steps) {
-      lines.push(
-        `    step     ${step.stepId}`,
-        `    role     ${step.role}  kind=${step.kind}  status=${step.status}  attempts=${step.attemptCount}/${step.maxAttempts}`,
-      );
-    }
     lines.push('');
   }
   return lines.join('\n').trimEnd();
