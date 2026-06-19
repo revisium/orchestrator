@@ -35,11 +35,13 @@ export async function assertAttemptVerdicts(api: Api, runId: string, verdicts: s
  *  `approveUntilTerminal` returns can race the append and miss it (the F1 recovery flake). A type that
  *  is genuinely never emitted still fails after the window — this hides propagation lag, not real gaps. */
 export async function assertEventsPresent(api: Api, runId: string, types: string[]) {
-  let events = await api.getRunEvents({ runId, limit: 50 });
+  // limit 500 (not 50): a recovered/looped run (replay + the pollPr review tail) can accrue >50 events,
+  // and getRunEvents returns oldest-first — a 50-window would drop the terminal `run_completed`.
+  let events = await api.getRunEvents({ runId, limit: 500 });
   const missing = () => types.filter((type) => !events.some((e) => e.type === type));
   for (let waited = 0; waited < 5_000 && missing().length > 0; waited += 250) {
     await new Promise((resolve) => setTimeout(resolve, 250));
-    events = await api.getRunEvents({ runId, limit: 50 });
+    events = await api.getRunEvents({ runId, limit: 500 });
   }
   for (const type of types) {
     assert.ok(events.some((e) => e.type === type), `event "${type}" must be visible`);
