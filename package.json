@@ -60,7 +60,7 @@
     "@nestjs/common": "11.1.24",
     "@nestjs/core": "11.1.24",
     "@revisium/client": "^0.6.0",
-    "@revisium/standalone": "^2.8.2",
+    "@revisium/standalone": "2.8.2",
     "commander": "^12.1.0",
     "pg": "8.21.0",
     "reflect-metadata": "0.2.2",
