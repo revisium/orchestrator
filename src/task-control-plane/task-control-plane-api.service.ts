@@ -7,7 +7,7 @@ import { baseUrl, getConfig, isAlive, isHealthy, readRuntime } from '../cli/conf
 import { ControlPlaneError } from '../control-plane/errors.js';
 import type { InboxItem } from '../control-plane/inbox.js';
 import { DbosService } from '../engine/dbos.service.js';
-import { PipelineService, type RunnerMode } from '../pipeline/develop-task.workflow.js';
+import { PipelineService, type RunnerMode } from '../pipeline/pipeline.service.js';
 import { templateFromExecutionPolicy } from '../pipeline/data-driven-template.js';
 import {
   normalizeExecutionProfile,

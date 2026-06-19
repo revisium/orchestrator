@@ -1,16 +1,18 @@
 /**
- * PipelineService — DBOS registration hub for the data-driven pipeline engine (plan 0015).
+ * PipelineService — the DBOS registration hub for the data-driven pipeline engine (plan 0015 / ADR-0002).
+ *
+ * (Renamed from `develop-task.workflow.ts`: the hardcoded `developTask` workflow that file was named for was
+ * removed in the plan-0015 cutover, so the old name described code that no longer exists.)
  *
  * INVARIANT: `src/pipeline/*` imports NO `@dbos-inc/dbos-sdk` (M1 — DBOS sealed).
  * All DBOS interaction goes through the generic DbosService verbs.
  *
  * Registration happens in the constructor, BEFORE DBOS.launch() (mirroring dev:ping).
  *
- * CUTOVER (plan 0015 slice 3): the old hardcoded `developTask` workflow + its role→phase classifiers
- * (`planRouteExecution`, `isDeveloperRole`/…, `validatePostIntegratorBindings`, `beforeDeveloperPhase`)
- * have been REMOVED. The data-driven engine (`makeDataDrivenTask`, executing a `pipeline-core` graph) is
- * the SOLE pipeline engine; selection routes EVERY pipeline to it (TaskControlPlaneApiService.startRun),
- * and a pipeline lacking a valid data-driven template FAILS LOUD there (PIPELINE_NOT_DATA_DRIVEN).
+ * The data-driven engine (`makeDataDrivenTask`, executing a `pipeline-core` graph) is the SOLE pipeline engine:
+ * selection routes EVERY pipeline to it (TaskControlPlaneApiService.startRun), and a pipeline lacking a valid
+ * data-driven template FAILS LOUD there (PIPELINE_NOT_DATA_DRIVEN). The former hardcoded role→phase classifiers
+ * (`planRouteExecution`, `validatePostIntegratorBindings`, …) were removed in that cutover.
  *
  * KEPT here (the shared seams the data-driven adapter reuses):
  *  - `makeRunStep` — the generic per-step runner (role→runner dispatch, attempt/cost/event bookkeeping).

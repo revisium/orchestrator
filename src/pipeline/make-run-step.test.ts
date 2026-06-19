@@ -13,7 +13,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { makeRunStep, type RunStepDeps } from './develop-task.workflow.js';
+import { makeRunStep, type RunStepDeps } from './pipeline.service.js';
 import { stubRunAgent } from '../worker/stub-runner.js';
 import { createRunAgent } from '../worker/runner-dispatch.js';
 import type { AttemptResult, RunAgent } from '../worker/runner.js';
