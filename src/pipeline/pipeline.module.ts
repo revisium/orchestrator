@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { EngineModule } from '../engine/dbos.module.js';
 import { RevisiumModule } from '../revisium/revisium.module.js';
 import { RunnerModule } from '../runners/runner.module.js';
-import { PipelineService } from './develop-task.workflow.js';
+import { PipelineService } from './pipeline.service.js';
 
 /**
  * PipelineModule — registers PipelineService, which registers the data-driven pipeline

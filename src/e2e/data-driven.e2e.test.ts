@@ -20,13 +20,12 @@ import {
   executedRoles,
 } from './kit/index.js';
 
-// Group L — DATA-DRIVEN PIPELINE on real DBOS (plan 0015 slice 2).
+// Group L — DATA-DRIVEN PIPELINE on real DBOS (plan 0015).
 //
-// The hardcoded develop-task workflow is the existing engine; this group proves the PARALLEL data-
-// driven adapter executes the pure pipeline-core graph (the `feature-development-dd` fixture template,
-// embedded as DATA in the playbook) on real DBOS/Revisium — driving plan→merge gates to completion,
-// surviving crash-recovery, and enforcing the bounded rework cap to `blocked`. Selection is additive:
-// only a pipeline carrying a state-machine template routes here; Groups A–K stay on the old path.
+// This group proves the data-driven engine — the pure pipeline-core graph executed by the DBOS adapter — on
+// real DBOS/Revisium, using the `feature-development-dd` fixture template embedded as DATA in the playbook:
+// driving plan→merge gates to completion, surviving crash-recovery, and enforcing the bounded rework cap to
+// `blocked`. Since the plan-0015 cutover the data-driven engine is the SOLE pipeline engine.
 //
 // The agent + integrator are stubbed (runnerOverrides) so no real claude/git/gh runs. The agent is
 // scripted per-run so a test can choose each node's DOMAIN verdict (the watcher must emit `clean` to

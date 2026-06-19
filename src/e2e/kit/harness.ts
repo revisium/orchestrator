@@ -6,7 +6,7 @@ import { RolesService } from '../../revisium/roles.service.js';
 import { RunService } from '../../revisium/run.service.js';
 import { InboxService } from '../../revisium/inbox.service.js';
 import { PlaybooksService } from '../../revisium/playbooks.service.js';
-import { PipelineService } from '../../pipeline/develop-task.workflow.js';
+import { PipelineService } from '../../pipeline/pipeline.service.js';
 import { WorktreeService } from '../../runners/worktree.service.js';
 import { TaskControlPlaneApiService } from '../../task-control-plane/task-control-plane-api.service.js';
 import type { RunAgent } from '../../worker/runner.js';
