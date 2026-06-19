@@ -534,7 +534,7 @@
                 "goto": "confirmMerge"
               },
               {
-                "default": "blockedEnd"
+                "default": "mergedEnd"
               }
             ]
           },

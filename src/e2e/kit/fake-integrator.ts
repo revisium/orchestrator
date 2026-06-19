@@ -14,7 +14,6 @@ import {
   type IntegratorService,
   type PrFeedback,
   type RespondThreadsOutput,
-  type Triage,
 } from '../../runners/integrator.js';
 import type { RunService } from '../../revisium/run.service.js';
 import type { ExecGhFn } from '../../poller/pr-readiness.js';
