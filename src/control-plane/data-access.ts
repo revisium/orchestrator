@@ -6,6 +6,7 @@ import {
   type ControlPlaneTransport,
   type TransportRow,
 } from './client-transport.js';
+import { notifyControlPlaneChange } from './change-notifications.js';
 import { isRuntimeTable, type RuntimeTable } from './tables.js';
 
 export type ListRowsOptions = {
@@ -93,7 +94,9 @@ export function createControlPlaneDataAccessForTransport(
       guardHead();
       assertRuntimeTable(table);
       const serialized = serializeData(table, rowId, data);
-      return mapRow(table, await transport.createRow(table, rowId, serialized));
+      const row = mapRow(table, await transport.createRow(table, rowId, serialized));
+      await notifyControlPlaneChange({ table, action: 'create', rowId, row });
+      return row;
     },
 
     async updateRow(table, rowId, data) {
@@ -101,7 +104,9 @@ export function createControlPlaneDataAccessForTransport(
       assertRuntimeTable(table);
       const serialized = serializeData(table, rowId, data);
       try {
-        return mapRow(table, await transport.updateRow(table, rowId, serialized));
+        const row = mapRow(table, await transport.updateRow(table, rowId, serialized));
+        await notifyControlPlaneChange({ table, action: 'update', rowId, row });
+        return row;
       } catch (error) {
         if (error instanceof ControlPlaneError && error.code === 'ROW_NOT_FOUND') {
           throw new ControlPlaneError('ROW_NOT_FOUND', `Cannot update missing row: ${rowPath(table, rowId)}`, {
@@ -118,7 +123,9 @@ export function createControlPlaneDataAccessForTransport(
       assertRuntimeTable(table);
       const serialized = serializePatches(table, patches);
       try {
-        return mapRow(table, await transport.patchRow(table, rowId, serialized));
+        const row = mapRow(table, await transport.patchRow(table, rowId, serialized));
+        await notifyControlPlaneChange({ table, action: 'patch', rowId, row });
+        return row;
       } catch (error) {
         if (error instanceof ControlPlaneError && error.code === 'ROW_NOT_FOUND') {
           throw new ControlPlaneError('ROW_NOT_FOUND', `Cannot patch missing row: ${rowPath(table, rowId)}`, {
