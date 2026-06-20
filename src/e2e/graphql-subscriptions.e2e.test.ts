@@ -54,7 +54,13 @@ after(async () => {
   host = null;
 });
 
-test('GraphQL subscriptions: subscribe → createRun mutation → runEventAppended payload', { skip: e2eSkip }, async () => {
+test('GraphQL real host: read path → createRun mutation → subscription payload', { skip: e2eSkip }, async () => {
+  const status = await graphql<{ status: { daemon: { running: boolean }; project: { org: string } } }>(
+    'query Status { status { daemon { running } project { org } } }',
+  );
+  assert.equal(status.status.daemon.running, true);
+  assert.equal(status.status.project.org, 'admin');
+
   const event = nextSubscription<{ runEventAppended: { runId: string; type: string } }>(
     'subscription { runEventAppended { runId type } }',
   );
@@ -70,7 +76,14 @@ test('GraphQL subscriptions: subscribe → createRun mutation → runEventAppend
       },
     },
   );
+  const detail = await graphql<{ run: { id: string; status: string; title: string } }>(
+    'query($id: ID!) { run(id: $id) { id status title } }',
+    { id: created.createRun.runId },
+  );
   const payload = await event;
+  assert.equal(detail.run.id, created.createRun.runId);
+  assert.equal(detail.run.status, 'ready');
+  assert.equal(detail.run.title, 'GraphQL subscription e2e');
   assert.equal(payload.runEventAppended.runId, created.createRun.runId);
   assert.equal(payload.runEventAppended.type, 'run_created');
 });

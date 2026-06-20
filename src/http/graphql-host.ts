@@ -33,8 +33,13 @@ function parsePort(raw: string | undefined): number {
 }
 
 export function resolveGraphqlHostOptions(options: GraphqlHostOptions = {}): Required<GraphqlHostOptions> {
+  const host = options.host ?? process.env.REVO_GRAPHQL_HOST ?? DEFAULT_GRAPHQL_HOST;
+  if (host !== DEFAULT_GRAPHQL_HOST) {
+    throw new TypeError(`GraphQL host must bind ${DEFAULT_GRAPHQL_HOST} in v1; received ${host}`);
+  }
+
   return {
-    host: options.host ?? process.env.REVO_GRAPHQL_HOST ?? DEFAULT_GRAPHQL_HOST,
+    host,
     port: options.port ?? parsePort(process.env.REVO_GRAPHQL_PORT),
   };
 }
