@@ -72,10 +72,13 @@ type SleepStepFn = (ms: number) => Promise<void>;
 
 @Injectable()
 export class DbosService {
-  private launched = false;
+  private static launched = false;
+  private static configured: { systemDatabaseUrl: string; logLevel?: DbosConfigOptions['logLevel'] } | null = null;
 
   /** Registered WorkflowQueues — guarded map to ensure idempotent registration. */
-  private readonly queues = new Map<string, WorkflowQueue>();
+  private static readonly queues = new Map<string, WorkflowQueue>();
+  private static readonly steps = new Map<string, (...args: unknown[]) => Promise<unknown>>();
+  private static readonly workflows = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 
   // Registered DBOS functions — assigned in constructor before launch().
   private readonly pingWorkflow: PingWorkflowFn;
@@ -84,7 +87,8 @@ export class DbosService {
 
   constructor() {
     // Register steps first (workflows may call them; all must be registered before launch).
-    this.markStep = DBOS.registerStep(
+    this.markStep = this.registerStep(
+      'DbosService.markStep',
       async function markStepImpl(workflowID: string, markerFile: string): Promise<number> {
         // Idempotent marker (F12): write exactly-once per workflowID by using 'wx' (exclusive
         // create). If the file already exists (step re-executed after a crash-before-checkpoint),
@@ -101,14 +105,13 @@ export class DbosService {
         const content = existsSync(markerFile) ? readFileSync(markerFile, 'utf8') : '';
         return content.split('\n').filter((l) => l.trim() !== '').length;
       },
-      { name: 'markStep', className: 'DbosService' },
     );
 
-    this.sleepStep = DBOS.registerStep(
+    this.sleepStep = this.registerStep(
+      'DbosService.sleepStep',
       async function sleepStepImpl(ms: number): Promise<void> {
         await DBOS.sleep(ms);
       },
-      { name: 'sleepStep', className: 'DbosService' },
     );
 
     // Register the workflow (uses bound steps).
@@ -116,7 +119,8 @@ export class DbosService {
     // not closures that close over `this` directly (avoids S7740 "do not assign this to self").
     const markStepBound = this.markStep.bind(this);
     const sleepStepBound = this.sleepStep.bind(this);
-    this.pingWorkflow = DBOS.registerWorkflow(
+    this.pingWorkflow = this.registerWorkflow(
+      'DbosService.pingImpl',
       async function pingImpl(
         workflowID: string,
         sleepMs: number,
@@ -126,7 +130,6 @@ export class DbosService {
         await sleepStepBound(sleepMs);
         return { workflowID, markerCount };
       },
-      { name: 'pingImpl', className: 'DbosService' },
     );
   }
 
@@ -150,10 +153,14 @@ export class DbosService {
     name: string,
     fn: (...a: A) => Promise<R>,
   ): (...a: A) => Promise<R> {
+    const cached = DbosService.steps.get(name);
+    if (cached) return cached as (...a: A) => Promise<R>;
     const lastDot = name.lastIndexOf('.');
     const className = lastDot >= 0 ? name.slice(0, lastDot) : 'Pipeline';
     const methodName = lastDot >= 0 ? name.slice(lastDot + 1) : name;
-    return DBOS.registerStep(fn, { name: methodName, className });
+    const registered = DBOS.registerStep(fn, { name: methodName, className });
+    DbosService.steps.set(name, registered as (...args: unknown[]) => Promise<unknown>);
+    return registered;
   }
 
   /**
@@ -165,10 +172,14 @@ export class DbosService {
     name: string,
     fn: (...a: A) => Promise<R>,
   ): (...a: A) => Promise<R> {
+    const cached = DbosService.workflows.get(name);
+    if (cached) return cached as (...a: A) => Promise<R>;
     const lastDot = name.lastIndexOf('.');
     const className = lastDot >= 0 ? name.slice(0, lastDot) : 'Pipeline';
     const methodName = lastDot >= 0 ? name.slice(lastDot + 1) : name;
-    return DBOS.registerWorkflow(fn, { name: methodName, className });
+    const registered = DBOS.registerWorkflow(fn, { name: methodName, className });
+    DbosService.workflows.set(name, registered as (...args: unknown[]) => Promise<unknown>);
+    return registered;
   }
 
   /**
@@ -177,8 +188,8 @@ export class DbosService {
    * Call before DBOS.launch().
    */
   registerQueue(name: string, opts: { concurrency?: number; workerConcurrency?: number }): void {
-    if (!this.queues.has(name)) {
-      this.queues.set(name, new WorkflowQueue(name, opts));
+    if (!DbosService.queues.has(name)) {
+      DbosService.queues.set(name, new WorkflowQueue(name, opts));
     }
   }
 
@@ -234,11 +245,24 @@ export class DbosService {
    * Must be called before launch().
    */
   setConfig(systemDatabaseUrl: string, options: DbosConfigOptions = {}): void {
+    const nextConfig = { systemDatabaseUrl, logLevel: options.logLevel };
+    if (DbosService.configured) {
+      if (
+        DbosService.configured.systemDatabaseUrl === nextConfig.systemDatabaseUrl &&
+        DbosService.configured.logLevel === nextConfig.logLevel
+      ) {
+        return;
+      }
+      if (DbosService.launched) {
+        throw new Error('Cannot reconfigure DBOS after launch.');
+      }
+    }
     DBOS.setConfig({
       name: 'agent-orchestrator',
       systemDatabaseUrl,
       ...(options.logLevel ? { logLevel: options.logLevel } : {}),
     });
+    DbosService.configured = nextConfig;
   }
 
   /**
@@ -246,9 +270,9 @@ export class DbosService {
    * Auto-recovers in-flight workflows.
    */
   async launch(): Promise<void> {
-    if (this.launched) return;
+    if (DbosService.launched) return;
     await DBOS.launch();
-    this.launched = true;
+    DbosService.launched = true;
   }
 
   /**
@@ -264,9 +288,9 @@ export class DbosService {
    * @param timeoutMs - drain bound (default SHUTDOWN_DRAIN_TIMEOUT_MS); pass 0/Infinity to disable.
    */
   async shutdown(timeoutMs: number = SHUTDOWN_DRAIN_TIMEOUT_MS): Promise<void> {
-    if (!this.launched) return;
+    if (!DbosService.launched) return;
     // Mark not-launched up front so a timed-out drain cannot leave a re-entrant launch confused.
-    this.launched = false;
+    DbosService.launched = false;
     const drain = DBOS.shutdown();
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
       await drain;

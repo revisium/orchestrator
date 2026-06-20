@@ -122,6 +122,7 @@ test('DbosService: launch() is idempotent — second call is a no-op (E6)', asyn
       1,
       'DBOS.launch() must be called exactly once despite two svc.launch() calls',
     );
+    await svc.shutdown();
   } finally {
     restoreDbos();
   }

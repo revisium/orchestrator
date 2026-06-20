@@ -10,7 +10,7 @@
  * branch — making the integrator's branchExists→switch path a no-op and avoiding its dirty-tree
  * `switch -c origin/<base>` failure.
  */
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { RunService } from '../revisium/run.service.js';
 import { getConfig } from '../config.js';
 import { branchName } from './integrator.js';
@@ -20,7 +20,7 @@ import { createRunWorktree, releaseRunWorktree } from '../worker/git-worktree-ma
 export class WorktreeService {
   private readonly resolveBaseCwd: (taskId: string) => Promise<string>;
 
-  constructor(private readonly runService: RunService) {
+  constructor(@Inject(RunService) private readonly runService: RunService) {
     this.resolveBaseCwd = this.runService.makeResolveTaskCwd();
   }
 

@@ -7,6 +7,7 @@
  *   - run create (resolves installed playbooks/profiles through host services)
  *   - inbox resolve --approve|--reject (slice 0004 — signals a parked workflow, needs DBOS)
  *   - mcp (local stdio MCP server over the host services)
+ *   - serve (local HTTP GraphQL front door over the host services)
  *
  * Other read-only run subcommands (list/show/events) remain host-free.
  * inbox list/show and inbox resolve --answer (non-gate) remain host-free.
@@ -25,7 +26,7 @@
  */
 
 /** Commands that require the Nest/DBOS host context (colon-style, no subcommand needed). */
-const HOST_COMMANDS = new Set(['dev:ping', 'dev:status', 'mcp']);
+const HOST_COMMANDS = new Set(['dev:ping', 'dev:status', 'mcp', 'serve']);
 
 /** Flags that force host-free regardless of the command. */
 const HELP_FLAGS = new Set(['--help', '-h', '--version', '-v']);
