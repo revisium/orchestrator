@@ -20,16 +20,19 @@ test('resolveGraphqlHostOptions accepts explicit local port', () => {
   });
 });
 
-test('resolveGraphqlHostOptions reads environment overrides', () => {
+test('resolveGraphqlHostOptions accepts only loopback host in v1', () => {
   const oldHost = process.env.REVO_GRAPHQL_HOST;
   const oldPort = process.env.REVO_GRAPHQL_PORT;
-  process.env.REVO_GRAPHQL_HOST = '::1';
+  process.env.REVO_GRAPHQL_HOST = DEFAULT_GRAPHQL_HOST;
   process.env.REVO_GRAPHQL_PORT = '19424';
   try {
     assert.deepEqual(resolveGraphqlHostOptions(), {
-      host: '::1',
+      host: DEFAULT_GRAPHQL_HOST,
       port: 19424,
     });
+    process.env.REVO_GRAPHQL_HOST = '0.0.0.0';
+    assert.throws(() => resolveGraphqlHostOptions(), /GraphQL host must bind 127\.0\.0\.1/);
+    assert.throws(() => resolveGraphqlHostOptions({ host: '::1' }), /GraphQL host must bind 127\.0\.0\.1/);
   } finally {
     if (oldHost === undefined) {
       delete process.env.REVO_GRAPHQL_HOST;

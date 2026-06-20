@@ -23,6 +23,7 @@ Documentation for the local AI-agent orchestrator built on Revisium. Repo-local 
 | [adr/0002-data-driven-pipeline-state-machine](./adr/0002-data-driven-pipeline-state-machine.md) | pipeline-as-data engine decision record |
 | [control-plane-schema](./control-plane-schema.md) | Revisium meaning tables, versioned vs runtime |
 | [repo-layer-contract](./repo-layer-contract.md) | data-access verbs (meaning; progress verbs retired) |
+| [graphql-api](./graphql-api.md) | local-only GraphQL front door, auth hook, metrics, verification contract |
 | [context-budget](./context-budget.md) | buildContext, token economics (§8) |
 | [runner-contract](./runner-contract.md) | runAgent, headless runners (§9) |
 | [inbox-and-gates](./inbox-and-gates.md) | human inbox, plan/merge gates (§11) |
