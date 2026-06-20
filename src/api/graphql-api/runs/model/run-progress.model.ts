@@ -7,7 +7,7 @@ export class RunProgressModel {
   workflowStatus!: string;
 
   @Field(() => GraphQLJSON, { nullable: true })
-  graphCursor!: unknown | null;
+  graphCursor!: Record<string, unknown> | null;
 
   @Field(() => Date)
   updatedAt!: Date;
