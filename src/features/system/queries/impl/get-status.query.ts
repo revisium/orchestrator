@@ -1,1 +1,3 @@
-export class GetStatusQuery {}
+export class GetStatusQuery {
+  readonly kind = 'getStatus';
+}

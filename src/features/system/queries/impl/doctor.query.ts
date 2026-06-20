@@ -1,1 +1,3 @@
-export class DoctorQuery {}
+export class DoctorQuery {
+  readonly kind = 'doctor';
+}

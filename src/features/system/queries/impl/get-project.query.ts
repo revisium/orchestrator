@@ -1,1 +1,3 @@
-export class GetProjectQuery {}
+export class GetProjectQuery {
+  readonly kind = 'getProject';
+}
