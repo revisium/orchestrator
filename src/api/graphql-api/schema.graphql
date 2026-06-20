@@ -4,6 +4,34 @@ type AlternativeRoleGroupModel {
   roles: [String!]!
 }
 
+input AnswerQuestionInput {
+  answer: JSON!
+  inboxId: ID!
+  resolvedBy: String
+}
+
+input CreateRunInput {
+  description: String
+  params: JSON
+  pipelineId: String
+  playbookId: String
+  priority: Int
+  repo: String!
+  scope: String
+  start: Boolean! = false
+  title: String!
+}
+
+type CreateRunResultModel {
+  eventId: ID!
+  route: JSON
+  runId: ID!
+  started: Boolean!
+  status: String!
+  taskId: ID!
+  workflow: JSON
+}
+
 type DaemonStatusModel {
   baseUrl: String
   healthy: Boolean!
@@ -22,6 +50,11 @@ type DoctorResultModel {
   issues: [String!]!
   ok: Boolean!
   status: SystemStatusModel!
+}
+
+input GateDecisionInput {
+  inboxId: ID!
+  resolvedBy: String
 }
 
 type GateRiskModel {
@@ -69,6 +102,15 @@ type InboxItemModelEdge {
   node: InboxItemModel!
 }
 
+type InboxResolutionModel {
+  answer: JSON
+  inboxId: ID!
+  previousStatus: String!
+  runId: String
+  signaled: Boolean!
+  topic: String
+}
+
 """
 The `JSON` scalar type represents JSON values as specified by [ECMA-404](http://www.ecma-international.org/publications/files/ECMA-ST/ECMA-404.pdf).
 """
@@ -90,6 +132,14 @@ input ListRunsInput {
   after: String
   first: Int! = 50
   status: String
+}
+
+type Mutation {
+  answerQuestion(data: AnswerQuestionInput!): InboxResolutionModel!
+  approveGate(data: GateDecisionInput!): InboxResolutionModel!
+  createRun(data: CreateRunInput!): CreateRunResultModel!
+  rejectGate(data: GateDecisionInput!): InboxResolutionModel!
+  resolveInboxItem(data: ResolveInboxItemInput!): InboxResolutionModel!
 }
 
 type PageInfo {
@@ -221,6 +271,13 @@ type RepositoryValidationModel {
   isDirectory: Boolean!
   path: String!
   remote: String!
+}
+
+input ResolveInboxItemInput {
+  answer: JSON!
+  inboxId: ID!
+  resolvedBy: String
+  signalGate: Boolean! = true
 }
 
 type RoleConnection {
