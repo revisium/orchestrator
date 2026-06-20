@@ -316,6 +316,19 @@ type RunConnection {
   totalCount: Int!
 }
 
+type RunCostModel {
+  attemptId: String!
+  costAmount: Float!
+  currency: String!
+  id: ID!
+  inputTokens: Int!
+  modelProfile: String!
+  outputTokens: Int!
+  recordedAt: DateTime!
+  runId: ID!
+  stepId: String!
+}
+
 type RunDigestModel {
   latestEvents: [RunEventModel!]!
   pendingInbox: [InboxItemModel!]!
@@ -370,12 +383,25 @@ type RunProgressModel {
   workflowStatus: String!
 }
 
+input RunSubscriptionInput {
+  runId: ID
+}
+
 input SimulateRouteInput {
   params: JSON
   pipeline: String
   playbookId: String
   repo: String
   title: String!
+}
+
+type Subscription {
+  inboxItemAdded(data: RunSubscriptionInput): InboxItemModel!
+  inboxItemResolved(data: RunSubscriptionInput): InboxItemModel!
+  runCostRecorded(data: RunSubscriptionInput): RunCostModel!
+  runEventAppended(data: RunSubscriptionInput): RunEventModel!
+  runProgressUpdated(data: RunSubscriptionInput): RunProgressModel!
+  runUpdated(data: RunSubscriptionInput): RunModel!
 }
 
 type SystemStatusModel {

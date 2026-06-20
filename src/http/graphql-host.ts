@@ -1,6 +1,7 @@
 import type { INestApplication } from '@nestjs/common';
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import { addWsServer } from '../api/graphql-api/graphql-ws/ws.js';
 import { resolveDefaultGraphqlPort } from '../config.js';
 import { GraphqlHostModule } from './graphql-host.module.js';
 
@@ -47,6 +48,12 @@ export async function startGraphqlHost(options: GraphqlHostOptions = {}): Promis
   const app = await NestFactory.create(GraphqlHostModule, { logger: ['error', 'warn'] });
   app.useGlobalPipes(new ValidationPipe({ transform: true }));
   await app.listen(resolved.port, resolved.host);
+  const ws = addWsServer(app);
+  const close = app.close.bind(app);
+  app.close = async () => {
+    await ws.dispose();
+    await close();
+  };
 
   return {
     app,
