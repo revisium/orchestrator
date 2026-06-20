@@ -30,7 +30,7 @@ let poolUrl = '';
 
 function getPool(url: string): pg.Pool {
   if (!pool || poolUrl !== url) {
-    void pool?.end().catch(() => undefined);
+    pool?.end().catch(() => undefined);
     poolUrl = url;
     pool = new pg.Pool({ connectionString: url, max: 1 });
   }
