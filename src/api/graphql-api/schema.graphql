@@ -178,6 +178,7 @@ type Query {
   run(id: ID!): RunModel!
   runDigest(id: ID!): RunDigestModel!
   runEvents(data: GetRunEventsInput!): RunEventConnection!
+  runProgress(id: ID!): RunProgressModel!
   runs(data: ListRunsInput): RunConnection!
   simulateRoute(data: SimulateRouteInput!): JSON!
   status: SystemStatusModel!
@@ -294,6 +295,7 @@ type RunModel {
   events(after: String, first: Int! = 50, type: String): RunEventConnection!
   id: ID!
   priority: Int!
+  progress: RunProgressModel!
   repos: [String!]!
   scope: String
   status: String!
@@ -303,6 +305,12 @@ type RunModel {
 type RunModelEdge {
   cursor: String!
   node: RunModel!
+}
+
+type RunProgressModel {
+  graphCursor: JSON
+  updatedAt: DateTime!
+  workflowStatus: String!
 }
 
 input SimulateRouteInput {

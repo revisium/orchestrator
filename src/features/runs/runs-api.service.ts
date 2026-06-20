@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { QueryBus } from '@nestjs/cqrs';
 import { GetRunDigestQuery, type GetRunDigestQueryData } from './queries/impl/get-run-digest.query.js';
 import { GetRunEventsQuery, type GetRunEventsQueryData } from './queries/impl/get-run-events.query.js';
+import { GetRunProgressQuery, type GetRunProgressQueryData } from './queries/impl/get-run-progress.query.js';
 import { GetRunQuery, type GetRunQueryData } from './queries/impl/get-run.query.js';
 import { ListRunsQuery, type ListRunsQueryData } from './queries/impl/list-runs.query.js';
 import { SimulateRouteQuery, type SimulateRouteQueryData } from './queries/impl/simulate-route.query.js';
@@ -20,6 +21,10 @@ export class RunsApiService {
 
   getRunEvents(data: GetRunEventsQueryData) {
     return this.queryBus.execute(new GetRunEventsQuery(data));
+  }
+
+  getRunProgress(data: GetRunProgressQueryData) {
+    return this.queryBus.execute(new GetRunProgressQuery(data));
   }
 
   getRunDigest(data: GetRunDigestQueryData) {

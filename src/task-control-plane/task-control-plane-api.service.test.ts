@@ -182,6 +182,9 @@ function makeApi(overrides: {
     async getWorkflowStatus() {
       return null;
     },
+    async getEvent() {
+      return null;
+    },
     async signal() {},
     ...overrides.dbosService,
   };
@@ -194,6 +197,48 @@ function makeApi(overrides: {
     dbosService as DbosService,
   );
 }
+
+test('TaskControlPlaneApiService.getRunProgress reads DBOS status and graph cursor through sealed verbs', async () => {
+  const api = makeApi({
+    dbosService: {
+      async getWorkflowStatus(runId: string) {
+        assert.equal(runId, 'run-1');
+        return {
+          workflowID: 'run-1',
+          status: 'PENDING',
+          workflowName: 'dataDrivenTask',
+          workflowClassName: 'PipelineService',
+          createdAt: Date.parse('2026-06-20T09:00:00.000Z'),
+          updatedAt: Date.parse('2026-06-20T09:00:01.000Z'),
+          priority: 0,
+          applicationID: 'test',
+        } as Awaited<ReturnType<DbosService['getWorkflowStatus']>>;
+      },
+      async getEvent<T>(workflowID: string, key: string, opts?: { timeoutSeconds?: number }): Promise<T> {
+        assert.equal(workflowID, 'run-1');
+        assert.equal(key, 'run-progress');
+        assert.deepEqual(opts, { timeoutSeconds: 0 });
+        return { activeNodeIds: ['developer'], scopedCounters: { review: 1 }, status: 'running' } as T;
+      },
+    },
+  });
+
+  const progress = await api.getRunProgress('run-1');
+
+  assert.equal(progress.workflowStatus, 'PENDING');
+  assert.deepEqual(progress.graphCursor, { activeNodeIds: ['developer'], scopedCounters: { review: 1 }, status: 'running' });
+  assert.equal(progress.updatedAt.toISOString(), '2026-06-20T09:00:01.000Z');
+});
+
+test('TaskControlPlaneApiService.getRunProgress returns NOT_STARTED when DBOS has no workflow yet', async () => {
+  const api = makeApi();
+
+  const progress = await api.getRunProgress('run-1');
+
+  assert.equal(progress.workflowStatus, 'NOT_STARTED');
+  assert.equal(progress.graphCursor, null);
+  assert.equal(progress.updatedAt.toISOString(), '2026-06-13T00:00:00.000Z');
+});
 
 test('TaskControlPlaneApiService.approveGate records retryable signal state around the DBOS signal', async () => {
   const calls: Array<

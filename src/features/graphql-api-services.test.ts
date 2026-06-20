@@ -18,6 +18,7 @@ test('GraphQL facade services wrap query-bus requests', async () => {
   await new RunsApiService(queryBus).listRuns({});
   await new RunsApiService(queryBus).getRun({ runId: 'run_1' });
   await new RunsApiService(queryBus).getRunEvents({ runId: 'run_1' });
+  await new RunsApiService(queryBus).getRunProgress({ runId: 'run_1' });
   await new RunsApiService(queryBus).getRunDigest({ runId: 'run_1' });
   await new RunsApiService(queryBus).simulateRoute({ title: 'Build' });
   await new InboxApiService(queryBus).listInbox({});
@@ -36,6 +37,7 @@ test('GraphQL facade services wrap query-bus requests', async () => {
     'ListRunsQuery',
     'GetRunQuery',
     'GetRunEventsQuery',
+    'GetRunProgressQuery',
     'GetRunDigestQuery',
     'SimulateRouteQuery',
     'ListInboxQuery',
