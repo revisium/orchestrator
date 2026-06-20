@@ -30,6 +30,8 @@ export type RevoConfig = ConfigFile & {
   runtimeFile: string;
 };
 
+export const GRAPHQL_PORT_OFFSET = 1;
+
 const sourceDir = dirname(fileURLToPath(import.meta.url));
 export const repoRoot = resolve(sourceDir, '..');
 
@@ -127,6 +129,18 @@ export async function resolvePorts(): Promise<{ httpPort: number; pgPort: number
 
   const { preferredPort, preferredPgPort } = getConfig();
   return { httpPort: preferredPort, pgPort: preferredPgPort };
+}
+
+export function resolveDefaultGraphqlPort(): number {
+  const runtime = readRuntime();
+  const basePort = runtime && isAlive(runtime.pid)
+    ? runtime.httpPort
+    : getConfig().preferredPort;
+  const port = basePort + GRAPHQL_PORT_OFFSET;
+  if (port > 65_535) {
+    throw new Error(`Cannot derive GraphQL port from HTTP port ${basePort}`);
+  }
+  return port;
 }
 
 export async function isPortFree(port: number): Promise<boolean> {

@@ -2,14 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   DEFAULT_GRAPHQL_HOST,
-  DEFAULT_GRAPHQL_PORT,
   resolveGraphqlHostOptions,
 } from './graphql-host.js';
+import { resolveDefaultGraphqlPort } from '../config.js';
 
 test('resolveGraphqlHostOptions defaults to local-only bind', () => {
   assert.deepEqual(resolveGraphqlHostOptions(), {
     host: DEFAULT_GRAPHQL_HOST,
-    port: DEFAULT_GRAPHQL_PORT,
+    port: resolveDefaultGraphqlPort(),
   });
 });
 
@@ -23,11 +23,11 @@ test('resolveGraphqlHostOptions accepts explicit local port', () => {
 test('resolveGraphqlHostOptions reads environment overrides', () => {
   const oldHost = process.env.REVO_GRAPHQL_HOST;
   const oldPort = process.env.REVO_GRAPHQL_PORT;
-  process.env.REVO_GRAPHQL_HOST = '127.0.0.1';
+  process.env.REVO_GRAPHQL_HOST = '::1';
   process.env.REVO_GRAPHQL_PORT = '19424';
   try {
     assert.deepEqual(resolveGraphqlHostOptions(), {
-      host: DEFAULT_GRAPHQL_HOST,
+      host: '::1',
       port: 19424,
     });
   } finally {

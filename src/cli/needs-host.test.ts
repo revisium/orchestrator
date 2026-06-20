@@ -83,8 +83,8 @@ test('isMcpCommand: true only for executable mcp command', () => {
   assert.equal(isMcpCommand(argv('run', 'create', '--title', 'mcp', '--repo', '.')), false);
 });
 
-test('needsHost: serve starts the HTTP GraphQL host', () => {
-  assert.equal(needsHost(argv('serve')), true);
+test('needsHost: serve is host-free until the command starts the HTTP GraphQL host', () => {
+  assert.equal(needsHost(argv('serve')), false);
   assert.equal(needsHost(argv('serve', '--help')), false);
 });
 

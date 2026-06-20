@@ -19,7 +19,7 @@ import { registerGraphqlEnums } from './registerGraphqlEnums.js';
         resolverValidationOptions: {
           requireResolversToMatchSchema: 'ignore',
         },
-        maskedErrors: false,
+        maskedErrors: process.env.NODE_ENV !== 'development',
       }),
     }),
   ],

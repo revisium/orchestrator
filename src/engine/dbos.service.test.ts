@@ -128,6 +128,48 @@ test('DbosService: launch() is idempotent — second call is a no-op (E6)', asyn
   }
 });
 
+test('DbosService: concurrent launch() calls share one DBOS.launch()', async () => {
+  let releaseLaunch!: () => void;
+  let launchCallCount = 0;
+  patchDbos({
+    launch: async () => {
+      launchCallCount += 1;
+      await new Promise<void>((resolve) => { releaseLaunch = resolve; });
+    },
+  });
+  try {
+    const { DbosService } = await import('./dbos.service.js');
+    const svc = new DbosService();
+    svc.setConfig('postgresql://revisium:password@localhost:15440/dbos');
+    const firstLaunch = svc.launch();
+    const secondLaunch = svc.launch();
+    assert.equal(launchCallCount, 1, 'only the first concurrent caller may call DBOS.launch()');
+    releaseLaunch();
+    await Promise.all([firstLaunch, secondLaunch]);
+    assert.equal(launchCallCount, 1, 'concurrent callers must await the shared launch promise');
+    await svc.shutdown();
+  } finally {
+    restoreDbos();
+  }
+});
+
+test('DbosService: registerQueue rejects conflicting duplicate options', async () => {
+  patchDbos({});
+  try {
+    const { DbosService } = await import('./dbos.service.js');
+    const svc = new DbosService();
+    const queueName = `test-queue-${process.pid}`;
+    svc.registerQueue(queueName, { concurrency: 2, workerConcurrency: 1 });
+    assert.doesNotThrow(() => svc.registerQueue(queueName, { concurrency: 2, workerConcurrency: 1 }));
+    assert.throws(
+      () => svc.registerQueue(queueName, { concurrency: 3, workerConcurrency: 1 }),
+      /already registered with different options/,
+    );
+  } finally {
+    restoreDbos();
+  }
+});
+
 test('DbosService: shutdown() before launch() is a no-op (E9)', async () => {
   let shutdownCallCount = 0;
   patchDbos({ shutdown: async () => { shutdownCallCount += 1; } });

@@ -69,14 +69,17 @@ export type DbosConfigOptions = {
 type PingWorkflowFn = (workflowID: string, sleepMs: number, markerFile: string) => Promise<PingResult>;
 type MarkStepFn = (workflowID: string, markerFile: string) => Promise<number>;
 type SleepStepFn = (ms: number) => Promise<void>;
+type QueueOptions = { concurrency?: number; workerConcurrency?: number };
 
 @Injectable()
 export class DbosService {
   private static launched = false;
+  private static launchPromise: Promise<void> | null = null;
   private static configured: { systemDatabaseUrl: string; logLevel?: DbosConfigOptions['logLevel'] } | null = null;
 
   /** Registered WorkflowQueues — guarded map to ensure idempotent registration. */
   private static readonly queues = new Map<string, WorkflowQueue>();
+  private static readonly queueOptions = new Map<string, QueueOptions>();
   private static readonly steps = new Map<string, (...args: unknown[]) => Promise<unknown>>();
   private static readonly workflows = new Map<string, (...args: unknown[]) => Promise<unknown>>();
 
@@ -187,10 +190,19 @@ export class DbosService {
    * The ONLY place `new WorkflowQueue(...)` is called, keeping @dbos-inc inside this file.
    * Call before DBOS.launch().
    */
-  registerQueue(name: string, opts: { concurrency?: number; workerConcurrency?: number }): void {
-    if (!DbosService.queues.has(name)) {
-      DbosService.queues.set(name, new WorkflowQueue(name, opts));
+  registerQueue(name: string, opts: QueueOptions): void {
+    const existing = DbosService.queueOptions.get(name);
+    if (existing) {
+      if (
+        existing.concurrency !== opts.concurrency ||
+        existing.workerConcurrency !== opts.workerConcurrency
+      ) {
+        throw new Error(`WorkflowQueue ${name} already registered with different options.`);
+      }
+      return;
     }
+    DbosService.queues.set(name, new WorkflowQueue(name, opts));
+    DbosService.queueOptions.set(name, { ...opts });
   }
 
   /**
@@ -271,8 +283,16 @@ export class DbosService {
    */
   async launch(): Promise<void> {
     if (DbosService.launched) return;
-    await DBOS.launch();
-    DbosService.launched = true;
+    if (DbosService.launchPromise) return DbosService.launchPromise;
+    DbosService.launchPromise = (async () => {
+      await DBOS.launch();
+      DbosService.launched = true;
+    })();
+    try {
+      await DbosService.launchPromise;
+    } finally {
+      DbosService.launchPromise = null;
+    }
   }
 
   /**

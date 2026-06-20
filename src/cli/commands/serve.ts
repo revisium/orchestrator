@@ -29,6 +29,6 @@ export function registerServe(program: Command): void {
     .command('serve')
     .description('Start the local HTTP GraphQL front door')
     .option('--host <host>', 'HTTP bind host (v1 only allows 127.0.0.1)')
-    .option('--port <port>', 'HTTP port (default: 19223 or REVO_GRAPHQL_PORT)')
+    .option('--port <port>', 'HTTP port (default: REVO_GRAPHQL_PORT or resolved Revisium HTTP port + 1)')
     .action((options: ServeOptions) => runServe(options));
 }

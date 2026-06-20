@@ -1,10 +1,10 @@
 import type { INestApplication } from '@nestjs/common';
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import { resolveDefaultGraphqlPort } from '../config.js';
 import { GraphqlHostModule } from './graphql-host.module.js';
 
 export const DEFAULT_GRAPHQL_HOST = '127.0.0.1';
-export const DEFAULT_GRAPHQL_PORT = 19223;
 
 export type GraphqlHostOptions = {
   host?: string;
@@ -19,7 +19,7 @@ export type StartedGraphqlHost = {
 };
 
 function parsePort(raw: string | undefined): number {
-  if (!raw) return DEFAULT_GRAPHQL_PORT;
+  if (!raw) return resolveDefaultGraphqlPort();
   const port = Number.parseInt(raw, 10);
   if (!Number.isInteger(port) || port <= 0 || port > 65_535) {
     throw new TypeError(`Invalid GraphQL port: ${raw}`);
