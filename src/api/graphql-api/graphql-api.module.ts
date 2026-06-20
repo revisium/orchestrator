@@ -3,11 +3,28 @@ import { Module } from '@nestjs/common';
 import { APP_FILTER } from '@nestjs/core';
 import { GraphQLModule } from '@nestjs/graphql';
 import { DateTimeResolver, JSONResolver } from 'graphql-scalars';
+import { InboxApiModule } from '../../features/inbox/inbox-api.module.js';
+import { MethodApiModule } from '../../features/method/method-api.module.js';
+import { PrApiModule } from '../../features/pr/pr-api.module.js';
+import { RunsApiModule } from '../../features/runs/runs-api.module.js';
+import { SystemApiModule } from '../../features/system/system-api.module.js';
 import { GraphQLValidationExceptionFilter } from './filters/graphql-validation-exception.filter.js';
+import { InboxResolver } from './inbox/inbox.resolver.js';
+import { MethodResolver } from './method/method.resolver.js';
+import { PrResolver } from './pr/pr.resolver.js';
 import { registerGraphqlEnums } from './registerGraphqlEnums.js';
+import { RunDigestResolver } from './runs/run-digest.resolver.js';
+import { RunEventsResolver } from './runs/run-events.resolver.js';
+import { RunsResolver } from './runs/runs.resolver.js';
+import { SystemResolver } from './system/system.resolver.js';
 
 @Module({
   imports: [
+    InboxApiModule,
+    MethodApiModule,
+    PrApiModule,
+    RunsApiModule,
+    SystemApiModule,
     GraphQLModule.forRootAsync<YogaDriverConfig>({
       driver: YogaDriver,
       useFactory: () => ({
@@ -25,6 +42,13 @@ import { registerGraphqlEnums } from './registerGraphqlEnums.js';
   ],
   providers: [
     { provide: APP_FILTER, useClass: GraphQLValidationExceptionFilter },
+    InboxResolver,
+    MethodResolver,
+    PrResolver,
+    RunDigestResolver,
+    RunEventsResolver,
+    RunsResolver,
+    SystemResolver,
   ],
 })
 export class GraphqlApiModule {}

@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { SystemResolver } from './system.resolver.js';
-import type { TaskControlPlaneApiService } from '../../../task-control-plane/task-control-plane-api.service.js';
+import type { SystemApiService } from '../../../features/system/system-api.service.js';
 
-test('SystemResolver.status delegates to TaskControlPlaneApiService', async () => {
+test('SystemResolver.status delegates to SystemApiService', async () => {
   const expected = {
     daemon: {
       running: false,
@@ -22,11 +22,11 @@ test('SystemResolver.status delegates to TaskControlPlaneApiService', async () =
   };
   let calls = 0;
   const api = {
-    async getStatus() {
+    async status() {
       calls += 1;
       return expected;
     },
-  } as unknown as TaskControlPlaneApiService;
+  } as unknown as SystemApiService;
 
   const resolver = new SystemResolver(api);
 

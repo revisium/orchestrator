@@ -1,0 +1,325 @@
+type AlternativeRoleGroupModel {
+  groupId: String!
+  resolution: String!
+  roles: [String!]!
+}
+
+type DaemonStatusModel {
+  baseUrl: String
+  healthy: Boolean!
+  httpPort: Int
+  pgPort: Int
+  pid: Int
+  running: Boolean!
+}
+
+"""
+A date-time string at UTC, such as 2019-12-03T09:54:33Z, compliant with the date-time format.
+"""
+scalar DateTime
+
+type DoctorResultModel {
+  issues: [String!]!
+  ok: Boolean!
+  status: SystemStatusModel!
+}
+
+type GateRiskModel {
+  context: JSON
+  inboxId: ID!
+  kind: String!
+  options: JSON
+  risk: String!
+  title: String!
+  topic: String
+}
+
+input GetRunEventsInput {
+  after: String
+  first: Int! = 50
+  runId: ID!
+  type: String
+}
+
+type InboxConnection {
+  edges: [InboxItemModelEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type InboxItemModel {
+  answer: JSON
+  context: JSON
+  createdAt: DateTime!
+  id: ID!
+  kind: String!
+  options: JSON
+  projectId: String
+  resolvedAt: DateTime
+  resolvedBy: String
+  runId: String
+  status: String!
+  stepId: String
+  taskId: String
+  title: String!
+}
+
+type InboxItemModelEdge {
+  cursor: String!
+  node: InboxItemModel!
+}
+
+"""
+The `JSON` scalar type represents JSON values as specified by [ECMA-404](http://www.ecma-international.org/publications/files/ECMA-ST/ECMA-404.pdf).
+"""
+scalar JSON @specifiedBy(url: "http://www.ecma-international.org/publications/files/ECMA-ST/ECMA-404.pdf")
+
+input ListInboxInput {
+  after: String
+  first: Int! = 50
+  runId: String
+  status: String
+}
+
+input ListMethodInput {
+  after: String
+  first: Int! = 50
+}
+
+input ListRunsInput {
+  after: String
+  first: Int! = 50
+  status: String
+}
+
+type PageInfo {
+  endCursor: String
+  hasNextPage: Boolean!
+  hasPreviousPage: Boolean!
+  startCursor: String
+}
+
+type PipelineConnection {
+  edges: [PipelineModelEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type PipelineModel {
+  alternativeRoles: [AlternativeRoleGroupModel!]!
+  executionPolicy: JSON
+  id: ID!
+  optionalRoles: [String!]!
+  path: String!
+  pipelineId: String!
+  playbookId: String!
+  requiredRoles: [String!]!
+  routeGates: [String!]!
+  triggers: [String!]!
+}
+
+type PipelineModelEdge {
+  cursor: String!
+  node: PipelineModel!
+}
+
+type PlaybookConnection {
+  edges: [PlaybookModelEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type PlaybookModel {
+  id: ID!
+  name: String!
+  packageName: String!
+  schemaVersion: Int!
+  source: String!
+  version: String!
+}
+
+type PlaybookModelEdge {
+  cursor: String!
+  node: PlaybookModel!
+}
+
+input PrReadinessInput {
+  baseBranch: String
+  headBranch: String
+  includeComments: Boolean
+  includeReviewThreads: Boolean
+  prNumber: Int
+  repo: String!
+  sonarProject: String
+}
+
+type ProjectModel {
+  branch: String!
+  dataDir: String!
+  org: String!
+  project: String!
+}
+
+type Query {
+  doctor: DoctorResultModel!
+  gateRisk(id: ID!): GateRiskModel!
+  inbox(data: ListInboxInput): InboxConnection!
+  inboxItem(id: ID!): InboxItemModel!
+  pendingDecisions(runId: String): [InboxItemModel!]!
+  pipeline(id: ID!): PipelineModel!
+  pipelines(data: ListMethodInput): PipelineConnection!
+  playbooks(data: ListMethodInput): PlaybookConnection!
+  prFeedback(data: PrReadinessInput!): JSON!
+  prReadiness(data: PrReadinessInput!): JSON!
+  project: ProjectModel!
+  repositoryContext(repo: String!): RepositoryContextModel!
+  role(id: ID!): RoleModel!
+  roles(data: ListMethodInput): RoleConnection!
+  run(id: ID!): RunModel!
+  runDigest(id: ID!): RunDigestModel!
+  runEvents(data: GetRunEventsInput!): RunEventConnection!
+  runs(data: ListRunsInput): RunConnection!
+  simulateRoute(data: SimulateRouteInput!): JSON!
+  status: SystemStatusModel!
+  validateRepository(repo: String!): RepositoryValidationModel!
+}
+
+type RepositoryContextModel {
+  branch: String!
+  clean: Boolean!
+  error: String!
+  exists: Boolean!
+  files: [RepositoryGuidanceFileModel!]!
+  gitRoot: String!
+  input: String!
+  isDirectory: Boolean!
+  packageError: String!
+  packageName: String!
+  path: String!
+  remote: String!
+  scripts: [RepositoryScriptModel!]!
+}
+
+type RepositoryGuidanceFileModel {
+  exists: Boolean!
+  path: String!
+}
+
+type RepositoryScriptModel {
+  command: String!
+  name: String!
+}
+
+type RepositoryValidationModel {
+  branch: String!
+  clean: Boolean!
+  error: String!
+  exists: Boolean!
+  gitRoot: String!
+  input: String!
+  isDirectory: Boolean!
+  path: String!
+  remote: String!
+}
+
+type RoleConnection {
+  edges: [RoleModelEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type RoleModel {
+  allowedTools: [String!]
+  effort: String
+  id: ID!
+  modelLevel: String!
+  name: String!
+  permissionMode: String
+  playbookId: String
+  playbookRoleId: String
+  rights: String
+  runner: String!
+  scopeRules: JSON
+  sourceHash: String
+  sourcePath: String
+  surface: String
+  systemPrompt: String
+  timeoutMs: Int
+}
+
+type RoleModelEdge {
+  cursor: String!
+  node: RoleModel!
+}
+
+type RunConnection {
+  edges: [RunModelEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type RunDigestModel {
+  latestEvents: [RunEventModel!]!
+  pendingInbox: [InboxItemModel!]!
+  run: RunModel!
+  usage: UsageModel!
+}
+
+type RunEventConnection {
+  edges: [RunEventModelEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type RunEventModel {
+  actor: String!
+  createdAt: DateTime!
+  id: ID!
+  payload: JSON
+  runId: ID!
+  stepId: String!
+  taskId: String!
+  type: String!
+}
+
+type RunEventModelEdge {
+  cursor: String!
+  node: RunEventModel!
+}
+
+type RunModel {
+  createdAt: DateTime!
+  description: String
+  digest: RunDigestModel!
+  events(after: String, first: Int! = 50, type: String): RunEventConnection!
+  id: ID!
+  priority: Int!
+  repos: [String!]!
+  scope: String
+  status: String!
+  title: String!
+}
+
+type RunModelEdge {
+  cursor: String!
+  node: RunModel!
+}
+
+input SimulateRouteInput {
+  params: JSON
+  pipeline: String
+  playbookId: String
+  repo: String
+  title: String!
+}
+
+type SystemStatusModel {
+  daemon: DaemonStatusModel!
+  project: ProjectModel!
+}
+
+type UsageModel {
+  costAmount: Float!
+  inputTokens: Int!
+  outputTokens: Int!
+}
