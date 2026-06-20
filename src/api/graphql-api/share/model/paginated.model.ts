@@ -16,7 +16,7 @@ export type PaginatedShape<T> = {
 
 @ObjectType()
 export class PageInfo implements PageInfoShape {
-  @Field({ nullable: true })
+  @Field(() => String, { nullable: true })
   endCursor?: string;
 
   @Field(() => Boolean)
@@ -25,7 +25,7 @@ export class PageInfo implements PageInfoShape {
   @Field(() => Boolean)
   hasPreviousPage!: boolean;
 
-  @Field({ nullable: true })
+  @Field(() => String, { nullable: true })
   startCursor?: string;
 }
 
