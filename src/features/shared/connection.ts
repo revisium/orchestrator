@@ -19,8 +19,17 @@ function decodeCursor(cursor: string | undefined): number {
   return Number.isInteger(index) && index >= 0 ? index : -1;
 }
 
+function normalizeFirst(first: number | undefined): number {
+  return Math.min(Math.max(first ?? DEFAULT_FIRST, 0), MAX_FIRST);
+}
+
+export function connectionFetchLimit(input: ConnectionInput = {}): number {
+  const start = decodeCursor(input.after) + 1;
+  return start + normalizeFirst(input.first) + 1;
+}
+
 export function toConnection<T>(items: T[], input: ConnectionInput = {}): PaginatedShape<T> {
-  const first = Math.min(Math.max(input.first ?? DEFAULT_FIRST, 0), MAX_FIRST);
+  const first = normalizeFirst(input.first);
   const start = decodeCursor(input.after) + 1;
   const page = items.slice(start, start + first);
   const edges = page.map((node, offset) => ({

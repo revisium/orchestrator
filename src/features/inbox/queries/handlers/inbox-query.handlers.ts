@@ -1,7 +1,7 @@
 import { Inject } from '@nestjs/common';
 import { IQueryHandler, QueryHandler } from '@nestjs/cqrs';
 import { TaskControlPlaneApiService } from '../../../../task-control-plane/task-control-plane-api.service.js';
-import { toConnection } from '../../../shared/connection.js';
+import { connectionFetchLimit, toConnection } from '../../../shared/connection.js';
 import { GetInboxItemQuery } from '../impl/get-inbox-item.query.js';
 import { GetPendingDecisionsQuery } from '../impl/get-pending-decisions.query.js';
 import { ListInboxQuery } from '../impl/list-inbox.query.js';
@@ -20,7 +20,7 @@ export class ListInboxHandler implements IQueryHandler<ListInboxQuery> {
     const items = await this.api.listInbox({
       status: normalizeStatus(query.data.status),
       runId: query.data.runId,
-      limit: 500,
+      limit: connectionFetchLimit(query.data),
     });
     return toConnection(items, query.data);
   }

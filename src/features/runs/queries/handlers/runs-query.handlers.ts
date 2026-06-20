@@ -1,7 +1,7 @@
 import { Inject } from '@nestjs/common';
 import { IQueryHandler, QueryHandler } from '@nestjs/cqrs';
 import { TaskControlPlaneApiService } from '../../../../task-control-plane/task-control-plane-api.service.js';
-import { toConnection } from '../../../shared/connection.js';
+import { connectionFetchLimit, toConnection } from '../../../shared/connection.js';
 import { GetRunDigestQuery } from '../impl/get-run-digest.query.js';
 import { GetRunEventsQuery } from '../impl/get-run-events.query.js';
 import { GetRunQuery } from '../impl/get-run.query.js';
@@ -32,8 +32,10 @@ type EventLike = {
 };
 
 function date(value: Date | string | undefined): Date {
-  if (value instanceof Date) return value;
-  return value ? new Date(value) : new Date(0);
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? new Date(0) : value;
+  if (!value) return new Date(0);
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? new Date(0) : parsed;
 }
 
 function mapRun(run: RunLike) {
@@ -67,7 +69,7 @@ export class ListRunsHandler implements IQueryHandler<ListRunsQuery> {
   constructor(@Inject(TaskControlPlaneApiService) private readonly api: TaskControlPlaneApiService) {}
 
   async execute(query: ListRunsQuery) {
-    const runs = await this.api.listRuns({ status: query.data.status, limit: 500 });
+    const runs = await this.api.listRuns({ status: query.data.status, limit: connectionFetchLimit(query.data) });
     return toConnection(runs.map(mapRun), query.data);
   }
 }
@@ -90,7 +92,7 @@ export class GetRunEventsHandler implements IQueryHandler<GetRunEventsQuery> {
     const events = await this.api.getRunEvents({
       runId: query.data.runId,
       type: query.data.type,
-      limit: 500,
+      limit: connectionFetchLimit(query.data),
     });
     return toConnection(events.map((event) => mapEvent(query.data.runId, event)), query.data);
   }

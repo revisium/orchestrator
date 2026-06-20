@@ -16,7 +16,7 @@ test('inbox query handlers delegate through TaskControlPlaneApiService', async (
   const item = { id: 'inbox_1', kind: 'approval', title: 'Approve', status: 'pending', createdAt: new Date() };
   const api = {
     async listInbox(input: unknown) {
-      assert.deepEqual(input, { status: 'pending', runId: 'run_1', limit: 500 });
+      assert.deepEqual(input, { status: 'pending', runId: 'run_1', limit: 51 });
       return [item];
     },
     async getInboxItem(id: string) {

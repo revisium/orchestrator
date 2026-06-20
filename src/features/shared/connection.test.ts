@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { toConnection } from './connection.js';
+import { connectionFetchLimit, toConnection } from './connection.js';
 
 test('toConnection returns Relay-style page metadata', () => {
   const first = toConnection(['a', 'b', 'c'], { first: 2 });
@@ -14,4 +14,11 @@ test('toConnection returns Relay-style page metadata', () => {
   assert.deepEqual(second.edges.map((edge) => edge.node), ['c']);
   assert.equal(second.pageInfo.hasPreviousPage, true);
   assert.equal(second.pageInfo.hasNextPage, false);
+});
+
+test('connectionFetchLimit fetches one extra row beyond the requested cursor window', () => {
+  const first = toConnection(['a', 'b', 'c'], { first: 2 });
+
+  assert.equal(connectionFetchLimit({ first: 2 }), 3);
+  assert.equal(connectionFetchLimit({ first: 2, after: first.pageInfo.endCursor }), 5);
 });
