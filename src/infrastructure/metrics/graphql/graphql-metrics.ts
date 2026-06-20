@@ -25,6 +25,8 @@ type OperationLabel = {
 };
 
 const ANONYMOUS_OPERATION = 'anonymous';
+const OVERFLOW_OPERATION_LABEL: OperationLabel = { operationName: 'other', operationType: 'unknown' };
+export const MAX_GRAPHQL_OPERATION_LABELS = 256;
 
 function key(label: OperationLabel): string {
   return `${label.operationType}:${label.operationName}`;
@@ -60,7 +62,13 @@ export class GraphqlOperationMetrics {
   private readonly records = new Map<string, GraphqlOperationMetricsRecord>();
 
   record(input: RecordInput): void {
-    const label = { operationName: input.operationName, operationType: input.operationType };
+    let label = { operationName: input.operationName, operationType: input.operationType };
+    const labelKey = key(label);
+    const overflowKey = key(OVERFLOW_OPERATION_LABEL);
+    const leavesRoomForOverflow = this.records.size < MAX_GRAPHQL_OPERATION_LABELS - (this.records.has(overflowKey) ? 0 : 1);
+    if (!this.records.has(labelKey) && !leavesRoomForOverflow) {
+      label = OVERFLOW_OPERATION_LABEL;
+    }
     const current = this.records.get(key(label)) ?? {
       ...label,
       count: 0,

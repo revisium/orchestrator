@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { OperationTypeNode } from 'graphql';
 import {
   GraphqlOperationMetrics,
+  MAX_GRAPHQL_OPERATION_LABELS,
   createGraphqlMetricsPlugin,
   identifyGraphqlOperation,
 } from './graphql-metrics.js';
@@ -43,6 +44,27 @@ test('GraphqlOperationMetrics records operation count, errors, and duration', ()
       maxDurationMs: 18,
     },
   ]);
+});
+
+test('GraphqlOperationMetrics bounds client-controlled operation label cardinality', () => {
+  const metrics = new GraphqlOperationMetrics();
+  for (let i = 0; i < MAX_GRAPHQL_OPERATION_LABELS - 1; i += 1) {
+    metrics.record({ operationName: `Query${i}`, operationType: OperationTypeNode.QUERY, durationMs: 1, errored: false });
+  }
+  metrics.record({ operationName: 'OverflowQuery', operationType: OperationTypeNode.QUERY, durationMs: 5, errored: false });
+  metrics.record({ operationName: 'AnotherNewLabel', operationType: OperationTypeNode.MUTATION, durationMs: 7, errored: true });
+
+  const snapshot = metrics.snapshot();
+  assert.equal(snapshot.length, MAX_GRAPHQL_OPERATION_LABELS);
+  assert.equal(snapshot.find((record) => record.operationName === 'OverflowQuery'), undefined);
+  assert.deepEqual(snapshot.find((record) => record.operationName === 'other' && record.operationType === 'unknown'), {
+    operationName: 'other',
+    operationType: 'unknown',
+    count: 2,
+    errorCount: 1,
+    totalDurationMs: 12,
+    maxDurationMs: 7,
+  });
 });
 
 test('createGraphqlMetricsPlugin wraps paramsHandler and records success and thrown errors', async () => {
@@ -92,4 +114,19 @@ test('createGraphqlMetricsPlugin wraps paramsHandler and records success and thr
 
   await assert.rejects(() => handler(), /boom/);
   assert.equal(metrics.snapshot().find((record) => record.operationName === 'Broken')?.errorCount, 1);
+
+  plugin.onParams?.({
+    params: { operationName: 'WithErrors', query: 'query WithErrors { missing }' },
+    paramsHandler: () => ({ errors: [new Error('field missing')] }),
+    setParamsHandler(next: (payload: unknown) => Promise<unknown>) {
+      handler = () => next({
+        params: { operationName: 'WithErrors', query: 'query WithErrors { missing }' },
+        request: new Request('http://127.0.0.1/graphql'),
+        context: {} as never,
+      });
+    },
+  } as never);
+
+  await handler();
+  assert.equal(metrics.snapshot().find((record) => record.operationName === 'WithErrors')?.errorCount, 1);
 });
