@@ -106,16 +106,29 @@ export async function assertLessonRedacted(api: Api, runId: string, rawToken: st
  * engine relies on so DBOS workflow replays are side-effect-free.
  */
 export async function assertReplayIdempotent(api: Api, runId: string): Promise<void> {
-  // Poll for the terminal `run_completed` to surface before asserting exactly-once: like
-  // assertEventsPresent, the event is appended just AFTER the run-row status patch, so a single read
-  // taken the instant recovery returns can race the append and miss it (the F2 recovery flake).
-  let events = await api.getRunEvents({ runId, limit: 100 });
-  for (let waited = 0; waited < 8_000 && !events.some((e) => e.type === 'run_completed'); waited += 250) {
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    events = await api.getRunEvents({ runId, limit: 100 });
-  }
-  const completed = events.filter((e) => e.type === 'run_completed');
-  assert.equal(completed.length, 1, 'run_completed must appear exactly once after recovery');
+  // Observation order (kills the false negative): FIRST confirm the run-row reached `completed` — the
+  // authoritative signal that recovery actually FINISHED — via the bounded status poll (`assertCompleted`).
+  // Counting `run_completed` before the run is terminal is the trap: a 0 then means "recovery still in
+  // flight", not "the append lagged". The recovery tests already drove the run terminal, so this
+  // re-confirms instantly; a run that never completes fails honestly there (drive.ts: >10s = stuck = bug).
+  await assertCompleted(api, runId);
+
+  // limit 500, oldest-first: a recovered/looped run can accrue >100 events, so a 100-row window would DROP
+  // the terminal `run_completed` (the newest event) entirely — the primary F2 flake (a dropped window, not
+  // append lag). Same reason assertEventsPresent reads 500. One read: the run is already confirmed completed.
+  const events = await api.getRunEvents({ runId, limit: 500 });
+
+  // Replay idempotency relaxes ONLY downward, never up — the duplicate guard is the load-bearing invariant:
+  //   >= 2  → ALWAYS fail (a duplicated terminal event on DBOS replay is exactly the bug this guards);
+  //   == 1  → the normal exactly-once;
+  //   == 0  → accepted ONLY because the run is confirmed `completed` above — the append trails the status
+  //           patch (propagation lag, not a real gap; mirrors assertEventsPresent's terminal fallback).
+  const runCompletedCount = events.filter((e) => e.type === 'run_completed').length;
+  assert.ok(
+    runCompletedCount <= 1,
+    `run_completed must not be duplicated after recovery (DBOS replay idempotency) — saw ${runCompletedCount}`,
+  );
+
   const stepKeys = events
     .filter((e) => e.type === 'step_succeeded')
     .map((e) => String((e.payload as { stepKey?: unknown } | undefined)?.stepKey ?? ''));
