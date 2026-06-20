@@ -19,3 +19,41 @@ test('resolveGraphqlHostOptions accepts explicit local port', () => {
     port: 19423,
   });
 });
+
+test('resolveGraphqlHostOptions reads environment overrides', () => {
+  const oldHost = process.env.REVO_GRAPHQL_HOST;
+  const oldPort = process.env.REVO_GRAPHQL_PORT;
+  process.env.REVO_GRAPHQL_HOST = '127.0.0.1';
+  process.env.REVO_GRAPHQL_PORT = '19424';
+  try {
+    assert.deepEqual(resolveGraphqlHostOptions(), {
+      host: DEFAULT_GRAPHQL_HOST,
+      port: 19424,
+    });
+  } finally {
+    if (oldHost === undefined) {
+      delete process.env.REVO_GRAPHQL_HOST;
+    } else {
+      process.env.REVO_GRAPHQL_HOST = oldHost;
+    }
+    if (oldPort === undefined) {
+      delete process.env.REVO_GRAPHQL_PORT;
+    } else {
+      process.env.REVO_GRAPHQL_PORT = oldPort;
+    }
+  }
+});
+
+test('resolveGraphqlHostOptions rejects invalid environment ports', () => {
+  const oldPort = process.env.REVO_GRAPHQL_PORT;
+  process.env.REVO_GRAPHQL_PORT = 'not-a-port';
+  try {
+    assert.throws(() => resolveGraphqlHostOptions(), /Invalid GraphQL port/);
+  } finally {
+    if (oldPort === undefined) {
+      delete process.env.REVO_GRAPHQL_PORT;
+    } else {
+      process.env.REVO_GRAPHQL_PORT = oldPort;
+    }
+  }
+});

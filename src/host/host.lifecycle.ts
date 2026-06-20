@@ -24,17 +24,20 @@ function isMcpStdioHost(): boolean {
   return process.env.REVO_MCP_STDIO === '1';
 }
 
+function keepControlPlaneBootstrapDependency(_api: TaskControlPlaneApiService | undefined): void {
+  // The constructor dependency forces the control-plane provider graph to instantiate
+  // before DBOS.launch(); pipeline registration must precede launch.
+}
+
 @Injectable()
 export class HostLifecycle implements OnApplicationBootstrap, OnApplicationShutdown {
   constructor(
     @Inject(DbosService) private readonly dbosService: DbosService,
     @Optional()
     @Inject(TaskControlPlaneApiService)
-    private readonly taskControlPlaneApi?: TaskControlPlaneApiService,
+    taskControlPlaneApi?: TaskControlPlaneApiService,
   ) {
-    // If a host module exposes the control-plane API (GraphQL), force that provider graph
-    // to instantiate before DBOS.launch(); pipeline registration must precede launch.
-    void this.taskControlPlaneApi;
+    keepControlPlaneBootstrapDependency(taskControlPlaneApi);
   }
 
   async onApplicationBootstrap(): Promise<void> {

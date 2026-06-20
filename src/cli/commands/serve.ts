@@ -5,7 +5,7 @@ type ServeOptions = {
   port?: string;
 };
 
-function parsePortOption(raw: string | undefined): number | undefined {
+export function parsePortOption(raw: string | undefined): number | undefined {
   if (!raw) return undefined;
   const port = Number.parseInt(raw, 10);
   if (!Number.isInteger(port) || port <= 0 || port > 65_535) {
