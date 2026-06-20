@@ -24,10 +24,13 @@ import { PlaybooksService } from '../revisium/playbooks.service.js';
 import type { PipelineSummary } from '../revisium/playbooks.service.js';
 import { RolesService, type RoleSummary } from '../revisium/roles.service.js';
 import { RunService } from '../revisium/run.service.js';
+import type { AttemptSummary, EventSummary } from '../run/inspect-run.js';
 import { PrReadinessService, type GetPrReadinessInput } from './pr-readiness.service.js';
 
 const execFileAsync = promisify(execFile);
 const GATE_TOPICS = new Set<string>(['plan', 'merge', 'question']);
+const WORKFLOW_SUCCESS_EVENT_TYPES = new Set(['step_succeeded', 'gate_signaled']);
+const WORKFLOW_FAILURE_EVENT_TYPES = new Set(['step_failed', 'attempt_failed']);
 const BUILTIN_RUNNERS = new Set(['claude-code', 'codex', 'script', 'stub-agent', 'revo-integrator', 'revo-merger', 'revo-deterministic']);
 
 export type RunnerModeInput = RunnerMode;
@@ -145,6 +148,161 @@ function summarizeAttempts(attempts: Array<{ inputTokens: number; outputTokens: 
     }),
     { inputTokens: 0, outputTokens: 0, costAmount: 0 },
   );
+}
+
+function normalizedRunStatus(status: string): string {
+  return status === 'paused' ? 'blocked' : status;
+}
+
+function payloadRecord(event: EventSummary): Record<string, unknown> | null {
+  return asRecord(event.payload);
+}
+
+function eventStepKey(event: EventSummary): string {
+  const payload = payloadRecord(event);
+  const stepKey = payload?.stepKey;
+  return typeof stepKey === 'string' ? stepKey : '';
+}
+
+function eventSummary(event: EventSummary): string {
+  const payload = payloadRecord(event);
+  const reason = payload?.reason;
+  const output = payload?.output;
+  if (typeof reason === 'string' && reason) return reason;
+  if (typeof output === 'string' && output) return output.slice(0, 180);
+  return event.type;
+}
+
+function stepKeyBase(stepKey: string): string {
+  return stepKey.split('#')[0] ?? stepKey;
+}
+
+function activeNodeIds(progress: RunProgress): string[] {
+  const cursor = asRecord(progress.graphCursor);
+  const value = cursor?.activeNodeIds;
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+}
+
+function cursorStatus(progress: RunProgress): string {
+  const cursor = asRecord(progress.graphCursor);
+  const status = cursor?.status;
+  return typeof status === 'string' ? status : progress.workflowStatus;
+}
+
+function templateNodeLabel(node: { id: string; displayName?: string }): string {
+  return node.displayName ?? node.id.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[-_]/g, ' ');
+}
+
+function roleFromRef(roleRef: string | undefined): string | null {
+  if (!roleRef) return null;
+  return roleRef.startsWith('role:') ? roleRef.slice('role:'.length) : roleRef;
+}
+
+function scriptFromRef(scriptRef: string | undefined): string | null {
+  if (!scriptRef) return null;
+  return scriptRef.startsWith('script:') ? scriptRef.slice('script:'.length) : scriptRef;
+}
+
+function mapAttemptForWorkflow(runId: string, attempt: AttemptSummary) {
+  return {
+    id: attempt.attemptId,
+    runId,
+    stepId: attempt.stepId,
+    stepKey: attempt.stepId,
+    iteration: attempt.iteration,
+    status: attempt.status,
+    verdict: attempt.verdict,
+    modelProfile: attempt.modelProfile,
+    inputTokens: attempt.inputTokens,
+    outputTokens: attempt.outputTokens,
+    costAmount: attempt.costAmount,
+    currency: attempt.currency,
+    durationMs: attempt.durationMs,
+    outputSummary: attempt.outputSummary,
+    artifactRef: attempt.artifactRef,
+    lesson: attempt.lesson,
+    error: attempt.error,
+    startedAt: dateOrEpoch(attempt.startedAt),
+  };
+}
+
+function mapInboxForWorkflow(item: InboxItem) {
+  return {
+    ...item,
+    runId: item.runId || null,
+    taskId: item.taskId || null,
+    stepId: item.stepId || null,
+    projectId: item.projectId || null,
+    resolvedBy: item.resolvedBy || null,
+    createdAt: dateOrEpoch(item.createdAt),
+    resolvedAt: item.resolvedAt ? dateOrEpoch(item.resolvedAt) : null,
+  };
+}
+
+function mapRunForWorkflow(run: {
+  runId?: string;
+  id?: string;
+  title?: string;
+  status?: string;
+  priority?: number;
+  description?: string;
+  scope?: string;
+  repos?: string[];
+  createdAt?: Date | string;
+}) {
+  return {
+    id: run.runId ?? run.id ?? '',
+    title: run.title ?? '',
+    status: normalizedRunStatus(run.status ?? ''),
+    priority: run.priority ?? 0,
+    description: run.description,
+    scope: run.scope,
+    repos: run.repos ?? [],
+    createdAt: dateOrEpoch(run.createdAt),
+  };
+}
+
+function workflowNodeStatus(input: { gate?: InboxItem; failed: boolean; active: boolean; succeeded: boolean }): string {
+  if (input.gate) return 'awaiting_approval';
+  if (input.failed) return 'failed';
+  if (input.active) return 'running';
+  if (input.succeeded) return 'succeeded';
+  return 'pending';
+}
+
+function workflowGateTopic(node: { id: string; metadata: unknown }): string {
+  const metadata = asRecord(node.metadata);
+  const reason = metadata?.reason;
+  return typeof reason === 'string' && reason ? reason : node.id;
+}
+
+function addAttemptForWorkflowNode(
+  attemptsByBase: Map<string, AttemptSummary[]>,
+  seenAttemptIdsByBase: Map<string, Set<string>>,
+  base: string,
+  attempt: AttemptSummary,
+) {
+  const seen = seenAttemptIdsByBase.get(base) ?? new Set<string>();
+  if (seen.has(attempt.attemptId)) return;
+  seen.add(attempt.attemptId);
+  seenAttemptIdsByBase.set(base, seen);
+  attemptsByBase.set(base, [...(attemptsByBase.get(base) ?? []), attempt]);
+}
+
+function workflowEdges(node: { id: string; kind: string }): Array<{ from: string; to: string; label: string; kind: string }> {
+  const record = node as Record<string, unknown>;
+  const edges: Array<{ from: string; to: string; label: string; kind: string }> = [];
+  const add = (to: unknown, label = '', kind = 'next') => {
+    if (typeof to === 'string' && to) edges.push({ from: node.id, to, label, kind });
+  };
+  add(record.next);
+  add(record.join, 'join', 'join');
+  const branches = Array.isArray(record.branches) ? record.branches : [];
+  for (const branch of branches) {
+    const item = asRecord(branch);
+    add(item?.goto ?? item?.entry, typeof item?.id === 'string' ? item.id : '', node.kind === 'humanGate' ? 'gate' : 'branch');
+  }
+  return edges;
 }
 
 function words(value: string): Set<string> {
@@ -441,6 +599,126 @@ export class TaskControlPlaneApiService {
 
   getRunLog(input: { runId: string; limit?: number }) {
     return this.runs.listRunAttempts(input.runId, { limit: input.limit });
+  }
+
+  async getRunWorkflow(runId: string) {
+    const [detail, runRow, events, attempts, pendingInbox, progress] = await Promise.all([
+      this.getRun({ runId }),
+      this.runs.getRun(runId),
+      this.runs.listRunEvents(runId, { limit: 500 }),
+      this.runs.listRunAttempts(runId, { limit: 500 }),
+      this.inbox.listInbox({ runId, status: 'pending', limit: 100 }),
+      this.getRunProgress(runId),
+    ]);
+    if (!runRow) throw new ControlPlaneError('ROW_NOT_FOUND', `run not found: ${runId}`);
+    const route = await this.routeForRun(runRow);
+    const template = templateFromExecutionPolicy(route.executionPolicy);
+    const activeIds = activeNodeIds(progress);
+    const active = new Set(activeIds);
+    const succeeded = new Set(
+      events
+        .filter((event) => WORKFLOW_SUCCESS_EVENT_TYPES.has(event.type))
+        .map(eventStepKey)
+        .filter(Boolean)
+        .map(stepKeyBase),
+    );
+    const failed = new Set(
+      events
+        .filter((event) => WORKFLOW_FAILURE_EVENT_TYPES.has(event.type))
+        .map(eventStepKey)
+        .filter(Boolean)
+        .map(stepKeyBase),
+    );
+    const inboxByNode = new Map<string, InboxItem>();
+    for (const item of pendingInbox) {
+      const context = asRecord(item.context);
+      const summary = asRecord(context?.summary);
+      const nodeId = typeof summary?.nodeId === 'string' ? summary.nodeId : '';
+      if (nodeId) inboxByNode.set(nodeId, item);
+    }
+    const attemptsByBase = new Map<string, AttemptSummary[]>();
+    const seenAttemptIdsByBase = new Map<string, Set<string>>();
+    for (const event of events) {
+      const key = eventStepKey(event);
+      if (!key) continue;
+      const base = stepKeyBase(key);
+      const eventAttempts = attempts.filter((attempt) => attempt.attemptId === asRecord(event.payload)?.attemptId);
+      for (const attempt of eventAttempts) {
+        addAttemptForWorkflowNode(attemptsByBase, seenAttemptIdsByBase, base, attempt);
+      }
+    }
+    const nodes = Object.values(template?.nodes ?? {}).map((node) => {
+      const record = node as typeof node & { roleRef?: string; scriptRef?: string };
+      const nodeAttempts = attemptsByBase.get(node.id) ?? [];
+      const roleId = roleFromRef(record.roleRef);
+      const binding = roleId ? route.roleBindings.find((item) => item.roleId === roleId) : undefined;
+      const isActive = active.has(node.id);
+      const gate = inboxByNode.get(node.id);
+      const status = workflowNodeStatus({
+        gate,
+        failed: failed.has(node.id),
+        active: isActive,
+        succeeded: succeeded.has(node.id),
+      });
+      return {
+        id: node.id,
+        label: templateNodeLabel(node),
+        kind: node.kind,
+        roleId,
+        scriptId: scriptFromRef(record.scriptRef),
+        modelLevel: binding?.modelLevel ?? null,
+        runner: binding?.resolvedRunnerId ?? null,
+        status,
+        attemptCount: nodeAttempts.length,
+        inputTokens: nodeAttempts.reduce((sum, attempt) => sum + attempt.inputTokens, 0),
+        outputTokens: nodeAttempts.reduce((sum, attempt) => sum + attempt.outputTokens, 0),
+        costAmount: nodeAttempts.reduce((sum, attempt) => sum + attempt.costAmount, 0),
+        verdict: nodeAttempts.at(-1)?.verdict ?? null,
+        inboxId: gate?.id ?? null,
+        metadata: node,
+      };
+    });
+    const edges = Object.values(template?.nodes ?? {}).flatMap((node) => workflowEdges(node));
+    return {
+      run: {
+        ...mapRunForWorkflow(detail.run),
+      },
+      pipeline: {
+        id: route.pipelineRowId,
+        pipelineId: route.pipelineId,
+        playbookId: route.playbookId,
+        title: template?.title ?? route.pipelineId,
+        routeGates: route.routeGates,
+        activeNodeIds: activeIds,
+        status: cursorStatus(progress),
+      },
+      nodes,
+      edges,
+      currentNodeIds: activeIds,
+      gates: nodes
+        .filter((node) => node.kind === 'humanGate')
+        .map((node) => {
+          const inbox = inboxByNode.get(node.id);
+          return {
+            nodeId: node.id,
+            topic: workflowGateTopic(node),
+            status: inbox ? 'pending' : node.status,
+            inboxId: inbox?.id ?? null,
+            answer: inbox?.answer ?? null,
+          };
+        }),
+      attempts: attempts.map((attempt) => mapAttemptForWorkflow(runId, attempt)),
+      pendingInbox: pendingInbox.map(mapInboxForWorkflow),
+      usage: summarizeAttempts(attempts),
+      activity: events.slice(-50).reverse().map((event) => ({
+        id: event.eventId,
+        type: event.type,
+        actor: event.actor,
+        createdAt: dateOrEpoch(event.createdAt),
+        summary: eventSummary(event),
+        payload: event.payload,
+      })),
+    };
   }
 
   async getRunDigest(runId: string) {

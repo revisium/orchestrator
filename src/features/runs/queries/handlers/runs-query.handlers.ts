@@ -2,10 +2,12 @@ import { Inject } from '@nestjs/common';
 import { IQueryHandler, QueryHandler } from '@nestjs/cqrs';
 import { TaskControlPlaneApiService } from '../../../../task-control-plane/task-control-plane-api.service.js';
 import { connectionFetchLimit, toConnection } from '../../../shared/connection.js';
+import { GetRunAttemptsQuery } from '../impl/get-run-attempts.query.js';
 import { GetRunDigestQuery } from '../impl/get-run-digest.query.js';
 import { GetRunEventsQuery } from '../impl/get-run-events.query.js';
 import { GetRunProgressQuery } from '../impl/get-run-progress.query.js';
 import { GetRunQuery } from '../impl/get-run.query.js';
+import { GetRunWorkflowQuery } from '../impl/get-run-workflow.query.js';
 import { ListRunsQuery } from '../impl/list-runs.query.js';
 import { SimulateRouteQuery } from '../impl/simulate-route.query.js';
 
@@ -39,16 +41,64 @@ function date(value: Date | string | undefined): Date {
   return Number.isNaN(parsed.getTime()) ? new Date(0) : parsed;
 }
 
+function status(value: string | undefined): string {
+  return value === 'paused' ? 'blocked' : value ?? '';
+}
+
+function rawStatusFilter(value: string | undefined): string | undefined {
+  return value === 'blocked' ? 'paused' : value;
+}
+
 function mapRun(run: RunLike) {
   return {
     id: run.runId ?? run.id ?? '',
     title: run.title ?? '',
-    status: run.status ?? '',
+    status: status(run.status),
     priority: run.priority ?? 0,
     description: run.description,
     scope: run.scope,
     repos: run.repos ?? [],
     createdAt: date(run.createdAt),
+  };
+}
+
+function mapAttempt(runId: string, attempt: {
+  attemptId?: string;
+  stepId?: string;
+  iteration?: number;
+  status?: string;
+  verdict?: string;
+  modelProfile?: string;
+  inputTokens?: number;
+  outputTokens?: number;
+  costAmount?: number;
+  currency?: string;
+  durationMs?: number;
+  outputSummary?: string;
+  artifactRef?: string;
+  lesson?: string;
+  error?: string;
+  startedAt?: Date | string;
+}) {
+  return {
+    id: attempt.attemptId ?? '',
+    runId,
+    stepId: attempt.stepId ?? '',
+    stepKey: attempt.stepId ?? '',
+    iteration: attempt.iteration ?? 0,
+    status: attempt.status ?? '',
+    verdict: attempt.verdict ?? '',
+    modelProfile: attempt.modelProfile ?? '',
+    inputTokens: attempt.inputTokens ?? 0,
+    outputTokens: attempt.outputTokens ?? 0,
+    costAmount: attempt.costAmount ?? 0,
+    currency: attempt.currency ?? 'USD',
+    durationMs: attempt.durationMs ?? 0,
+    outputSummary: attempt.outputSummary ?? '',
+    artifactRef: attempt.artifactRef ?? '',
+    lesson: attempt.lesson ?? '',
+    error: attempt.error ?? '',
+    startedAt: date(attempt.startedAt),
   };
 }
 
@@ -70,7 +120,10 @@ export class ListRunsHandler implements IQueryHandler<ListRunsQuery> {
   constructor(@Inject(TaskControlPlaneApiService) private readonly api: TaskControlPlaneApiService) {}
 
   async execute(query: ListRunsQuery) {
-    const runs = await this.api.listRuns({ status: query.data.status, limit: connectionFetchLimit(query.data) });
+    const runs = await this.api.listRuns({
+      status: rawStatusFilter(query.data.status),
+      limit: connectionFetchLimit(query.data),
+    });
     return toConnection(runs.map(mapRun), query.data);
   }
 }
@@ -105,6 +158,28 @@ export class GetRunEventsHandler implements IQueryHandler<GetRunEventsQuery> {
       limit: connectionFetchLimit(query.data),
     });
     return toConnection(events.map((event) => mapEvent(query.data.runId, event)), query.data);
+  }
+}
+
+@QueryHandler(GetRunAttemptsQuery)
+export class GetRunAttemptsHandler implements IQueryHandler<GetRunAttemptsQuery> {
+  constructor(@Inject(TaskControlPlaneApiService) private readonly api: TaskControlPlaneApiService) {}
+
+  async execute(query: GetRunAttemptsQuery) {
+    const attempts = await this.api.getRunLog({
+      runId: query.data.runId,
+      limit: connectionFetchLimit(query.data),
+    });
+    return toConnection(attempts.map((attempt) => mapAttempt(query.data.runId, attempt)), query.data);
+  }
+}
+
+@QueryHandler(GetRunWorkflowQuery)
+export class GetRunWorkflowHandler implements IQueryHandler<GetRunWorkflowQuery> {
+  constructor(@Inject(TaskControlPlaneApiService) private readonly api: TaskControlPlaneApiService) {}
+
+  execute(query: GetRunWorkflowQuery) {
+    return this.api.getRunWorkflow(query.data.runId);
   }
 }
 
