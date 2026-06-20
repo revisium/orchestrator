@@ -14,24 +14,21 @@ import {
   approveUntilTerminal,
   assertEventsPresent,
   assertBlocked,
+  assertRoleStepAfterEvent,
   executedRoles,
 } from './kit/index.js';
 
-// Group K — PIPELINE EXTENSIBILITY (embedding a role/script into a pipeline via DATA).
-//
-// The pipeline SHAPE is code, but WHICH roles fill each phase comes from the installed playbook.
-// The e2e fixture (src/e2e/fixtures/playbook) declares a `pr-watcher` role + a `feature-pr-watch`
-// pipeline that embeds it post-integrator — i.e. a role plugged into the pipeline purely from data.
-// These tests pin that behaviour (the safety net for a later data-driven-pipeline redesign): the
-// embedded role runs after the integrator, its verdict drives the flow, and routing reflects it.
-// One shared host; the agent is scripted per-run so we can choose the embedded role's verdict.
+// Group K — pipeline extensibility: which role fills each phase comes from the installed playbook,
+// not from code. The fixture playbook declares a `pr-watcher` role + a `feature-pr-watch` pipeline
+// that embeds it post-integrator. These tests pin that a role plugged in via DATA alone still runs,
+// drives the flow, and shows up in routing — the safety net for the data-driven-pipeline redesign.
 
-const PIPELINE = 'feature-pr-watch'; // fixture pipeline: orchestrator, analyst, reviewer, developer, integrator, pr-watcher
-const PIPELINE_POLL = 'feature-pr-poll'; // mirrors feature-pr-watch but with an UNKNOWN-id pr-poller post-integrator
-const STUB_INTEGRATOR = { runnerOverrides: { 'revo-integrator': 'stub-agent' } }; // integrate w/o git/gh
+const PIPELINE = 'feature-pr-watch';
+const PIPELINE_POLL = 'feature-pr-poll'; // mirrors feature-pr-watch with an UNKNOWN-id pr-poller
+const STUB_INTEGRATOR = { runnerOverrides: { 'revo-integrator': 'stub-agent' } }; // integrate without git/gh
 
 let h: RunHarness;
-let target: TargetRepo; // clean repo so live preflight passes (stub integrator never writes to it)
+let target: TargetRepo;
 const specs = new Map<string, AgentSpec>(); // runId → scripted role verdicts
 
 before(async () => {
@@ -46,15 +43,15 @@ after(async () => {
   if (h) await h.close();
 });
 
-/** Create + start the pr-watch pipeline (stub integrator). Optionally script the embedded role's verdict. */
-async function startPrWatchRun(spec?: AgentSpec): Promise<{ runId: string; taskId: string }> {
+/** Create + start a Group-K pipeline (stub integrator). `spec` scripts the embedded role's verdict. */
+async function startRun(pipelineId: string, spec?: AgentSpec): Promise<{ runId: string; taskId: string }> {
   const created = await h.api.createRun({
     repo: target.worktree,
-    title: 'E2E embedded pr-watcher',
+    title: 'E2E embedded role',
     description: 'Group K — role embedded into the pipeline via playbook data.',
     scope: 'extensibility e2e',
     playbookId: PLAYBOOK_ID,
-    pipelineId: PIPELINE,
+    pipelineId,
     executionProfile: STUB_INTEGRATOR,
     start: false,
   });
@@ -63,37 +60,27 @@ async function startPrWatchRun(spec?: AgentSpec): Promise<{ runId: string; taskI
   return { runId: created.runId, taskId: created.taskId };
 }
 
-/** Create + start the pr-poll pipeline (stub integrator) — the UNKNOWN-id, kind:status embedded role. */
-async function startPrPollRun(spec?: AgentSpec): Promise<{ runId: string; taskId: string }> {
-  const created = await h.api.createRun({
-    repo: target.worktree,
-    title: 'E2E embedded pr-poller',
-    description: 'Group K — unknown-id role classified post-integrator via kind, from playbook data.',
-    scope: 'extensibility e2e',
-    playbookId: PLAYBOOK_ID,
-    pipelineId: PIPELINE_POLL,
-    executionProfile: STUB_INTEGRATOR,
-    start: false,
-  });
-  if (spec) specs.set(created.runId, spec);
-  await h.api.startRun({ runId: created.runId });
-  return { runId: created.runId, taskId: created.taskId };
+/** Run `simulateRoute` and narrow to the routing projection the extensibility assertions need. */
+async function route(pipelineId: string) {
+  return (await h.api.simulateRoute({ title: 'route', pipeline: pipelineId })) as unknown as {
+    pipelineId: string;
+    roles: string[];
+    roleBindings: Array<{ roleId: string } & Record<string, unknown>>;
+  };
 }
 
-test('K1: an embedded post-integrator role (pr-watcher) declared only in playbook data runs and completes', { skip: e2eSkip }, async () => {
-  const run = await startPrWatchRun(); // default: every role PASS, incl the embedded pr-watcher
+test('K1: an embedded post-integrator role declared only in playbook data runs and completes', { skip: e2eSkip }, async () => {
+  const run = await startRun(PIPELINE);
   const terminal = await approveUntilTerminal(h.api, run.runId); // approve plan + merge
   assert.equal(terminal.state, 'completed');
-  // integrate_succeeded proves the integrator ran (it's a stub runner → not an agent call, so it is
-  // not in executedRoles); K3 proves pr-watcher is ordered after the integrator in the route.
+  // `integrate_succeeded` proves the integrator ran; it is a stub runner, so it is NOT in
+  // `executedRoles` (which records agent calls only). K3 proves pr-watcher is ordered after the integrator.
   await assertEventsPresent(h.api, run.runId, ['integrate_succeeded', 'run_completed']);
-  const roles = executedRoles(h, run.runId).map(([role]) => role);
-  assert.ok(roles.includes('pr-watcher'), 'the embedded pr-watcher role executed (from pipeline data, no code change)');
+  assert.ok(executedRoles(h, run.runId).some(([role]) => role === 'pr-watcher'), 'the embedded pr-watcher ran');
 });
 
 test('K2: the embedded role\'s BLOCKER verdict drives the pipeline (watcher-fix loop → blocks at the cap)', { skip: e2eSkip }, async () => {
-  // pr-watcher always BLOCKER → the post-integrator loop reworks via the developer, then blocks at the cap.
-  const run = await startPrWatchRun({ byRole: { 'pr-watcher': { kind: 'verdict', verdict: 'BLOCKER' } } });
+  const run = await startRun(PIPELINE, { byRole: { 'pr-watcher': { kind: 'verdict', verdict: 'BLOCKER' } } });
   await approveUntilTerminal(h.api, run.runId); // approve the plan gate; the run then blocks before merge
   await assertBlocked(h.api, run.runId);
   const roles = executedRoles(h, run.runId).map(([role]) => role);
@@ -102,65 +89,29 @@ test('K2: the embedded role\'s BLOCKER verdict drives the pipeline (watcher-fix 
 });
 
 test('K3: routing composes the pipeline from data — the embedded role appears after the integrator', { skip: e2eSkip }, async () => {
-  const route = (await h.api.simulateRoute({ title: 'route', pipeline: PIPELINE })) as unknown as {
-    pipelineId: string;
-    roles: string[];
-  };
-  assert.equal(route.pipelineId, PIPELINE);
-  assert.ok(route.roles.includes('pr-watcher'), 'pr-watcher is routed purely from the fixture pipeline data');
-  assert.ok(
-    route.roles.indexOf('pr-watcher') > route.roles.indexOf('integrator'),
-    'the embedded role is ordered after the integrator (post-integrator phase)',
-  );
+  const r = await route(PIPELINE);
+  assert.equal(r.pipelineId, PIPELINE);
+  assert.ok(r.roles.includes('pr-watcher'), 'pr-watcher is routed from the fixture pipeline data');
+  assert.ok(r.roles.indexOf('pr-watcher') > r.roles.indexOf('integrator'), 'the embedded role is ordered post-integrator');
 });
 
-// K4/K5 — a role whose id is UNKNOWN to any historical classifier runs as a post-integrator node
-// purely from its placement in the TEMPLATE (the data-driven engine resolves `role:pr-poller` as an
-// opaque capability handle by id; it holds ZERO role-ids and reads no role `kind`). The post-integrator
-// placement is the template's node ordering, not a code classifier. (K1/K3 prove a recognized id,
-// pr-watcher; K4/K5 prove an unrecognized id needs no code change at all.)
+// K4/K5: an unknown-id role still routes from template placement alone — the engine resolves
+// `role:<id>` as an opaque handle and reads no role `kind`. (K1/K3 cover a known id.)
 
-test('K4: an UNRECOGNIZED-id role (pr-poller) placed post-integrator in the template runs and completes', { skip: e2eSkip }, async () => {
-  const run = await startPrPollRun(); // default: every role PASS, incl the unknown-id pr-poller
+test('K4: unknown-id pr-poller runs post-integrator and completes', { skip: e2eSkip }, async () => {
+  const run = await startRun(PIPELINE_POLL);
   const terminal = await approveUntilTerminal(h.api, run.runId); // approve plan + merge
   assert.equal(terminal.state, 'completed');
-  // The run completing proves the data-driven engine resolved the `role:pr-poller` capability handle to
-  // its route binding by id alone (the engine holds ZERO role-ids — its post-integrator placement is the
-  // template's node ordering, not a hardcoded classifier as in the removed engine).
   await assertEventsPresent(h.api, run.runId, ['integrate_succeeded', 'run_completed']);
-  const roles = executedRoles(h, run.runId).map(([role]) => role);
-  assert.ok(roles.includes('pr-poller'), 'the unknown-id pr-poller executed (resolved as a capability handle, no code change)');
-
-  // Runtime ordering: integrate_succeeded must precede the pr-poller agent step (not merely both
-  // present). The data-driven engine keys a step by its NODE id, so we identify the pr-poller step by
-  // the ROLE recorded in the event payload (payload.role = the resolved role binding) — robust to the
-  // template's node naming.
-  const events = await h.api.getRunEvents({ runId: run.runId, limit: 50 });
-  const integrateIdx = events.findIndex((e) => e.type === 'integrate_succeeded');
-  const pollerStepIdx = events.findIndex((e) => {
-    if (e.type !== 'step_succeeded') return false;
-    const role = (e.payload as { role?: unknown } | undefined)?.role;
-    // payload.role is the resolved role binding (the installed row id, playbook-prefixed) — match its
-    // suffix so the assertion is robust to the install prefix and the template's node naming.
-    return typeof role === 'string' && role.endsWith('pr-poller');
-  });
-  assert.ok(integrateIdx >= 0, 'integrate_succeeded was emitted');
-  assert.ok(pollerStepIdx >= 0, "pr-poller's step_succeeded was emitted");
-  assert.ok(integrateIdx < pollerStepIdx, 'the status role ran AFTER the integrator at runtime');
+  assert.ok(executedRoles(h, run.runId).some(([role]) => role === 'pr-poller'), 'pr-poller ran');
+  await assertRoleStepAfterEvent(h.api, run.runId, 'pr-poller', 'integrate_succeeded');
 });
 
 test('K5: routing binds the unknown-id pr-poller from data, ordered after integrator (no kind in the binding)', { skip: e2eSkip }, async () => {
-  const route = (await h.api.simulateRoute({ title: 'route', pipeline: PIPELINE_POLL })) as unknown as {
-    pipelineId: string;
-    roles: string[];
-    roleBindings: Array<{ roleId: string } & Record<string, unknown>>;
-  };
-  assert.equal(route.pipelineId, PIPELINE_POLL);
-  const pollerBinding = route.roleBindings.find((b) => b.roleId === 'pr-poller');
-  assert.ok(pollerBinding, 'pr-poller is bound purely from the fixture pipeline data');
-  assert.equal('kind' in pollerBinding, false, 'the binding carries NO kind (the role-kind machinery was removed)');
-  assert.ok(
-    route.roles.indexOf('pr-poller') > route.roles.indexOf('integrator'),
-    'pr-poller is still ordered after the integrator (post-integrator phase)',
-  );
+  const r = await route(PIPELINE_POLL);
+  assert.equal(r.pipelineId, PIPELINE_POLL);
+  const pollerBinding = r.roleBindings.find((b) => b.roleId === 'pr-poller');
+  assert.ok(pollerBinding, 'pr-poller is bound from the fixture pipeline data');
+  assert.equal('kind' in pollerBinding, false, 'the binding carries no kind (the role-kind machinery was removed)');
+  assert.ok(r.roles.indexOf('pr-poller') > r.roles.indexOf('integrator'), 'pr-poller is ordered post-integrator');
 });

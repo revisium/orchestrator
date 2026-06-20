@@ -150,6 +150,31 @@ export function executedRoles(h: RunHarness, runId: string): Array<[string, stri
 }
 
 /**
+ * Assert a `step_succeeded` for `role` was emitted after `afterEventType`. The two operands differ in
+ * shape on purpose: an integrator is a stub runner that emits `integrate_succeeded` (an event type),
+ * never a step — so the ordering is checked across the two event shapes, not within one. The step's
+ * role is the resolved binding (playbook-prefixed), matched by suffix so the assertion is robust to
+ * the install prefix and the template's node naming.
+ */
+export async function assertRoleStepAfterEvent(
+  api: Api,
+  runId: string,
+  role: string,
+  afterEventType: string,
+): Promise<void> {
+  const events = await api.getRunEvents({ runId, limit: 50 });
+  const eventIdx = events.findIndex((e) => e.type === afterEventType);
+  const stepIdx = events.findIndex((e) => {
+    if (e.type !== 'step_succeeded') return false;
+    const stepRole = (e.payload as { role?: unknown } | undefined)?.role;
+    return typeof stepRole === 'string' && stepRole.endsWith(role);
+  });
+  assert.ok(eventIdx >= 0, `${afterEventType} was emitted`);
+  assert.ok(stepIdx >= 0, `${role}'s step_succeeded was emitted`);
+  assert.ok(eventIdx < stepIdx, `${role} ran after ${afterEventType}`);
+}
+
+/**
  * Assert the fake gh opened a draft PR for the run's feature branch (list → create → view),
  * scoped by `taskId` so it is robust to other runs' gh calls. Returns the head branch name.
  */

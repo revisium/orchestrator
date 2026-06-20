@@ -12,10 +12,10 @@ import {
   type McpInvoker,
 } from './kit/index.js';
 
-// Group H — the MCP SURFACE (the AI-client-facing interface). Every tool is exercised through the
-// REAL MCP layer: createMcpInvoker builds the McpFacadeService + the registered tool handlers and
-// invokes them by name, so each call runs the same zod validation, dispatch, error mapping, and
-// JSON result shape the live stdio server uses — not just the underlying API. One shared host.
+// Group H — the MCP SURFACE (the AI-client-facing interface). Every tool runs through the REAL MCP
+// layer: createMcpInvoker builds the McpFacadeService + registered handlers and invokes them by name,
+// so each call exercises the same zod validation, dispatch, error mapping, and JSON result shape the
+// live stdio server uses. One shared host.
 
 let h: RunHarness;
 let mcp: McpInvoker;
@@ -31,13 +31,13 @@ after(async () => {
   if (h) await h.close();
 });
 
-// Small typed helpers — the invoker returns the parsed JSON the client would receive.
+/** Invoke a tool by name, typed as the parsed JSON the client would receive. */
 const inv = <T = Record<string, unknown>>(name: string, args?: Record<string, unknown>) =>
   mcp.invoke(name, args) as Promise<T>;
 
 test('H1: create_run → start_run → wait_for_run → get_run round-trips a run to completion', { skip: e2eSkip }, async () => {
-  // MCP strips runner overrides (safety), so the run uses the real runner — which runs a live
-  // preflight. Use a CLEAN throwaway repo (not the dirty cwd) so local-change reaches completion.
+  // MCP strips runner overrides (safety), so the real runner runs a live preflight — use a clean
+  // throwaway repo so local-change reaches completion.
   const target = createTargetRepo();
   try {
     const created = await inv<{ runId: string }>('create_run', {
@@ -69,7 +69,6 @@ test('H2: a feature run drives plan + merge gates entirely through MCP tools', {
     h.developerWrites.set(created.runId, target.worktree); // faked developer change so the real integrator has a diff
     await inv('start_run', { runId: created.runId });
 
-    // plan gate → approve, merge gate → approve, then completed — all observed/resolved via MCP.
     for (let i = 0; i < 2; i++) {
       const st = await inv<{ state: string; inbox?: { id: string } }>('wait_for_run', {
         runId: created.runId,
@@ -153,17 +152,16 @@ test('H7: gate-only verbs are enforced — answer_question on a gate is rejected
     assert.equal(st.state, 'pending_gate');
     const inboxId = st.inbox?.id;
     assert.ok(inboxId, 'pending_gate must surface the inbox item');
-    // answer_question on a gate → VALIDATION_FAILURE (gates must use approve/reject)
     await assert.rejects(
       () => mcp.invoke('answer_question', { inboxId, answer: { nope: true } }),
       (err: unknown) => (err as { code?: string }).code === 'VALIDATION_FAILURE',
     );
-    // approve_gate on an unknown inbox → ROW_NOT_FOUND
     await assert.rejects(
       () => mcp.invoke('approve_gate', { inboxId: 'inbox_missing' }),
       (err: unknown) => (err as { code?: string }).code === 'ROW_NOT_FOUND',
     );
-    await inv('reject_gate', { inboxId }); // settle cleanly: reject the plan gate → cancelled, workflow terminates
+    // Settle cleanly: reject the plan gate so the workflow terminates and the shared harness stays clean.
+    await inv('reject_gate', { inboxId });
   } finally {
     target.cleanup();
   }
@@ -173,8 +171,7 @@ test('H8: get_capabilities advertises the full stdio tool set', { skip: e2eSkip 
   const caps = await inv<{ transport: string; auth: string; tools: string[] }>('get_capabilities');
   assert.equal(caps.transport, 'stdio');
   assert.equal(caps.auth, 'none');
-  // The advertised tools match the handlers actually registered on the server.
-  assert.deepEqual([...caps.tools].sort(), [...mcp.toolNames].sort());
+  assert.deepEqual([...caps.tools].sort(), [...mcp.toolNames].sort(), 'advertised tools match the registered handlers');
   for (const t of ['create_run', 'start_run', 'wait_for_run', 'approve_gate', 'get_run']) {
     assert.ok(caps.tools.includes(t), `capabilities must list ${t}`);
   }
@@ -202,8 +199,8 @@ test('H10: inspection tools reflect a completed run', { skip: e2eSkip }, async (
     await inv('start_run', { runId: created.runId });
     const settled = await inv<{ state: string }>('wait_for_run', { runId: created.runId, timeoutMs: 10_000, intervalMs: 500 });
     assert.equal(settled.state, 'completed');
-    // Poll for the terminal `run_completed` event: it is appended just AFTER the run-row status patch,
-    // so a read taken the instant wait_for_run returns can race the append (terminal-event-visibility flake).
+    // Poll for run_completed: it is appended just AFTER the run-row status patch, so a read taken the
+    // instant wait_for_run returns can race the append (terminal-event-visibility flake).
     let events = await inv<Array<{ type: string }>>('get_run_events', { runId: created.runId });
     for (let waited = 0; waited < 5_000 && !events.some((e) => e.type === 'run_completed'); waited += 250) {
       await new Promise((resolve) => setTimeout(resolve, 250));
