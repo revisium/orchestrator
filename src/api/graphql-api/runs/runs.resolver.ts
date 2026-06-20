@@ -4,14 +4,17 @@ import { GraphQLJSON } from 'graphql-scalars';
 import { RunsApiService } from '../../../features/runs/runs-api.service.js';
 import { GraphqlParamTypes } from '../share/graphql-param-types.js';
 import { CreateRunInput } from './inputs/create-run.input.js';
+import { GetRunAttemptsInput } from './inputs/get-run-attempts.input.js';
 import { GetRunEventsInput } from './inputs/get-run-events.input.js';
 import { ListRunsInput } from './inputs/list-runs.input.js';
 import { SimulateRouteInput } from './inputs/simulate-route.input.js';
 import { CreateRunResultModel } from './model/create-run-result.model.js';
+import { RunAttemptConnection } from './model/run-attempt.model.js';
 import { RunConnection } from './model/run-connection.model.js';
 import { RunDigestModel } from './model/run-digest.model.js';
 import { RunEventConnection } from './model/run-event-connection.model.js';
 import { RunModel } from './model/run.model.js';
+import { RunWorkflowModel } from './model/run-workflow.model.js';
 
 @Resolver(() => RunModel)
 export class RunsResolver {
@@ -35,10 +38,22 @@ export class RunsResolver {
     return this.api.getRunEvents(data);
   }
 
+  @Query(() => RunAttemptConnection)
+  @GraphqlParamTypes(GetRunAttemptsInput)
+  runAttempts(@Args('data', { type: () => GetRunAttemptsInput }) data: GetRunAttemptsInput) {
+    return this.api.getRunAttempts(data);
+  }
+
   @Query(() => RunDigestModel)
   @GraphqlParamTypes(String)
   runDigest(@Args('id', { type: () => ID }) id: string) {
     return this.api.getRunDigest({ runId: id });
+  }
+
+  @Query(() => RunWorkflowModel)
+  @GraphqlParamTypes(String)
+  runWorkflow(@Args('id', { type: () => ID }) id: string) {
+    return this.api.getRunWorkflow({ runId: id });
   }
 
   @Query(() => GraphQLJSON)

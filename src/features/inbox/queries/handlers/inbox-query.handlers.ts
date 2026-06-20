@@ -12,6 +12,26 @@ function normalizeStatus(status: string | undefined): 'pending' | 'resolved' | u
   return undefined;
 }
 
+function date(value: Date | string | undefined): Date {
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? new Date(0) : value;
+  if (!value) return new Date(0);
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? new Date(0) : parsed;
+}
+
+function optionalDate(value: Date | string | undefined): Date | null {
+  if (!value) return null;
+  return date(value);
+}
+
+function mapInboxItem<T extends { createdAt?: Date | string; resolvedAt?: Date | string }>(item: T) {
+  return {
+    ...item,
+    createdAt: date(item.createdAt),
+    resolvedAt: optionalDate(item.resolvedAt),
+  };
+}
+
 @QueryHandler(ListInboxQuery)
 export class ListInboxHandler implements IQueryHandler<ListInboxQuery> {
   constructor(@Inject(TaskControlPlaneApiService) private readonly api: TaskControlPlaneApiService) {}
@@ -22,7 +42,7 @@ export class ListInboxHandler implements IQueryHandler<ListInboxQuery> {
       runId: query.data.runId,
       limit: connectionFetchLimit(query.data),
     });
-    return toConnection(items, query.data);
+    return toConnection(items.map(mapInboxItem), query.data);
   }
 }
 
@@ -31,7 +51,7 @@ export class GetInboxItemHandler implements IQueryHandler<GetInboxItemQuery> {
   constructor(@Inject(TaskControlPlaneApiService) private readonly api: TaskControlPlaneApiService) {}
 
   execute(query: GetInboxItemQuery) {
-    return this.api.getInboxItem(query.data.inboxId);
+    return this.api.getInboxItem(query.data.inboxId).then(mapInboxItem);
   }
 }
 
@@ -40,7 +60,7 @@ export class GetPendingDecisionsHandler implements IQueryHandler<GetPendingDecis
   constructor(@Inject(TaskControlPlaneApiService) private readonly api: TaskControlPlaneApiService) {}
 
   execute(query: GetPendingDecisionsQuery) {
-    return this.api.getPendingDecisions(query.data.runId);
+    return this.api.getPendingDecisions(query.data.runId).then((items) => items.map(mapInboxItem));
   }
 }
 

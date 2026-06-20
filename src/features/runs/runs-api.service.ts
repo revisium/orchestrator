@@ -1,10 +1,12 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { CommandBus, QueryBus } from '@nestjs/cqrs';
 import { CreateRunCommand, type CreateRunCommandData } from './commands/impl/create-run.command.js';
+import { GetRunAttemptsQuery, type GetRunAttemptsQueryData } from './queries/impl/get-run-attempts.query.js';
 import { GetRunDigestQuery, type GetRunDigestQueryData } from './queries/impl/get-run-digest.query.js';
 import { GetRunEventsQuery, type GetRunEventsQueryData } from './queries/impl/get-run-events.query.js';
 import { GetRunProgressQuery, type GetRunProgressQueryData } from './queries/impl/get-run-progress.query.js';
 import { GetRunQuery, type GetRunQueryData } from './queries/impl/get-run.query.js';
+import { GetRunWorkflowQuery, type GetRunWorkflowQueryData } from './queries/impl/get-run-workflow.query.js';
 import { ListRunsQuery, type ListRunsQueryData } from './queries/impl/list-runs.query.js';
 import { SimulateRouteQuery, type SimulateRouteQueryData } from './queries/impl/simulate-route.query.js';
 
@@ -27,8 +29,16 @@ export class RunsApiService {
     return this.queryBus.execute(new GetRunEventsQuery(data));
   }
 
+  getRunAttempts(data: GetRunAttemptsQueryData) {
+    return this.queryBus.execute(new GetRunAttemptsQuery(data));
+  }
+
   getRunProgress(data: GetRunProgressQueryData) {
     return this.queryBus.execute(new GetRunProgressQuery(data));
+  }
+
+  getRunWorkflow(data: GetRunWorkflowQueryData) {
+    return this.queryBus.execute(new GetRunWorkflowQuery(data));
   }
 
   getRunDigest(data: GetRunDigestQueryData) {

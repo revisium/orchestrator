@@ -9,11 +9,13 @@ import {
   RUN_EVENT_APPENDED_TOPIC,
   RUN_PROGRESS_UPDATED_TOPIC,
   RUN_UPDATED_TOPIC,
+  RUN_WORKFLOW_UPDATED_TOPIC,
 } from '../graphql-ws/constants.js';
 import { RunCostModel } from './model/run-cost.model.js';
 import { RunEventModel } from './model/run-event.model.js';
 import { RunProgressModel } from './model/run-progress.model.js';
 import { RunModel } from './model/run.model.js';
+import { RunWorkflowModel } from './model/run-workflow.model.js';
 
 function runFilter(payload: { runId?: string }, variables: { data?: RunSubscriptionInput }) {
   return !variables.data?.runId || payload.runId === variables.data.runId;
@@ -26,6 +28,12 @@ export class RunsSubscriptionResolver {
   @GraphqlParamTypes(RunSubscriptionInput)
   subscribeToRunUpdated(@Args('data', { type: () => RunSubscriptionInput, nullable: true }) _data?: RunSubscriptionInput) {
     return this.pubSub.asyncIterableIterator(RUN_UPDATED_TOPIC);
+  }
+
+  @Subscription(() => RunWorkflowModel, { name: RUN_WORKFLOW_UPDATED_TOPIC, filter: runFilter })
+  @GraphqlParamTypes(RunSubscriptionInput)
+  subscribeToRunWorkflowUpdated(@Args('data', { type: () => RunSubscriptionInput, nullable: true }) _data?: RunSubscriptionInput) {
+    return this.pubSub.asyncIterableIterator(RUN_WORKFLOW_UPDATED_TOPIC);
   }
 
   @Subscription(() => RunEventModel, { name: RUN_EVENT_APPENDED_TOPIC, filter: runFilter })

@@ -80,10 +80,53 @@ test('GraphQL real host: read path → createRun mutation → subscription paylo
     'query($id: ID!) { run(id: $id) { id status title } }',
     { id: created.createRun.runId },
   );
+  const workflow = await graphql<{
+    runWorkflow: {
+      run: { id: string; status: string };
+      pipeline: { pipelineId: string; playbookId: string; status: string };
+      nodes: Array<{ id: string; kind: string; status: string }>;
+      edges: Array<{ from: string; to: string; kind: string }>;
+      currentNodeIds: string[];
+      attempts: Array<{ id: string }>;
+      usage: { inputTokens: number; outputTokens: number; costAmount: number };
+      pendingInbox: Array<{ id: string }>;
+      activity: Array<{ type: string }>;
+    };
+    runAttempts: { totalCount: number };
+  }>(
+    [
+      'query($id: ID!, $attempts: GetRunAttemptsInput!) {',
+      '  runWorkflow(id: $id) {',
+      '    run { id status }',
+      '    pipeline { pipelineId playbookId status }',
+      '    nodes { id kind status }',
+      '    edges { from to kind }',
+      '    currentNodeIds',
+      '    attempts { id }',
+      '    usage { inputTokens outputTokens costAmount }',
+      '    pendingInbox { id }',
+      '    activity { type }',
+      '  }',
+      '  runAttempts(data: $attempts) { totalCount }',
+      '}',
+    ].join('\n'),
+    { id: created.createRun.runId, attempts: { runId: created.createRun.runId } },
+  );
   const payload = await event;
   assert.equal(detail.run.id, created.createRun.runId);
   assert.equal(detail.run.status, 'ready');
   assert.equal(detail.run.title, 'GraphQL subscription e2e');
+  assert.equal(workflow.runWorkflow.run.id, created.createRun.runId);
+  assert.equal(workflow.runWorkflow.pipeline.pipelineId, 'local-change');
+  assert.equal(workflow.runWorkflow.pipeline.playbookId, 'revisium-agent-playbook');
+  assert.equal(workflow.runWorkflow.pipeline.status, 'NOT_STARTED');
+  assert.ok(workflow.runWorkflow.nodes.some((node) => node.id === 'developer' && node.kind === 'agent'));
+  assert.ok(workflow.runWorkflow.edges.some((edge) => edge.from === 'developer' && edge.to === 'doneEnd'));
+  assert.deepEqual(workflow.runWorkflow.currentNodeIds, []);
+  assert.equal(workflow.runWorkflow.usage.costAmount, 0);
+  assert.equal(workflow.runWorkflow.pendingInbox.length, 0);
+  assert.equal(workflow.runWorkflow.activity[0]?.type, 'run_created');
+  assert.equal(workflow.runAttempts.totalCount, 0);
   assert.equal(payload.runEventAppended.runId, created.createRun.runId);
   assert.equal(payload.runEventAppended.type, 'run_created');
 });

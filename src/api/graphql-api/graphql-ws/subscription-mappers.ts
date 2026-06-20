@@ -21,11 +21,16 @@ function date(value: unknown): Date {
   return Number.isNaN(parsed.getTime()) ? new Date(0) : parsed;
 }
 
+function runStatus(value: unknown): string {
+  const status = str(value);
+  return status === 'paused' ? 'blocked' : status;
+}
+
 export function mapRunRow(row: ControlPlaneRow) {
   return {
     id: row.rowId,
     title: str(row.data.title),
-    status: str(row.data.status),
+    status: runStatus(row.data.status),
     priority: num(row.data.priority),
     description: str(row.data.description) || undefined,
     scope: str(row.data.scope) || undefined,

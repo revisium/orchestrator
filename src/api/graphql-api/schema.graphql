@@ -67,6 +67,12 @@ type GateRiskModel {
   topic: String
 }
 
+input GetRunAttemptsInput {
+  after: String
+  first: Int! = 50
+  runId: ID!
+}
+
 input GetRunEventsInput {
   after: String
   first: Int! = 50
@@ -193,6 +199,50 @@ type PlaybookModelEdge {
   node: PlaybookModel!
 }
 
+type PrCheckModel {
+  name: String!
+  result: String!
+}
+
+type PrChecksModel {
+  fail: [String!]!
+  list: [PrCheckModel!]!
+  pass: [String!]!
+  pending: [String!]!
+  terminal: [String!]!
+}
+
+type PrFeedbackItemModel {
+  author: String
+  evidence: String
+  location: String
+  provider: String
+  reason: String
+  severity: String
+  source: String
+  summary: String
+}
+
+type PrFeedbackModel {
+  developerFixes: [PrFeedbackItemModel!]!
+  humanDecisions: [PrFeedbackItemModel!]!
+  ignoredNoise: [PrFeedbackItemModel!]!
+  providerWait: [PrFeedbackItemModel!]!
+  residualRisks: [String!]!
+  reviewerQuestions: [PrFeedbackItemModel!]!
+}
+
+type PrInfoModel {
+  base: String!
+  draft: Boolean!
+  head: String!
+  headSha: String!
+  mergeState: String!
+  number: Int
+  state: String!
+  url: String!
+}
+
 input PrReadinessInput {
   baseBranch: String
   headBranch: String
@@ -201,6 +251,60 @@ input PrReadinessInput {
   prNumber: Int
   repo: String!
   sonarProject: String
+}
+
+type PrReadinessModel {
+  checks: PrChecksModel!
+  ciSummary: JSON!
+  evidence: [String!]!
+  feedback: PrFeedbackModel!
+  nextAction: String!
+  pr: PrInfoModel!
+  providerState: JSON!
+  reviewDecision: String!
+  reviewThreads: PrReviewThreadsModel!
+  sonar: PrSonarModel!
+  verdict: String!
+}
+
+type PrReviewThreadModel {
+  author: String
+  body: String!
+  id: String!
+  isOutdated: Boolean!
+  isResolved: Boolean!
+  line: Int
+  path: String
+  url: String
+}
+
+type PrReviewThreadsModel {
+  included: Boolean!
+  items: [PrReviewThreadModel!]!
+  unresolvedCount: Int!
+}
+
+type PrSonarHotspotModel {
+  component: String!
+  line: Int
+  message: String!
+  securityCategory: String
+  vulnerabilityProbability: String
+}
+
+type PrSonarIssueModel {
+  component: String!
+  line: Int
+  message: String!
+  rule: String
+  severity: String!
+}
+
+type PrSonarModel {
+  configured: Boolean!
+  hotspots: [PrSonarHotspotModel!]!
+  issues: [PrSonarIssueModel!]!
+  unavailable: Boolean!
 }
 
 type ProjectModel {
@@ -220,15 +324,19 @@ type Query {
   pipelines(data: ListMethodInput): PipelineConnection!
   playbooks(data: ListMethodInput): PlaybookConnection!
   prFeedback(data: PrReadinessInput!): JSON!
+  prFeedbackTyped(data: PrReadinessInput!): PrFeedbackModel!
   prReadiness(data: PrReadinessInput!): JSON!
+  prReadinessTyped(data: PrReadinessInput!): PrReadinessModel!
   project: ProjectModel!
   repositoryContext(repo: String!): RepositoryContextModel!
   role(id: ID!): RoleModel!
   roles(data: ListMethodInput): RoleConnection!
   run(id: ID!): RunModel!
+  runAttempts(data: GetRunAttemptsInput!): RunAttemptConnection!
   runDigest(id: ID!): RunDigestModel!
   runEvents(data: GetRunEventsInput!): RunEventConnection!
   runProgress(id: ID!): RunProgressModel!
+  runWorkflow(id: ID!): RunWorkflowModel!
   runs(data: ListRunsInput): RunConnection!
   simulateRoute(data: SimulateRouteInput!): JSON!
   status: SystemStatusModel!
@@ -310,6 +418,47 @@ type RoleModelEdge {
   node: RoleModel!
 }
 
+type RunActivityItemModel {
+  actor: String!
+  createdAt: DateTime!
+  id: ID!
+  payload: JSON
+  summary: String!
+  type: String!
+}
+
+type RunAttemptConnection {
+  edges: [RunAttemptModelEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type RunAttemptModel {
+  artifactRef: String!
+  costAmount: Float!
+  currency: String!
+  durationMs: Int!
+  error: String!
+  id: ID!
+  inputTokens: Int!
+  iteration: Int!
+  lesson: String!
+  modelProfile: String!
+  outputSummary: String!
+  outputTokens: Int!
+  runId: ID!
+  startedAt: DateTime!
+  status: String!
+  stepId: String!
+  stepKey: String!
+  verdict: String!
+}
+
+type RunAttemptModelEdge {
+  cursor: String!
+  node: RunAttemptModel!
+}
+
 type RunConnection {
   edges: [RunModelEdge!]!
   pageInfo: PageInfo!
@@ -358,6 +507,14 @@ type RunEventModelEdge {
   node: RunEventModel!
 }
 
+type RunGateStateModel {
+  answer: JSON
+  inboxId: ID
+  nodeId: ID!
+  status: String!
+  topic: String!
+}
+
 type RunModel {
   createdAt: DateTime!
   description: String
@@ -387,6 +544,54 @@ input RunSubscriptionInput {
   runId: ID
 }
 
+type RunWorkflowEdgeModel {
+  from: ID!
+  kind: String!
+  label: String!
+  to: ID!
+}
+
+type RunWorkflowModel {
+  activity: [RunActivityItemModel!]!
+  attempts: [RunAttemptModel!]!
+  currentNodeIds: [String!]!
+  edges: [RunWorkflowEdgeModel!]!
+  gates: [RunGateStateModel!]!
+  nodes: [RunWorkflowNodeModel!]!
+  pendingInbox: [InboxItemModel!]!
+  pipeline: RunWorkflowPipelineModel!
+  run: RunModel!
+  usage: UsageModel!
+}
+
+type RunWorkflowNodeModel {
+  attemptCount: Int!
+  costAmount: Float!
+  id: ID!
+  inboxId: ID
+  inputTokens: Int!
+  kind: String!
+  label: String!
+  metadata: JSON
+  modelLevel: String
+  outputTokens: Int!
+  roleId: String
+  runner: String
+  scriptId: String
+  status: String!
+  verdict: String
+}
+
+type RunWorkflowPipelineModel {
+  activeNodeIds: [String!]!
+  id: ID!
+  pipelineId: String!
+  playbookId: String!
+  routeGates: [String!]!
+  status: String!
+  title: String!
+}
+
 input SimulateRouteInput {
   params: JSON
   pipeline: String
@@ -402,6 +607,7 @@ type Subscription {
   runEventAppended(data: RunSubscriptionInput): RunEventModel!
   runProgressUpdated(data: RunSubscriptionInput): RunProgressModel!
   runUpdated(data: RunSubscriptionInput): RunModel!
+  runWorkflowUpdated(data: RunSubscriptionInput): RunWorkflowModel!
 }
 
 type SystemStatusModel {
