@@ -1,6 +1,7 @@
 import {
   GetRunDigestHandler,
   GetRunEventsHandler,
+  GetRunProgressHandler,
   GetRunHandler,
   ListRunsHandler,
   SimulateRouteHandler,
@@ -9,6 +10,7 @@ import {
 export const runsQueryHandlers = [
   GetRunDigestHandler,
   GetRunEventsHandler,
+  GetRunProgressHandler,
   GetRunHandler,
   ListRunsHandler,
   SimulateRouteHandler,

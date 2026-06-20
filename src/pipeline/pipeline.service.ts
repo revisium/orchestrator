@@ -41,6 +41,7 @@ import type { AppendEventInput } from '../run/append-event.js';
 import { makeAwaitHuman } from './await-human.js';
 import {
   makeDataDrivenTask,
+  RUN_PROGRESS_EVENT_KEY,
   type DataDrivenResult,
   type DataDrivenTaskDeps,
   type DataDrivenTaskOpts,
@@ -424,6 +425,7 @@ export class PipelineService {
     const dataDrivenDeps: DataDrivenTaskDeps = {
       appendEvent: stepDeps.appendEvent,
       appendRunOutput: this.runService.appendRunOutput.bind(this.runService),
+      setProgress: (_runId, cursor) => this.dbos.setEvent(RUN_PROGRESS_EVENT_KEY, cursor),
       awaitHuman,
       completeRun: (
         runId: string,

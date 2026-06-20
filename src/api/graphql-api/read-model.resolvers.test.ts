@@ -5,6 +5,7 @@ import { MethodResolver } from './method/method.resolver.js';
 import { PrResolver } from './pr/pr.resolver.js';
 import { RunDigestResolver } from './runs/run-digest.resolver.js';
 import { RunEventsResolver } from './runs/run-events.resolver.js';
+import { RunProgressResolver } from './runs/run-progress.resolver.js';
 import { RunsResolver } from './runs/runs.resolver.js';
 
 test('read-model resolvers delegate to domain api services', async () => {
@@ -13,6 +14,7 @@ test('read-model resolvers delegate to domain api services', async () => {
     listRuns: (data: unknown) => (calls.push(`runs:${JSON.stringify(data)}`), 'runs'),
     getRun: (data: unknown) => (calls.push(`run:${JSON.stringify(data)}`), 'run'),
     getRunEvents: (data: unknown) => (calls.push(`events:${JSON.stringify(data)}`), 'events'),
+    getRunProgress: (data: unknown) => (calls.push(`progress:${JSON.stringify(data)}`), 'progress'),
     getRunDigest: (data: unknown) => (calls.push(`digest:${JSON.stringify(data)}`), 'digest'),
     simulateRoute: (data: unknown) => (calls.push(`route:${JSON.stringify(data)}`), 'route'),
   };
@@ -40,6 +42,8 @@ test('read-model resolvers delegate to domain api services', async () => {
   assert.equal(new RunsResolver(runsApi as never).runDigest('run_1'), 'digest');
   assert.equal(new RunsResolver(runsApi as never).simulateRoute({ title: 'Build' }), 'route');
   assert.equal(new RunEventsResolver(runsApi as never).events({ id: 'run_1' } as never, 'created', 1, 'cursor'), 'events');
+  assert.equal(new RunProgressResolver(runsApi as never).runProgress('run_1'), 'progress');
+  assert.equal(new RunProgressResolver(runsApi as never).progress({ id: 'run_1' } as never), 'progress');
   assert.equal(new RunDigestResolver(runsApi as never).digest({ id: 'run_1' } as never), 'digest');
   assert.equal(new InboxResolver(inboxApi as never).inbox(), 'inbox');
   assert.equal(new InboxResolver(inboxApi as never).inboxItem('inbox_1'), 'inboxItem');
@@ -54,4 +58,5 @@ test('read-model resolvers delegate to domain api services', async () => {
   assert.equal(new PrResolver(prApi as never).prFeedback({ repo: 'revisium/orchestrator' }), 'feedback');
   assert.ok(calls.some((call) => call === 'digest:{"runId":"run_1"}'));
   assert.ok(calls.some((call) => call === 'events:{"runId":"run_1","type":"created","first":1,"after":"cursor"}'));
+  assert.equal(calls.filter((call) => call === 'progress:{"runId":"run_1"}').length, 2);
 });
