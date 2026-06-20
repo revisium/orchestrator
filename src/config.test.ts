@@ -17,7 +17,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import os from 'node:os';
-import { readRuntime, resolvePorts } from './config.js';
+import { readRuntime, resolveDefaultGraphqlPort, resolvePorts } from './config.js';
 
 const TMP = mkdtempSync(join(os.tmpdir(), 'revo-config-contract-'));
 process.env['REVO_DATA_DIR'] = TMP;
@@ -65,4 +65,9 @@ test('runtime.json contract: resolvePorts ignores stale ports and falls back to 
   // A pid that cannot be alive → resolvePorts must NOT trust the persisted (stale) ports.
   writeFileSync(RUNTIME_FILE, JSON.stringify({ ...CONTRACT, pid: 2_147_483_646 }));
   assert.deepEqual(await resolvePorts(), { httpPort: 29999, pgPort: 25999 });
+});
+
+test('runtime.json contract: resolveDefaultGraphqlPort rejects invalid live base ports', () => {
+  writeFileSync(RUNTIME_FILE, JSON.stringify({ ...CONTRACT, httpPort: -1, pid: process.pid }));
+  assert.throws(() => resolveDefaultGraphqlPort(), /invalid HTTP port/);
 });

@@ -337,11 +337,17 @@ export class PipelineService {
   private readonly runAgent: RunAgent;
 
   constructor(
+    @Inject(DbosService)
     private readonly dbos: DbosService,
+    @Inject(RolesService)
     private readonly rolesService: RolesService,
+    @Inject(RunService)
     private readonly runService: RunService,
+    @Inject(InboxService)
     private readonly inboxService: InboxService,
+    @Inject(IntegratorService)
     private readonly integratorService: IntegratorService,
+    @Inject(WorktreeService)
     private readonly worktreeService: WorktreeService,
     @Inject(RUN_AGENT) runAgentToken: RunAgent,
   ) {
