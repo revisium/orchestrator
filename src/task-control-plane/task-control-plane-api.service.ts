@@ -8,6 +8,7 @@ import { ControlPlaneError } from '../control-plane/errors.js';
 import type { InboxItem } from '../control-plane/inbox.js';
 import { DbosService } from '../engine/dbos.service.js';
 import { PipelineService, type RunnerMode } from '../pipeline/pipeline.service.js';
+import { RUN_PROGRESS_EVENT_KEY, type DataDrivenProgressCursor } from '../pipeline/data-driven-task.workflow.js';
 import { templateFromExecutionPolicy } from '../pipeline/data-driven-template.js';
 import {
   normalizeExecutionProfile,
@@ -50,6 +51,12 @@ export type RepositoryContext = RepositoryValidation & {
   packageError: string;
 };
 
+export type RunProgress = {
+  workflowStatus: string;
+  graphCursor: DataDrivenProgressCursor | null;
+  updatedAt: Date;
+};
+
 type GitResult = {
   ok: boolean;
   stdout: string;
@@ -64,6 +71,13 @@ function asErrorMessage(error: unknown): string {
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
   return value as Record<string, unknown>;
+}
+
+function dateOrEpoch(value: Date | string | number | undefined): Date {
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? new Date(0) : value;
+  if (value === undefined || value === '') return new Date(0);
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? new Date(0) : parsed;
 }
 
 function gateTopic(item: InboxItem): 'plan' | 'merge' | 'question' | null {
@@ -400,6 +414,29 @@ export class TaskControlPlaneApiService {
 
   getRunEvents(input: { runId: string; type?: string; limit?: number }) {
     return this.runs.listRunEvents(input.runId, { type: input.type, limit: input.limit });
+  }
+
+  async getRunProgress(runId: string): Promise<RunProgress> {
+    const detail = await this.runs.showRun(runId);
+    if (!detail) throw new ControlPlaneError('ROW_NOT_FOUND', `run not found: ${runId}`);
+    const workflow = await this.dbos.getWorkflowStatus(runId);
+    if (!workflow) {
+      return {
+        workflowStatus: 'NOT_STARTED',
+        graphCursor: null,
+        updatedAt: dateOrEpoch(detail.run.createdAt),
+      };
+    }
+    const graphCursor = await this.dbos.getEvent<DataDrivenProgressCursor>(
+      workflow.workflowID,
+      RUN_PROGRESS_EVENT_KEY,
+      { timeoutSeconds: 0 },
+    );
+    return {
+      workflowStatus: workflow.status,
+      graphCursor,
+      updatedAt: dateOrEpoch(workflow.updatedAt ?? workflow.createdAt),
+    };
   }
 
   getRunLog(input: { runId: string; limit?: number }) {

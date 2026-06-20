@@ -4,6 +4,7 @@ import { TaskControlPlaneApiService } from '../../../../task-control-plane/task-
 import { connectionFetchLimit, toConnection } from '../../../shared/connection.js';
 import { GetRunDigestQuery } from '../impl/get-run-digest.query.js';
 import { GetRunEventsQuery } from '../impl/get-run-events.query.js';
+import { GetRunProgressQuery } from '../impl/get-run-progress.query.js';
 import { GetRunQuery } from '../impl/get-run.query.js';
 import { ListRunsQuery } from '../impl/list-runs.query.js';
 import { SimulateRouteQuery } from '../impl/simulate-route.query.js';
@@ -81,6 +82,15 @@ export class GetRunHandler implements IQueryHandler<GetRunQuery> {
   async execute(query: GetRunQuery) {
     const detail = await this.api.getRun({ runId: query.data.runId, includeEvents: query.data.includeEvents });
     return mapRun(detail.run);
+  }
+}
+
+@QueryHandler(GetRunProgressQuery)
+export class GetRunProgressHandler implements IQueryHandler<GetRunProgressQuery> {
+  constructor(@Inject(TaskControlPlaneApiService) private readonly api: TaskControlPlaneApiService) {}
+
+  execute(query: GetRunProgressQuery) {
+    return this.api.getRunProgress(query.data.runId);
   }
 }
 

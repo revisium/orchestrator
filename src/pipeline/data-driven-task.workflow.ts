@@ -62,6 +62,15 @@ export type DataDrivenResult = {
   steps: number;
 };
 
+export const RUN_PROGRESS_EVENT_KEY = 'run-progress';
+
+export type DataDrivenProgressCursor = {
+  activeNodeIds: string[];
+  scopedCounters: Record<string, number>;
+  status: RunState['status'];
+  lastResult?: LastResult;
+};
+
 /** Opts passed to dataDrivenTask — the route (capability resolution) + the PINNED template. */
 export type DataDrivenTaskOpts = {
   route: RouteDecision;
@@ -198,6 +207,8 @@ export type DataDrivenTaskDeps = {
   appendEvent: (input: AppendEventInput) => Promise<void>;
   /** Persist a produced step output to Revisium (0016). DBOS-wrapped in prod; idempotent on replay. */
   appendRunOutput: (input: RunOutputRow) => Promise<void>;
+  /** Public DBOS event seam for the latest graph cursor; never writes Revisium progress rows. */
+  setProgress?: (runId: string, cursor: DataDrivenProgressCursor) => Promise<void>;
   /** Reuse of the gate park/resume (DBOS recv/send) — the SAME mechanism the hardcoded path uses. */
   awaitHuman: (
     runId: string,
@@ -249,6 +260,15 @@ export type DataDrivenTaskDeps = {
   createWorktreeFn: (runId: string, taskId: string, title: string, base: string) => Promise<{ worktreePath: string }>;
   releaseWorktreeFn: (runId: string, taskId: string) => Promise<void>;
 };
+
+function progressCursor(state: RunState, lastResult: LastResult | undefined): DataDrivenProgressCursor {
+  return {
+    activeNodeIds: [...state.activeNodeIds],
+    scopedCounters: { ...state.scopedCounters },
+    status: state.status,
+    ...(lastResult ? { lastResult } : {}),
+  };
+}
 
 /**
  * Map an approve/reject human decision onto a DOMAIN verdict the template's gate `outcomes` can route.
@@ -470,6 +490,7 @@ export function makeDataDrivenTask(
     for (let i = 0; i < MAX_STEPS; i++) {
       const { state: nextState, decision } = coreStep(template, state, lastResult);
       state = nextState;
+      await deps.setProgress?.(runId, progressCursor(state, lastResult));
 
       if (decision.type === 'complete') {
         return await finish(runId, decision.status, lastVerdict, stepCount);

@@ -10,7 +10,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { makeDataDrivenTask, type DataDrivenTaskDeps } from './data-driven-task.workflow.js';
+import { makeDataDrivenTask, type DataDrivenProgressCursor, type DataDrivenTaskDeps } from './data-driven-task.workflow.js';
 import { templateFromExecutionPolicy } from './data-driven-template.js';
 import { featureDevelopment, featureDevelopmentPrReview, confirmMergeFlow } from '../pipeline-core/kit/fixtures.js';
 import type { Template } from '../pipeline-core/index.js';
@@ -67,6 +67,7 @@ type Recorder = {
   outputs: Array<{ nodeId: string; ordinal: number; name: string; payload: unknown }>;
   /** Hydrated `inputs` the adapter passed to each step, keyed by stepKey (0016 consumes). */
   inputsByStep: Record<string, unknown>;
+  progress: DataDrivenProgressCursor[];
 };
 
 /**
@@ -89,7 +90,21 @@ function buildAdapter(opts: {
   /** Override respondThreads (default: replied/resolved 0). Lets a test capture the triage it consumed. */
   respondThreads?: (input: IntegratorInput) => RespondThreadsOutput | IntegratorBlocked | Promise<RespondThreadsOutput | IntegratorBlocked>;
 }) {
-  const rec: Recorder = { gates: [], completed: [], blocked: [], failed: [], integrateCalls: 0, confirmMergeCalls: 0, pollPrCalls: 0, respondCalls: 0, respondTriage: [], events: [], outputs: [], inputsByStep: {} };
+  const rec: Recorder = {
+    gates: [],
+    completed: [],
+    blocked: [],
+    failed: [],
+    integrateCalls: 0,
+    confirmMergeCalls: 0,
+    pollPrCalls: 0,
+    respondCalls: 0,
+    respondTriage: [],
+    events: [],
+    outputs: [],
+    inputsByStep: {},
+    progress: [],
+  };
   const visits = new Map<string, number>();
 
   const runStepFn = async (
@@ -118,6 +133,7 @@ function buildAdapter(opts: {
   const deps: DataDrivenTaskDeps = {
     appendEvent: async (e) => { rec.events.push(`${e.type}:${e.stepKey}`); },
     appendRunOutput: async (o) => { rec.outputs.push({ nodeId: o.nodeId, ordinal: o.ordinal, name: o.name, payload: o.payload }); },
+    setProgress: async (_runId, cursor) => { rec.progress.push(cursor); },
     awaitHuman: async (_runId, topic, _gateKey, _title, _summary): Promise<GateDecision> => {
       rec.gates.push(topic);
       return (opts.gate ?? (() => ({ decision: 'approve' })))(topic);
@@ -187,6 +203,21 @@ test('DD1: happy path — analyst→plan→developer→review→integrate→poll
   assert.equal(rec.confirmMergeCalls, 1, 'confirmMerge ran once at the success terminal');
   assert.equal(rec.blocked.length, 0);
   assert.equal(rec.failed.length, 0);
+});
+
+test('DD1b: adapter publishes graph progress cursors through its sealed dep', async () => {
+  const { run, rec } = buildAdapter({
+    template: featureDevelopmentPrReview(),
+    verdicts: { codeReview: 'approved' },
+    gate: () => ({ decision: 'approve' }),
+  });
+
+  await run();
+
+  assert.ok(rec.progress.length > 0);
+  assert.deepEqual(rec.progress[0]?.activeNodeIds, ['analyst']);
+  assert.equal(rec.progress.at(-1)?.status, 'succeeded');
+  assert.deepEqual(rec.progress.at(-1)?.activeNodeIds, ['mergedEnd']);
 });
 
 test('DD2: reviewer BLOCKER ×cap → bounded rework loop → blocked terminal (counter cap is DATA)', async () => {

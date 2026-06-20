@@ -15,6 +15,7 @@ import { PrResolver } from './pr/pr.resolver.js';
 import { registerGraphqlEnums } from './registerGraphqlEnums.js';
 import { RunDigestResolver } from './runs/run-digest.resolver.js';
 import { RunEventsResolver } from './runs/run-events.resolver.js';
+import { RunProgressResolver } from './runs/run-progress.resolver.js';
 import { RunsResolver } from './runs/runs.resolver.js';
 import { SystemResolver } from './system/system.resolver.js';
 
@@ -47,6 +48,7 @@ import { SystemResolver } from './system/system.resolver.js';
     PrResolver,
     RunDigestResolver,
     RunEventsResolver,
+    RunProgressResolver,
     RunsResolver,
     SystemResolver,
   ],

@@ -250,6 +250,14 @@ export class DbosService {
     return DBOS.recv<T>(topic, { deadlineEpochMS: opts?.deadlineEpochMS ?? GATE_DEADLINE_EPOCH_MS });
   }
 
+  setEvent<T>(key: string, value: T): Promise<void> {
+    return DBOS.setEvent(key, value);
+  }
+
+  getEvent<T>(workflowID: string, key: string, opts?: { timeoutSeconds?: number }): Promise<T | null> {
+    return DBOS.getEvent<T>(workflowID, key, opts);
+  }
+
   // ── end generic engine verbs ────────────────────────────────────────────────
 
   /**
