@@ -10,7 +10,7 @@
  *   - IntegratorService          — @Injectable wrapper with bound arrow properties.
  *   - resolveExecutable(name)    — resolve a bare executable name to an absolute PATH entry.
  */
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { existsSync, statSync } from 'node:fs';
 import { join, delimiter } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -761,7 +761,7 @@ function defaultExecGit(args: string[], cwd: string): string {
 export class IntegratorService {
   private readonly deps: Omit<IntegratorDeps, 'execGh'>;
 
-  constructor(private readonly runService: RunService) {
+  constructor(@Inject(RunService) private readonly runService: RunService) {
     // execGh is resolved per-run inside runIntegrate (fail-loud on an unresolved pinned identity),
     // so it is NOT built here — only the git + cwd deps are stable at construction.
     this.deps = {

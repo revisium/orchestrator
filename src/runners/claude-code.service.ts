@@ -26,6 +26,7 @@ export class ClaudeCodeService {
 
   constructor(
     @Inject(PROCESS_EXECUTOR) executor: ProcessExecutor,
+    @Inject(RunService)
     private readonly runService: RunService,
   ) {
     this.runner = createClaudeCodeRunner({

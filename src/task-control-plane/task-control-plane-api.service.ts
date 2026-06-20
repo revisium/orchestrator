@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { baseUrl, getConfig, isAlive, isHealthy, readRuntime } from '../cli/config.js';
 import { ControlPlaneError } from '../control-plane/errors.js';
 import type { InboxItem } from '../control-plane/inbox.js';
@@ -180,11 +180,17 @@ function assertProductionRunnerBinding(runnerId: string, runnerSource: RouteRole
 @Injectable()
 export class TaskControlPlaneApiService {
   constructor(
+    @Inject(RunService)
     private readonly runs: RunService,
+    @Inject(InboxService)
     private readonly inbox: InboxService,
+    @Inject(RolesService)
     private readonly roles: RolesService,
+    @Inject(PlaybooksService)
     private readonly playbooks: PlaybooksService,
+    @Inject(PipelineService)
     private readonly pipeline: PipelineService,
+    @Inject(DbosService)
     private readonly dbos: DbosService,
     private readonly prReadiness: PrReadinessService = new PrReadinessService(),
   ) {}

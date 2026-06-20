@@ -14,18 +14,31 @@
  *     the daemon is detached+unref'd and is a shared, long-lived process; subsequent
  *     `revo dev:status <id>` invocations must find the same daemon + embedded Postgres.
  */
-import { Injectable, OnApplicationBootstrap, OnApplicationShutdown } from '@nestjs/common';
+import { Inject, Injectable, OnApplicationBootstrap, OnApplicationShutdown, Optional } from '@nestjs/common';
 import { DbosService } from '../engine/dbos.service.js';
 import { ensureRevisium, readPostmasterPgPort } from './ensure-revisium.js';
 import { dbosSystemDatabaseUrl, ensurePostgres } from '../engine/ensure-postgres.js';
+import { TaskControlPlaneApiService } from '../task-control-plane/task-control-plane-api.service.js';
 
 function isMcpStdioHost(): boolean {
   return process.env.REVO_MCP_STDIO === '1';
 }
 
+function keepControlPlaneBootstrapDependency(_api: TaskControlPlaneApiService | undefined): void {
+  // The constructor dependency forces the control-plane provider graph to instantiate
+  // before DBOS.launch(); pipeline registration must precede launch.
+}
+
 @Injectable()
 export class HostLifecycle implements OnApplicationBootstrap, OnApplicationShutdown {
-  constructor(private readonly dbosService: DbosService) {}
+  constructor(
+    @Inject(DbosService) private readonly dbosService: DbosService,
+    @Optional()
+    @Inject(TaskControlPlaneApiService)
+    taskControlPlaneApi?: TaskControlPlaneApiService,
+  ) {
+    keepControlPlaneBootstrapDependency(taskControlPlaneApi);
+  }
 
   async onApplicationBootstrap(): Promise<void> {
     // Step 1: Ensure Revisium daemon is running (auto-start if absent).
