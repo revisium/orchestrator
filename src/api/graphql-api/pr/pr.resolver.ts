@@ -4,6 +4,7 @@ import { GraphQLJSON } from 'graphql-scalars';
 import { PrApiService } from '../../../features/pr/pr-api.service.js';
 import { GraphqlParamTypes } from '../share/graphql-param-types.js';
 import { PrReadinessInput } from './inputs/pr-readiness.input.js';
+import { PrFeedbackModel, PrReadinessModel } from './model/pr-readiness.model.js';
 
 @Resolver()
 export class PrResolver {
@@ -15,9 +16,21 @@ export class PrResolver {
     return this.api.prReadiness(data);
   }
 
+  @Query(() => PrReadinessModel)
+  @GraphqlParamTypes(PrReadinessInput)
+  prReadinessTyped(@Args('data', { type: () => PrReadinessInput }) data: PrReadinessInput) {
+    return this.api.prReadiness(data);
+  }
+
   @Query(() => GraphQLJSON)
   @GraphqlParamTypes(PrReadinessInput)
   prFeedback(@Args('data', { type: () => PrReadinessInput }) data: PrReadinessInput) {
+    return this.api.prFeedback(data);
+  }
+
+  @Query(() => PrFeedbackModel)
+  @GraphqlParamTypes(PrReadinessInput)
+  prFeedbackTyped(@Args('data', { type: () => PrReadinessInput }) data: PrReadinessInput) {
     return this.api.prFeedback(data);
   }
 }

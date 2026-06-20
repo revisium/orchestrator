@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import pg from 'pg';
 import { PubSub } from 'graphql-subscriptions';
+import { RunsApiService } from '../../../features/runs/runs-api.service.js';
 import {
   CONTROL_PLANE_CHANGE_CHANNEL,
   controlPlaneNotificationDatabaseUrl,
@@ -13,6 +14,7 @@ import {
   RUN_COST_RECORDED_TOPIC,
   RUN_EVENT_APPENDED_TOPIC,
   RUN_UPDATED_TOPIC,
+  RUN_WORKFLOW_UPDATED_TOPIC,
 } from './constants.js';
 import { changeRunId, mapInboxRow, mapRunCostRow, mapRunEventRow, mapRunRow } from './subscription-mappers.js';
 
@@ -21,7 +23,10 @@ export class ControlPlaneSubscriptionBridge implements OnModuleInit, OnModuleDes
   private readonly logger = new Logger(ControlPlaneSubscriptionBridge.name);
   private client: pg.Client | null = null;
 
-  constructor(@Inject(APP_PUB_SUB) private readonly pubSub: PubSub) {}
+  constructor(
+    @Inject(APP_PUB_SUB) private readonly pubSub: PubSub,
+    @Inject(RunsApiService) private readonly runsApi: RunsApiService,
+  ) {}
 
   async onModuleInit() {
     const url = controlPlaneNotificationDatabaseUrl();
@@ -59,22 +64,42 @@ export class ControlPlaneSubscriptionBridge implements OnModuleInit, OnModuleDes
   private async publishChange(change: ControlPlaneChange): Promise<void> {
     if (change.table === 'task_runs') {
       await this.pubSub.publish(RUN_UPDATED_TOPIC, { runUpdated: mapRunRow(change.row), runId: change.rowId });
+      await this.publishWorkflow(change.rowId);
       return;
     }
     if (change.table === 'events' && change.action === 'create') {
-      await this.pubSub.publish(RUN_EVENT_APPENDED_TOPIC, { runEventAppended: mapRunEventRow(change.row), runId: changeRunId(change) });
+      const runId = changeRunId(change);
+      await this.pubSub.publish(RUN_EVENT_APPENDED_TOPIC, { runEventAppended: mapRunEventRow(change.row), runId });
+      await this.publishWorkflow(runId);
       return;
     }
     if (change.table === 'inbox' && change.action === 'create') {
-      await this.pubSub.publish(INBOX_ITEM_ADDED_TOPIC, { inboxItemAdded: mapInboxRow(change.row), runId: changeRunId(change) });
+      const runId = changeRunId(change);
+      await this.pubSub.publish(INBOX_ITEM_ADDED_TOPIC, { inboxItemAdded: mapInboxRow(change.row), runId });
+      await this.publishWorkflow(runId);
       return;
     }
     if (change.table === 'inbox' && change.row.data.status === 'resolved') {
-      await this.pubSub.publish(INBOX_ITEM_RESOLVED_TOPIC, { inboxItemResolved: mapInboxRow(change.row), runId: changeRunId(change) });
+      const runId = changeRunId(change);
+      await this.pubSub.publish(INBOX_ITEM_RESOLVED_TOPIC, { inboxItemResolved: mapInboxRow(change.row), runId });
+      await this.publishWorkflow(runId);
       return;
     }
     if (change.table === 'cost_ledger' && change.action === 'create') {
-      await this.pubSub.publish(RUN_COST_RECORDED_TOPIC, { runCostRecorded: mapRunCostRow(change.row), runId: changeRunId(change) });
+      const runId = changeRunId(change);
+      await this.pubSub.publish(RUN_COST_RECORDED_TOPIC, { runCostRecorded: mapRunCostRow(change.row), runId });
+      await this.publishWorkflow(runId);
+    }
+  }
+
+  private async publishWorkflow(runId: string): Promise<void> {
+    if (!runId) return;
+    try {
+      const workflow = await this.runsApi.getRunWorkflow({ runId });
+      await this.pubSub.publish(RUN_WORKFLOW_UPDATED_TOPIC, { runWorkflowUpdated: workflow, runId });
+    } catch (error) {
+      // Low-level topics remain authoritative even if the aggregate projection is temporarily unavailable.
+      this.logger.warn(`Run workflow subscription publish skipped for ${runId}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 }

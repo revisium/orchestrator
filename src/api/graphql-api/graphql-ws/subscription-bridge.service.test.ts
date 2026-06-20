@@ -7,6 +7,7 @@ import {
   RUN_COST_RECORDED_TOPIC,
   RUN_EVENT_APPENDED_TOPIC,
   RUN_UPDATED_TOPIC,
+  RUN_WORKFLOW_UPDATED_TOPIC,
 } from './constants.js';
 import { ControlPlaneSubscriptionBridge } from './subscription-bridge.service.js';
 
@@ -17,7 +18,12 @@ test('ControlPlaneSubscriptionBridge maps sealed control-plane changes to PubSub
       published.push({ topic, payload });
     },
   };
-  const bridge = new ControlPlaneSubscriptionBridge(pubSub as never) as unknown as {
+  const runsApi = {
+    async getRunWorkflow(data: { runId: string }) {
+      return { run: { id: data.runId }, nodes: [] };
+    },
+  };
+  const bridge = new ControlPlaneSubscriptionBridge(pubSub as never, runsApi as never) as unknown as {
     handleNotification(payload: string): Promise<void>;
   };
 
@@ -64,15 +70,16 @@ test('ControlPlaneSubscriptionBridge maps sealed control-plane changes to PubSub
     await bridge.handleNotification(JSON.stringify(change));
   }
 
-  assert.deepEqual(published.map((item) => item.topic), [
+  assert.deepEqual(published.filter((item) => item.topic !== RUN_WORKFLOW_UPDATED_TOPIC).map((item) => item.topic), [
     RUN_UPDATED_TOPIC,
     RUN_EVENT_APPENDED_TOPIC,
     INBOX_ITEM_ADDED_TOPIC,
     INBOX_ITEM_RESOLVED_TOPIC,
     RUN_COST_RECORDED_TOPIC,
   ]);
-  assert.equal((published[0]?.payload.runUpdated as { id: string }).id, 'run_1');
-  assert.equal((published[1]?.payload.runEventAppended as { runId: string }).runId, 'run_1');
-  assert.equal((published[2]?.payload.inboxItemAdded as { runId: string }).runId, 'run_1');
-  assert.equal((published[4]?.payload.runCostRecorded as { costAmount: number }).costAmount, 0.01);
+  assert.equal(published.filter((item) => item.topic === RUN_WORKFLOW_UPDATED_TOPIC).length, 5);
+  assert.equal((published.find((item) => item.topic === RUN_UPDATED_TOPIC)?.payload.runUpdated as { id: string }).id, 'run_1');
+  assert.equal((published.find((item) => item.topic === RUN_EVENT_APPENDED_TOPIC)?.payload.runEventAppended as { runId: string }).runId, 'run_1');
+  assert.equal((published.find((item) => item.topic === INBOX_ITEM_ADDED_TOPIC)?.payload.inboxItemAdded as { runId: string }).runId, 'run_1');
+  assert.equal((published.find((item) => item.topic === RUN_COST_RECORDED_TOPIC)?.payload.runCostRecorded as { costAmount: number }).costAmount, 0.01);
 });

@@ -240,6 +240,139 @@ test('TaskControlPlaneApiService.getRunProgress returns NOT_STARTED when DBOS ha
   assert.equal(progress.updatedAt.toISOString(), '2026-06-13T00:00:00.000Z');
 });
 
+test('TaskControlPlaneApiService.getRunWorkflow returns UI projection through sealed verbs', async () => {
+  const api = makeApi({
+    runService: {
+      async getRun() {
+        return {
+          rowId: 'run-1',
+          data: {
+            id: 'run-1',
+            title: 'Run',
+            playbook_id: 'pb',
+            pipeline_id: 'local-change',
+            route_decision: {
+              playbookId: 'pb',
+              pipelineId: 'local-change',
+              pipelineRowId: 'pb-local-change',
+              source: 'explicit',
+              roles: ['developer'],
+              requiredRoles: ['developer'],
+              optionalRoles: [],
+              routeGates: [],
+              executionPolicy: LOCAL_CHANGE_POLICY,
+              executionProfile: { id: 'default', runnerOverrides: {} },
+              roleBindings: [{
+                roleId: 'developer',
+                rowId: 'pb-developer',
+                modelLevel: 'standard',
+                runnerId: 'claude-code',
+                resolvedRunnerId: 'claude-code',
+                runnerSource: 'playbook',
+              }],
+              params: {},
+            },
+          },
+        };
+      },
+      async showRun() {
+        return {
+          run: {
+            runId: 'run-1',
+            title: 'Run',
+            status: 'paused',
+            priority: 2,
+            createdAt: '2026-06-13T00:00:00.000Z',
+            description: 'Desc',
+            scope: 'ci',
+            repos: ['.'],
+          },
+          tasks: [],
+        };
+      },
+      async listRunEvents() {
+        return [
+          {
+            eventId: 'event-2',
+            type: 'gate_opened',
+            actor: 'orchestrator',
+            createdAt: '2026-06-13T00:00:59.000Z',
+            taskId: 'task-1',
+            stepId: '',
+            payload: { stepKey: 'developer', attemptId: 'attempt-1', output: 'not terminal' },
+          },
+          {
+            eventId: 'event-1',
+            type: 'step_succeeded',
+            actor: 'orchestrator',
+            createdAt: '2026-06-13T00:01:00.000Z',
+            taskId: 'task-1',
+            stepId: '',
+            payload: { stepKey: 'developer', attemptId: 'attempt-1', output: 'done' },
+          },
+        ];
+      },
+      async listRunAttempts() {
+        return [
+          {
+            attemptId: 'attempt-1',
+            stepId: 'pstep-1',
+            iteration: 0,
+            status: 'succeeded',
+            verdict: 'approved',
+            modelProfile: 'standard',
+            inputTokens: 10,
+            outputTokens: 5,
+            costAmount: 0.2,
+            currency: 'USD',
+            durationMs: 100,
+            outputSummary: 'done',
+            artifactRef: '',
+            stdoutTail: '',
+            stderrTail: '',
+            lesson: '',
+            error: '',
+            startedAt: '2026-06-13T00:00:30.000Z',
+          },
+        ];
+      },
+    },
+    inboxService: {
+      async listInbox() {
+        return [makeInboxItem({ id: 'inbox-plan', context: { topic: 'plan', summary: { nodeId: 'developer' } } })];
+      },
+    },
+    dbosService: {
+      async getWorkflowStatus() {
+        return {
+          workflowID: 'run-1',
+          status: 'SUCCESS',
+          workflowName: 'dataDrivenTask',
+          workflowClassName: 'PipelineService',
+          createdAt: Date.parse('2026-06-20T09:00:00.000Z'),
+          updatedAt: Date.parse('2026-06-20T09:00:01.000Z'),
+          priority: 0,
+          applicationID: 'test',
+        } as Awaited<ReturnType<DbosService['getWorkflowStatus']>>;
+      },
+      async getEvent<T>(): Promise<T> {
+        return { activeNodeIds: ['doneEnd'], status: 'blocked' } as T;
+      },
+    },
+  });
+
+  const workflow = await api.getRunWorkflow('run-1');
+
+  assert.equal(workflow.run.id, 'run-1');
+  assert.equal(workflow.run.status, 'blocked');
+  assert.equal(workflow.pipeline.status, 'blocked');
+  assert.equal(workflow.nodes.find((node) => node.id === 'developer')?.status, 'awaiting_approval');
+  assert.equal(workflow.nodes.find((node) => node.id === 'developer')?.attemptCount, 1);
+  assert.equal(workflow.pendingInbox[0]?.createdAt instanceof Date, true);
+  assert.equal(workflow.usage.costAmount, 0.2);
+  assert.equal(workflow.activity[0]?.summary, 'done');
+});
+
 test('TaskControlPlaneApiService.approveGate records retryable signal state around the DBOS signal', async () => {
   const calls: Array<
     | { kind: 'event'; type: string; stepKey: string; payload: unknown }

@@ -42,6 +42,7 @@ export type AttemptSummary = {
   inputTokens: number;
   outputTokens: number;
   costAmount: number;
+  currency: string;
   durationMs: number;
   outputSummary: string;
   artifactRef: string;
@@ -118,6 +119,7 @@ function toAttemptSummary(row: ControlPlaneRow): AttemptSummary {
     inputTokens: num(row.data.input_tokens),
     outputTokens: num(row.data.output_tokens),
     costAmount: num(row.data.cost_amount),
+    currency: str(row.data.currency) || 'USD',
     durationMs: num(row.data.duration_ms),
     outputSummary: str(row.data.output_summary),
     artifactRef: str(row.data.artifact_ref),
