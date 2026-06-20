@@ -20,7 +20,11 @@ export type StartedGraphqlHost = {
 
 function parsePort(raw: string | undefined): number {
   if (!raw) return resolveDefaultGraphqlPort();
-  const port = Number.parseInt(raw, 10);
+  const candidate = raw.trim();
+  if (!/^\d+$/.test(candidate)) {
+    throw new TypeError(`Invalid GraphQL port: ${raw}`);
+  }
+  const port = Number(candidate);
   if (!Number.isInteger(port) || port <= 0 || port > 65_535) {
     throw new TypeError(`Invalid GraphQL port: ${raw}`);
   }

@@ -136,6 +136,9 @@ export function resolveDefaultGraphqlPort(): number {
   const basePort = runtime && isAlive(runtime.pid)
     ? runtime.httpPort
     : getConfig().preferredPort;
+  if (!Number.isInteger(basePort) || basePort <= 0 || basePort > 65_535) {
+    throw new Error(`Cannot derive GraphQL port from invalid HTTP port ${basePort}`);
+  }
   const port = basePort + GRAPHQL_PORT_OFFSET;
   if (port > 65_535) {
     throw new Error(`Cannot derive GraphQL port from HTTP port ${basePort}`);

@@ -49,6 +49,8 @@ test('resolveGraphqlHostOptions rejects invalid environment ports', () => {
   process.env.REVO_GRAPHQL_PORT = 'not-a-port';
   try {
     assert.throws(() => resolveGraphqlHostOptions(), /Invalid GraphQL port/);
+    process.env.REVO_GRAPHQL_PORT = '19424abc';
+    assert.throws(() => resolveGraphqlHostOptions(), /Invalid GraphQL port/);
   } finally {
     if (oldPort === undefined) {
       delete process.env.REVO_GRAPHQL_PORT;
