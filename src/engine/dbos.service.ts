@@ -258,6 +258,26 @@ export class DbosService {
     return DBOS.getEvent<T>(workflowID, key, opts);
   }
 
+  /**
+   * Write a DBOS stream record. Valid from workflow bodies and DBOS steps; unlike setEvent,
+   * this is intentionally safe for the step-side agent observability bridge.
+   */
+  writeStream<T>(key: string, value: T): Promise<void> {
+    return DBOS.writeStream<T>(key, value);
+  }
+
+  /**
+   * Close a DBOS stream. DBOS 4.19 only permits close from a workflow body, so step-side
+   * reporters must not call this after an attempt.
+   */
+  closeStream(key: string): Promise<void> {
+    return DBOS.closeStream(key);
+  }
+
+  readStream<T>(workflowID: string, key: string): AsyncGenerator<T, void, unknown> {
+    return DBOS.readStream<T>(workflowID, key);
+  }
+
   // ── end generic engine verbs ────────────────────────────────────────────────
 
   /**

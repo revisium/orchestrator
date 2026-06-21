@@ -23,6 +23,7 @@ import type { ControlPlaneDataAccess } from '../control-plane/data-access.js';
 import { ControlPlaneError } from '../control-plane/errors.js';
 import type { AppendEventInput, AppendCostInput, AppendAttemptInput } from '../run/append-event.js';
 import type { ExecutionProfile } from './route-contract.js';
+import type { AgentOutputEvent } from '../observability/types.js';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -257,6 +258,56 @@ test('attempt row includes the process artifact ref + stdout/stderr tails', asyn
   assert.equal(attempt?.verdict, 'unknown', 'output.verdict is observability-only and is not used');
   assert.equal(attempt?.stdoutTail, 'stdout tail');
   assert.equal(attempt?.stderrTail, 'stderr tail');
+});
+
+test('agent activity reporter is scoped to the attempt, streamed, and flushed before runStep returns', async () => {
+  const runId = 'run-reporter';
+  const { deps } = buildRunStepDeps();
+  const streamEvents: AgentOutputEvent[] = [];
+  deps.writeAgentOutputEvent = async (event) => {
+    streamEvents.push(event);
+  };
+  deps.runAgent = async ({ reporter }): Promise<AttemptResult> => {
+    reporter?.started();
+    reporter?.output('stdout', 'hello');
+    reporter?.finished({ exitCode: 0, timedOut: false });
+    return { output: 'ok', verdict: 'approved', nextSteps: [], costs: [], needsHuman: false };
+  };
+  const runStep = makeRunStep(deps);
+
+  await runStep(runId, 'developer', 'developer', { phase: 'implement' }, 'script');
+
+  assert.deepEqual(streamEvents.map((event) => event.kind), ['activity', 'output', 'status']);
+  assert.equal(streamEvents[0]?.runId, runId);
+  assert.equal(streamEvents[0]?.stepKey, 'developer');
+  assert.equal(streamEvents[0]?.snapshot?.runner, 'script');
+  assert.equal(streamEvents[1]?.snapshot?.stdoutBytes, 5);
+  assert.equal(streamEvents[2]?.snapshot?.status, 'exited');
+});
+
+test('agent activity reporter writer failures do not fail a successful agent step', async () => {
+  const { deps, harness } = buildRunStepDeps();
+  const origWarn = console.warn;
+  console.warn = () => undefined;
+  try {
+    deps.writeAgentOutputEvent = async () => {
+      throw new Error('dbos stream down');
+    };
+    deps.runAgent = async ({ reporter }): Promise<AttemptResult> => {
+      reporter?.started();
+      reporter?.output('stdout', 'still succeeds');
+      return { output: 'ok', verdict: 'approved', nextSteps: [], costs: [], needsHuman: false };
+    };
+    const runStep = makeRunStep(deps);
+
+    const result = await runStep('run-reporter-fail', 'developer', 'developer', {}, 'script');
+
+    assert.equal(result.verdict, 'approved');
+    assert.equal(harness.appendEventArgs.at(-1)?.type, 'step_succeeded');
+    assert.equal(harness.appendAttemptInputs.at(-1)?.status, 'succeeded');
+  } finally {
+    console.warn = origWarn;
+  }
 });
 
 test('params.planPath context error fails before launching the agent', async () => {

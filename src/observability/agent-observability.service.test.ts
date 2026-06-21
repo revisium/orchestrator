@@ -4,6 +4,14 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AgentObservabilityError, AgentObservabilityService } from './index.js';
+import type { AgentOutputEvent } from './types.js';
+
+type WatchAgentOutputArg = Parameters<AgentObservabilityService['watchAgentOutput']>[0];
+const watchInputShapeOk: WatchAgentOutputArg = { runId: 'run-typecheck', cursor: 'agent-output-v1:cursor' };
+// @ts-expect-error watch input is intentionally protocol-neutral and does not accept bounded-pull options.
+const watchInputShapeRejectsLimit: WatchAgentOutputArg = { runId: 'run-typecheck', limit: 1 };
+void watchInputShapeOk;
+void watchInputShapeRejectsLimit;
 
 const GH_TOKEN = 'gho_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345';
 
@@ -653,6 +661,447 @@ test('agent observability: explicit missing attempt returns no-attempt error', a
         return true;
       },
     );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('agent observability: bounded DBOS stream reads apply cursor and limit without touching files', async () => {
+  const events: AgentOutputEvent[] = [
+    {
+      cursor: 'c1',
+      runId: 'run-stream',
+      attemptId: 'attempt_1',
+      stepId: 'step-1',
+      at: '2026-01-01T00:00:00.000Z',
+      kind: 'output',
+    },
+    {
+      cursor: 'c2',
+      runId: 'run-stream',
+      attemptId: 'attempt_1',
+      stepId: 'step-1',
+      at: '2026-01-01T00:00:01.000Z',
+      kind: 'output',
+    },
+    {
+      cursor: 'c3',
+      runId: 'run-stream',
+      attemptId: 'attempt_2',
+      stepId: 'step-2',
+      at: '2026-01-01T00:00:02.000Z',
+      kind: 'status',
+    },
+  ];
+  const service = new AgentObservabilityService({
+    artifactRoot: join(tmpdir(), 'missing-observability-root'),
+    now: () => Date.parse('2026-01-01T00:00:03.500Z'),
+    dbos: {
+      getEvent: async () => null,
+      readStream: async function* <T>() {
+        for (const event of events) yield event as T;
+      },
+    },
+  });
+
+  const page = await service.readAgentOutputEvents({ runId: 'run-stream', cursor: 'c1', limit: 1 });
+
+  assert.deepEqual(page.events.map((event) => event.cursor), ['c2']);
+  assert.equal(page.nextCursor, 'c2');
+});
+
+test('agent observability: getAgentActivity derives multi-attempt state from stream snapshots', async () => {
+  const events: AgentOutputEvent[] = [
+    {
+      cursor: 'a1',
+      runId: 'run-activity',
+      attemptId: 'attempt_1',
+      stepId: 'step-1',
+      stepKey: 'developer',
+      at: '2026-01-01T00:00:00.000Z',
+      kind: 'status',
+      statusHint: 'exited',
+      snapshot: {
+        runId: 'run-activity',
+        attemptId: 'attempt_1',
+        stepId: 'step-1',
+        stepKey: 'developer',
+        role: 'developer',
+        runner: 'script',
+        status: 'exited',
+        startedAt: '2026-01-01T00:00:00.000Z',
+        lastEventAt: '2026-01-01T00:00:01.000Z',
+        stdoutBytes: 3,
+        stderrBytes: 0,
+        eventCount: 2,
+        artifactRef: 'run-activity/attempt_1',
+      },
+    },
+    {
+      cursor: 'a2',
+      runId: 'run-activity',
+      attemptId: 'attempt_2',
+      stepId: 'step-2',
+      stepKey: 'reviewer',
+      at: '2026-01-01T00:00:02.000Z',
+      kind: 'status',
+      statusHint: 'running',
+      snapshot: {
+        runId: 'run-activity',
+        attemptId: 'attempt_2',
+        stepId: 'step-2',
+        stepKey: 'reviewer',
+        role: 'reviewer',
+        runner: 'claude-code',
+        status: 'running',
+        startedAt: '2026-01-01T00:00:02.000Z',
+        lastEventAt: '2026-01-01T00:00:03.000Z',
+        lastOutputAt: '2026-01-01T00:00:03.000Z',
+        stdoutBytes: 7,
+        stderrBytes: 0,
+        eventCount: 1,
+        artifactRef: 'run-activity/attempt_2',
+      },
+    },
+  ];
+  const service = new AgentObservabilityService({
+    artifactRoot: join(tmpdir(), 'missing-observability-root'),
+    now: () => Date.parse('2026-01-01T00:00:03.500Z'),
+    dbos: {
+      getEvent: async () => null,
+      readStream: async function* <T>() {
+        for (const event of events) yield event as T;
+      },
+    },
+  });
+
+  const activity = await service.getAgentActivity('run-activity');
+
+  assert.equal(activity?.aggregateStatus, 'running');
+  assert.equal(activity?.latestActivityAt, '2026-01-01T00:00:03.000Z');
+  assert.equal(activity?.latestOutputAt, '2026-01-01T00:00:03.000Z');
+  assert.deepEqual(activity?.attempts.map((attempt) => attempt.attemptId), ['attempt_1', 'attempt_2']);
+});
+
+test('agent observability: readAgentOutputEvents reports cursorExpired when requested cursor is unavailable', async () => {
+  const events: AgentOutputEvent[] = [
+    {
+      cursor: 'agent-output-v1:attempt_1:output:stdout:0:1',
+      runId: 'run-cursor',
+      attemptId: 'attempt_1',
+      stepId: 'step-1',
+      at: '2026-01-01T00:00:00.000Z',
+      kind: 'output',
+    },
+  ];
+  const service = new AgentObservabilityService({
+    artifactRoot: join(tmpdir(), 'missing-observability-root'),
+    dbos: {
+      getEvent: async () => null,
+      readStream: async function* <T>() {
+        for (const event of events) yield event as T;
+      },
+    },
+  });
+
+  const page = await service.readAgentOutputEvents({
+    runId: 'run-cursor',
+    cursor: 'agent-output-v1:missing',
+    limit: 10,
+  });
+
+  assert.equal(page.cursorExpired, true);
+  assert.deepEqual(page.events, []);
+});
+
+test('agent observability: readAgentOutputEvents caps pre-cursor scanning for missing cursors', async () => {
+  const events: AgentOutputEvent[] = Array.from({ length: 1_500 }, (_, i) => ({
+    cursor: `agent-output-v1:run-long:attempt_1:output:stdout:${i}:1`,
+    runId: 'run-long',
+    attemptId: 'attempt_1',
+    stepId: 'step-1',
+    at: '2026-01-01T00:00:00.000Z',
+    kind: 'output',
+  }));
+  let consumed = 0;
+  const service = new AgentObservabilityService({
+    artifactRoot: join(tmpdir(), 'missing-observability-root'),
+    dbos: {
+      getEvent: async () => null,
+      readStream: async function* <T>() {
+        for (const event of events) {
+          consumed += 1;
+          yield event as T;
+        }
+      },
+    },
+  });
+
+  const page = await service.readAgentOutputEvents({
+    runId: 'run-long',
+    cursor: 'agent-output-v1:run-long:missing',
+    limit: 1,
+  });
+
+  assert.equal(page.cursorExpired, true);
+  assert.deepEqual(page.events, []);
+  assert.equal(consumed, 1_000);
+});
+
+test('agent observability: watchAgentOutput resumes after a found cursor', async () => {
+  const events: AgentOutputEvent[] = [
+    {
+      cursor: 'agent-output-v1:run-watch:attempt_1:output:stdout:0:1',
+      runId: 'run-watch',
+      attemptId: 'attempt_1',
+      stepId: 'step-1',
+      at: '2026-01-01T00:00:00.000Z',
+      kind: 'output',
+    },
+    {
+      cursor: 'agent-output-v1:run-watch:attempt_1:output:stdout:1:1',
+      runId: 'run-watch',
+      attemptId: 'attempt_1',
+      stepId: 'step-1',
+      at: '2026-01-01T00:00:01.000Z',
+      kind: 'output',
+    },
+  ];
+  const service = new AgentObservabilityService({
+    artifactRoot: join(tmpdir(), 'missing-observability-root'),
+    dbos: {
+      getEvent: async () => null,
+      readStream: async function* <T>() {
+        for (const event of events) yield event as T;
+      },
+    },
+  });
+  const yielded: AgentOutputEvent[] = [];
+
+  for await (const event of service.watchAgentOutput({ runId: 'run-watch', cursor: events[0]!.cursor })) {
+    yielded.push(event);
+  }
+
+  assert.deepEqual(yielded.map((event) => event.cursor), [events[1]!.cursor]);
+});
+
+test('agent observability: watchAgentOutput throws cursor expired after bounded missing-cursor scan', async () => {
+  const events: AgentOutputEvent[] = Array.from({ length: 1_500 }, (_, i) => ({
+    cursor: `agent-output-v1:run-watch-long:attempt_1:output:stdout:${i}:1`,
+    runId: 'run-watch-long',
+    attemptId: 'attempt_1',
+    stepId: 'step-1',
+    at: '2026-01-01T00:00:00.000Z',
+    kind: 'output',
+  }));
+  let consumed = 0;
+  const service = new AgentObservabilityService({
+    artifactRoot: join(tmpdir(), 'missing-observability-root'),
+    dbos: {
+      getEvent: async () => null,
+      readStream: async function* <T>() {
+        for (const event of events) {
+          consumed += 1;
+          yield event as T;
+        }
+      },
+    },
+  });
+
+  await assert.rejects(
+    async () => {
+      for await (const _event of service.watchAgentOutput({
+        runId: 'run-watch-long',
+        cursor: 'agent-output-v1:run-watch-long:missing',
+      })) {
+        // no events should be yielded before the missing cursor is found
+      }
+    },
+    (error) => {
+      assertObsError(error, 'STREAM_CURSOR_EXPIRED');
+      return true;
+    },
+  );
+  assert.equal(consumed, 1_000);
+});
+
+test('agent observability: readAgentOutputEvents rejects obvious invalid cursor input', async () => {
+  const service = new AgentObservabilityService({
+    artifactRoot: join(tmpdir(), 'missing-observability-root'),
+    dbos: {
+      getEvent: async () => null,
+      readStream: async function* () {},
+    },
+  });
+
+  await assert.rejects(
+    () => service.readAgentOutputEvents({ runId: 'run-cursor', cursor: '/Users/anton/secret' }),
+    (error) => {
+      assertObsError(error, 'VALIDATION_FAILURE');
+      return true;
+    },
+  );
+});
+
+test('agent observability: getAgentActivity derives idle from stale running activity at read time', async () => {
+  const service = new AgentObservabilityService({
+    artifactRoot: join(tmpdir(), 'missing-observability-root'),
+    idleThresholdMs: 1_000,
+    now: () => Date.parse('2026-01-01T00:00:03.000Z'),
+    dbos: {
+      getEvent: async () => null,
+      readStream: async function* <T>() {
+        yield {
+          cursor: 'agent-output-v1:attempt_1:status:running:1',
+          runId: 'run-idle',
+          attemptId: 'attempt_1',
+          stepId: 'step-1',
+          at: '2026-01-01T00:00:00.000Z',
+          kind: 'status',
+          snapshot: {
+            runId: 'run-idle',
+            attemptId: 'attempt_1',
+            stepId: 'step-1',
+            role: 'developer',
+            runner: 'claude-code',
+            status: 'running',
+            startedAt: '2026-01-01T00:00:00.000Z',
+            lastEventAt: '2026-01-01T00:00:00.000Z',
+            lastOutputAt: '2026-01-01T00:00:01.000Z',
+            stdoutBytes: 5,
+            stderrBytes: 0,
+            eventCount: 1,
+            artifactRef: 'run-idle/attempt_1',
+          },
+        } satisfies AgentOutputEvent as T;
+      },
+    },
+  });
+
+  const activity = await service.getAgentActivity('run-idle');
+
+  assert.equal(activity?.aggregateStatus, 'idle');
+  assert.equal(activity?.attempts[0]?.status, 'idle');
+});
+
+test('agent observability: idle classification does not overwrite terminal statuses', async () => {
+  const service = new AgentObservabilityService({
+    artifactRoot: join(tmpdir(), 'missing-observability-root'),
+    idleThresholdMs: 1_000,
+    now: () => Date.parse('2026-01-01T01:00:00.000Z'),
+    dbos: {
+      getEvent: async () => null,
+      readStream: async function* <T>() {
+        for (const status of ['failed', 'permission_blocked', 'exited'] as const) {
+          yield {
+            cursor: `agent-output-v1:attempt_${status}:status:${status}:1`,
+            runId: 'run-terminal',
+            attemptId: `attempt_${status}`,
+            stepId: `step-${status}`,
+            at: '2026-01-01T00:00:00.000Z',
+            kind: 'status',
+            snapshot: {
+              runId: 'run-terminal',
+              attemptId: `attempt_${status}`,
+              stepId: `step-${status}`,
+              role: 'developer',
+              runner: 'claude-code',
+              status,
+              startedAt: '2026-01-01T00:00:00.000Z',
+              lastEventAt: '2026-01-01T00:00:00.000Z',
+              stdoutBytes: 0,
+              stderrBytes: 0,
+              eventCount: 1,
+              artifactRef: `run-terminal/attempt_${status}`,
+            },
+          } satisfies AgentOutputEvent as T;
+        }
+      },
+    },
+  });
+
+  const activity = await service.getAgentActivity('run-terminal');
+
+  assert.deepEqual(activity?.attempts.map((attempt) => attempt.status).sort(), ['exited', 'failed', 'permission_blocked']);
+  assert.ok(!activity?.attempts.some((attempt) => attempt.status === 'idle'));
+  assert.equal(activity?.aggregateStatus, 'failed');
+});
+
+test('agent observability: getAgentActivity scans beyond the first 1000 stream events for latest snapshots', async () => {
+  const events: AgentOutputEvent[] = Array.from({ length: 1_050 }, (_, i) => ({
+    cursor: `agent-output-v1:attempt_1:output:stdout:${i}:1`,
+    runId: 'run-chatty',
+    attemptId: 'attempt_1',
+    stepId: 'step-1',
+    at: `2026-01-01T00:00:${String(Math.floor(i / 20)).padStart(2, '0')}.000Z`,
+    kind: 'output',
+    snapshot: {
+      runId: 'run-chatty',
+      attemptId: 'attempt_1',
+      stepId: 'step-1',
+      role: 'developer',
+      runner: 'claude-code',
+      status: 'running',
+      startedAt: '2026-01-01T00:00:00.000Z',
+      lastEventAt: '2026-01-01T00:00:52.000Z',
+      lastOutputAt: '2026-01-01T00:00:52.000Z',
+      stdoutBytes: i + 1,
+      stderrBytes: 0,
+      eventCount: i + 1,
+      artifactRef: 'run-chatty/attempt_1',
+    },
+  }));
+  const service = new AgentObservabilityService({
+    artifactRoot: join(tmpdir(), 'missing-observability-root'),
+    now: () => Date.parse('2026-01-01T00:00:52.500Z'),
+    dbos: {
+      getEvent: async () => null,
+      readStream: async function* <T>() {
+        for (const event of events) yield event as T;
+      },
+    },
+  });
+
+  const activity = await service.getAgentActivity('run-chatty');
+
+  assert.equal(activity?.attempts[0]?.stdoutBytes, 1_050);
+  assert.equal(activity?.attempts[0]?.eventCount, 1_050);
+  assert.equal(activity?.aggregateStatus, 'running');
+});
+
+test('agent observability: getAgentActivity falls back to completed artifact attempts', async () => {
+  const root = tempRoot();
+  try {
+    writeAttempt(root, {
+      runId: 'run-artifacts',
+      attemptId: 'attempt_1',
+      stdout: 'hello',
+      stderr: '',
+      meta: {
+        runId: 'run-artifacts',
+        attemptId: 'attempt_1',
+        stepId: 'step-1',
+        stepKey: 'developer',
+        role: 'developer',
+        runner: 'script',
+        startedAt: '2026-01-01T00:00:00.000Z',
+        finishedAt: '2026-01-01T00:00:01.000Z',
+        status: 'finished',
+      },
+    });
+    const service = new AgentObservabilityService({
+      artifactRoot: root,
+      dbos: {
+        getEvent: async () => null,
+        readStream: async function* () {},
+      },
+    });
+
+    const activity = await service.getAgentActivity('run-artifacts');
+
+    assert.equal(activity?.aggregateStatus, 'exited');
+    assert.equal(activity?.attempts[0]?.stdoutBytes, 5);
+    assert.equal(activity?.attempts[0]?.artifactRef, 'run-artifacts/attempt_1');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
