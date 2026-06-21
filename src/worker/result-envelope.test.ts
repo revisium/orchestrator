@@ -33,6 +33,22 @@ test('parseTransportEnvelope: detects is_error true', () => {
   assert.equal(env.text, 'boom');
 });
 
+test('parseTransportEnvelope: extracts Claude observability metadata', () => {
+  const permissionDenials = [{ tool_name: 'Write', reason: 'denied by policy' }];
+  const stdout = JSON.stringify({
+    result: 'done',
+    permission_denials: permissionDenials,
+    terminal_reason: 'permission_denied',
+    session_id: 'session-123',
+  });
+
+  const env = parseTransportEnvelope(stdout);
+  assert.equal(env.text, 'done');
+  assert.deepEqual(env.permissionDenials, permissionDenials);
+  assert.equal(env.terminalReason, 'permission_denied');
+  assert.equal(env.sessionId, 'session-123');
+});
+
 test('parseTransportEnvelope: throws on non-JSON stdout', () => {
   assert.throws(
     () => parseTransportEnvelope('not json at all'),
