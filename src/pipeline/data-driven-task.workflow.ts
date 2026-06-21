@@ -115,74 +115,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-/**
- * Extract the DOMAIN verdict from a recorded agent/script result, restricted to the node's declared
- * `outcomes`/domain vocabulary. The engine treats domain verdicts as opaque labels (§8): we read the
- * agent's free output for a label the template can route on, never inventing engine semantics.
- *
- * Resolution order: explicit `output.verdict` (string) → a leading-token string output → undefined.
- * The value is lowercased to match the spec's domain vocabulary (`approved|blocker|clean|…`).
- */
+/** Extract the DOMAIN verdict from the only supported source: top-level AttemptResult.verdict. */
 function domainVerdictOf(result: AttemptResult): string | undefined {
-  // Preferred: the explicit top-level `verdict` (REVO_RESULT contract — a prominent required field the
-  // agent reliably fills, unlike a prose `output`).
-  if (typeof result.verdict === 'string' && result.verdict.length > 0) return normalizeDomainLabel(result.verdict);
-  const output = result.output;
-  // Then a structured `output: { verdict: "<label>" }` (back-compat with the older convention).
-  if (isRecord(output) && typeof output.verdict === 'string') return normalizeDomainLabel(output.verdict);
-  // Fallback: the agent returned a free-text/summary string. The prompt still requires a verdict token,
-  // so scan the text for the LAST known domain label as a whole word. Without this a prose-shaped output
-  // yields no routable verdict and a `choice` router falls to its default → blocked (the planReviewRouter
-  // exposed exactly this in the alpha.4 dogfood: "Plan approved: …" produced no `approved` for routing).
-  if (typeof output === 'string') return scanVerdict(output);
+  if (typeof result.verdict === 'string' && result.verdict.trim().length > 0) {
+    return result.verdict.trim().toLowerCase();
+  }
   return undefined;
 }
 
-/** Exact domain-verdict words a free-text output may carry (NOT the PASS/MINOR structural aliases — those
- *  would false-positive on prose like "tests passed"). */
-const DOMAIN_VERDICT_WORDS = new Set(['APPROVED', 'CLEAN', 'CHANGES_REQUESTED', 'BLOCKER', 'DIRTY']);
-
-/** Last known domain-verdict word in free text → its lowercase label. Total + deterministic. */
-function scanVerdict(text: string): string | undefined {
-  let found: string | undefined;
-  for (const token of text.split(/[^A-Za-z_]+/)) {
-    if (token && DOMAIN_VERDICT_WORDS.has(token.toUpperCase())) found = token.toLowerCase();
+function resultVerdictProblem(template: Template, node: Node, result: AttemptResult): string | undefined {
+  if (node.kind !== 'agent') return undefined;
+  const verdict = domainVerdictOf(result);
+  if (!verdict) {
+    return `${REVO_RESULT_INVALID}: node ${node.id} requires top-level result.verdict`;
   }
-  return found;
-}
-
-/**
- * Normalize an agent's free-text verdict token to a domain label. The seeded test/agent vocabulary
- * uses PASS/BLOCKER/MAJOR/etc.; the data-driven templates use approved/blocker/clean/dirty/… . We map
- * the well-known structural tokens to the closest domain label and otherwise pass the lowercased token
- * through (so a template that declares its own labels just works). Total + deterministic.
- */
-function normalizeDomainLabel(raw: string): string {
-  const token = raw.trim().toUpperCase().replace(/[\s-]+/g, '_');
-  switch (token) {
-    case 'PASS':
-    case 'PASSED':
-    case 'APPROVE':
-    case 'APPROVED':
-    case 'CLEAN':
-    case 'READY':
-    case 'VERIFIED':
-      // A passing structural token maps to the canonical "good" labels; the interpreter only routes on
-      // labels a guard names, so emitting both-equivalents is unnecessary — return the lowercased token.
-      return token === 'CLEAN' ? 'clean' : 'approved';
-    case 'MINOR':
-      return 'approved'; // MINOR proceeds (parity with the hardcoded isBlocking)
-    case 'MAJOR':
-    case 'REQUEST_CHANGES':
-    case 'CHANGES_REQUESTED':
-      return 'changes_requested';
-    case 'BLOCKER':
-    case 'BLOCK':
-    case 'DIRTY':
-      return token === 'DIRTY' ? 'dirty' : 'blocker';
-    default:
-      return raw.trim().toLowerCase();
+  if (!template.verdicts.domain.includes(verdict)) {
+    return `${REVO_RESULT_INVALID}: node ${node.id} emitted verdict "${verdict}" outside template verdicts.domain [${template.verdicts.domain.join(', ')}]`;
   }
+  return undefined;
 }
 
 /**
@@ -480,6 +430,7 @@ export function makeDataDrivenTask(
     let state: RunState = initialState(template);
     let lastResult: LastResult | undefined;
     let lastVerdict = '';
+    let lastFailureReason = '';
     let stepCount = 0;
     // Workflow-local dataflow state (0016 §4.1/§6): per-node execution ordinals + produced outputs.
     // Both are rebuilt deterministically on DBOS replay (the loop re-runs identically); the adapter
@@ -493,7 +444,7 @@ export function makeDataDrivenTask(
       await deps.setProgress?.(runId, progressCursor(state, lastResult));
 
       if (decision.type === 'complete') {
-        return await finish(runId, decision.status, lastVerdict, stepCount);
+        return await finish(runId, decision.status, lastVerdict, stepCount, lastFailureReason);
       }
 
       const eff = await applyDecision(decision, {
@@ -502,6 +453,7 @@ export function makeDataDrivenTask(
       });
       lastResult = eff.lastResult;
       if (eff.lastVerdict !== undefined) lastVerdict = eff.lastVerdict;
+      if (eff.failureReason !== undefined) lastFailureReason = eff.failureReason;
       stepCount += eff.stepDelta;
     }
 
@@ -513,7 +465,7 @@ export function makeDataDrivenTask(
   // ── Decision dispatch ────────────────────────────────────────────────────────
 
   /** What executing one non-terminal Decision yields back to the loop. */
-  type DecisionEffect = { lastResult: LastResult | undefined; lastVerdict?: string; stepDelta: number };
+  type DecisionEffect = { lastResult: LastResult | undefined; lastVerdict?: string; failureReason?: string; stepDelta: number };
   type EffectCtx = {
     runId: string;
     template: Template;
@@ -552,9 +504,13 @@ export function makeDataDrivenTask(
           });
           return { lastResult: { outcome: 'failed', errorCode: REVO_INPUT_MISSING }, lastVerdict: 'failed', stepDelta: 1 };
         }
-        const result = await invokeRole(runId, decision, node, bindingByRef, executionProfile, resolved.inputs, stepKey);
+        const result = await invokeRole(runId, decision, template, node, bindingByRef, executionProfile, resolved.inputs, stepKey);
         if (result.failed) {
-          return { lastResult: { outcome: 'failed', errorCode: result.errorCode }, lastVerdict: 'failed', stepDelta: 1 };
+          await appendEvent({
+            runId, taskId, stepId: '', stepKey, type: 'step_failed',
+            payload: { nodeId: node.id, error: result.errorCode, reason: result.reason },
+          });
+          return { lastResult: { outcome: 'failed', errorCode: result.errorCode }, lastVerdict: 'failed', failureReason: result.reason, stepDelta: 1 };
         }
         await recordOutput(runId, node, ordinal, result.output, ctx.outputsByNode);
         const verdict = result.verdict;
@@ -635,12 +591,13 @@ export function makeDataDrivenTask(
   async function invokeRole(
     runId: string,
     decision: Extract<Decision, { type: 'invokeRole' }>,
+    template: Template,
     node: Node,
     bindingByRef: Map<string, RouteRoleBinding>,
     executionProfile: ExecutionProfile,
     inputs: Record<string, unknown>,
     stepKey: string,
-  ): Promise<{ failed: true; errorCode: typeof REVO_RESULT_INVALID } | { failed: false; verdict?: string; output: unknown }> {
+  ): Promise<{ failed: true; errorCode: typeof REVO_RESULT_INVALID; reason: string } | { failed: false; verdict?: string; output: unknown }> {
     const binding = bindingByRef.get(decision.roleRef);
     if (!binding) {
       // A VALID template's caps resolve at run start; an unresolved roleRef is a fatal config gap.
@@ -654,8 +611,15 @@ export function makeDataDrivenTask(
     const result = await runStepFn(runId, binding.rowId, stepKey, stepInput, binding.resolvedRunnerId, executionProfile);
     // runStep converts a runner-process crash into a blocking attempt (needsHuman + verdict BLOCKER);
     // that is a domain failure of the node → route via §6 precedence as a result-invalid/failed effect.
-    if (result.needsHuman || !resultSatisfiesSchema(node, result)) {
-      return { failed: true, errorCode: REVO_RESULT_INVALID };
+    if (result.needsHuman) {
+      return { failed: true, errorCode: REVO_RESULT_INVALID, reason: `${REVO_RESULT_INVALID}: node ${node.id} returned needsHuman instead of a valid result` };
+    }
+    if (!resultSatisfiesSchema(node, result)) {
+      return { failed: true, errorCode: REVO_RESULT_INVALID, reason: `${REVO_RESULT_INVALID}: node ${node.id} result did not satisfy resultSchema ${String('resultSchema' in node ? node.resultSchema : '')}` };
+    }
+    const verdictProblem = resultVerdictProblem(template, node, result);
+    if (verdictProblem) {
+      return { failed: true, errorCode: REVO_RESULT_INVALID, reason: verdictProblem };
     }
     return { failed: false, verdict: domainVerdictOf(result), output: result.output };
   }
@@ -783,6 +747,7 @@ export function makeDataDrivenTask(
     status: TerminalStatus,
     verdict: string,
     steps: number,
+    failureReason = '',
   ): Promise<DataDrivenResult> {
     if (status === 'succeeded') {
       await completeRun(runId, { actor: 'pipeline', source: 'data-driven-complete', verdict, iterations: steps });
@@ -797,7 +762,7 @@ export function makeDataDrivenTask(
       });
       await blockRun(runId, { actor: 'pipeline', source: 'data-driven-blocked', reason: 'route-terminal' });
     } else {
-      await failRun(runId, `data-driven pipeline reached a failed terminal (lastVerdict=${verdict})`);
+      await failRun(runId, failureReason || `data-driven pipeline reached a failed terminal (lastVerdict=${verdict})`);
     }
     return { runId, status, verdict, steps };
   }

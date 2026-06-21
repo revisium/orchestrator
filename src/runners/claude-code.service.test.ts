@@ -42,17 +42,12 @@ function makeDraftTransport(repoRef = '/tmp'): ControlPlaneTransport {
   };
 }
 
-/** Minimal valid REVO_RESULT output for the claude runner to accept. */
+/** Minimal valid structured_output transport for the claude runner to accept. */
 function makeClaudeOutput(output: Record<string, unknown>): string {
-  const agentText = [
-    'Some reasoning text here.',
-    '<<<REVO_RESULT',
-    JSON.stringify({ output, nextSteps: [], needsHuman: false, lesson: null }),
-    'REVO_RESULT>>>',
-  ].join('\n');
   const envelope = {
     type: 'result',
-    result: agentText,
+    result: 'ignored prose',
+    structured_output: { verdict: 'approved', output: JSON.stringify(output), needsHuman: false },
     is_error: false,
     cost_usd: 0.001,
     input_tokens: 100,

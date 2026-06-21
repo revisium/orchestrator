@@ -44,7 +44,7 @@ function makeRole(name: string): Role {
   };
 }
 
-test('stubRunAgent: emits a passing verdict regardless of role (generic stub)', async () => {
+test('stubRunAgent: emits a top-level passing verdict regardless of role (generic stub)', async () => {
   for (const role of ['architect', 'developer', 'reviewer', 'integrator', 'tester']) {
     const result = await stubRunAgent({
       role: makeRole(role),
@@ -54,7 +54,8 @@ test('stubRunAgent: emits a passing verdict regardless of role (generic stub)', 
       step: { ...STEP, role },
     });
 
-    assert.equal((result.output as Record<string, unknown>).verdict, 'PASS', `${role} → PASS`);
+    assert.equal(result.verdict, 'approved', `${role} -> approved`);
+    assert.equal((result.output as Record<string, unknown>).verdict, undefined, `${role} -> no output verdict`);
     assert.equal(result.nextSteps.length, 0, `${role} → no nextSteps (engine sequences from the template)`);
   }
 });

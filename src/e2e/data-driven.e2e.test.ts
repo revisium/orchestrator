@@ -35,7 +35,7 @@ let h: RunHarness;
 let target: TargetRepo;
 const specs = new Map<string, AgentSpec>();
 
-// The data-driven watcher node routes on a `clean` DOMAIN verdict; everything else PASS by default.
+// The data-driven watcher node routes on a `clean` DOMAIN verdict; other roles default to `approved`.
 const cleanWatcher: AgentSpec = { byRole: { watcher: { kind: 'domainVerdict', verdict: 'clean' } } };
 
 before(async () => {
@@ -106,12 +106,12 @@ test('L4: a produced plan is persisted and hydrated into the consuming developer
 // recovery.e2e.test.ts: the crash must happen BEFORE any long-lived harness exists, else a competing
 // host on the shared DBOS queue could steal + run the recovered workflow with the wrong agent.
 
-test('L3: reviewer BLOCKER ×cap drives the bounded rework loop to blocked (counter cap is DATA)', { skip: e2eSkip }, async () => {
+test('L3: reviewer blocker x cap drives the bounded rework loop to blocked (counter cap is DATA)', { skip: e2eSkip }, async () => {
   // The template's codeReviewRouter routes blocker → reworkDeveloper while counter.lt(codeReviewLoop,3);
   // reworkDeveloper increments the scope. After the cap the guard is false → default → blockedEnd.
-  // A reviewer that always emits BLOCKER (→ domain `blocker`) exhausts the cap and the run blocks.
+  // A reviewer that always emits the domain `blocker` exhausts the cap and the run blocks.
   const blockerReviewer: AgentSpec = {
-    byRole: { reviewer: { kind: 'verdict', verdict: 'BLOCKER' }, watcher: { kind: 'domainVerdict', verdict: 'clean' } },
+    byRole: { reviewer: { kind: 'verdict', verdict: 'blocker' }, watcher: { kind: 'domainVerdict', verdict: 'clean' } },
   };
   const run = await startDataDrivenRun(h, target, specs, blockerReviewer);
 

@@ -1,3 +1,5 @@
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
 import type { JsonFilterDto } from '@revisium/client';
 import type { ControlPlaneDataAccess } from '../control-plane/data-access.js';
 import type { Step } from '../control-plane/steps.js';
@@ -6,10 +8,88 @@ import type { Role } from '../control-plane/definitions.js';
 
 // ADR digest not yet included — deferred to a later plan once structure is established.
 
+export const REVO_CONTEXT_MISSING = 'revo.ContextMissing' as const;
+
+const MAX_PUBLIC_PARAMS_CHARS = 8_000;
+const MAX_PLAN_CONTEXT_CHARS = 40_000;
+
+export type AgentRunContext = {
+  description: string;
+  params: Record<string, unknown>;
+};
+
+export class ContextMissingError extends Error {
+  readonly code = REVO_CONTEXT_MISSING;
+
+  constructor(message: string) {
+    super(`${REVO_CONTEXT_MISSING}: ${message}`);
+    this.name = 'ContextMissingError';
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+function bounded(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  return `${value.slice(0, maxChars)}\n[truncated: ${String(value.length - maxChars)} chars omitted]`;
+}
+
+function redactText(value: string): string {
+  return value.replace(
+    /\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY)[A-Za-z0-9_]*)\s*[:=]\s*([^\s"'`]+)/gi,
+    '$1=[REDACTED]',
+  );
+}
+
+function jsonForContext(value: unknown, maxChars: number): string {
+  return bounded(redactText(JSON.stringify(value, null, 2)), maxChars);
+}
+
+function insideOrSame(parent: string, child: string): boolean {
+  const rel = path.relative(parent, child);
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+async function materializePlanContext(planPath: unknown, repoRef: string): Promise<{ path: string; content: string } | null> {
+  if (planPath === undefined || planPath === null) return null;
+  if (typeof planPath !== 'string' || planPath.trim().length === 0) {
+    throw new ContextMissingError('params.planPath must be a non-empty string');
+  }
+  if (!path.isAbsolute(repoRef)) {
+    throw new ContextMissingError('params.planPath requires a local absolute task repo_ref');
+  }
+  const repoRoot = path.resolve(repoRef);
+  const workspaceRoot = path.dirname(repoRoot);
+  const rawPath = planPath.trim();
+  const resolved = path.resolve(path.isAbsolute(rawPath) ? rawPath : path.join(repoRoot, rawPath));
+  if (!insideOrSame(workspaceRoot, resolved)) {
+    throw new ContextMissingError(`params.planPath is outside task workspace: ${rawPath}`);
+  }
+  let stat;
+  try {
+    stat = await fs.stat(resolved);
+  } catch {
+    throw new ContextMissingError(`params.planPath is not readable: ${rawPath}`);
+  }
+  if (!stat.isFile()) {
+    throw new ContextMissingError(`params.planPath is not a file: ${rawPath}`);
+  }
+  let content: string;
+  try {
+    content = await fs.readFile(resolved, 'utf8');
+  } catch {
+    throw new ContextMissingError(`params.planPath is not readable: ${rawPath}`);
+  }
+  return { path: resolved, content: bounded(redactText(content), MAX_PLAN_CONTEXT_CHARS) };
+}
+
 export async function buildContext(
   da: ControlPlaneDataAccess,
   step: Step,
   role: Role,
+  runContext?: AgentRunContext,
 ): Promise<string> {
   const scopeRulesSummary = role.scopeRules ? JSON.stringify(role.scopeRules) : '{}';
 
@@ -17,6 +97,8 @@ export async function buildContext(
   const taskTitle = task ? toStr(task.data.title) : '(unknown task)';
   const taskScope = task ? toStr(task.data.scope) : '';
   const taskRepo = task ? toStr(task.data.repo_ref) : '';
+  const publicParams = isRecord(runContext?.params) ? runContext.params : {};
+  const planContext = await materializePlanContext(publicParams.planPath, taskRepo);
 
   // WORKAROUND: JsonFilterDto.equals is typed as { [key: string]: unknown } but accepts scalar
   // strings at runtime; mirrors the cast pattern in claimNextStep/recoverInFlight.
@@ -43,6 +125,11 @@ export async function buildContext(
 
   if (taskScope) parts.push(`Scope: ${taskScope}`);
   if (taskRepo) parts.push(`Repo: ${taskRepo}`);
+  if (runContext?.description) parts.push('## Run description:', runContext.description);
+  parts.push('## Run params (public):', jsonForContext(publicParams, MAX_PUBLIC_PARAMS_CHARS));
+  if (planContext) {
+    parts.push('## Required context: params.planPath', `Path: ${planContext.path}`, planContext.content);
+  }
 
   if (priorLessons.length > 0) {
     parts.push('## Prior failed attempt lessons:');

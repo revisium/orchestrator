@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { buildContext } from './build-context.js';
 import type { ControlPlaneDataAccess, ListRowsOptions } from '../control-plane/data-access.js';
 import type { Step } from '../control-plane/steps.js';
@@ -96,6 +99,82 @@ test('buildContext: includes current step input', async () => {
   const da = makeDA({});
   const ctx = await buildContext(da, STEP, ROLE);
   assert.ok(ctx.includes('"Add feature X"'), 'should include step input JSON');
+});
+
+test('buildContext: includes run description, public params, and bounded planPath content', async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'revo-context-'));
+  try {
+    writeFileSync(join(repo, 'plan.md'), '# Plan\nDo the scoped work.\nSECRET_TOKEN=abc123\n');
+    const da = makeDA({ task: { title: 'My Feature', scope: 'backend', repo_ref: repo } });
+    const ctx = await buildContext(da, STEP, ROLE, {
+      description: 'Run-level description',
+      params: { planPath: 'plan.md', ticket: 'RV-1' },
+    });
+    assert.ok(ctx.includes('## Run description:\nRun-level description'));
+    assert.ok(ctx.includes('"ticket": "RV-1"'));
+    assert.ok(ctx.includes('## Required context: params.planPath'));
+    assert.ok(ctx.includes('# Plan\nDo the scoped work.'));
+    assert.ok(ctx.includes('SECRET_TOKEN=[REDACTED]'));
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test('buildContext: materializes absolute params.planPath from a sibling workspace plan folder', async () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'revo-workspace-'));
+  try {
+    const repo = join(workspace, 'agent-orchestrator-admin');
+    const plans = join(workspace, 'revo-plans', 'admin');
+    mkdirSync(repo, { recursive: true });
+    mkdirSync(plans, { recursive: true });
+    const planPath = join(plans, '002-runs.md');
+    writeFileSync(planPath, '# Runs\nRead-only run views.\n');
+
+    const da = makeDA({ task: { title: 'Admin runs', scope: 'frontend', repo_ref: repo } });
+    const ctx = await buildContext(da, STEP, ROLE, {
+      description: '',
+      params: { planPath },
+    });
+
+    assert.ok(ctx.includes('## Required context: params.planPath'));
+    assert.ok(ctx.includes(planPath));
+    assert.ok(ctx.includes('# Runs\nRead-only run views.'));
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('buildContext: params.planPath outside the task workspace is rejected', async () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'revo-workspace-'));
+  const outside = mkdtempSync(join(tmpdir(), 'revo-outside-'));
+  try {
+    const repo = join(workspace, 'agent-orchestrator-admin');
+    mkdirSync(repo, { recursive: true });
+    const planPath = join(outside, 'plan.md');
+    writeFileSync(planPath, '# Outside\n');
+    const da = makeDA({ task: { title: 'Admin runs', scope: 'frontend', repo_ref: repo } });
+
+    await assert.rejects(
+      () => buildContext(da, STEP, ROLE, { description: '', params: { planPath } }),
+      /revo\.ContextMissing: params\.planPath is outside task workspace/,
+    );
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('buildContext: inaccessible params.planPath fails before agent execution', async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'revo-context-'));
+  try {
+    const da = makeDA({ task: { title: 'My Feature', scope: 'backend', repo_ref: repo } });
+    await assert.rejects(
+      () => buildContext(da, STEP, ROLE, { description: '', params: { planPath: 'missing.md' } }),
+      /revo\.ContextMissing: params\.planPath is not readable: missing\.md/,
+    );
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
 });
 
 test('buildContext: null input renders as null', async () => {
