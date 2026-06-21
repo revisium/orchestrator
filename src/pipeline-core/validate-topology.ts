@@ -1,10 +1,3 @@
-/**
- * validate-topology — the static graph-shape rules (§12 rules 1–5): a single entry resolves, every edge
- * target exists, terminals/non-terminals are well-formed, guard conditions are grammatical, choice/
- * humanGate routing is total, and every node is reachable from entry. None needs cross-node dominance,
- * cycle, or parallel-branch analysis — those live in the loops/parallel/dataflow modules.
- */
-
 import { CONDITION_OPS, TERMINAL_STATUSES, isDefaultBranch } from './types.js';
 import type { Condition, Node, Template } from './types.js';
 import { DiagSink } from './validate-sink.js';

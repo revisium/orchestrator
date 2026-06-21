@@ -1,9 +1,3 @@
-/**
- * validate-verdict — §12 rule 9 (verdict-vocabulary closure): no domain label shadows a core verdict,
- * every verdict.* guard label and humanGate outcome is a declared domain label, and declared labels are
- * actually used. The verdict vocabulary is the contract every routing guard and gate outcome draws from.
- */
-
 import { CORE_VERDICTS } from './types.js';
 import type { Condition, Node, Template } from './types.js';
 import { DiagSink } from './validate-sink.js';

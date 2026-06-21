@@ -1,9 +1,3 @@
-/**
- * validate-parallel — §12 rule 8 (parallel/join well-formedness): each parallel resolves its join, the
- * quorum K is in range, branch sub-graphs are disjoint and each can reach an `all`-join, cross-branch
- * gotos stay inside a branch or target the join, and multi-writer fields carry a merge reducer.
- */
-
 import { MERGE_REDUCERS } from './types.js';
 import type { Node, Template } from './types.js';
 import { DiagSink } from './validate-sink.js';

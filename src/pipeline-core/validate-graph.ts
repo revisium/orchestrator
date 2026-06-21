@@ -1,22 +1,3 @@
-/**
- * validate-graph — shared graph-traversal and node-access primitives for the §12 rules. Each lives here
- * because it is consumed by ≥2 rule families (gate C: only lift what earns its keep):
- *   - structuralEdges   — loops (findBackEdges), parallel (cross-branch goto), dataflow (dominators)
- *   - reachableFrom     — reachability (rule 5), dataflow (dominators)
- *   - forwardReach      — loops (cycleNodes), counter-scopes (R7 ancestry), parallel (all-join reach)
- *   - backwardReach     — cycleNodes (its private sub-helper)
- *   - findBackEdges     — loops (rule 6b), dataflow (stale-cycle detection)
- *   - cycleNodes        — loops (rule 6b), dataflow (stale-cycle detection)
- *   - branchSubgraph    — parallel (branch membership), dataflow (cross-parallel safety)
- *   - guardConditionsOf — condition-grammar, counter-scopes, verdict-closure
- *
- * Two reachability walks coexist on purpose: `reachableFrom` follows EVERY outgoing edge (catch/escalate
- * included — a node routed to on failure IS reachable), which is what rule 5 and dominance need.
- * `forwardReach` follows STRUCTURAL edges only (catch/escalate are failure routes, not loop
- * continuation), which is what the cycle/loop primitives need. They look alike but reason about different
- * edge sets; do not merge.
- */
-
 import { isGuardedBranch } from './types.js';
 import type { Condition, Node, Template } from './types.js';
 import { outgoingEdges } from './validate-edges.js';

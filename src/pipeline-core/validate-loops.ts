@@ -1,10 +1,3 @@
-/**
- * validate-loops — the loop & counter boundedness rules (§12 rule 6b loop-cap and rule 7 counter-scope
- * well-formedness). Both govern the loop/counter domain: rule 6b proves every cycle is finite
- * (counter cap-guard or human gate); rule 7 proves counter-scope declarations are well-formed. They share
- * the cycle/reach primitives from validate-graph.
- */
-
 import { isGuardedBranch } from './types.js';
 import type { Condition, Node, Scope, Template } from './types.js';
 import { DiagSink } from './validate-sink.js';

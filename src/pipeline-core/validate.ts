@@ -1,11 +1,7 @@
 /**
- * pipeline-core/validate.ts — the authoritative install-time validator (§12). `validateTemplate` is the
- * orchestrator: it runs every rule (each in its own sibling module) in a fixed order and returns every
- * finding. The graph-shape rules live in validate-topology, loop/counter boundedness in validate-loops,
- * parallel/join in validate-parallel, verdict closure in validate-verdict, produces/consumes in
- * validate-dataflow, conflict-matrix in validate-conflicts, capability-refs in validate-capability; the
- * diff classifier (rule 13) is re-exported from validate-diff. Only the two declaration-hygiene rules
- * (id hygiene, per-node failure policy) — which belong to no graph category — stay here.
+ * pipeline-core/validate.ts — the authoritative install-time validator (§12). Runs rules 1–12 + 14
+ * (each imported from its sibling module) and re-exports the diff classifier (rule 13) from
+ * validate-diff.ts, so the public surface (`validateTemplate`, `classifyTemplateDiff`) is unchanged.
  *
  * Pure: zero I/O, no clocks. Each §12 rule is its own collector; `validateTemplate` returns every
  * finding (it does not stop at the first error). Codes are stable (tested against).
