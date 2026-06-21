@@ -453,7 +453,7 @@ export function makeDataDrivenTask(
       });
       lastResult = eff.lastResult;
       if (eff.lastVerdict !== undefined) lastVerdict = eff.lastVerdict;
-      if (eff.failureReason !== undefined) lastFailureReason = eff.failureReason;
+      lastFailureReason = eff.failureReason ?? '';
       stepCount += eff.stepDelta;
     }
 
@@ -508,7 +508,7 @@ export function makeDataDrivenTask(
         if (result.failed) {
           await appendEvent({
             runId, taskId, stepId: '', stepKey, type: 'step_failed',
-            payload: { nodeId: node.id, error: result.errorCode, reason: result.reason },
+            payload: { nodeId: node.id, error: result.errorCode },
           });
           return { lastResult: { outcome: 'failed', errorCode: result.errorCode }, lastVerdict: 'failed', failureReason: result.reason, stepDelta: 1 };
         }

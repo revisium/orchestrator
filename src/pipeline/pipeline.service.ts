@@ -181,7 +181,7 @@ export function makeRunStep(deps: RunStepDeps) {
         stepKey,
         type: 'step_failed',
         payload: {
-          error: err instanceof ContextMissingError ? err.code : 'revo.ContextMissing',
+          error: err instanceof ContextMissingError ? err.code : 'revo.ContextBuildFailed',
           reason,
           role,
           stepKey,

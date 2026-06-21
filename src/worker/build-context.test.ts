@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildContext } from './build-context.js';
@@ -141,6 +141,49 @@ test('buildContext: materializes absolute params.planPath from a sibling workspa
     assert.ok(ctx.includes('# Runs\nRead-only run views.'));
   } finally {
     rmSync(workspace, { recursive: true, force: true });
+  }
+});
+
+test('buildContext: params.planPath symlink escaping the task workspace is rejected', async () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'revo-workspace-'));
+  const outside = mkdtempSync(join(tmpdir(), 'revo-outside-'));
+  try {
+    const repo = join(workspace, 'agent-orchestrator-admin');
+    const plans = join(workspace, 'revo-plans');
+    mkdirSync(repo, { recursive: true });
+    mkdirSync(plans, { recursive: true });
+    const outsidePlan = join(outside, 'plan.md');
+    const linkedPlan = join(plans, 'linked-plan.md');
+    writeFileSync(outsidePlan, '# Outside\n');
+    symlinkSync(outsidePlan, linkedPlan);
+
+    const da = makeDA({ task: { title: 'Admin runs', scope: 'frontend', repo_ref: repo } });
+    await assert.rejects(
+      () => buildContext(da, STEP, ROLE, { description: '', params: { planPath: linkedPlan } }),
+      /revo\.ContextMissing: params\.planPath is outside task workspace/,
+    );
+  } finally {
+    rmSync(workspace, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('buildContext: redacts quoted JSON secret params', async () => {
+  const repo = mkdtempSync(join(tmpdir(), 'revo-context-'));
+  try {
+    const da = makeDA({ task: { title: 'My Feature', scope: 'backend', repo_ref: repo } });
+    const ctx = await buildContext(da, STEP, ROLE, {
+      description: '',
+      params: {
+        nested: { API_KEY: 'secret_value' },
+        visible: 'kept',
+      },
+    });
+    assert.ok(ctx.includes('"API_KEY": "[REDACTED]"'));
+    assert.ok(ctx.includes('"visible": "kept"'));
+    assert.ok(!ctx.includes('secret_value'));
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
   }
 });
 

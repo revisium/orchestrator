@@ -31,20 +31,39 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+function isSecretKey(key: string): boolean {
+  return /(?:TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY)/i.test(key);
+}
+
 function bounded(value: string, maxChars: number): string {
   if (value.length <= maxChars) return value;
   return `${value.slice(0, maxChars)}\n[truncated: ${String(value.length - maxChars)} chars omitted]`;
 }
 
 function redactText(value: string): string {
-  return value.replace(
-    /\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY)[A-Za-z0-9_]*)\s*[:=]\s*([^\s"'`]+)/gi,
-    '$1=[REDACTED]',
-  );
+  return value
+    .replace(
+      /(["']?)([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY)[A-Za-z0-9_]*)(\1)\s*:\s*(["'])(.*?)\4/gi,
+      '$1$2$3: $4[REDACTED]$4',
+    )
+    .replace(
+      /\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY)[A-Za-z0-9_]*)\s*[:=]\s*([^\s"'`]+)/gi,
+      '$1=[REDACTED]',
+    );
+}
+
+function redactJsonish(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(redactJsonish);
+  if (!isRecord(value)) return value;
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    out[key] = isSecretKey(key) ? '[REDACTED]' : redactJsonish(item);
+  }
+  return out;
 }
 
 function jsonForContext(value: unknown, maxChars: number): string {
-  return bounded(redactText(JSON.stringify(value, null, 2)), maxChars);
+  return bounded(redactText(JSON.stringify(redactJsonish(value), null, 2)), maxChars);
 }
 
 function insideOrSame(parent: string, child: string): boolean {
@@ -60,16 +79,27 @@ async function materializePlanContext(planPath: unknown, repoRef: string): Promi
   if (!path.isAbsolute(repoRef)) {
     throw new ContextMissingError('params.planPath requires a local absolute task repo_ref');
   }
-  const repoRoot = path.resolve(repoRef);
+  let repoRoot: string;
+  try {
+    repoRoot = await fs.realpath(path.resolve(repoRef));
+  } catch {
+    throw new ContextMissingError('params.planPath requires a readable local task repo_ref');
+  }
   const workspaceRoot = path.dirname(repoRoot);
   const rawPath = planPath.trim();
   const resolved = path.resolve(path.isAbsolute(rawPath) ? rawPath : path.join(repoRoot, rawPath));
-  if (!insideOrSame(workspaceRoot, resolved)) {
+  let realResolved: string;
+  try {
+    realResolved = await fs.realpath(resolved);
+  } catch {
+    throw new ContextMissingError(`params.planPath is not readable: ${rawPath}`);
+  }
+  if (!insideOrSame(workspaceRoot, realResolved)) {
     throw new ContextMissingError(`params.planPath is outside task workspace: ${rawPath}`);
   }
   let stat;
   try {
-    stat = await fs.stat(resolved);
+    stat = await fs.stat(realResolved);
   } catch {
     throw new ContextMissingError(`params.planPath is not readable: ${rawPath}`);
   }
@@ -78,11 +108,11 @@ async function materializePlanContext(planPath: unknown, repoRef: string): Promi
   }
   let content: string;
   try {
-    content = await fs.readFile(resolved, 'utf8');
+    content = await fs.readFile(realResolved, 'utf8');
   } catch {
     throw new ContextMissingError(`params.planPath is not readable: ${rawPath}`);
   }
-  return { path: resolved, content: bounded(redactText(content), MAX_PLAN_CONTEXT_CHARS) };
+  return { path: realResolved, content: bounded(redactText(content), MAX_PLAN_CONTEXT_CHARS) };
 }
 
 export async function buildContext(

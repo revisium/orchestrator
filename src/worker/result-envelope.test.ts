@@ -61,6 +61,10 @@ test('agentResultFromStructured: requires top-level verdict and string output', 
     () => agentResultFromStructured({ verdict: 'approved', output: { summary: 'nope' } }),
     /missing required string output/,
   );
+  assert.throws(
+    () => agentResultFromStructured({ verdict: 'approved', output: '# Plan', nextSteps: { role: 'developer' } }),
+    /nextSteps must be an array/,
+  );
 });
 
 // ─── nextSteps normalization ──────────────────────────────────────────────────

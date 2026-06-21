@@ -56,6 +56,9 @@ export function agentResultFromStructured(structured: unknown): AgentResult {
   if ('lesson' in o && o.lesson !== null && typeof o.lesson !== 'string') {
     throw new Error('agent structured result lesson must be a string when present');
   }
+  if ('nextSteps' in o && !Array.isArray(o.nextSteps)) {
+    throw new Error('agent structured result nextSteps must be an array when present');
+  }
   return {
     output: o.output,
     verdict: o.verdict,
