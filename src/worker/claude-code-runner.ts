@@ -117,16 +117,16 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
   const fallbackTimeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const command = deps.command ?? DEFAULT_COMMAND;
 
-  return async ({ role, profile, context, attemptId, step }) => {
+  return async ({ role, profile, context, attemptId, step, reporter }) => {
     // attemptId is already minted by startAttempt (loop) — consumed here, never re-minted.
     // cwd is worktree-aware (plan 0017): for a live run, resolveCwd returns the run's isolated worktree
     // (keyed by step.runId); per-run worktree lifecycle is owned by the workflow, NOT the runner.
-    const cwd = await deps.resolveCwd(step);
     // 0008 #5: per-role data overrides the hardcoded defaults (timeout + permission mode).
     const timeoutMs = role.timeoutMs ?? fallbackTimeoutMs;
     const permissionMode = role.permissionMode ?? 'default';
     let processArtifact: ReturnType<ArtifactStore['startProcess']> | undefined;
     try {
+      const cwd = await deps.resolveCwd(step);
       const args = buildArgs(profile.modelId, role.allowedTools, permissionMode, profile.params);
       processArtifact = deps.artifactStore?.startProcess({
         runId: step.runId,
@@ -138,14 +138,22 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
         cwd,
         timeoutMs,
       });
+      reporter?.started();
       const req: ExecRequest = {
         command,
         args,
         cwd,
         timeoutMs,
         input: buildPrompt(context, attemptId),
-        onStdoutChunk: (chunk) => processArtifact?.appendStdout(chunk),
-        onStderrChunk: (chunk) => processArtifact?.appendStderr(chunk),
+        onSpawn: (pid) => reporter?.spawned(pid),
+        onStdoutChunk: (chunk) => {
+          processArtifact?.appendStdout(chunk);
+          reporter?.output('stdout', chunk);
+        },
+        onStderrChunk: (chunk) => {
+          processArtifact?.appendStderr(chunk);
+          reporter?.output('stderr', chunk);
+        },
       };
 
       const result = await deps.executor(req);
@@ -154,9 +162,11 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
       // Timeout / process failure → throw; the loop's catch → failStep returns the step to ready
       // (backoff) or dead at the attempt cap. No loop change needed.
       if (result.timedOut) {
+        reporter?.failed(`claude-code runner exceeded ${timeoutMs}ms`, { timedOut: true, exitCode: result.code });
         throw runnerError(`claude-code runner exceeded ${timeoutMs}ms`, processSnapshot);
       }
       if (result.code !== 0) {
+        reporter?.failed(`claude-code runner exited with code ${String(result.code)}`, { exitCode: result.code });
         throw runnerError(
           `claude-code runner exited with code ${String(result.code)}: ${tail(result.stderr || result.stdout)}`,
           processSnapshot,
@@ -164,12 +174,15 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
       }
 
       const transport = parseTransportEnvelope(result.stdout);
+      reporter?.parsed({ type: 'result', preview: transport.text });
       if (transport.isError) {
+        reporter?.failed(`claude-code runner reported is_error: ${tail(transport.text)}`, { exitCode: result.code });
         throw runnerError(`claude-code runner reported is_error: ${tail(transport.text)}`, processSnapshot);
       }
 
       const agent = agentResultFromStructured(transport.structuredOutput);
       const costs = buildCosts(step, profile, transport);
+      reporter?.finished({ exitCode: result.code, timedOut: result.timedOut });
 
       // needsHuman: do NOT write nextSteps — the loop parks via the existing awaiting_approval path.
       if (agent.needsHuman) {
@@ -198,6 +211,7 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
     } catch (err) {
       if (err instanceof RunAgentError) throw err;
       const processSnapshot = processArtifact?.finish({ error: String(err) });
+      reporter?.failed(err);
       throw runnerError(String(err), processSnapshot);
     }
   };

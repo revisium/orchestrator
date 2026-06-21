@@ -4,16 +4,33 @@ import { isAbsolute, join, relative, resolve, win32 } from 'node:path';
 import { TextDecoder } from 'node:util';
 import { redactTokens } from '../runners/gh-identity.js';
 import {
+  AGENT_ACTIVITY_EVENT_KEY,
+  AGENT_OUTPUT_STREAM_KEY,
+  type AgentActivitySnapshot,
+  type AgentActivityStatus,
   AgentObservabilityError,
   type AgentAttemptSummary,
   type AgentLogChunk,
   type AgentLogMeta,
   type AgentLogStream,
+  type AgentOutputEvent,
+  type AgentRunActivity,
+  type ReadAgentOutputEventsInput,
+  type ReadAgentOutputEventsResult,
+  type WatchAgentOutputInput,
 } from './types.js';
 
 export type AgentObservabilityServiceOptions = {
   artifactRoot: string;
   runExists?: (runId: string) => Promise<boolean> | boolean;
+  dbos?: AgentObservabilityDbos;
+  idleThresholdMs?: number;
+  now?: () => number;
+};
+
+export type AgentObservabilityDbos = {
+  getEvent<T>(workflowID: string, key: string, opts?: { timeoutSeconds?: number }): Promise<T | null>;
+  readStream<T>(workflowID: string, key: string): AsyncGenerator<T, void, unknown>;
 };
 
 export type GetAgentLogInput = {
@@ -42,6 +59,12 @@ const SENSITIVE_BOUNDARY_SCAN_BYTES = 65_536;
 const TOKEN_PATTERN = /\b(?:gh[opsru]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g;
 const WINDOWS_PATH_PATTERN = /\b[A-Za-z]:\\[^\s'"`]+/g;
 const POSIX_PATH_PATTERN = /\/(?:Users|private|tmp|var|opt|home|workspace|Volumes)\/[^\s'"`)]+/g;
+const DEFAULT_STREAM_EVENT_LIMIT = 100;
+const MAX_STREAM_EVENT_LIMIT = 1_000;
+const DEFAULT_STREAM_READ_TIMEOUT_MS = 250;
+const DEFAULT_IDLE_THRESHOLD_MS = 120_000;
+const MAX_STREAM_ACTIVITY_SCAN_EVENTS = 10_000;
+const SAFE_CURSOR_RE = /^[A-Za-z0-9_.:-]+$/;
 
 type ReadBounds =
   | { mode: 'tail'; tailBytes: number }
@@ -78,10 +101,99 @@ type AlignedWindow = {
 export class AgentObservabilityService {
   private readonly artifactRoot: string;
   private readonly runExists?: (runId: string) => Promise<boolean> | boolean;
+  private readonly dbos?: AgentObservabilityDbos;
+  private readonly idleThresholdMs: number;
+  private readonly now: () => number;
 
   constructor(options: AgentObservabilityServiceOptions) {
     this.artifactRoot = resolve(options.artifactRoot);
     this.runExists = options.runExists;
+    this.dbos = options.dbos;
+    this.idleThresholdMs = validateIdleThreshold(options.idleThresholdMs);
+    this.now = options.now ?? (() => Date.now());
+  }
+
+  async getAgentActivity(runId: string): Promise<AgentRunActivity | null> {
+    const safeRunId = validateSegment(runId, 'runId');
+    const eventSnapshot = await this.dbos?.getEvent<AgentRunActivity>(
+      safeRunId,
+      AGENT_ACTIVITY_EVENT_KEY,
+      { timeoutSeconds: 0 },
+    );
+    if (eventSnapshot) return this.classifyActivity(eventSnapshot);
+
+    const streamActivity = await this.readLatestAgentActivityFromStream(safeRunId);
+    if (streamActivity) return streamActivity;
+
+    return this.getAgentActivityFromArtifacts(safeRunId);
+  }
+
+  async readAgentOutputEvents(
+    input: ReadAgentOutputEventsInput,
+  ): Promise<ReadAgentOutputEventsResult> {
+    const safeRunId = validateSegment(input.runId, 'runId');
+    const cursor = input.cursor === undefined ? undefined : validateCursor(input.cursor);
+    const limit = validateEventLimit(input.limit);
+    const timeoutMs = validateStreamTimeout(input.timeoutMs);
+    if (!this.dbos) {
+      return { runId: safeRunId, events: [], cursorExpired: cursor !== undefined };
+    }
+
+    const generator = this.dbos.readStream<AgentOutputEvent>(safeRunId, AGENT_OUTPUT_STREAM_KEY);
+    try {
+      const page = await readBoundedOutputEvents({
+        generator,
+        runId: safeRunId,
+        cursor,
+        limit,
+        timeoutMs,
+      });
+      return {
+        runId: safeRunId,
+        events: page.events,
+        nextCursor: page.events.at(-1)?.cursor,
+        cursorExpired: hasExpiredCursor(cursor, page.cursorFound),
+      };
+    } finally {
+      void generator.return(undefined).catch(() => undefined);
+    }
+  }
+
+  async *watchAgentOutput(input: WatchAgentOutputInput): AsyncGenerator<AgentOutputEvent, void, unknown> {
+    const safeRunId = validateSegment(input.runId, 'runId');
+    const cursor = input.cursor === undefined ? undefined : validateCursor(input.cursor);
+    if (!this.dbos) {
+      throw new AgentObservabilityError('DBOS_STREAM_UNAVAILABLE', 'DBOS stream reader is not configured');
+    }
+    let cursorFound = cursor === undefined;
+    let scannedBeforeCursor = 0;
+    for await (const raw of this.dbos.readStream<AgentOutputEvent>(safeRunId, AGENT_OUTPUT_STREAM_KEY)) {
+      if (!cursorFound) scannedBeforeCursor += 1;
+      const event = normalizeOutputEvent(safeRunId, raw);
+      if (!event) {
+        if (scannedBeforeCursor >= MAX_STREAM_EVENT_LIMIT) throw cursorExpiredError();
+        continue;
+      }
+      if (cursorFound) {
+        yield event;
+        continue;
+      }
+      cursorFound = event.cursor === cursor;
+      if (cursorFound) continue;
+      if (scannedBeforeCursor >= MAX_STREAM_EVENT_LIMIT) throw cursorExpiredError();
+    }
+    if (hasExpiredCursor(cursor, cursorFound)) {
+      throw cursorExpiredError();
+    }
+  }
+
+  async *watchAgentActivity(input: WatchAgentOutputInput): AsyncGenerator<AgentRunActivity, void, unknown> {
+    const snapshots = new Map<string, AgentActivitySnapshot>();
+    for await (const event of this.watchAgentOutput(input)) {
+      if (!event.snapshot) continue;
+      snapshots.set(event.attemptId, this.classifySnapshot(event.snapshot));
+      yield this.buildRunActivity(event.runId, [...snapshots.values()]);
+    }
   }
 
   async listAgentAttempts(runId: string): Promise<AgentAttemptSummary[]> {
@@ -162,6 +274,84 @@ export class AgentObservabilityService {
         return timeDiff !== 0 ? timeDiff : a.attemptId.localeCompare(b.attemptId);
       })
       .at(-1)!.attemptId;
+  }
+
+  private async getAgentActivityFromArtifacts(runId: string): Promise<AgentRunActivity | null> {
+    let attempts: AgentAttemptSummary[];
+    try {
+      attempts = await this.listAgentAttempts(runId);
+    } catch (err) {
+      if (err instanceof AgentObservabilityError) {
+        if (err.code === 'RUN_NOT_FOUND' || err.code === 'NO_AGENT_ATTEMPT_AVAILABLE') return null;
+      }
+      throw err;
+    }
+    if (attempts.length === 0) return null;
+    return this.buildRunActivity(
+      runId,
+      attempts.map((attempt): AgentActivitySnapshot => {
+        const finishedAt = attempt.finishedAt;
+        const latestAt = finishedAt ?? attempt.startedAt;
+        const snapshot: AgentActivitySnapshot = {
+          runId,
+          attemptId: attempt.attemptId,
+          stepId: attempt.stepId,
+          ...(attempt.stepKey ? { stepKey: attempt.stepKey } : {}),
+          role: attempt.role,
+          runner: attempt.runner,
+          status: statusFromArtifact(attempt.status, attempt.timedOut),
+          startedAt: attempt.startedAt,
+          lastEventAt: latestAt,
+          stdoutBytes: attempt.stdoutBytes,
+          stderrBytes: attempt.stderrBytes,
+          eventCount: 0,
+          artifactRef: attempt.artifactRef,
+        };
+        if (finishedAt) snapshot.lastOutputAt = finishedAt;
+        const exitCode = attempt.exitCode;
+        if (exitCode === null || typeof exitCode === 'number') snapshot.exitCode = exitCode;
+        const timedOut = attempt.timedOut;
+        if (typeof timedOut === 'boolean') snapshot.timedOut = timedOut;
+        return snapshot;
+      }),
+    );
+  }
+
+  private async readLatestAgentActivityFromStream(runId: string): Promise<AgentRunActivity | null> {
+    if (!this.dbos) return null;
+    const generator = this.dbos.readStream<AgentOutputEvent>(runId, AGENT_OUTPUT_STREAM_KEY);
+    const snapshots = new Map<string, AgentActivitySnapshot>();
+    let scanned = 0;
+    try {
+      while (scanned < MAX_STREAM_ACTIVITY_SCAN_EVENTS) {
+        const next = await nextWithTimeout(generator, DEFAULT_STREAM_READ_TIMEOUT_MS);
+        if (next === 'timeout' || next.done) break;
+        scanned += 1;
+        const event = normalizeOutputEvent(runId, next.value);
+        if (event?.snapshot) snapshots.set(event.attemptId, event.snapshot);
+      }
+    } finally {
+      void generator.return(undefined).catch(() => undefined);
+    }
+    if (scanned >= MAX_STREAM_ACTIVITY_SCAN_EVENTS) return null;
+    if (snapshots.size === 0) return null;
+    return this.buildRunActivity(runId, [...snapshots.values()]);
+  }
+
+  private buildRunActivity(runId: string, attempts: AgentActivitySnapshot[]): AgentRunActivity {
+    return buildRunActivity(runId, attempts.map((attempt) => this.classifySnapshot(attempt)));
+  }
+
+  private classifyActivity(activity: AgentRunActivity): AgentRunActivity {
+    return this.buildRunActivity(activity.runId, activity.attempts);
+  }
+
+  private classifySnapshot(snapshot: AgentActivitySnapshot): AgentActivitySnapshot {
+    if (snapshot.status !== 'starting' && snapshot.status !== 'running') return snapshot;
+    const latestAt = parseDate(snapshot.lastOutputAt) ?? parseDate(snapshot.lastEventAt);
+    if (latestAt === undefined) return snapshot;
+    if (this.now() - latestAt < this.idleThresholdMs) return snapshot;
+    return { ...snapshot, status: 'idle' };
   }
 
   private async resolveRunDirectory(runId: string): Promise<ExistingRunDirectory> {
@@ -311,6 +501,194 @@ function validatePositiveByteCount(value: number | undefined, label: string): nu
   }
   if (value > MAX_READ_BYTES) throw validationFailure(`${label} exceeds maximum allowed bytes`);
   return value;
+}
+
+function validateEventLimit(value: number | undefined): number {
+  const limit = value ?? DEFAULT_STREAM_EVENT_LIMIT;
+  if (!Number.isInteger(limit) || limit <= 0) throw validationFailure('limit must be a positive integer');
+  if (limit > MAX_STREAM_EVENT_LIMIT) throw validationFailure('limit exceeds maximum allowed events');
+  return limit;
+}
+
+function validateStreamTimeout(value: number | undefined): number {
+  const timeout = value ?? DEFAULT_STREAM_READ_TIMEOUT_MS;
+  if (!Number.isInteger(timeout) || timeout <= 0) throw validationFailure('timeoutMs must be a positive integer');
+  return timeout;
+}
+
+function validateIdleThreshold(value: number | undefined): number {
+  const threshold = value ?? DEFAULT_IDLE_THRESHOLD_MS;
+  if (!Number.isInteger(threshold) || threshold <= 0) {
+    throw validationFailure('idleThresholdMs must be a positive integer');
+  }
+  return threshold;
+}
+
+function validateCursor(value: string): string {
+  if (value.length === 0 || value.length > 512 || !SAFE_CURSOR_RE.test(value)) {
+    throw validationFailure('invalid cursor');
+  }
+  return value;
+}
+
+type BoundedOutputEventsInput = {
+  generator: AsyncGenerator<AgentOutputEvent, void, unknown>;
+  runId: string;
+  cursor?: string;
+  limit: number;
+  timeoutMs: number;
+};
+
+type BoundedOutputEventsResult = {
+  events: AgentOutputEvent[];
+  cursorFound: boolean;
+};
+
+async function readBoundedOutputEvents(input: BoundedOutputEventsInput): Promise<BoundedOutputEventsResult> {
+  const events: AgentOutputEvent[] = [];
+  let cursorFound = input.cursor === undefined;
+  let scannedBeforeCursor = 0;
+
+  while (events.length < input.limit) {
+    const next = await nextWithTimeout(input.generator, input.timeoutMs);
+    if (next === 'timeout' || next.done) break;
+    const state = processOutputEventCandidate(input.runId, input.cursor, next.value, cursorFound, scannedBeforeCursor);
+    cursorFound = state.cursorFound;
+    scannedBeforeCursor = state.scannedBeforeCursor;
+    if (state.event) events.push(state.event);
+    if (state.stop) break;
+  }
+
+  return { events, cursorFound };
+}
+
+type OutputEventCandidateState = {
+  event?: AgentOutputEvent;
+  cursorFound: boolean;
+  scannedBeforeCursor: number;
+  stop: boolean;
+};
+
+function processOutputEventCandidate(
+  runId: string,
+  cursor: string | undefined,
+  value: unknown,
+  cursorFound: boolean,
+  scannedBeforeCursor: number,
+): OutputEventCandidateState {
+  const nextScanned = cursorFound ? scannedBeforeCursor : scannedBeforeCursor + 1;
+  const event = normalizeOutputEvent(runId, value);
+  if (event) {
+    if (cursorFound) return { event, cursorFound, scannedBeforeCursor: nextScanned, stop: false };
+
+    const found = event.cursor === cursor;
+    return {
+      cursorFound: found,
+      scannedBeforeCursor: nextScanned,
+      stop: cursorMissedScanLimit(found, nextScanned),
+    };
+  }
+
+  return {
+    cursorFound,
+    scannedBeforeCursor: nextScanned,
+    stop: cursor !== undefined && cursorFound === false && nextScanned >= MAX_STREAM_EVENT_LIMIT,
+  };
+}
+
+function hasExpiredCursor(cursor: string | undefined, cursorFound: boolean): boolean {
+  return typeof cursor === 'string' && cursorFound === false;
+}
+
+function cursorExpiredError(): AgentObservabilityError {
+  return new AgentObservabilityError('STREAM_CURSOR_EXPIRED', 'stream cursor was not found before the scan limit');
+}
+
+function cursorMissedScanLimit(cursorFound: boolean, scannedBeforeCursor: number): boolean {
+  if (cursorFound) return false;
+  return scannedBeforeCursor >= MAX_STREAM_EVENT_LIMIT;
+}
+
+async function nextWithTimeout<T>(
+  generator: AsyncGenerator<T, void, unknown>,
+  timeoutMs: number,
+): Promise<IteratorResult<T, void> | 'timeout'> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race<IteratorResult<T, void> | 'timeout'>([
+      generator.next(),
+      new Promise<'timeout'>((resolve) => {
+        timer = setTimeout(() => resolve('timeout'), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function normalizeOutputEvent(runId: string, value: unknown): AgentOutputEvent | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const event = value as AgentOutputEvent;
+  if (event.runId !== runId) return null;
+  if (typeof event.cursor !== 'string' || event.cursor.length === 0) return null;
+  if (typeof event.attemptId !== 'string' || event.attemptId.length === 0) return null;
+  if (typeof event.stepId !== 'string') return null;
+  if (typeof event.at !== 'string') return null;
+  if (
+    event.kind !== 'activity' &&
+    event.kind !== 'output' &&
+    event.kind !== 'parsed_event' &&
+    event.kind !== 'status'
+  ) {
+    return null;
+  }
+  return event;
+}
+
+function buildRunActivity(runId: string, attempts: AgentActivitySnapshot[]): AgentRunActivity {
+  const sorted = [...attempts];
+  sorted.sort((a, b) => {
+    const startedDiff = (parseDate(a.startedAt) ?? 0) - (parseDate(b.startedAt) ?? 0);
+    if (startedDiff === 0) return a.attemptId.localeCompare(b.attemptId);
+    return startedDiff;
+  });
+  const activityTimes = sorted
+    .map((attempt) => attempt.lastEventAt || attempt.startedAt)
+    .sort((a, b) => a.localeCompare(b));
+  const latestActivityAt = activityTimes.at(-1) ?? new Date(0).toISOString();
+  const outputTimes = sorted
+    .map((attempt) => attempt.lastOutputAt)
+    .filter((value): value is string => typeof value === 'string' && value.length > 0)
+    .sort((a, b) => a.localeCompare(b));
+  const latestOutputAt = outputTimes.at(-1);
+  return {
+    runId,
+    aggregateStatus: aggregateStatus(sorted),
+    latestActivityAt,
+    ...(latestOutputAt ? { latestOutputAt } : {}),
+    attempts: sorted,
+  };
+}
+
+function aggregateStatus(attempts: AgentActivitySnapshot[]): AgentActivityStatus {
+  const statuses = new Set(attempts.map((attempt) => attempt.status));
+  if (statuses.has('cancelled')) return 'cancelled';
+  if (statuses.has('timed_out')) return 'timed_out';
+  if (statuses.has('failed')) return 'failed';
+  if (statuses.has('permission_blocked')) return 'permission_blocked';
+  if (statuses.has('running') || statuses.has('starting')) return 'running';
+  if (statuses.has('idle')) return 'idle';
+  return 'exited';
+}
+
+function statusFromArtifact(status: string, timedOut: boolean | undefined): AgentActivityStatus {
+  if (timedOut || status === 'timed_out') return 'timed_out';
+  if (status === 'error' || status === 'failed') return 'failed';
+  if (status === 'running' || status === 'starting') return 'running';
+  if (status === 'cancelled') return 'cancelled';
+  if (status === 'permission_blocked') return 'permission_blocked';
+  if (status === 'idle') return 'idle';
+  return 'exited';
 }
 
 async function resolveRootIfPresent(root: string): Promise<string | undefined> {

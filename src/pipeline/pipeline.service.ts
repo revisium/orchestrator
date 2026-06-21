@@ -38,6 +38,11 @@ import type { RunAgent, AttemptResult } from '../worker/runner.js';
 import { artifactsFromRunAgentError } from '../worker/runner.js';
 import { fnv1a64Hex } from '../control-plane/steps.js';
 import type { AppendEventInput } from '../run/append-event.js';
+import {
+  createAgentActivityReporter,
+  type AgentActivityReporter,
+} from '../observability/agent-activity-reporter.js';
+import { AGENT_OUTPUT_STREAM_KEY, type AgentOutputEvent } from '../observability/types.js';
 import { makeAwaitHuman } from './await-human.js';
 import {
   makeDataDrivenTask,
@@ -91,6 +96,7 @@ export type RunStepDeps = {
   /** Persist a per-attempt observability row (0008 #4). */
   appendAttempt: RunService['appendAttempt'];
   runAgent: RunAgent;
+  writeAgentOutputEvent?: (event: AgentOutputEvent) => Promise<void>;
   /** Monotonic clock for attempt duration (injectable for deterministic tests). Defaults to Date.now. */
   now?: () => number;
 };
@@ -121,6 +127,15 @@ function runnerFailureReason(err: unknown): string {
   return redactTokens(message).slice(0, RUNNER_FAILURE_REASON_MAX);
 }
 
+async function flushReporter(reporter: AgentActivityReporter | undefined): Promise<void> {
+  if (!reporter) return;
+  try {
+    await reporter.flush();
+  } catch (err) {
+    console.warn(`[pipeline] agent activity reporter flush failed — observability only. ${String(err)}`);
+  }
+}
+
 function processArtifactFields(artifacts: unknown): { artifactRef?: string; stdoutTail?: string; stderrTail?: string } {
   const processArtifact = isRecord(artifacts) && isRecord(artifacts.process) ? artifacts.process : artifacts;
   if (!isRecord(processArtifact)) return {};
@@ -142,7 +157,16 @@ function processArtifactFields(artifacts: unknown): { artifactRef?: string; stdo
  * and call it directly — exercising the SAME code path as production (C1).
  */
 export function makeRunStep(deps: RunStepDeps) {
-  const { loadRole, loadModelProfile, loadPipelineContext, appendEvent, appendCost, appendAttempt, runAgent } = deps;
+  const {
+    loadRole,
+    loadModelProfile,
+    loadPipelineContext,
+    appendEvent,
+    appendCost,
+    appendAttempt,
+    runAgent,
+    writeAgentOutputEvent,
+  } = deps;
   const clock = deps.now ?? (() => Date.now());
 
   return async function runStepImpl(
@@ -197,6 +221,19 @@ export function makeRunStep(deps: RunStepDeps) {
     //    pass runnerMode ('script'|'live') without a route; that fallback is intentionally private.
     const effectiveRunner = dispatchRunnerId(resolveStepRunner(loadedRole.runner, resolvedRunnerId, executionProfile));
     const dispatchRole = { ...loadedRole, runner: effectiveRunner };
+    const reporter = writeAgentOutputEvent
+      ? createAgentActivityReporter(
+          {
+            runId,
+            attemptId,
+            stepId: step.id,
+            stepKey,
+            role,
+            runner: effectiveRunner,
+          },
+          writeAgentOutputEvent,
+        )
+      : undefined;
 
     // 7. Run the agent (timed for the attempt-row duration). Runner-process failures are domain
     // failures, not DBOS step failures: convert them to a blocking attempt so the workflow can
@@ -204,8 +241,10 @@ export function makeRunStep(deps: RunStepDeps) {
     const startedAt = clock();
     let result: AttemptResult;
     try {
-      result = await runAgent({ role: dispatchRole, profile, context, attemptId, step });
+      result = await runAgent({ role: dispatchRole, profile, context, attemptId, step, reporter });
+      await flushReporter(reporter);
     } catch (err) {
+      await flushReporter(reporter);
       const durationMs = Math.max(0, clock() - startedAt);
       const reason = runnerFailureReason(err);
       const artifactFields = processArtifactFields(artifactsFromRunAgentError(err));
@@ -377,6 +416,7 @@ export class PipelineService {
       appendCost: this.runService.appendCost.bind(this.runService),
       appendAttempt: this.runService.appendAttempt.bind(this.runService),
       runAgent: this.runAgent,
+      writeAgentOutputEvent: (event) => this.dbos.writeStream(AGENT_OUTPUT_STREAM_KEY, event),
     };
 
     // Register the step using the production builder (must happen BEFORE DBOS.launch()).
