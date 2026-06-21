@@ -12,8 +12,9 @@
 //
 // Uses a SINGLE scriptedAgent (not per-run routed) so the data-driven watcher node always emits the
 // `clean` DOMAIN verdict it needs to reach the merge gate — independent of runId and process. The
-// default all-PASS agent would route the watcher to `failedEnd`; a per-run spec map cannot cross the
-// crash→recovery process boundary, so a constant spec is the deterministic choice here.
+// default agent may not carry the watcher-specific `clean` verdict across process boundaries; a per-run
+// spec map cannot cross the crash->recovery process boundary, so a constant spec is the deterministic
+// choice here.
 import 'reflect-metadata';
 import {
   createRunHarness,

@@ -58,18 +58,17 @@ function prReviewAgent(sink: AgentSink): RunAgent {
       const decision = seq[Math.min(n, seq.length - 1)] ?? 'wontfix';
       // The emulator's review-comment scenario seeds exactly one unresolved thread, id PRRT_T1.
       const output = {
-        verdict: decision,
         items: [{ threadId: 'PRRT_T1', decision, guidance: 'address the review comment', replyText: 'done in the latest push' }],
         needsHuman: decision === 'question',
       };
-      return { output, nextSteps: [], costs: cost };
+      return { output, verdict: decision, nextSteps: [], costs: cost };
     }
     // developer writes a change file so the real integrator has a diff to commit/re-push. Plan 0017:
     // write into the run's ISOLATED worktree (resolveWriteDir), NOT the registered base checkout — the
     // integrator commits from the worktree, so a base-checkout write would leave it with no diff.
     const writeRepo = logicalRole === 'developer' ? resolveWriteDir(step.runId, sink.developerWrites.get(step.runId)) : undefined;
     if (writeRepo) writeFileSync(join(writeRepo, `developer-${attemptId}.txt`), `change from ${attemptId}\n`);
-    return { output: { verdict: 'PASS', role: logicalRole }, nextSteps: [], costs: cost };
+    return { output: { role: logicalRole }, verdict: logicalRole === 'watcher' ? 'clean' : 'approved', nextSteps: [], costs: cost };
   };
 }
 

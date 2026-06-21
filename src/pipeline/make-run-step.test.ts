@@ -75,7 +75,7 @@ function makeLoadPipelineContext(taskId = 'task-001') {
     stepKey: string,
     stepInput: unknown,
     modelProfile: string,
-  ): Promise<{ da: ControlPlaneDataAccess; step: Step }> => {
+  ): Promise<Awaited<ReturnType<RunStepDeps['loadPipelineContext']>>> => {
     const step: Step = {
       id: `pstep_fake_${stepKey}`,
       taskId,
@@ -94,7 +94,7 @@ function makeLoadPipelineContext(taskId = 'task-001') {
       leaseExpiresAt: '',
       deadReason: '',
     };
-    return { da, step };
+    return { da, step, runContext: { description: '', params: {} } };
   };
 }
 
@@ -165,10 +165,11 @@ test('T1: runStep(architect) writes one step_succeeded event with a canonical lo
   assert.equal(harness.loadRoleArgs[0], 'architect');
   assert.ok(!harness.loadRoleArgs[0]?.includes('#'), 'loadRole must receive canonical name');
 
-  // Output carries the generic stub echo + a passing verdict (the stub is role-agnostic, slice 4).
+  // Output carries the generic stub echo; the routing verdict is top-level (the stub is role-agnostic).
   const output = result.output as Record<string, unknown>;
   assert.ok(typeof output.echo === 'string' && output.echo.includes('role=architect'));
-  assert.equal(output.verdict, 'PASS');
+  assert.equal(output.verdict, undefined);
+  assert.equal(result.verdict, 'approved');
 
   // A bounded, deterministic attempt row was written.
   const attempt = harness.appendAttemptInputs[0];
@@ -216,7 +217,8 @@ test('attempt row surfaces the verdict + iteration (from stepKey) + a determinis
   const runId = 'run-attempt';
   const { deps, harness } = buildRunStepDeps();
   deps.runAgent = async (): Promise<AttemptResult> => ({
-    output: { verdict: 'PASS' },
+    output: '# Plan\nShip it.',
+    verdict: 'approved',
     nextSteps: [],
     costs: [{ modelProfile: 'standard', currency: 'USD', inputTokens: 10, outputTokens: 5, costAmount: 0.001 }],
     needsHuman: false,
@@ -230,7 +232,7 @@ test('attempt row surfaces the verdict + iteration (from stepKey) + a determinis
   assert.ok(attempt, 'an attempt row is written');
   assert.equal(attempt.iteration, 2, 'iteration is parsed from the stepKey #k suffix');
   assert.equal(attempt.attemptNo, 3, 'attemptNo is iteration+1');
-  assert.equal(attempt.verdict, 'PASS', 'the verdict is surfaced on the row');
+  assert.equal(attempt.verdict, 'approved', 'the top-level verdict is surfaced on the row');
   assert.equal(attempt.status, 'succeeded');
   assert.ok(attempt.attemptId.startsWith('attempt_'));
   assert.ok((attempt.inputTokens ?? 0) === 10 && (attempt.outputTokens ?? 0) === 5, 'tokens aggregated from costs');
@@ -252,8 +254,32 @@ test('attempt row includes the process artifact ref + stdout/stderr tails', asyn
 
   const attempt = harness.appendAttemptInputs[0];
   assert.equal(attempt?.artifactRef, `${runId}/attempt_test`);
+  assert.equal(attempt?.verdict, 'unknown', 'output.verdict is observability-only and is not used');
   assert.equal(attempt?.stdoutTail, 'stdout tail');
   assert.equal(attempt?.stderrTail, 'stderr tail');
+});
+
+test('params.planPath context error fails before launching the agent', async () => {
+  const runId = 'run-context-missing';
+  const { deps, harness } = buildRunStepDeps();
+  let launched = false;
+  deps.loadPipelineContext = async (rId, role, stepKey, stepInput, modelProfile) => {
+    const base = await makeLoadPipelineContext()(rId, role, stepKey, stepInput, modelProfile);
+    return { ...base, runContext: { description: '', params: { planPath: 'missing.md' } } };
+  };
+  deps.runAgent = async (): Promise<AttemptResult> => {
+    launched = true;
+    return { output: 'should not run', verdict: 'approved', nextSteps: [], costs: [], needsHuman: false };
+  };
+  const runStep = makeRunStep(deps);
+
+  await assert.rejects(
+    () => runStep(runId, 'architect', 'architect', { phase: 'plan' }, 'script'),
+    /revo\.ContextMissing/,
+  );
+
+  assert.equal(launched, false, 'agent must not launch without required context');
+  assert.equal(harness.appendEventArgs.at(-1)?.type, 'step_failed');
 });
 
 test('per-role runner threading: a resolved stub runner dispatches via the stub (never the throwing claude-code)', async () => {

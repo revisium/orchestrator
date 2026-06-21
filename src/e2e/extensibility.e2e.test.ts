@@ -79,13 +79,13 @@ test('K1: an embedded post-integrator role declared only in playbook data runs a
   assert.ok(executedRoles(h, run.runId).some(([role]) => role === 'pr-watcher'), 'the embedded pr-watcher ran');
 });
 
-test('K2: the embedded role\'s BLOCKER verdict drives the pipeline (watcher-fix loop → blocks at the cap)', { skip: e2eSkip }, async () => {
-  const run = await startRun(PIPELINE, { byRole: { 'pr-watcher': { kind: 'verdict', verdict: 'BLOCKER' } } });
+test('K2: the embedded role\'s blocker verdict drives the pipeline (watcher-fix loop -> blocks at the cap)', { skip: e2eSkip }, async () => {
+  const run = await startRun(PIPELINE, { byRole: { 'pr-watcher': { kind: 'verdict', verdict: 'blocker' } } });
   await approveUntilTerminal(h.api, run.runId); // approve the plan gate; the run then blocks before merge
   await assertBlocked(h.api, run.runId);
   const roles = executedRoles(h, run.runId).map(([role]) => role);
   assert.ok(roles.includes('pr-watcher'), 'the embedded role ran');
-  assert.ok(roles.filter((r) => r === 'developer').length >= 2, 'a BLOCKER from the embedded role triggers developer rework');
+  assert.ok(roles.filter((r) => r === 'developer').length >= 2, 'a blocker from the embedded role triggers developer rework');
 });
 
 test('K3: routing composes the pipeline from data — the embedded role appears after the integrator', { skip: e2eSkip }, async () => {

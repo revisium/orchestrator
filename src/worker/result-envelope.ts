@@ -1,77 +1,70 @@
 import type { Step } from '../control-plane/steps.js';
 import type { NewStepSpec } from './runner.js';
 
-// The EXACT contract between the agent and the runner. Two layers:
-//   A. transport envelope — `claude -p --output-format json` stdout (final text + cost/usage)
-//   B. agent result envelope — a sentineled REVO_RESULT block the agent emits inside that final text
-//
-// The instruction below is the SINGLE SOURCE OF TRUTH. The runner (claude-code-runner.ts) appends it
-// to EVERY prompt so the agent is always told how to emit; the parser here keys on the same markers.
-// It lives next to the parser — not in build-context.ts (the stub shares that), not in role prompts.
-
-export const REVO_RESULT_CONTRACT = `
-You MUST end your reply with a single result block in EXACTLY this form — the markers on their own lines,
-valid JSON between them, and NOTHING after the closing marker:
-
-<<<REVO_RESULT
-{
-  "verdict": <REQUIRED if your role emits one — EXACTLY one routing token, lowercase, no prose, e.g. "approved" | "changes_requested" | "blocker" | "clean" | "dirty"; the pipeline routes on this. Use null if your role emits no verdict>,
-  "output": <any JSON — a short human-readable summary or structured result the next step consumes>,
-  "artifacts": <any JSON, optional — e.g. { "planPath": "docs/plans/00xx.md" }; omit if none>,
-  "nextSteps": [
-    { "role": "developer", "kind": "implement", "input": { "from": "<this step>" },
-      "modelProfile"?: "standard", "taskId"?: "<defaults to the current step's task>",
-      "priority"?: 0, "maxAttempts"?: 3, "dependsOn"?: [], "runAfter"?: "" }
-  ],
-  "needsHuman": false,
-  "lesson": null
-}
-REVO_RESULT>>>
-
-If you have no follow-up work, return "nextSteps": []. If you are blocked and need a human, set
-"needsHuman": true and "nextSteps": []. Emit the block exactly once.
-`;
-
-// Markers the parser keys on — must stay identical to those embedded in REVO_RESULT_CONTRACT.
-// The marker-sync unit test guards that invariant.
-const OPEN_MARKER = '<<<REVO_RESULT';
-const CLOSE_MARKER = 'REVO_RESULT>>>';
-
-// PRIMARY result channel (0016 follow-up): the claude CLI `--json-schema` constrains the agent's final
-// message to this schema and returns it as the transport `structured_output` field — a RELIABLE
-// `verdict` (the pipeline routes on it), unlike mining a free-text REVO_RESULT block (which the agent
-// shaped as prose, leaving no routable verdict). `output` is the summary/plan the next step consumes.
+// The only supported agent result channel: the Claude CLI `--json-schema` constrains the final
+// message and returns it as the transport `structured_output` field. The engine routes only on the
+// top-level `verdict` from that structured object; prose output is never parsed for routing.
 export const AGENT_RESULT_SCHEMA = JSON.stringify({
   type: 'object',
   additionalProperties: false,
   properties: {
-    verdict: { type: 'string', description: 'the single routing token, lowercase, e.g. approved | changes_requested | blocker | clean | dirty' },
+    verdict: {
+      type: 'string',
+      minLength: 1,
+      description: 'the single routing token, lowercase, e.g. approved | changes_requested | blocker | clean | dirty',
+    },
     output: { type: 'string', description: 'a short summary, or the artifact (e.g. the plan) the next step consumes' },
+    artifacts: { description: 'optional JSON artifacts, e.g. { "planPath": "docs/plans/00xx.md" }' },
+    nextSteps: {
+      type: 'array',
+      description: 'optional follow-up work items; use [] when there is no follow-up work',
+      items: { type: 'object' },
+    },
     needsHuman: { type: 'boolean', description: 'true only if you are blocked and a human must intervene' },
     lesson: { type: 'string', description: 'optional one-line note for a future attempt' },
   },
   required: ['verdict', 'output'],
 });
 
-/** Short prompt note paired with `--json-schema` (replaces the prose REVO_RESULT block — the two output
- *  instructions conflict; with --json-schema the CLI returns `structured_output`). */
+/** Short prompt note paired with `--json-schema`; the CLI returns the result as `structured_output`. */
 export const STRUCTURED_RESULT_NOTE = `
 Return your final answer as JSON matching the provided output schema:
 - "verdict": the single routing token for your role (lowercase; e.g. approved | changes_requested | blocker | clean | dirty).
 - "output": a short summary, or — if you produce an artifact for a later step (e.g. an implementation plan) — that artifact.
+- "nextSteps": [] unless you are explicitly creating legacy follow-up steps.
 Set "needsHuman": true only if you are blocked and a human must intervene.
 `;
 
-/** Build the AgentResult from a validated structured_output object (the --json-schema path). */
-export function agentResultFromStructured(structured: unknown): AgentResult | null {
-  if (structured === null || typeof structured !== 'object') return null;
+/** Build the AgentResult from the required structured_output object (the --json-schema path). */
+export function agentResultFromStructured(structured: unknown): AgentResult {
+  if (structured === undefined) {
+    throw new TypeError('agent structured result missing structured_output');
+  }
+  if (structured === null || typeof structured !== 'object' || Array.isArray(structured)) {
+    throw new TypeError('agent structured result must be an object');
+  }
   const o = structured as Record<string, unknown>;
+  if (typeof o.verdict !== 'string' || o.verdict.trim().length === 0) {
+    throw new TypeError('agent structured result missing required top-level verdict');
+  }
+  if (typeof o.output !== 'string') {
+    throw new TypeError('agent structured result missing required string output');
+  }
+  if ('needsHuman' in o && typeof o.needsHuman !== 'boolean') {
+    throw new TypeError('agent structured result needsHuman must be a boolean when present');
+  }
+  if ('lesson' in o && o.lesson !== null && typeof o.lesson !== 'string') {
+    throw new TypeError('agent structured result lesson must be a string when present');
+  }
+  if ('nextSteps' in o && !Array.isArray(o.nextSteps)) {
+    throw new TypeError('agent structured result nextSteps must be an array when present');
+  }
   return {
-    output: typeof o.output === 'string' ? o.output : (o.output ?? ''),
-    verdict: typeof o.verdict === 'string' && o.verdict.length > 0 ? o.verdict : undefined,
+    output: o.output,
+    verdict: o.verdict,
     artifacts: o.artifacts,
     nextSteps: Array.isArray(o.nextSteps) ? o.nextSteps : [],
-    needsHuman: Boolean(o.needsHuman),
+    needsHuman: o.needsHuman === true,
     lesson: typeof o.lesson === 'string' ? o.lesson : undefined,
   };
 }
@@ -132,52 +125,23 @@ export function parseTransportEnvelope(stdout: string): TransportEnvelope {
   };
 }
 
-// Layer B. Extract the substring between the markers and JSON.parse it. Absent or unparseable →
-// the documented lesson-bearing error (the corrective is the contract the runner re-appends, not this).
-export function extractAgentResult(text: string): AgentResult {
-  const start = text.indexOf(OPEN_MARKER);
-  const end = start === -1 ? -1 : text.indexOf(CLOSE_MARKER, start + OPEN_MARKER.length);
-  if (start === -1 || end === -1) {
-    throw new Error('agent did not emit a parseable REVO_RESULT envelope');
-  }
-  const jsonSlice = text.slice(start + OPEN_MARKER.length, end);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(jsonSlice);
-  } catch {
-    throw new Error('agent did not emit a parseable REVO_RESULT envelope');
-  }
-  if (parsed === null || typeof parsed !== 'object') {
-    throw new Error('agent did not emit a parseable REVO_RESULT envelope');
-  }
-  const obj = parsed as Record<string, unknown>;
-  return {
-    output: obj.output,
-    verdict: typeof obj.verdict === 'string' && obj.verdict.length > 0 ? obj.verdict : undefined,
-    artifacts: obj.artifacts,
-    nextSteps: Array.isArray(obj.nextSteps) ? obj.nextSteps : [],
-    needsHuman: Boolean(obj.needsHuman),
-    lesson: typeof obj.lesson === 'string' ? obj.lesson : undefined,
-  };
-}
-
 // Map each raw nextSteps entry to NewStepSpec. Require role/kind/input; default taskId and
 // modelProfile from the current step so the agent never needs to know IDs. Throw a lesson-bearing
 // error (naming the index) on a malformed entry.
 export function normalizeNextSteps(raw: unknown[], step: Step): NewStepSpec[] {
   return raw.map((entry, i) => {
     if (entry === null || typeof entry !== 'object') {
-      throw new Error(`REVO_RESULT nextSteps[${i}] is not an object`);
+      throw new Error(`agent result nextSteps[${i}] is not an object`);
     }
     const e = entry as Record<string, unknown>;
     if (typeof e.role !== 'string' || e.role.length === 0) {
-      throw new Error(`REVO_RESULT nextSteps[${i}] missing required "role"`);
+      throw new Error(`agent result nextSteps[${i}] missing required "role"`);
     }
     if (typeof e.kind !== 'string' || e.kind.length === 0) {
-      throw new Error(`REVO_RESULT nextSteps[${i}] missing required "kind"`);
+      throw new Error(`agent result nextSteps[${i}] missing required "kind"`);
     }
     if (!('input' in e)) {
-      throw new Error(`REVO_RESULT nextSteps[${i}] missing required "input"`);
+      throw new Error(`agent result nextSteps[${i}] missing required "input"`);
     }
     const spec: NewStepSpec = {
       taskId: typeof e.taskId === 'string' && e.taskId.length > 0 ? e.taskId : step.taskId,

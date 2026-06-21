@@ -21,7 +21,7 @@ const STUB_OVERRIDE_FULL = { runnerOverrides: { 'claude-code': 'stub-agent', 're
 /**
  * Create + start a run on the SEEDED DEFAULT playbook's `feature-development` pipeline (slice 5). Both
  * the agent and the integrator are stubbed so the run reaches the plan + merge gates without real
- * claude/git/gh; the default `feature-development` routes a PASS verdict (→ `approved`) past both the
+ * claude/git/gh; the default `feature-development` routes top-level domain verdicts past both the
  * code-review and post-integrator-watcher routers, so the deterministic agent drives it to completion.
  */
 export async function startDefaultFeatureRun(h: RunHarness, repo: string = process.cwd()) {

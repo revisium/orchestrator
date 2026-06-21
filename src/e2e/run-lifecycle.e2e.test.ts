@@ -66,7 +66,7 @@ test('local-change: developer-only run completes and reattaches', { skip: e2eSki
   // (asserted via assertCompleted) is the reliable success signal.
 
   await assertCompleted(h.api, run.runId);
-  await assertAttemptVerdicts(h.api, run.runId, ['PASS']); // local-change executes developer only
+  await assertAttemptVerdicts(h.api, run.runId, ['approved']); // local-change executes developer only
   assert.deepEqual(executedRoles(h, run.runId), [['developer', 'script']]);
   await assertEventsPresent(h.api, run.runId, ['step_succeeded', 'run_completed']);
   await assertUsage(h.api, run.runId, { inputTokens: 10, outputTokens: 5, costAmount: 0.001 });
@@ -106,9 +106,9 @@ test('feature-development: plan→merge approve completes and opens a PR', { ski
     assert.deepEqual(terminal.approvedTopics, ['plan', 'merge']);
 
     await assertCompleted(h.api, run.runId);
-    // analyst → planReviewer → developer → codeReview → integrator → (pollPr clean) → merge. FOUR PASS
+    // analyst -> planReviewer -> developer -> codeReview -> integrator -> (pollPr clean) -> merge. FOUR approved
     // agent attempts (the old watcher agent node was replaced by the deterministic pollPr script, 0018).
-    await assertAttemptVerdicts(h.api, run.runId, ['PASS', 'PASS', 'PASS', 'PASS']);
+    await assertAttemptVerdicts(h.api, run.runId, ['approved', 'approved', 'approved', 'approved']);
     // pollPr observes the PR (clean → merge gate) and confirmMerge reports the PR merged.
     await assertEventsPresent(h.api, run.runId, ['gate_signaled', 'integrate_succeeded', 'pr_polled', 'merge_confirmed', 'run_completed']);
 
