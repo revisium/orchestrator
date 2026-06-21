@@ -151,7 +151,9 @@ function comparePath(a: string, b: string): number {
  * `onFailure`, `incrementCounters`, `outcomes`, `timeout.after`) are NOT in the safe set → breaking.
  */
 function unclassifiedFieldChange(before: Node, after: Node): string {
-  const SAFE_KEYS = new Set(['id', 'displayName', 'reason']);
+  // `input` is listed for parity with the doc above; it is a Decision field, not a Node key, so it never
+  // reaches this loop — harmless, and keeps the code aligned with its documented safe-set.
+  const SAFE_KEYS = new Set(['id', 'displayName', 'reason', 'input']);
   const changed: string[] = [];
   const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
   for (const key of keys) {
