@@ -470,11 +470,16 @@ async function readFileRange(path: string, start: number, end: number): Promise<
   const buffer = Buffer.alloc(length);
   const handle = await open(path, constants.O_RDONLY);
   try {
-    await handle.read(buffer, 0, length, start);
+    let filled = 0;
+    while (filled < length) {
+      const { bytesRead } = await handle.read(buffer, filled, length - filled, start + filled);
+      if (bytesRead === 0) break;
+      filled += bytesRead;
+    }
+    return filled === length ? buffer : buffer.subarray(0, filled);
   } finally {
     await handle.close();
   }
-  return buffer;
 }
 
 async function readSyntheticRange(segments: SyntheticSegment[], start: number, end: number): Promise<Buffer> {
