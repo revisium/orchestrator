@@ -8,71 +8,30 @@
  *   - stubIntegrate(input)       — STUB (script only); ZERO external effects; pure + deterministic.
  *   - preflightLive(taskId, base, deps) — LIVE PREFLIGHT; clean check + base freshness; one-shot.
  *   - IntegratorService          — @Injectable wrapper with bound arrow properties.
- *   - resolveExecutable(name)    — resolve a bare executable name to an absolute PATH entry.
+ *
+ * The pure primitives (resolveExecutable, branchName, parseOwnerRepo) and shared types live in
+ * sibling modules (integrator-git / -branch-naming / -remote / -types) and are re-exported here so
+ * the public import path ('./integrator.js') is unchanged.
  */
 import { Inject, Injectable } from '@nestjs/common';
-import { existsSync, statSync } from 'node:fs';
-import { join, delimiter } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import type { ExecGhFn } from '../poller/pr-readiness.js';
 import { collectPrReadiness, type ReviewThread } from '../poller/pr-readiness-core.js';
 import { RunService } from '../revisium/run.service.js';
 import { resolveGhAccount, resolvePinnedGh } from './gh-identity.js';
+import type { ExecFn, IntegratorBlocked } from './integrator-types.js';
+import { gitAbsPath, branchExists, countAhead } from './integrator-git.js';
+import { resolveOwnerRepo } from './integrator-remote.js';
+import { branchName } from './integrator-branch-naming.js';
 
-// ─── resolveExecutable ────────────────────────────────────────────────────────
-
-/**
- * Resolve a bare executable name to its first absolute path on PATH.
- * Uses only node:fs + node:path — no child_process, no spawning.
- *
- * @param name  - bare executable name, e.g. "git"
- * @param pathEnv - override for PATH (defaults to process.env.PATH); injectable for tests
- * @returns absolute path to the executable
- * @throws Error if not found on PATH
- */
-export function resolveExecutable(name: string, pathEnv = process.env['PATH'] ?? ''): string {
-  if (!pathEnv) {
-    throw new Error(`cannot resolve executable "${name}" on PATH: PATH is empty or unset`);
-  }
-
-  const dirs = pathEnv.split(delimiter);
-
-  // On win32 also check common executable extensions; on posix the plain name suffices.
-  const candidates =
-    process.platform === 'win32'
-      ? [name, `${name}.exe`, `${name}.cmd`, `${name}.bat`]
-      : [name];
-
-  for (const dir of dirs) {
-    if (!dir) continue;
-    for (const candidate of candidates) {
-      const full = join(dir, candidate);
-      try {
-        if (existsSync(full) && statSync(full).isFile()) {
-          return full;
-        }
-      } catch {
-        // dir may be unreadable — skip silently
-      }
-    }
-  }
-
-  throw new Error(`cannot resolve executable "${name}" on PATH`);
-}
-
-// Lazily resolved once per process — avoids resolving on module load (safe for tests).
-let _gitAbsPath: string | undefined;
-function gitAbsPath(): string {
-  if (_gitAbsPath === undefined) {
-    _gitAbsPath = resolveExecutable('git');
-  }
-  return _gitAbsPath;
-}
+// Public-API re-exports — the implementations now live in focused sibling modules, but callers
+// (worktree.service, git-worktree-manager, the test kit) keep importing from './integrator.js'.
+export { resolveExecutable } from './integrator-git.js';
+export { branchName };
+export { parseOwnerRepo } from './integrator-remote.js';
+export type { ExecFn, IntegratorBlocked };
 
 // ─── types ────────────────────────────────────────────────────────────────────
-
-/** Synchronous executor for git commands in a given cwd. */
-export type ExecFn = (args: string[], cwd: string) => string;
 
 export type IntegratorDeps = {
   execGit: ExecFn;
@@ -98,72 +57,6 @@ export type IntegratorOutput = {
   branch: string;
   prNumber: number;
 };
-
-export type IntegratorBlocked = {
-  needsHuman: true;
-  lesson: string;
-};
-
-// ─── slug helper ─────────────────────────────────────────────────────────────
-
-const SLUG_MAX = 40;
-
-/** Deterministic branch-name slug from title: lowercase, non-alnum runs → '-', trim/truncate. */
-function slugify(title: string): string {
-  return title
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .split('-')
-    .filter((seg) => seg.length > 0)
-    .join('-')
-    .slice(0, SLUG_MAX);
-}
-
-/** Derive deterministic feature branch name from taskId + title. Exported so the worktree manager
- *  checks out the SAME branch the integrator commits/pushes on (plan 0017). */
-export function branchName(taskId: string, title: string): string {
-  const slug = slugify(title) || slugify(taskId) || 'task';
-  return `feat/${taskId}-${slug}`;
-}
-
-// ─── owner/repo derivation ────────────────────────────────────────────────────
-
-// Owner and repo: GitHub-safe chars only ([A-Za-z0-9._-]); trailing .git stripped; no trailing paths.
-// Non-greedy repo segment (+?) allows the (?:\.git)? suffix to back-trim a trailing ".git".
-const GITHUB_SSH_RE = /^git@github\.com:([A-Za-z0-9._-]+\/[A-Za-z0-9._-]+?)(?:\.git)?$/;
-const GITHUB_HTTPS_RE = /^https?:\/\/github\.com\/([A-Za-z0-9._-]+\/[A-Za-z0-9._-]+?)(?:\.git)?$/;
-
-export function parseOwnerRepo(remoteUrl: string): string | null {
-  const ssh = GITHUB_SSH_RE.exec(remoteUrl.trim());
-  if (ssh?.[1]) return ssh[1];
-  const https = GITHUB_HTTPS_RE.exec(remoteUrl.trim());
-  if (https?.[1]) return https[1];
-  return null;
-}
-
-function resolveOwnerRepo(
-  execGit: ExecFn,
-  cwd: string,
-): { ownerRepo: string } | IntegratorBlocked {
-  let remoteUrl: string;
-  try {
-    remoteUrl = execGit(['remote', 'get-url', 'origin'], cwd).trim();
-  } catch {
-    return {
-      needsHuman: true,
-      lesson:
-        'target repo has no parseable github remote — cannot open a PR (config gap: add a github origin remote)',
-    };
-  }
-  const ownerRepo = parseOwnerRepo(remoteUrl);
-  if (!ownerRepo) {
-    return {
-      needsHuman: true,
-      lesson: `target repo has no parseable github remote — cannot open a PR (remote url: ${remoteUrl})`,
-    };
-  }
-  return { ownerRepo };
-}
 
 // ─── PR find-or-create (M4 — own idempotent list→filter→create, public seam) ──
 
@@ -360,41 +253,6 @@ export function stubIntegrate(input: IntegratorInput): IntegratorOutput {
 }
 
 // ─── REAL integrator (live only) ─────────────────────────────────────────────
-
-/** Branch existence check — returns true if the branch exists locally. */
-function branchExists(execGit: ExecFn, cwd: string, branch: string): boolean {
-  try {
-    execGit(['rev-parse', '--verify', branch], cwd);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * Count commits on branch ahead of origin/<base>.
- * Returns 0 only for expected "no upstream / unknown revision / ambiguous argument" errors
- * (these mean the branch is not ahead). Rethrows other errors so DBOS can retry transient failures.
- */
-function countAhead(execGit: ExecFn, cwd: string, branch: string, base: string): number {
-  try {
-    const raw = execGit(['rev-list', '--count', `origin/${base}..${branch}`], cwd).trim();
-    return Number.parseInt(raw, 10) || 0;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    // Expected: branch or upstream not yet known to git (not a transient failure).
-    if (
-      msg.includes('unknown revision') ||
-      msg.includes('ambiguous argument') ||
-      msg.includes('no upstream') ||
-      msg.includes('does not have any commits yet')
-    ) {
-      return 0;
-    }
-    // Transient failure (network, lock, etc.) — rethrow so DBOS retries.
-    throw err;
-  }
-}
 
 /**
  * integrate — REAL integrator (live only).
