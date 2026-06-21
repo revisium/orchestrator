@@ -38,26 +38,26 @@ Set "needsHuman": true only if you are blocked and a human must intervene.
 /** Build the AgentResult from the required structured_output object (the --json-schema path). */
 export function agentResultFromStructured(structured: unknown): AgentResult {
   if (structured === undefined) {
-    throw new Error('agent structured result missing structured_output');
+    throw new TypeError('agent structured result missing structured_output');
   }
   if (structured === null || typeof structured !== 'object' || Array.isArray(structured)) {
-    throw new Error('agent structured result must be an object');
+    throw new TypeError('agent structured result must be an object');
   }
   const o = structured as Record<string, unknown>;
   if (typeof o.verdict !== 'string' || o.verdict.trim().length === 0) {
-    throw new Error('agent structured result missing required top-level verdict');
+    throw new TypeError('agent structured result missing required top-level verdict');
   }
   if (typeof o.output !== 'string') {
-    throw new Error('agent structured result missing required string output');
+    throw new TypeError('agent structured result missing required string output');
   }
   if ('needsHuman' in o && typeof o.needsHuman !== 'boolean') {
-    throw new Error('agent structured result needsHuman must be a boolean when present');
+    throw new TypeError('agent structured result needsHuman must be a boolean when present');
   }
   if ('lesson' in o && o.lesson !== null && typeof o.lesson !== 'string') {
-    throw new Error('agent structured result lesson must be a string when present');
+    throw new TypeError('agent structured result lesson must be a string when present');
   }
   if ('nextSteps' in o && !Array.isArray(o.nextSteps)) {
-    throw new Error('agent structured result nextSteps must be an array when present');
+    throw new TypeError('agent structured result nextSteps must be an array when present');
   }
   return {
     output: o.output,

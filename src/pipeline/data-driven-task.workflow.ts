@@ -487,7 +487,7 @@ export function makeDataDrivenTask(
     decision: Exclude<Decision, { type: 'complete' }>,
     ctx: EffectCtx,
   ): Promise<DecisionEffect> {
-    const { runId, template, bindingByRef, executionProfile, taskId, title, base } = ctx;
+    const { runId, template, bindingByRef, taskId, title, base } = ctx;
     switch (decision.type) {
       case 'invokeRole': {
         const node = resolveNode(template, decision.nodeId);
@@ -504,7 +504,7 @@ export function makeDataDrivenTask(
           });
           return { lastResult: { outcome: 'failed', errorCode: REVO_INPUT_MISSING }, lastVerdict: 'failed', stepDelta: 1 };
         }
-        const result = await invokeRole(runId, decision, template, node, bindingByRef, executionProfile, resolved.inputs, stepKey);
+        const result = await invokeRole(runId, decision, node, ctx, resolved.inputs, stepKey);
         if (result.failed) {
           await appendEvent({
             runId, taskId, stepId: '', stepKey, type: 'step_failed',
@@ -591,14 +591,12 @@ export function makeDataDrivenTask(
   async function invokeRole(
     runId: string,
     decision: Extract<Decision, { type: 'invokeRole' }>,
-    template: Template,
     node: Node,
-    bindingByRef: Map<string, RouteRoleBinding>,
-    executionProfile: ExecutionProfile,
+    ctx: EffectCtx,
     inputs: Record<string, unknown>,
     stepKey: string,
   ): Promise<{ failed: true; errorCode: typeof REVO_RESULT_INVALID; reason: string } | { failed: false; verdict?: string; output: unknown }> {
-    const binding = bindingByRef.get(decision.roleRef);
+    const binding = ctx.bindingByRef.get(decision.roleRef);
     if (!binding) {
       // A VALID template's caps resolve at run start; an unresolved roleRef is a fatal config gap.
       throw new Error(`CAPABILITY_UNRESOLVED: roleRef ${decision.roleRef} has no route binding`);
@@ -608,7 +606,7 @@ export function makeDataDrivenTask(
     // `## Inputs (from previous steps)` prompt section (build-context).
     const stepInput =
       Object.keys(inputs).length > 0 ? { nodeId: decision.nodeId, inputs } : { nodeId: decision.nodeId };
-    const result = await runStepFn(runId, binding.rowId, stepKey, stepInput, binding.resolvedRunnerId, executionProfile);
+    const result = await runStepFn(runId, binding.rowId, stepKey, stepInput, binding.resolvedRunnerId, ctx.executionProfile);
     // runStep converts a runner-process crash into a blocking attempt (needsHuman + verdict BLOCKER);
     // that is a domain failure of the node → route via §6 precedence as a result-invalid/failed effect.
     if (result.needsHuman) {
@@ -617,7 +615,7 @@ export function makeDataDrivenTask(
     if (!resultSatisfiesSchema(node, result)) {
       return { failed: true, errorCode: REVO_RESULT_INVALID, reason: `${REVO_RESULT_INVALID}: node ${node.id} result did not satisfy resultSchema ${String('resultSchema' in node ? node.resultSchema : '')}` };
     }
-    const verdictProblem = resultVerdictProblem(template, node, result);
+    const verdictProblem = resultVerdictProblem(ctx.template, node, result);
     if (verdictProblem) {
       return { failed: true, errorCode: REVO_RESULT_INVALID, reason: verdictProblem };
     }

@@ -43,11 +43,11 @@ function bounded(value: string, maxChars: number): string {
 function redactText(value: string): string {
   return value
     .replace(
-      /(["']?)([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY)[A-Za-z0-9_]*)(\1)\s*:\s*(["'])(.*?)\4/gi,
-      '$1$2$3: $4[REDACTED]$4',
+      /(["']?)(\w*(?:TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY)\w*)\1\s*:\s*(["'])(.*?)\3/gi,
+      '$1$2$1: $3[REDACTED]$3',
     )
     .replace(
-      /\b([A-Za-z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY)[A-Za-z0-9_]*)\s*[:=]\s*([^\s"'`]+)/gi,
+      /\b(\w*(?:TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY)\w*)\s*[:=]\s*([^\s"'`]+)/gi,
       '$1=[REDACTED]',
     );
 }
