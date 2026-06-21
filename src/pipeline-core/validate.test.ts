@@ -220,6 +220,25 @@ test('rule 7: a parent cycle in scopes → SCOPE_CYCLE', () => {
   assertHasDiagnostic(t, 'SCOPE_CYCLE');
 });
 
+test('rule 7: a counter incremented before a fan-out and read after the join → SCOPE_SPANS_PARALLEL', () => {
+  const t = template('inv')
+    .specVersion('1.0')
+    .entry('inc')
+    .domain('again', 'done')
+    .scope('L', { cap: 2, parent: null })
+    .add(
+      node.agent('inc', 'role:x', 'fanout', { incrementCounters: ['L'] }),
+      node.parallel('fanout', [{ id: 'a', entry: 'aw' }, { id: 'b', entry: 'bw' }], 'j'),
+      node.agent('aw', 'role:y', 'j'),
+      node.agent('bw', 'role:z', 'j'),
+      node.join('j', joinAll(), 'router', { merge: { f: 'overwrite' } }),
+      node.choice('router', [on(counterLt('L', 2), 'inc'), otherwise('doneEnd')]),
+      node.terminal('doneEnd', 'succeeded'),
+    )
+    .build();
+  assertHasDiagnostic(t, 'SCOPE_SPANS_PARALLEL');
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Rule 8 — parallel/join well-formedness.
 // ─────────────────────────────────────────────────────────────────────────────
