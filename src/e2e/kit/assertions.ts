@@ -162,7 +162,7 @@ export async function assertRoleStepAfterEvent(
   role: string,
   afterEventType: string,
 ): Promise<void> {
-  const events = await api.getRunEvents({ runId, limit: 50 });
+  const events = await api.getRunEvents({ runId, limit: 500 });
   const eventIdx = events.findIndex((e) => e.type === afterEventType);
   const stepIdx = events.findIndex((e) => {
     if (e.type !== 'step_succeeded') return false;
