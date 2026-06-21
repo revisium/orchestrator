@@ -72,7 +72,7 @@ type Recorder = {
 
 /**
  * Build the adapter from a per-node verdict script + a gate decider. `runStepFn` returns the scripted
- * domain verdict for the node id; an absent entry returns a structural PASS-equivalent with no verdict.
+ * top-level domain verdict for the node id; an absent entry returns `approved`.
  */
 function buildAdapter(opts: {
   verdicts?: Record<string, string | string[]>;
@@ -89,6 +89,8 @@ function buildAdapter(opts: {
   pollPr?: (input: IntegratorInput) => PrFeedback | IntegratorBlocked | Promise<PrFeedback | IntegratorBlocked>;
   /** Override respondThreads (default: replied/resolved 0). Lets a test capture the triage it consumed. */
   respondThreads?: (input: IntegratorInput) => RespondThreadsOutput | IntegratorBlocked | Promise<RespondThreadsOutput | IntegratorBlocked>;
+  /** Exact per-node result override for invalid-result contract tests. */
+  results?: Record<string, AttemptResult>;
 }) {
   const rec: Recorder = {
     gates: [],
@@ -123,11 +125,13 @@ function buildAdapter(opts: {
       rec.inputsByStep[nodeId] = (input as Record<string, unknown>).inputs;
     }
     if (opts.needsHumanNodes?.has(nodeId)) {
-      return { output: { verdict: 'BLOCKER' }, nextSteps: [], costs: [], needsHuman: true, lesson: 'parked' };
+      return { output: { from: nodeId }, verdict: 'blocker', nextSteps: [], costs: [], needsHuman: true, lesson: 'parked' };
     }
+    const exact = opts.results?.[nodeId];
+    if (exact) return exact;
     const entry = opts.verdicts?.[nodeId];
     const verdict = Array.isArray(entry) ? (entry[Math.min(n, entry.length - 1)] ?? 'approved') : (entry ?? 'approved');
-    return { output: { verdict, from: nodeId }, nextSteps: [], costs: [] };
+    return { output: { from: nodeId }, verdict, nextSteps: [], costs: [] };
   };
 
   const deps: DataDrivenTaskDeps = {
@@ -353,6 +357,53 @@ test('DD5: an effect that needsHuman → resultSchema/abort precedence → faile
   assert.equal(rec.completed.length, 0);
 });
 
+test('DD5b: markdown output with no top-level verdict is not scanned and fails as revo.ResultInvalid', async () => {
+  const tmpl = template('verdict-required')
+    .specVersion('1.0')
+    .entry('review')
+    .domain('approved', 'blocker')
+    .add(
+      node.agent('review', 'role:reviewer', 'router', { resultSchema: 'schema:review', onFailure: 'abort' }),
+      node.choice('router', [on(verdictEq('approved'), 'done'), otherwise('blocked')]),
+      node.terminal('done', 'succeeded'),
+      node.terminal('blocked', 'blocked'),
+    )
+    .build();
+  const { run, rec } = buildAdapter({
+    template: tmpl,
+    results: { review: { output: '# Plan approved\nLooks good.', nextSteps: [], costs: [], needsHuman: false } },
+  });
+
+  const result = await run();
+  assert.equal(result.status, 'failed');
+  assert.equal(rec.blocked.length, 0, 'missing verdict must not fall through to the default branch');
+  assert.ok(rec.events.some((e) => e === 'step_failed:review'), 'invalid result emits step_failed');
+  assert.match(rec.failed[0] ?? '', /revo\.ResultInvalid/);
+});
+
+test('DD5c: top-level verdict outside template domain fails as revo.ResultInvalid', async () => {
+  const tmpl = template('verdict-domain')
+    .specVersion('1.0')
+    .entry('review')
+    .domain('approved', 'blocker')
+    .add(
+      node.agent('review', 'role:reviewer', 'router', { resultSchema: 'schema:review', onFailure: 'abort' }),
+      node.choice('router', [on(verdictEq('approved'), 'done'), otherwise('blocked')]),
+      node.terminal('done', 'succeeded'),
+      node.terminal('blocked', 'blocked'),
+    )
+    .build();
+  const { run, rec } = buildAdapter({
+    template: tmpl,
+    results: { review: { output: 'summary', verdict: 'PASS', nextSteps: [], costs: [], needsHuman: false } },
+  });
+
+  const result = await run();
+  assert.equal(result.status, 'failed');
+  assert.match(rec.failed[0] ?? '', /revo\.ResultInvalid/);
+  assert.ok(rec.events.some((e) => e === 'step_failed:review'), 'invalid domain verdict emits step_failed');
+});
+
 test('DD6: an invalid pinned template fails the run loudly (defense-in-depth validation)', async () => {
   const broken = featureDevelopment();
   // Dangle an edge: point analyst.next at a non-existent node → REF_UNRESOLVED.
@@ -484,7 +535,7 @@ test('DD-DF1: a producing node persists its output and a consumer is hydrated wi
     [{ nodeId: 'analyst', ordinal: 1, name: 'plan' }],
   );
   // developer received the analyst's output under the declared `as` key.
-  assert.deepEqual(rec.inputsByStep['developer'], { plan: { verdict: 'approved', from: 'analyst' } });
+  assert.deepEqual(rec.inputsByStep['developer'], { plan: { from: 'analyst' } });
 });
 
 test('DD-DF4: a missing required input fails the run (revo.InputMissing) WITHOUT invoking the consumer', async () => {

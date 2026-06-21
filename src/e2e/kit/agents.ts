@@ -37,12 +37,13 @@ export type AgentSink = { agentCalls: AgentCall[]; developerWrites: DeveloperWri
 
 /** Per-role behaviour for {@link scriptedAgent}/{@link routedScriptedAgent}. */
 export type RoleBehavior =
-  | { kind: 'pass' } //                                       output { verdict: 'PASS' }
-  | { kind: 'verdict'; verdict: 'PASS' | 'MINOR' | 'MAJOR' | 'BLOCKER' } // structured verdict
+  | { kind: 'pass' } //                                       top-level default domain verdict
+  | { kind: 'verdict'; verdict: string } //                   top-level domain verdict
   | { kind: 'domainVerdict'; verdict: string } //             arbitrary DOMAIN verdict label (0015 data-driven)
+  | { kind: 'invalidNoVerdict'; output?: string } //          malformed result: no top-level verdict
   | { kind: 'throw'; message?: string } //                    runner throws → step_failed, BLOCKER, needsHuman
   | { kind: 'needsHuman'; lesson?: string } //                parks the step (awaiting_approval)
-  | { kind: 'cost'; inputTokens: number; outputTokens: number; costAmount: number }; // PASS + custom cost
+  | { kind: 'cost'; inputTokens: number; outputTokens: number; costAmount: number }; // default verdict + custom cost
 
 /** A scripted plan: behaviour per logical role; arrays are consumed one entry per call (clamped). */
 export type AgentSpec = {
@@ -54,6 +55,10 @@ function pickBehavior(spec: AgentSpec, role: string, callIndex: number): RoleBeh
   const entry = spec.byRole?.[role];
   if (Array.isArray(entry)) return entry[Math.min(callIndex, entry.length - 1)] ?? { kind: 'pass' };
   return entry ?? spec.default ?? { kind: 'pass' };
+}
+
+function defaultVerdictFor(role: string): string {
+  return role === 'watcher' ? 'clean' : 'approved';
 }
 
 function runBehavior(
@@ -68,14 +73,23 @@ function runBehavior(
   if (writeRepo && behavior.kind !== 'needsHuman') {
     writeFileSync(join(writeRepo, `developer-${ctx.attemptId}.txt`), `change from ${ctx.attemptId}\n`);
   }
+  if (behavior.kind === 'invalidNoVerdict') {
+    return {
+      output: behavior.output ?? '# Plan approved\nLooks good.',
+      nextSteps: [],
+      costs: [],
+      needsHuman: false,
+    };
+  }
   const verdict =
-    behavior.kind === 'verdict' || behavior.kind === 'domainVerdict' ? behavior.verdict : 'PASS';
+    behavior.kind === 'verdict' || behavior.kind === 'domainVerdict' ? behavior.verdict : defaultVerdictFor(ctx.logicalRole);
   const cost =
     behavior.kind === 'cost'
       ? { inputTokens: behavior.inputTokens, outputTokens: behavior.outputTokens, costAmount: behavior.costAmount }
       : { inputTokens: 10, outputTokens: 5, costAmount: 0.001 };
   return {
-    output: { verdict, role: ctx.logicalRole, runner: ctx.runner },
+    output: { role: ctx.logicalRole, runner: ctx.runner },
+    verdict,
     artifacts: {
       process: { ref: `test-artifacts/${ctx.attemptId}`, stdoutTail: `stdout from ${ctx.logicalRole}`, stderrTail: '' },
     },
@@ -107,7 +121,7 @@ export function scriptedAgent(spec: AgentSpec, sink: AgentSink): RunAgent {
 /**
  * Agent that dispatches to a per-run {@link AgentSpec} from `specs` (keyed by runId), so one harness
  * can drive many runs with different failure scripts. Create the run with `start:false`, register its
- * spec in `specs`, then `startRun` — the workflow then reads this run's plan. Defaults to all-PASS.
+ * spec in `specs`, then `startRun` — the workflow then reads this run's plan. Defaults to domain success.
  */
 export function routedScriptedAgent(specs: Map<string, AgentSpec>, sink: AgentSink): RunAgent {
   const counts = new Map<string, number>();
@@ -129,7 +143,7 @@ export function routedScriptedAgent(specs: Map<string, AgentSpec>, sink: AgentSi
 }
 
 /**
- * Deterministic test agent: records every call, returns a PASS verdict with fixed costs and a
+ * Deterministic test agent: records every call, returns a domain success verdict with fixed costs and a
  * process artifact. When the logical role is `developer` and a worktree is registered for the run,
  * it writes a file so the real integrator has a diff to commit.
  *
@@ -149,10 +163,10 @@ export function deterministicAgent(
     }
     return {
       output: {
-        verdict: 'PASS',
         role: logicalRole,
         runner: role.runner,
       },
+      verdict: defaultVerdictFor(logicalRole),
       artifacts: {
         process: {
           ref: `test-artifacts/${attemptId}`,

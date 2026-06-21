@@ -6,6 +6,7 @@ import { fnv1a64Hex } from '../control-plane/steps.js';
 import type { Step } from '../control-plane/steps.js';
 import { makeResolveCwd, makeResolveTaskCwd, makeResolveRunCwd } from '../control-plane/resolve-cwd.js';
 import { getConfig } from '../config.js';
+import type { AgentRunContext } from '../worker/build-context.js';
 import { createRunWorkflow, type CreateRunInput, type CreateRunResult } from '../run/create-run.js';
 import { listRuns, showRun, listRunEvents, listRunAttempts, getRunFailure, type RunSummary, type RunDetail, type EventSummary, type AttemptSummary } from '../run/inspect-run.js';
 import { cancelRun, type CancelRunResult } from '../run/cancel-run.js';
@@ -118,15 +119,20 @@ export class RunService {
     stepKey: string,
     stepInput: unknown,
     modelProfile: string,
-  ): Promise<{ da: ControlPlaneDataAccess; step: Step }> {
+  ): Promise<{ da: ControlPlaneDataAccess; step: Step; runContext: AgentRunContext }> {
     const detail = await showRun(this.da, runId);
     if (!detail) {
+      throw new ControlPlaneError('ROW_NOT_FOUND', `run not found: ${runId}`);
+    }
+    const runRow = await this.da.getRow('task_runs', runId);
+    if (!runRow) {
       throw new ControlPlaneError('ROW_NOT_FOUND', `run not found: ${runId}`);
     }
     const taskId = detail.tasks[0]?.taskId;
     if (!taskId) {
       throw new ControlPlaneError('ROW_NOT_FOUND', `run ${runId} has no task`);
     }
+    const params = runRow.data.params;
     const step: Step = {
       id: `pstep_${fnv1a64Hex(`${runId}|${stepKey}`)}`,
       taskId,
@@ -145,7 +151,16 @@ export class RunService {
       leaseExpiresAt: '',
       deadReason: '',
     };
-    return { da: this.da, step };
+    return {
+      da: this.da,
+      step,
+      runContext: {
+        description: typeof runRow.data.description === 'string' ? runRow.data.description : '',
+        params: params !== null && typeof params === 'object' && !Array.isArray(params)
+          ? (params as Record<string, unknown>)
+          : {},
+      },
+    };
   }
 
   /**

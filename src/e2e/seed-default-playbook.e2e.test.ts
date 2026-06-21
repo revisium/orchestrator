@@ -28,8 +28,8 @@ import { validateTemplate } from '../pipeline-core/index.js';
 // The bootstrap in scripts/e2e-setup.ts already seeds the default; givenSeededDefaultPlaybook only
 // self-heals a reused test home that predates this slice (and never installs the fixture). The agent
 // (and the script integrator, for feature-development) are stubbed via runnerOverrides so no real
-// claude/git/gh runs; the default `feature-development` routes a PASS verdict past both routers, so the
-// deterministic agent drives plan→merge to completion.
+// claude/git/gh runs; the default `feature-development` routes top-level domain verdicts past both
+// routers, so the deterministic agent drives plan->merge to completion.
 
 let h: RunHarness;
 

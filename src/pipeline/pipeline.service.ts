@@ -33,7 +33,7 @@ import { IntegratorService } from '../runners/integrator.js';
 import { WorktreeService } from '../runners/worktree.service.js';
 import { redactTokens } from '../runners/gh-identity.js';
 import { RUN_AGENT } from '../runners/tokens.js';
-import { buildContext } from '../worker/build-context.js';
+import { buildContext, ContextMissingError } from '../worker/build-context.js';
 import type { RunAgent, AttemptResult } from '../worker/runner.js';
 import { artifactsFromRunAgentError } from '../worker/runner.js';
 import { fnv1a64Hex } from '../control-plane/steps.js';
@@ -100,16 +100,11 @@ export type RunStepDeps = {
  *
  * The data-driven engine routes on a node's DOMAIN verdict (resolved in the adapter, §8) and never
  * consults this. This is purely the human-readable verdict surfaced on the per-attempt log row: read
- * an explicit `output.verdict` (string) or the leading token of a free-text string output, else mark
- * it `unknown`. No engine semantics are derived from it.
+ * only the explicit top-level AttemptResult.verdict, else mark it `unknown` for observability. No
+ * engine semantics are derived from it.
  */
 function verdictForAttemptRow(result: AttemptResult): string {
-  const output = result.output;
-  if (isRecord(output) && typeof output.verdict === 'string') return output.verdict;
-  if (typeof output === 'string') {
-    const token = output.trim().split(/\s+/)[0];
-    if (token) return token.toUpperCase();
-  }
+  if (typeof result.verdict === 'string' && result.verdict.trim().length > 0) return result.verdict;
   return 'unknown';
 }
 
@@ -165,7 +160,7 @@ export function makeRunStep(deps: RunStepDeps) {
     const profile = await loadModelProfile(loadedRole.modelLevel);
 
     // 3. Build pipeline context: synthesize in-memory Step with real taskId (M3, B6).
-    const { da, step } = await loadPipelineContext(
+    const { da, step, runContext } = await loadPipelineContext(
       runId,
       role,
       stepKey,
@@ -174,7 +169,26 @@ export function makeRunStep(deps: RunStepDeps) {
     );
 
     // 4. Build the agent context string.
-    const context = await buildContext(da, step, loadedRole);
+    let context: string;
+    try {
+      context = await buildContext(da, step, loadedRole, runContext);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      await appendEvent({
+        runId,
+        taskId: step.taskId,
+        stepId: step.id,
+        stepKey,
+        type: 'step_failed',
+        payload: {
+          error: err instanceof ContextMissingError ? err.code : 'revo.ContextBuildFailed',
+          reason,
+          role,
+          stepKey,
+        },
+      });
+      throw err;
+    }
 
     // 5. Deterministic, bounded attemptId (B2).
     const attemptId = `attempt_${fnv1a64Hex(`${runId}|${stepKey}`)}`;

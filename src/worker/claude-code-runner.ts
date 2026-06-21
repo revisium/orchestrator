@@ -9,7 +9,6 @@ import {
   STRUCTURED_RESULT_NOTE,
   agentResultFromStructured,
   parseTransportEnvelope,
-  extractAgentResult,
   normalizeNextSteps,
   type TransportEnvelope,
 } from './result-envelope.js';
@@ -54,9 +53,8 @@ function readParamNum(params: unknown, ...keys: string[]): number | undefined {
 // (previously unused "{}") is threaded in — a configured maxTurns maps to claude's --max-turns.
 function buildArgs(modelId: string, allowedTools: string[], permissionMode: string, params: unknown): string[] {
   const args = ['-p', '--model', modelId, '--output-format', 'json', '--permission-mode', permissionMode];
-  // Constrain the final message to the agent-result schema → a reliable `verdict` in structured_output
-  // (0016 follow-up). Empirically the CLI returns a clean structured_output ONLY when the prose
-  // REVO_RESULT block is NOT also instructed (the two conflict), so buildPrompt uses the short note.
+  // Constrain the final message to the agent-result schema -> a reliable `verdict` in structured_output.
+  // No prose fallback is accepted.
   args.push('--json-schema', AGENT_RESULT_SCHEMA);
   // Empty list → pass NO tools (most restrictive; text/plan-only). Never widen beyond role.allowedTools.
   if (allowedTools.length > 0) {
@@ -69,9 +67,8 @@ function buildArgs(modelId: string, allowedTools: string[], permissionMode: stri
   return args;
 }
 
-// Prompt order (design decision 6): context → attemptId line → REVO_RESULT_CONTRACT. Appending the
-// contract HERE — not in build-context.ts, not in the role system_prompt — guarantees the agent is
-// told how to emit on EVERY attempt, including retries.
+// Prompt order (design decision 6): context → attemptId line → structured-result note. Appending the
+// output instruction here keeps the result contract transport-owned, not buried in role prompts.
 function buildPrompt(context: string, attemptId: string): string {
   const idempotencyLine =
     `Attempt-Id: ${attemptId} — idempotency key. Reference it on any external effect you create.`;
@@ -171,15 +168,14 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
         throw runnerError(`claude-code runner reported is_error: ${tail(transport.text)}`, processSnapshot);
       }
 
-      // Prefer the --json-schema structured_output (reliable verdict); fall back to a prose REVO_RESULT
-      // block only if the CLI returned no structured output (older CLI / schema unsupported).
-      const agent = agentResultFromStructured(transport.structuredOutput) ?? extractAgentResult(transport.text);
+      const agent = agentResultFromStructured(transport.structuredOutput);
       const costs = buildCosts(step, profile, transport);
 
       // needsHuman: do NOT write nextSteps — the loop parks via the existing awaiting_approval path.
       if (agent.needsHuman) {
         const parked: AttemptResult = {
           output: agent.output,
+          verdict: agent.verdict,
           artifacts: withProcessArtifact(agent.artifacts, processSnapshot),
           nextSteps: [],
           costs,

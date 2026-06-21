@@ -52,10 +52,10 @@ async function startFeatureWithSpec(target: TargetRepo, spec: AgentSpec): Promis
 test('C1: a blocking review triggers rework, then the run completes', { skip: e2eSkip }, async () => {
   const target = createTargetRepo();
   try {
-    // reviewer blocks once (MAJOR), then passes → developer reworks once.
+    // reviewer blocks once, then passes -> developer reworks once.
     const { runId } = await startFeatureWithSpec(target, {
-      // reviewer passes planning, blocks the first code review (MAJOR), then passes → one rework.
-      byRole: { reviewer: [{ kind: 'pass' }, { kind: 'verdict', verdict: 'MAJOR' }, { kind: 'pass' }] },
+      // reviewer passes planning, blocks the first code review, then passes -> one rework.
+      byRole: { reviewer: [{ kind: 'pass' }, { kind: 'verdict', verdict: 'blocker' }, { kind: 'pass' }] },
     });
     const terminal = await approveUntilTerminal(h.api, runId);
     assert.equal(terminal.state, 'completed');
@@ -70,7 +70,7 @@ test('C2: a review that never passes blocks the pipeline at the iteration cap', 
   const target = createTargetRepo();
   try {
     const { runId } = await startFeatureWithSpec(target, {
-      byRole: { reviewer: { kind: 'verdict', verdict: 'BLOCKER' } },
+      byRole: { reviewer: { kind: 'verdict', verdict: 'blocker' } },
     });
     const terminal = await approveUntilTerminal(h.api, runId);
     assert.notEqual(terminal.state, 'completed', 'a never-passing review must not complete');
@@ -91,6 +91,23 @@ test('C3: a developer that throws records step_failed and does not complete', { 
     const terminal = await approveUntilTerminal(h.api, runId);
     assert.notEqual(terminal.state, 'completed', 'a crashing developer must not complete the run');
     await assertEventsPresent(h.api, runId, ['step_failed']);
+  } finally {
+    target.cleanup();
+  }
+});
+
+test('C4: markdown output without top-level verdict terminal-fails as invalid result', { skip: e2eSkip }, async () => {
+  const target = createTargetRepo();
+  try {
+    const { runId } = await startFeatureWithSpec(target, {
+      byRole: { reviewer: { kind: 'invalidNoVerdict', output: '# Review\napproved' } },
+    });
+    const terminal = await approveUntilTerminal(h.api, runId);
+    assert.equal(terminal.state, 'failed', 'invalid agent result must terminal-fail');
+    await assertEventsPresent(h.api, runId, ['step_failed']);
+    const failures = await h.api.getRunEvents({ runId, type: 'run_failed' });
+    const payload = failures.at(-1)?.payload as { reason?: string } | undefined;
+    assert.match(payload?.reason ?? '', /revo\.ResultInvalid/);
   } finally {
     target.cleanup();
   }

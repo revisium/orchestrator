@@ -19,7 +19,7 @@ import { createFakeIntegrator } from './fake-integrator.js';
 export type RunHarnessOptions = {
   /**
    * Override the agent via a factory that receives the harness recorders (so a custom agent records
-   * into the same `agentCalls`/`developerWrites`). Default: {@link deterministicAgent} (all-PASS).
+   * into the same `agentCalls`/`developerWrites`). Default: {@link deterministicAgent}.
    */
   agent?: (sink: AgentSink) => RunAgent;
   /**
