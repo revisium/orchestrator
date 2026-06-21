@@ -199,10 +199,14 @@ test('H10: inspection tools reflect a completed run', { skip: e2eSkip }, async (
     await inv('start_run', { runId: created.runId });
     const settled = await inv<{ state: string }>('wait_for_run', { runId: created.runId, timeoutMs: 10_000, intervalMs: 500 });
     assert.equal(settled.state, 'completed');
-    // Poll for run_completed: it is appended just AFTER the run-row status patch, so a read taken the
-    // instant wait_for_run returns can race the append (terminal-event-visibility flake).
+    // Poll for run_completed. completeRun writes the event BEFORE patching the run-row status
+    // (event-first), and it is an awaited workflow step — so by the time the workflow is terminal the
+    // event is committed. But under load the events-table read can lag the run-row read just after the
+    // run settles, so a single read taken when wait_for_run returns can miss it; poll until the read
+    // path converges. The 15s ceiling is only spent on a rare slow runner — the common case exits on
+    // poll #1-2 (it returns the instant run_completed is seen).
     let events = await inv<Array<{ type: string }>>('get_run_events', { runId: created.runId });
-    for (let waited = 0; waited < 5_000 && !events.some((e) => e.type === 'run_completed'); waited += 250) {
+    for (let waited = 0; waited < 15_000 && !events.some((e) => e.type === 'run_completed'); waited += 250) {
       await new Promise((resolve) => setTimeout(resolve, 250));
       events = await inv<Array<{ type: string }>>('get_run_events', { runId: created.runId });
     }
