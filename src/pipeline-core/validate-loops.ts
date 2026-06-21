@@ -1,7 +1,7 @@
 import { isGuardedBranch } from './types.js';
 import type { Condition, Node, Scope, Template } from './types.js';
 import { DiagSink } from './validate-sink.js';
-import { cycleNodes, findBackEdges, forwardReach, guardConditionsOf } from './validate-graph.js';
+import { backwardReach, cycleNodes, findBackEdges, forwardReach, guardConditionsOf } from './validate-graph.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Rule 6b — loop-cap presence.
@@ -148,9 +148,13 @@ function checkScopeStrictAncestry(template: Template, scopeId: string, d: DiagSi
   }
 }
 
-/** 7d — a counter scope may not span a parallel/join boundary (v1). */
+/**
+ * 7d — a counter scope may not span a parallel/join boundary (v1). The region is the increment/read endpoints
+ * PLUS every node on a structural path between them: a counter incremented before a fan-out and read after the
+ * join (or whose endpoints sit in different branches) crosses the boundary and is unsafe in v1.
+ */
 function checkScopeDoesNotSpanParallel(template: Template, scopeId: string, d: DiagSink): void {
-  const region = new Set<string>([...nodesIncrementing(template, scopeId), ...nodesReadingScope(template, scopeId)]);
+  const region = scopeRegionBetween(template, nodesIncrementing(template, scopeId), nodesReadingScope(template, scopeId));
   for (const id of region) {
     const node = template.nodes[id];
     if (node && (node.kind === 'parallel' || node.kind === 'join')) {
@@ -160,6 +164,20 @@ function checkScopeDoesNotSpanParallel(template: Template, scopeId: string, d: D
       });
     }
   }
+}
+
+/** Endpoints plus every node on some structural path from an increment site to a reader (forwardReach ∩ backwardReach). */
+function scopeRegionBetween(template: Template, incrementSites: string[], readers: string[]): Set<string> {
+  const region = new Set<string>([...incrementSites, ...readers]);
+  for (const inc of incrementSites) {
+    const fwd = forwardReach(template, inc);
+    for (const reader of readers) {
+      if (!fwd.has(reader)) continue;
+      const back = backwardReach(template, reader);
+      for (const id of fwd) if (back.has(id)) region.add(id);
+    }
+  }
+  return region;
 }
 
 function scopeChainHasCycle(scopes: Record<string, { parent: string | null }>, start: string): boolean {

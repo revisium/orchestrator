@@ -4,7 +4,7 @@ import {
   branchSubgraph,
   cycleNodes,
   findBackEdges,
-  reachableFrom,
+  forwardReach,
   structuralEdges,
 } from './validate-graph.js';
 
@@ -18,7 +18,7 @@ interface DataflowCtx {
   nodes: Template['nodes'];
   hasEntry: boolean;
   dom: Map<string, Set<string>>;
-  membership: Map<string, { parallel: string; branch: string }>;
+  membership: Map<string, Array<{ parallel: string; branch: string }>>;
   cyclesByNode: Map<string, Array<Set<string>>>;
 }
 
@@ -125,14 +125,12 @@ function checkFreshness(node: EffectNode, ref: ConsumesRef, path: string, ctx: D
 
 /** Cross-parallel: consuming a sibling branch's output is unsafe (the branch may be cancelled). */
 function checkCrossParallel(node: EffectNode, ref: ConsumesRef, path: string, ctx: DataflowCtx, d: DiagSink): void {
-  const consumerBranch = ctx.membership.get(node.id);
-  const producerBranch = ctx.membership.get(ref.node);
-  if (
-    consumerBranch &&
-    producerBranch &&
-    consumerBranch.parallel === producerBranch.parallel &&
-    consumerBranch.branch !== producerBranch.branch
-  ) {
+  const consumerBranches = ctx.membership.get(node.id) ?? [];
+  const producerBranches = ctx.membership.get(ref.node) ?? [];
+  const crosses = consumerBranches.some((c) =>
+    producerBranches.some((p) => c.parallel === p.parallel && c.branch !== p.branch),
+  );
+  if (crosses) {
     d.error('CONSUMES_CROSS_PARALLEL_UNSAFE', `node "${node.id}" consumes "${ref.node}" from a sibling parallel branch`, {
       nodeId: node.id,
       path,
@@ -140,9 +138,13 @@ function checkCrossParallel(node: EffectNode, ref: ConsumesRef, path: string, ct
   }
 }
 
-/** Standard iterative dominator sets over STRUCTURAL edges from `entry`. dom(entry) = {entry}. */
+/**
+ * Standard iterative dominator sets over STRUCTURAL edges from `entry` (dom(entry) = {entry}). Both the node-set
+ * and the predecessor graph use the structural edge model — a catch/escalate route is a failure path where the
+ * producer did not successfully run, so it is excluded from "ran before the consumer on every path".
+ */
 function dominators(template: Template, entry: string): Map<string, Set<string>> {
-  const reachable = [...reachableFrom(template, entry)].filter((id) => template.nodes[id]);
+  const reachable = [...forwardReach(template, entry)].filter((id) => template.nodes[id]);
   const preds = new Map<string, string[]>();
   for (const id of reachable) preds.set(id, []);
   for (const id of reachable) {
@@ -192,13 +194,15 @@ function consumerStaleCycles(template: Template): Map<string, Array<Set<string>>
   return out;
 }
 
-/** Map each node to its (parallel, branch) membership, if any — for cross-branch dataflow safety. */
-function branchMembership(template: Template): Map<string, { parallel: string; branch: string }> {
-  const out = new Map<string, { parallel: string; branch: string }>();
+/** Map each node to ALL its (parallel, branch) memberships — a node in nested parallels belongs to each. */
+function branchMembership(template: Template): Map<string, Array<{ parallel: string; branch: string }>> {
+  const out = new Map<string, Array<{ parallel: string; branch: string }>>();
   for (const par of Object.values(template.nodes)) {
     if (par.kind !== 'parallel') continue;
     for (const br of par.branches) {
-      for (const id of branchSubgraph(template, br.entry, par.join)) out.set(id, { parallel: par.id, branch: br.id });
+      for (const id of branchSubgraph(template, br.entry, par.join)) {
+        (out.get(id) ?? out.set(id, []).get(id)!).push({ parallel: par.id, branch: br.id });
+      }
     }
   }
   return out;

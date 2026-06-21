@@ -39,22 +39,25 @@ export function validateTemplate(template: Template): Diagnostic[] {
   const d = new DiagSink();
   const nodes = template.nodes ?? {};
   const ids = new Set(Object.keys(nodes));
+  // Rules dereference `nodes` directly; a malformed parsed template (type says required, JSON may lie)
+  // would otherwise throw inside a rule instead of producing diagnostics.
+  const normalized: Template = { ...template, nodes };
 
-  ruleIdHygiene(template, d); // run first — duplicate/bad ids inform the rest
-  ruleSingleEntry(template, ids, d);
-  ruleReferencesResolve(template, ids, d);
-  ruleTerminals(template, d);
-  ruleConditionGrammar(template, d); // grammar sanity — feeds rules 2/4/9
-  ruleTotalRouting(template, d);
-  ruleReachability(template, ids, d);
-  ruleFailurePolicy(template, d); // failure-policy well-formedness
-  ruleLoopCap(template, d); // loop-cap presence
-  ruleCounterScopes(template, d);
-  ruleParallelJoin(template, d);
-  ruleVerdictClosure(template, d);
-  ruleConflictMatrix(template, d);
-  ruleCapabilityRefs(template, d);
-  ruleDataflow(template, ids, d); // produces/consumes — 0016 §7
+  ruleIdHygiene(normalized, d); // run first — duplicate/bad ids inform the rest
+  ruleSingleEntry(normalized, ids, d);
+  ruleReferencesResolve(normalized, ids, d);
+  ruleTerminals(normalized, d);
+  ruleConditionGrammar(normalized, d); // grammar sanity — feeds rules 2/4/9
+  ruleTotalRouting(normalized, d);
+  ruleReachability(normalized, ids, d);
+  ruleFailurePolicy(normalized, d); // failure-policy well-formedness
+  ruleLoopCap(normalized, d); // loop-cap presence
+  ruleCounterScopes(normalized, d);
+  ruleParallelJoin(normalized, d);
+  ruleVerdictClosure(normalized, d);
+  ruleConflictMatrix(normalized, d);
+  ruleCapabilityRefs(normalized, d);
+  ruleDataflow(normalized, ids, d); // produces/consumes — 0016 §7
 
   return d.items;
 }
