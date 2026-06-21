@@ -16,6 +16,11 @@ const origRegisterWorkflow = DBOS.registerWorkflow;
 const origRegisterStep = DBOS.registerStep;
 const origSend = DBOS.send.bind(DBOS);
 const origRecv = DBOS.recv.bind(DBOS);
+const origSetEvent = DBOS.setEvent.bind(DBOS);
+const origGetEvent = DBOS.getEvent.bind(DBOS);
+const origWriteStream = DBOS.writeStream.bind(DBOS);
+const origCloseStream = DBOS.closeStream.bind(DBOS);
+const origReadStream = DBOS.readStream.bind(DBOS);
 
 type ConfigArg = Parameters<typeof DBOS.setConfig>[0];
 
@@ -49,6 +54,16 @@ function patchDbos(overrides: {
     getStatus: async () => null,
     workflowID: _id,
   });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (DBOS as any).setEvent = async () => undefined;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (DBOS as any).getEvent = async () => null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (DBOS as any).writeStream = async () => undefined;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (DBOS as any).closeStream = async () => undefined;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (DBOS as any).readStream = async function* () {};
 
   return recorded;
 }
@@ -72,6 +87,16 @@ function restoreDbos() {
   (DBOS as any).send = origSend;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (DBOS as any).recv = origRecv;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (DBOS as any).setEvent = origSetEvent;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (DBOS as any).getEvent = origGetEvent;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (DBOS as any).writeStream = origWriteStream;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (DBOS as any).closeStream = origCloseStream;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (DBOS as any).readStream = origReadStream;
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -311,6 +336,41 @@ test('DbosService.signal: idempotencyKey is optional — undefined not passed wh
     await svc.signal('wf-id', 'plan', { decision: 'approve' });
     // arg3 is idempotencyKey (undefined when not passed) — DBOS accepts undefined.
     assert.equal(sendArgs[3], undefined, 'idempotencyKey must be undefined when not supplied');
+  } finally {
+    restoreDbos();
+  }
+});
+
+test('DbosService streams: wrappers delegate to DBOS communication primitives', async () => {
+  patchDbos({});
+  const writes: unknown[][] = [];
+  let closedKey = '';
+  let readArgs: unknown[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (DBOS as any).writeStream = async (...args: unknown[]) => { writes.push(args); };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (DBOS as any).closeStream = async (key: string) => { closedKey = key; };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (DBOS as any).readStream = async function* (...args: unknown[]) {
+    readArgs = args;
+    yield { cursor: 'c1' };
+  };
+
+  try {
+    const { DbosService } = await import('./dbos.service.js');
+    const svc = new DbosService();
+
+    await svc.writeStream('agent-output', { cursor: 'c1' });
+    await svc.closeStream('agent-output');
+    const read: unknown[] = [];
+    for await (const event of svc.readStream('run-1', 'agent-output')) {
+      read.push(event);
+    }
+
+    assert.deepEqual(writes, [['agent-output', { cursor: 'c1' }]]);
+    assert.equal(closedKey, 'agent-output');
+    assert.deepEqual(readArgs, ['run-1', 'agent-output']);
+    assert.deepEqual(read, [{ cursor: 'c1' }]);
   } finally {
     restoreDbos();
   }

@@ -9,6 +9,7 @@ import { createArtifactStore } from './artifact-store.js';
 import { RunAgentError } from './runner.js';
 import { makeRole, BASE_STEP } from './test-fixtures.js';
 import type { ModelProfile } from '../control-plane/definitions.js';
+import type { AgentActivityReporter } from '../observability/agent-activity-reporter.js';
 
 // Fake executor: records the ExecRequest and returns a canned ExecResult. No real `claude`, no tokens.
 function fakeExecutor(result: ExecResult, captured: ExecRequest[]): ProcessExecutor {
@@ -54,6 +55,33 @@ function structuredTransport(
 }
 
 const ATTEMPT_ID = 'attempt_20260101T000000000Z_abc12345';
+
+function fakeReporter(events: string[]): AgentActivityReporter {
+  return {
+    started: () => { events.push('started'); },
+    spawned: (pid) => { events.push(`spawned:${pid}`); },
+    output: (stream, chunk) => { events.push(`${stream}:${chunk}`); },
+    parsed: (event) => { events.push(`parsed:${event.type ?? ''}`); },
+    status: (status) => { events.push(`status:${status}`); },
+    finished: (event) => { events.push(`finished:${String(event.exitCode)}:${String(event.timedOut)}`); },
+    failed: (error) => { events.push(`failed:${error instanceof Error ? error.message : String(error)}`); },
+    flush: async () => undefined,
+    snapshot: () => ({
+      runId: BASE_STEP.runId,
+      attemptId: ATTEMPT_ID,
+      stepId: BASE_STEP.id,
+      role: 'architect',
+      runner: 'claude-code',
+      status: 'running',
+      startedAt: new Date(0).toISOString(),
+      lastEventAt: new Date(0).toISOString(),
+      stdoutBytes: 0,
+      stderrBytes: 0,
+      eventCount: 0,
+      artifactRef: `${BASE_STEP.runId}/${ATTEMPT_ID}`,
+    }),
+  };
+}
 
 function run(executor: ProcessExecutor, roleOverrides = {}) {
   const runner = createClaudeCodeRunner({
@@ -275,6 +303,39 @@ test('claude-code runner: writes process artifacts and returns a stable process 
   }
 });
 
+test('claude-code runner: reports spawn, stdout, stderr, parsed, and finished lifecycle', async () => {
+  const events: string[] = [];
+  const stdout = structuredTransport({ verdict: 'approved', output: 'ok' });
+  const runner = createClaudeCodeRunner({
+    executor: async (req) => {
+      req.onSpawn?.(456);
+      req.onStdoutChunk?.('transport chunk');
+      req.onStderrChunk?.('diagnostic chunk');
+      return ok(stdout, { stderr: 'diagnostic chunk' });
+    },
+    resolveCwd: async () => '/workspace/repo',
+    timeoutMs: 5_000,
+  });
+
+  await runner({
+    role: makeRole('architect'),
+    profile: PROFILE,
+    context: 'ctx',
+    attemptId: ATTEMPT_ID,
+    step: BASE_STEP,
+    reporter: fakeReporter(events),
+  });
+
+  assert.deepEqual(events, [
+    'started',
+    'spawned:456',
+    'stdout:transport chunk',
+    'stderr:diagnostic chunk',
+    'parsed:result',
+    'finished:0:false',
+  ]);
+});
+
 test('claude-code runner: reported total_cost_usd of 0 with non-zero tokens yields cost 0 (not token-computed)', async () => {
   const stdout = structuredTransport(undefined, {
     total_cost_usd: 0,
@@ -323,6 +384,28 @@ test('claude-code runner: non-zero exit throws with stderr as the lesson', async
     () => run(fakeExecutor({ code: 1, stdout: '', stderr: 'auth required', timedOut: false }, [])),
     /auth required/,
   );
+});
+
+test('claude-code runner: reports failed lifecycle on non-zero exit', async () => {
+  const events: string[] = [];
+  const runner = createClaudeCodeRunner({
+    executor: async () => ({ code: 2, stdout: '', stderr: 'auth required', timedOut: false }),
+    resolveCwd: async () => '/workspace/repo',
+    timeoutMs: 5_000,
+  });
+
+  await assert.rejects(() =>
+    runner({
+      role: makeRole('architect'),
+      profile: PROFILE,
+      context: 'ctx',
+      attemptId: ATTEMPT_ID,
+      step: BASE_STEP,
+      reporter: fakeReporter(events),
+    }),
+  );
+
+  assert.deepEqual(events, ['started', 'failed:claude-code runner exited with code 2']);
 });
 
 test('claude-code runner: non-zero exit error carries process artifact refs/tails', async () => {
@@ -481,6 +564,42 @@ test('claude-code runner: threads attemptId into the prompt and calls only the e
   assert.ok(captured[0]?.input?.includes(ATTEMPT_ID), 'attemptId present in delivered prompt');
   assert.equal(executorCalls, 1, 'process launched exactly once via the executor');
   assert.equal(resolveCwdCalls, 1, 'no external call beyond executor + injected resolveCwd');
+});
+
+test('claude-code runner: reports failed lifecycle when resolveCwd rejects before process start', async () => {
+  const events: string[] = [];
+  let executorCalls = 0;
+  const runner = createClaudeCodeRunner({
+    executor: async () => {
+      executorCalls++;
+      return ok(structuredTransport());
+    },
+    resolveCwd: async () => {
+      throw new Error('worktree unavailable');
+    },
+    timeoutMs: 5_000,
+  });
+
+  await assert.rejects(
+    () =>
+      runner({
+        role: makeRole('architect'),
+        profile: PROFILE,
+        context: 'ctx',
+        attemptId: ATTEMPT_ID,
+        step: BASE_STEP,
+        reporter: fakeReporter(events),
+      }),
+    (err) => {
+      assert.ok(err instanceof RunAgentError);
+      assert.match(err.message, /worktree unavailable/);
+      assert.equal(err.artifacts, undefined);
+      return true;
+    },
+  );
+
+  assert.equal(executorCalls, 0, 'process must not launch when cwd resolution fails');
+  assert.deepEqual(events, ['failed:worktree unavailable']);
 });
 
 // ─── defaults ──────────────────────────────────────────────────────────────
