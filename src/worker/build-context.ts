@@ -40,16 +40,41 @@ function bounded(value: string, maxChars: number): string {
   return `${value.slice(0, maxChars)}\n[truncated: ${String(value.length - maxChars)} chars omitted]`;
 }
 
+function unquote(value: string): string {
+  if (value.length >= 2 && ((value[0] === '"' && value.at(-1) === '"') || (value[0] === '\'' && value.at(-1) === '\''))) {
+    return value.slice(1, -1);
+  }
+  return value;
+}
+
+function firstSeparatorIndex(value: string): number {
+  const colon = value.indexOf(':');
+  const equals = value.indexOf('=');
+  if (colon === -1) return equals;
+  if (equals === -1) return colon;
+  return Math.min(colon, equals);
+}
+
+function leadingWhitespace(value: string): string {
+  let i = 0;
+  while (i < value.length && (value[i] === ' ' || value[i] === '\t')) i += 1;
+  return value.slice(0, i);
+}
+
+function redactTextLine(line: string): string {
+  const separator = firstSeparatorIndex(line);
+  if (separator === -1) return line;
+  const key = unquote(line.slice(0, separator).trim());
+  if (!isSecretKey(key)) return line;
+  const afterSeparator = line.slice(separator + 1);
+  const prefix = leadingWhitespace(afterSeparator);
+  const rest = afterSeparator.slice(prefix.length);
+  const quote = rest[0] === '"' || rest[0] === '\'' ? rest[0] : '';
+  return `${line.slice(0, separator + 1)}${prefix}${quote}[REDACTED]${quote}`;
+}
+
 function redactText(value: string): string {
-  return value
-    .replace(
-      /(["']?)(\w*(?:TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY)\w*)\1\s*:\s*(["'])(.*?)\3/gi,
-      '$1$2$1: $3[REDACTED]$3',
-    )
-    .replace(
-      /\b(\w*(?:TOKEN|SECRET|PASSWORD|API_KEY|ACCESS_KEY)\w*)\s*[:=]\s*([^\s"'`]+)/gi,
-      '$1=[REDACTED]',
-    );
+  return value.split('\n').map(redactTextLine).join('\n');
 }
 
 function redactJsonish(value: unknown): unknown {
