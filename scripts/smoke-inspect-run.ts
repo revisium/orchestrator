@@ -1,46 +1,9 @@
-import { spawn } from 'node:child_process';
-import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
-import { createControlPlaneDataAccess } from '../src/control-plane/index.js';
+import { assertIncludes, matchId, runCli } from '../src/smoke/cli.js';
+import { guardSmokeIsolation } from '../src/smoke/isolation.js';
 
-const require = createRequire(import.meta.url);
-const tsxPackagePath = require.resolve('tsx/package.json');
-const tsxPackage = require(tsxPackagePath) as { bin: string | Record<string, string> };
-const tsxBin = typeof tsxPackage.bin === 'string' ? tsxPackage.bin : tsxPackage.bin.tsx;
-if (!tsxBin) throw new Error('Could not resolve tsx CLI path from package.json');
-const tsxCliPath = join(dirname(tsxPackagePath), tsxBin);
+guardSmokeIsolation({ scriptName: 'smoke:inspect-run' });
 
-type CliResult = {
-  stdout: string;
-  stderr: string;
-  status: number | null;
-};
-
-function runCli(args: string[]): Promise<CliResult> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [tsxCliPath, 'src/cli/index.ts', ...args], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (chunk: string) => { stdout += chunk; });
-    child.stderr.on('data', (chunk: string) => { stderr += chunk; });
-    child.on('error', reject);
-    child.on('close', (status) => resolve({ stdout, stderr, status }));
-  });
-}
-
-function matchId(output: string, pattern: RegExp, label: string): string {
-  const match = pattern.exec(output);
-  if (!match?.[1]) throw new Error(`Could not parse ${label} from CLI output:\n${output}`);
-  return match[1];
-}
-
-function assertIncludes(str: string, sub: string, label: string): void {
-  if (!str.includes(sub)) throw new Error(`${label}: expected output to include "${sub}".\nGot:\n${str}`);
-}
+const { createControlPlaneDataAccess } = await import('../src/control-plane/index.js');
 
 // Step 1: create a run with a unique title
 const title = `Smoke inspect run ${Date.now()}`;

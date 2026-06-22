@@ -1,4 +1,8 @@
-import { createControlPlaneDataAccess } from '../src/control-plane/index.js';
+import { guardSmokeIsolation } from '../src/smoke/isolation.js';
+
+guardSmokeIsolation({ scriptName: 'smoke:control-plane' });
+
+const { createControlPlaneDataAccess } = await import('../src/control-plane/index.js');
 
 const cp = createControlPlaneDataAccess();
 const suffix = Date.now();
