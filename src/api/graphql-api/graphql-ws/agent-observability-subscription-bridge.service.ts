@@ -143,7 +143,10 @@ function stringifyReason(reason: unknown): string {
   if (reason instanceof Error) return reason.message;
   if (typeof reason === 'string') return reason;
   if (reason === undefined) return 'undefined';
-  if (reason === null || typeof reason !== 'object') return String(reason);
+  if (reason === null) return 'null';
+  if (typeof reason === 'number' || typeof reason === 'boolean' || typeof reason === 'bigint') return `${reason}`;
+  if (typeof reason === 'symbol') return reason.description ? `Symbol(${reason.description})` : 'Symbol()';
+  if (typeof reason === 'function') return reason.name ? `[function ${reason.name}]` : '[function]';
   try {
     return JSON.stringify(reason) ?? 'unserializable object';
   } catch {
