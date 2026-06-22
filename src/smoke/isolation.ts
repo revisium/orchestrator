@@ -101,14 +101,17 @@ export function resolveSmokeIsolation(options: SmokeIsolationOptions): SmokeIsol
     );
   }
 
-  return {
+  const isolation: SmokeIsolation = {
     scriptName: options.scriptName,
     dataDir,
     httpPort,
     pgPort,
     dbosDb,
-    ...(graphqlPort !== undefined ? { graphqlPort } : {}),
   };
+  if (typeof graphqlPort === 'number') {
+    isolation.graphqlPort = graphqlPort;
+  }
+  return isolation;
 }
 
 export function printSmokeIsolation(isolation: SmokeIsolation): void {

@@ -1,50 +1,9 @@
-import { spawn } from 'node:child_process';
-import { createRequire } from 'node:module';
-import { dirname, join } from 'node:path';
+import { matchId, runCli } from '../src/smoke/cli.js';
 import { guardSmokeIsolation } from '../src/smoke/isolation.js';
 
 guardSmokeIsolation({ scriptName: 'smoke:create-run' });
 
 const { createControlPlaneDataAccess } = await import('../src/control-plane/index.js');
-
-const require = createRequire(import.meta.url);
-const tsxPackagePath = require.resolve('tsx/package.json');
-const tsxPackage = require(tsxPackagePath) as { bin: string | Record<string, string> };
-const tsxBin = typeof tsxPackage.bin === 'string' ? tsxPackage.bin : tsxPackage.bin.tsx;
-if (!tsxBin) throw new Error('Could not resolve tsx CLI path from package.json');
-const tsxCliPath = join(dirname(tsxPackagePath), tsxBin);
-
-type CliResult = {
-  stdout: string;
-  stderr: string;
-  status: number | null;
-};
-
-function runCli(args: string[]): Promise<CliResult> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [tsxCliPath, 'src/cli/index.ts', ...args], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.setEncoding('utf8');
-    child.stderr.setEncoding('utf8');
-    child.stdout.on('data', (chunk: string) => {
-      stdout += chunk;
-    });
-    child.stderr.on('data', (chunk: string) => {
-      stderr += chunk;
-    });
-    child.on('error', reject);
-    child.on('close', (status) => resolve({ stdout, stderr, status }));
-  });
-}
-
-function matchId(output: string, pattern: RegExp, label: string): string {
-  const match = pattern.exec(output);
-  if (!match?.[1]) throw new Error(`Could not parse ${label} from CLI output:\n${output}`);
-  return match[1];
-}
 
 const title = `Smoke create run ${Date.now()}`;
 const cli = await runCli([
