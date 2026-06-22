@@ -21,6 +21,12 @@ import type { INestApplicationContext } from '@nestjs/common';
 import { ControlPlaneError } from '../../control-plane/index.js';
 import { CreateRunWorkflowError, type CreateRunInput } from '../../run/create-run.js';
 import { formatRunList, formatRunDetail, formatEventList, formatEventListVerbose, formatAttemptList } from '../../run/inspect-run.js';
+import type {
+  AgentAttemptSummary,
+  AgentLogChunk,
+  AgentLogStream,
+  AgentRunActivity,
+} from '../../observability/types.js';
 import type { RunService } from '../../revisium/run.service.js';
 import { withRevisiumService } from './revisium-context.js';
 import { sanitizeWorkflowID } from './dev.js';
@@ -71,6 +77,28 @@ type LogOptions = {
   limit?: string;
   json: boolean;
 };
+
+type AgentActivityOptions = {
+  json: boolean;
+};
+
+type AgentAttemptsOptions = {
+  json: boolean;
+};
+
+type AgentLogsOptions = {
+  attemptId?: string;
+  stream?: string;
+  offsetBytes?: string;
+  limitBytes?: string;
+  tailBytes?: string;
+  json: boolean;
+};
+
+const DEFAULT_AGENT_LOG_STREAM: AgentLogStream = 'combined';
+const DEFAULT_AGENT_LOG_TAIL_BYTES = 65_536;
+const MAX_AGENT_LOG_READ_BYTES = 1_048_576;
+const AGENT_LOG_STREAMS = new Set<AgentLogStream>(['stdout', 'stderr', 'events', 'combined']);
 
 async function resolveTaskControlPlaneApi(app: INestApplicationContext) {
   const { TaskControlPlaneApiService } = await import('../../task-control-plane/task-control-plane-api.service.js');
@@ -287,6 +315,65 @@ function parseLimit(value: string | undefined, flag: string): number | undefined
   return n;
 }
 
+function parseByteCount(
+  value: string | undefined,
+  flag: string,
+  opts: { required?: boolean; allowZero?: boolean } = {},
+): number | undefined {
+  if (value === undefined) {
+    if (opts.required) throw new Error(`Invalid ${flag}: missing value`);
+    return undefined;
+  }
+  const n = Number(value);
+  const min = opts.allowZero ? 0 : 1;
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < min) {
+    const label = opts.allowZero ? 'a non-negative integer' : 'a positive integer';
+    throw new Error(`Invalid ${flag}: ${value} (must be ${label})`);
+  }
+  if (n > MAX_AGENT_LOG_READ_BYTES) {
+    throw new Error(`Invalid ${flag}: ${value} (maximum is ${MAX_AGENT_LOG_READ_BYTES})`);
+  }
+  return n;
+}
+
+function parseAgentLogStream(value: string | undefined): AgentLogStream {
+  const stream = value ?? DEFAULT_AGENT_LOG_STREAM;
+  if (AGENT_LOG_STREAMS.has(stream as AgentLogStream)) return stream as AgentLogStream;
+  throw new Error(`Invalid --stream: ${stream} (must be stdout, stderr, events, or combined)`);
+}
+
+export function buildAgentLogInput(runId: string, options: AgentLogsOptions) {
+  const hasTail = options.tailBytes !== undefined;
+  const hasOffsetOrLimit = options.offsetBytes !== undefined || options.limitBytes !== undefined;
+  if (hasTail && hasOffsetOrLimit) {
+    throw new Error('Invalid log range: --tail-bytes cannot be combined with --offset-bytes or --limit-bytes');
+  }
+
+  const input: {
+    runId: string;
+    attemptId?: string;
+    stream: AgentLogStream;
+    offsetBytes?: number;
+    limitBytes?: number;
+    tailBytes?: number;
+  } = {
+    runId,
+    stream: parseAgentLogStream(options.stream),
+  };
+  if (options.attemptId !== undefined) input.attemptId = options.attemptId;
+
+  if (hasTail) {
+    input.tailBytes = parseByteCount(options.tailBytes, '--tail-bytes', { required: true });
+  } else if (hasOffsetOrLimit) {
+    input.offsetBytes = parseByteCount(options.offsetBytes ?? '0', '--offset-bytes', { allowZero: true });
+    input.limitBytes = parseByteCount(options.limitBytes ?? String(DEFAULT_AGENT_LOG_TAIL_BYTES), '--limit-bytes');
+  } else {
+    input.tailBytes = DEFAULT_AGENT_LOG_TAIL_BYTES;
+  }
+
+  return input;
+}
+
 /**
  * withRunService — thin wrapper around the shared withRevisiumService helper.
  * Opens exactly ONE Nest context per invocation and closes it in finally.
@@ -500,6 +587,78 @@ async function runLog(runId: string, options: LogOptions): Promise<void> {
   }
 }
 
+async function runAgentActivity(
+  runId: string,
+  options: AgentActivityOptions,
+  app: INestApplicationContext | undefined,
+): Promise<void> {
+  if (!app) {
+    console.error('Error: run activity requires the host context — invoke via the host path');
+    process.exitCode = 1;
+    return;
+  }
+
+  try {
+    const api = await resolveTaskControlPlaneApi(app);
+    const activity = await api.getAgentActivity(runId);
+    if (options.json) {
+      process.stdout.write(JSON.stringify(activity, null, 2) + '\n');
+    } else {
+      console.log(formatAgentActivity(activity, runId));
+    }
+  } catch (error) {
+    reportRunCliError(error);
+  }
+}
+
+async function runAgentAttempts(
+  runId: string,
+  options: AgentAttemptsOptions,
+  app: INestApplicationContext | undefined,
+): Promise<void> {
+  if (!app) {
+    console.error('Error: run attempts requires the host context — invoke via the host path');
+    process.exitCode = 1;
+    return;
+  }
+
+  try {
+    const api = await resolveTaskControlPlaneApi(app);
+    const attempts = await api.getAgentAttempts(runId);
+    if (options.json) {
+      process.stdout.write(JSON.stringify(attempts, null, 2) + '\n');
+    } else {
+      console.log(formatAgentAttempts(attempts));
+    }
+  } catch (error) {
+    reportRunCliError(error);
+  }
+}
+
+async function runAgentLogs(
+  runId: string,
+  options: AgentLogsOptions,
+  app: INestApplicationContext | undefined,
+): Promise<void> {
+  if (!app) {
+    console.error('Error: run logs requires the host context — invoke via the host path');
+    process.exitCode = 1;
+    return;
+  }
+
+  try {
+    const api = await resolveTaskControlPlaneApi(app);
+    const chunk = await api.getAgentLog(buildAgentLogInput(runId, options));
+    if (options.json) {
+      process.stdout.write(JSON.stringify(chunk, null, 2) + '\n');
+    } else {
+      console.log(formatAgentLogChunk(chunk));
+    }
+  } catch (error) {
+    reportRunCliError(error);
+  }
+}
+
 async function runCancel(runId: string): Promise<void> {
   try {
     const result = await withRunService((svc) => svc.cancelRun(runId));
@@ -516,6 +675,67 @@ async function runCancel(runId: string): Promise<void> {
   } catch (error) {
     reportRunCliError(error);
   }
+}
+
+function formatAgentActivity(activity: AgentRunActivity | null, runId: string): string {
+  if (!activity) return `no agent activity for ${runId}`;
+  const lines = [
+    `run: ${activity.runId}`,
+    `status: ${activity.aggregateStatus}`,
+    `latest activity: ${activity.latestActivityAt}`,
+  ];
+  if (activity.latestOutputAt) lines.push(`latest output: ${activity.latestOutputAt}`);
+  if (activity.attempts.length === 0) {
+    lines.push('attempts: 0');
+    return lines.join('\n');
+  }
+  lines.push('attempts:');
+  for (const attempt of activity.attempts) {
+    const bits = [
+      attempt.attemptId,
+      attempt.role,
+      attempt.runner,
+      attempt.status,
+      `stdout=${attempt.stdoutBytes}`,
+      `stderr=${attempt.stderrBytes}`,
+    ];
+    if (attempt.lastStream) bits.push(`lastStream=${attempt.lastStream}`);
+    if (attempt.stepKey) bits.push(`step=${attempt.stepKey}`);
+    lines.push(`- ${bits.join(' ')}`);
+  }
+  return lines.join('\n');
+}
+
+function formatAgentAttempts(attempts: AgentAttemptSummary[]): string {
+  if (attempts.length === 0) return 'no agent attempts';
+  return attempts.map((attempt) => {
+    const bits = [
+      attempt.attemptId,
+      attempt.role,
+      attempt.runner,
+      attempt.status,
+      `stdout=${attempt.stdoutBytes}`,
+      `stderr=${attempt.stderrBytes}`,
+      `started=${attempt.startedAt}`,
+    ];
+    if (attempt.finishedAt) bits.push(`finished=${attempt.finishedAt}`);
+    if (attempt.stepKey) bits.push(`step=${attempt.stepKey}`);
+    return bits.join(' ');
+  }).join('\n');
+}
+
+function formatAgentLogChunk(chunk: AgentLogChunk): string {
+  const header = [
+    `run: ${chunk.runId}`,
+    `attempt: ${chunk.attemptId}`,
+    `stream: ${chunk.stream}`,
+    `offset: ${chunk.offsetBytes}`,
+  ];
+  if (chunk.nextOffsetBytes !== undefined) header.push(`next: ${chunk.nextOffsetBytes}`);
+  if (chunk.totalBytes !== undefined) header.push(`total: ${chunk.totalBytes}`);
+  if (chunk.truncated) header.push('truncated: true');
+  if (chunk.content.length === 0) return header.join('\n');
+  return `${header.join('\n')}\n\n${chunk.content}`;
 }
 
 export function registerRun(program: Command, app?: INestApplicationContext): void {
@@ -582,6 +802,32 @@ export function registerRun(program: Command, app?: INestApplicationContext): vo
     .option('--limit <n>', 'Maximum number of results')
     .option('--json', 'Output as JSON', false)
     .action(runLog);
+
+  run
+    .command('activity')
+    .description('Show live agent activity for a run (host-requiring)')
+    .argument('<runId>', 'Run ID')
+    .option('--json', 'Output as JSON', false)
+    .action((runId: string, options: AgentActivityOptions) => runAgentActivity(runId, options, app));
+
+  run
+    .command('attempts')
+    .description('List agent attempt artifacts for a run (host-requiring)')
+    .argument('<runId>', 'Run ID')
+    .option('--json', 'Output as JSON', false)
+    .action((runId: string, options: AgentAttemptsOptions) => runAgentAttempts(runId, options, app));
+
+  run
+    .command('logs')
+    .description('Read bounded agent log content for a run (host-requiring)')
+    .argument('<runId>', 'Run ID')
+    .option('--attempt-id <id>', 'Agent attempt ID')
+    .option('--stream <stream>', 'Log stream: stdout, stderr, events, or combined', DEFAULT_AGENT_LOG_STREAM)
+    .option('--offset-bytes <n>', 'Start reading at byte offset')
+    .option('--limit-bytes <n>', 'Maximum bytes to read')
+    .option('--tail-bytes <n>', 'Read the last N bytes')
+    .option('--json', 'Output as JSON', false)
+    .action((runId: string, options: AgentLogsOptions) => runAgentLogs(runId, options, app));
 
   run
     .command('cancel')

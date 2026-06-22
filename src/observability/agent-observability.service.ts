@@ -65,6 +65,17 @@ const DEFAULT_STREAM_READ_TIMEOUT_MS = 250;
 const DEFAULT_IDLE_THRESHOLD_MS = 120_000;
 const MAX_STREAM_ACTIVITY_SCAN_EVENTS = 10_000;
 const SAFE_CURSOR_RE = /^[A-Za-z0-9_.:-]+$/;
+const OUTPUT_EVENT_KINDS = new Set<AgentOutputEvent['kind']>(['activity', 'output', 'parsed_event', 'status']);
+const ACTIVITY_STATUSES = new Set<AgentActivityStatus>([
+  'starting',
+  'running',
+  'idle',
+  'permission_blocked',
+  'cancelled',
+  'exited',
+  'timed_out',
+  'failed',
+]);
 
 type ReadBounds =
   | { mode: 'tail'; tailBytes: number }
@@ -96,6 +107,27 @@ type SensitiveSpan = {
 type AlignedWindow = {
   buffer: Buffer;
   absoluteStart: number;
+};
+
+type OutputEventFields = {
+  cursor: string;
+  attemptId: string;
+  stepId: string;
+  at: string;
+  kind: AgentOutputEvent['kind'];
+};
+
+type ActivitySnapshotFields = {
+  stepId: string;
+  role: string;
+  runner: string;
+  status: AgentActivityStatus;
+  startedAt: string;
+  lastEventAt: string;
+  stdoutBytes: number;
+  stderrBytes: number;
+  eventCount: number;
+  artifactRef: string;
 };
 
 export class AgentObservabilityService {
@@ -136,12 +168,13 @@ export class AgentObservabilityService {
     const cursor = input.cursor === undefined ? undefined : validateCursor(input.cursor);
     const limit = validateEventLimit(input.limit);
     const timeoutMs = validateStreamTimeout(input.timeoutMs);
+    await this.assertRunExists(safeRunId);
     if (!this.dbos) {
       return { runId: safeRunId, events: [], cursorExpired: cursor !== undefined };
     }
 
     const generator = this.dbos.readStream<AgentOutputEvent>(safeRunId, AGENT_OUTPUT_STREAM_KEY);
-    try {
+    return withGeneratorCleanup(generator, async () => {
       const page = await readBoundedOutputEvents({
         generator,
         runId: safeRunId,
@@ -155,9 +188,7 @@ export class AgentObservabilityService {
         nextCursor: page.events.at(-1)?.cursor,
         cursorExpired: hasExpiredCursor(cursor, page.cursorFound),
       };
-    } finally {
-      void generator.return(undefined).catch(() => undefined);
-    }
+    });
   }
 
   async *watchAgentOutput(input: WatchAgentOutputInput): AsyncGenerator<AgentOutputEvent, void, unknown> {
@@ -323,7 +354,7 @@ export class AgentObservabilityService {
     const generator = this.dbos.readStream<AgentOutputEvent>(runId, AGENT_OUTPUT_STREAM_KEY);
     const snapshots = new Map<string, AgentActivitySnapshot>();
     let scanned = 0;
-    try {
+    await withGeneratorCleanup(generator, async () => {
       while (scanned < MAX_STREAM_ACTIVITY_SCAN_EVENTS) {
         const next = await nextWithTimeout(generator, DEFAULT_STREAM_READ_TIMEOUT_MS);
         if (next === 'timeout' || next.done) break;
@@ -331,9 +362,7 @@ export class AgentObservabilityService {
         const event = normalizeOutputEvent(runId, next.value);
         if (event?.snapshot) snapshots.set(event.attemptId, event.snapshot);
       }
-    } finally {
-      void generator.return(undefined).catch(() => undefined);
-    }
+    });
     if (scanned >= MAX_STREAM_ACTIVITY_SCAN_EVENTS) return null;
     if (snapshots.size === 0) return null;
     return this.buildRunActivity(runId, [...snapshots.values()]);
@@ -633,23 +662,209 @@ async function nextWithTimeout<T>(
   }
 }
 
-function normalizeOutputEvent(runId: string, value: unknown): AgentOutputEvent | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const event = value as AgentOutputEvent;
-  if (event.runId !== runId) return null;
-  if (typeof event.cursor !== 'string' || event.cursor.length === 0) return null;
-  if (typeof event.attemptId !== 'string' || event.attemptId.length === 0) return null;
-  if (typeof event.stepId !== 'string') return null;
-  if (typeof event.at !== 'string') return null;
-  if (
-    event.kind !== 'activity' &&
-    event.kind !== 'output' &&
-    event.kind !== 'parsed_event' &&
-    event.kind !== 'status'
-  ) {
-    return null;
+async function withGeneratorCleanup<T>(
+  generator: AsyncGenerator<AgentOutputEvent, void, unknown>,
+  read: () => Promise<T>,
+): Promise<T> {
+  let result: T | undefined;
+  let hasResult = false;
+  let primaryError: unknown;
+  try {
+    result = await read();
+    hasResult = true;
+  } catch (error) {
+    primaryError = error;
   }
-  return event;
+
+  let cleanupError: unknown;
+  try {
+    await generator.return(undefined);
+  } catch (error) {
+    cleanupError = error;
+  }
+
+  if (primaryError !== undefined) throw primaryError;
+  if (cleanupError !== undefined) throw cleanupError;
+  if (hasResult) return result as T;
+  throw validationFailure('stream reader did not produce a result');
+}
+
+function normalizeOutputEvent(runId: string, value: unknown): AgentOutputEvent | null {
+  const event = asRecord(value);
+  if (event?.runId !== runId) return null;
+  const fields = normalizeOutputEventFields(event);
+  if (!fields) return null;
+  const normalized: AgentOutputEvent = {
+    cursor: fields.cursor,
+    runId,
+    attemptId: fields.attemptId,
+    stepId: redactPublicText(fields.stepId),
+    at: fields.at,
+    kind: fields.kind,
+  };
+  applyOutputEventOptionalFields(normalized, event, runId, fields.attemptId);
+  return normalized;
+}
+
+function normalizeOutputEventFields(event: Record<string, unknown>): OutputEventFields | undefined {
+  const cursor = normalizeCursorValue(event.cursor);
+  const attemptId = normalizeSegmentValue(event.attemptId, 'attemptId');
+  const stepId = normalizeNonEmptyString(event.stepId);
+  const at = normalizeNonEmptyString(event.at);
+  const kind = normalizeOutputEventKind(event.kind);
+  if (!cursor || !attemptId || !stepId || !at || !kind) return undefined;
+  return { cursor, attemptId, stepId, at, kind };
+}
+
+function applyOutputEventOptionalFields(
+  normalized: AgentOutputEvent,
+  event: Record<string, unknown>,
+  runId: string,
+  attemptId: string,
+): void {
+  applyOutputEventIdentityFields(normalized, event);
+  applyOutputEventByteFields(normalized, event);
+  applyOutputEventTextFields(normalized, event);
+  const statusHint = normalizeActivityStatus(event.statusHint);
+  if (statusHint) normalized.statusHint = statusHint;
+  const snapshot = normalizeActivitySnapshotForOutput(runId, attemptId, event.snapshot);
+  if (snapshot) normalized.snapshot = snapshot;
+}
+
+function applyOutputEventIdentityFields(normalized: AgentOutputEvent, event: Record<string, unknown>): void {
+  const stepKey = normalizeNonEmptyString(event.stepKey);
+  if (stepKey) normalized.stepKey = redactPublicText(stepKey);
+  const attemptSeq = normalizeNonNegativeInteger(event.attemptSeq);
+  if (attemptSeq !== undefined) normalized.attemptSeq = attemptSeq;
+  const stream = normalizeOutputStream(event.stream);
+  if (stream) normalized.stream = stream;
+}
+
+function applyOutputEventByteFields(normalized: AgentOutputEvent, event: Record<string, unknown>): void {
+  const bytes = normalizeNonNegativeInteger(event.bytes);
+  if (bytes !== undefined) normalized.bytes = bytes;
+  const outputOffsetBytes = normalizeNonNegativeInteger(event.outputOffsetBytes);
+  if (outputOffsetBytes !== undefined) normalized.outputOffsetBytes = outputOffsetBytes;
+}
+
+function applyOutputEventTextFields(normalized: AgentOutputEvent, event: Record<string, unknown>): void {
+  if (typeof event.preview === 'string') normalized.preview = redactPublicText(event.preview);
+  if (typeof event.parsedType === 'string') normalized.parsedType = redactPublicText(event.parsedType);
+}
+
+function normalizeCursorValue(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  try {
+    return validateCursor(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeSegmentValue(value: unknown, name: string): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  try {
+    return validateSegment(value, name);
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeNonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function normalizeString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function normalizeOutputEventKind(value: unknown): AgentOutputEvent['kind'] | undefined {
+  if (typeof value !== 'string') return undefined;
+  const kind = value as AgentOutputEvent['kind'];
+  return OUTPUT_EVENT_KINDS.has(kind) ? kind : undefined;
+}
+
+function normalizeOutputStream(value: unknown): AgentOutputEvent['stream'] | undefined {
+  if (value === undefined) return undefined;
+  if (value === 'stdout' || value === 'stderr' || value === 'agent-jsonl') return value;
+  return undefined;
+}
+
+function normalizeActivityStatus(value: unknown): AgentActivityStatus | undefined {
+  if (typeof value !== 'string') return undefined;
+  const status = value as AgentActivityStatus;
+  return ACTIVITY_STATUSES.has(status) ? status : undefined;
+}
+
+function normalizeActivitySnapshotForOutput(
+  runId: string,
+  attemptId: string,
+  value: unknown,
+): AgentActivitySnapshot | undefined {
+  const snapshot = asRecord(value);
+  if (!snapshot) return undefined;
+  if (snapshot.runId !== runId || snapshot.attemptId !== attemptId) return undefined;
+  const fields = normalizeActivitySnapshotFields(snapshot);
+  if (!fields) return undefined;
+  const normalized: AgentActivitySnapshot = {
+    runId,
+    attemptId,
+    stepId: redactPublicText(fields.stepId),
+    role: redactPublicText(fields.role),
+    runner: redactPublicText(fields.runner),
+    status: fields.status,
+    startedAt: fields.startedAt,
+    lastEventAt: fields.lastEventAt,
+    stdoutBytes: fields.stdoutBytes,
+    stderrBytes: fields.stderrBytes,
+    eventCount: fields.eventCount,
+    artifactRef: redactPublicText(fields.artifactRef),
+  };
+  applyActivitySnapshotOptionalFields(normalized, snapshot);
+  return normalized;
+}
+
+function normalizeActivitySnapshotFields(snapshot: Record<string, unknown>): ActivitySnapshotFields | undefined {
+  const fields = {
+    stepId: normalizeNonEmptyString(snapshot.stepId),
+    role: normalizeString(snapshot.role),
+    runner: normalizeString(snapshot.runner),
+    status: normalizeActivityStatus(snapshot.status),
+    startedAt: normalizeString(snapshot.startedAt),
+    lastEventAt: normalizeString(snapshot.lastEventAt),
+    stdoutBytes: normalizeNonNegativeInteger(snapshot.stdoutBytes),
+    stderrBytes: normalizeNonNegativeInteger(snapshot.stderrBytes),
+    eventCount: normalizeNonNegativeInteger(snapshot.eventCount),
+    artifactRef: normalizeNonEmptyString(snapshot.artifactRef),
+  };
+  if (Object.values(fields).includes(undefined)) return undefined;
+  return fields as ActivitySnapshotFields;
+}
+
+function applyActivitySnapshotOptionalFields(
+  normalized: AgentActivitySnapshot,
+  snapshot: Record<string, unknown>,
+): void {
+  const stepKey = normalizeNonEmptyString(snapshot.stepKey);
+  if (stepKey) normalized.stepKey = redactPublicText(stepKey);
+  if (typeof snapshot.pid === 'number' && Number.isInteger(snapshot.pid) && snapshot.pid > 0) normalized.pid = snapshot.pid;
+  if (typeof snapshot.lastOutputAt === 'string') normalized.lastOutputAt = snapshot.lastOutputAt;
+  const lastStream = normalizeOutputStream(snapshot.lastStream);
+  if (lastStream) normalized.lastStream = lastStream;
+  if (typeof snapshot.exitCode === 'number' && Number.isInteger(snapshot.exitCode)) normalized.exitCode = snapshot.exitCode;
+  if (snapshot.exitCode === null) normalized.exitCode = null;
+  if (typeof snapshot.timedOut === 'boolean') normalized.timedOut = snapshot.timedOut;
+  if (typeof snapshot.error === 'string') normalized.error = redactPublicText(snapshot.error);
+}
+
+function normalizeNonNegativeInteger(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) return undefined;
+  return value;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
 }
 
 function redactActivitySnapshot(snapshot: AgentActivitySnapshot): AgentActivitySnapshot {

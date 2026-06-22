@@ -15,6 +15,25 @@ void watchInputShapeRejectsLimit;
 
 const GH_TOKEN = 'gho_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345';
 
+function manualGenerator<T>(input: {
+  next: () => Promise<IteratorResult<T, void>>;
+  return?: () => Promise<IteratorResult<T, void>>;
+}): AsyncGenerator<T, void, unknown> {
+  return {
+    next: input.next,
+    return: input.return ?? (async () => ({ done: true, value: undefined })),
+    throw: async (error?: unknown) => {
+      throw error;
+    },
+    [Symbol.asyncDispose]: async () => {
+      await input.return?.();
+    },
+    [Symbol.asyncIterator]() {
+      return this;
+    },
+  };
+}
+
 function tempRoot(): string {
   return mkdtempSync(join(tmpdir(), 'revo-observability-'));
 }
@@ -713,6 +732,169 @@ test('agent observability: bounded DBOS stream reads apply cursor and limit with
 
   assert.deepEqual(page.events.map((event) => event.cursor), ['c2']);
   assert.equal(page.nextCursor, 'c2');
+});
+
+test('agent observability: readAgentOutputEvents checks run existence before DBOS stream or no-DBOS handling', async () => {
+  let streamRead = false;
+  const service = new AgentObservabilityService({
+    artifactRoot: join(tmpdir(), 'missing-observability-root'),
+    runExists: () => false,
+    dbos: {
+      getEvent: async () => null,
+      readStream<T>() {
+        streamRead = true;
+        return (async function* () {
+          yield {
+            cursor: 'stale',
+            runId: 'run-missing',
+            attemptId: 'attempt_1',
+            stepId: 'step-1',
+            at: '2026-01-01T00:00:00.000Z',
+            kind: 'output',
+          } as T;
+        })();
+      },
+    },
+  });
+  const noDbos = new AgentObservabilityService({
+    artifactRoot: join(tmpdir(), 'missing-observability-root'),
+    runExists: () => false,
+  });
+
+  await assert.rejects(() => service.readAgentOutputEvents({ runId: 'run-missing' }), (error) => {
+    assertObsError(error, 'RUN_NOT_FOUND');
+    return true;
+  });
+  await assert.rejects(() => noDbos.readAgentOutputEvents({ runId: 'run-missing' }), (error) => {
+    assertObsError(error, 'RUN_NOT_FOUND');
+    return true;
+  });
+  assert.equal(streamRead, false);
+});
+
+test('agent observability: readAgentOutputEvents returns redacted whitelisted output events', async () => {
+  const events = [
+    {
+      cursor: 'agent-output-v1:attempt_1:output:stdout:0:1',
+      runId: 'run-redact',
+      attemptId: 'attempt_1',
+      attemptSeq: 1,
+      stepId: '/Users/anton/private-step',
+      stepKey: '/tmp/private-key',
+      at: '2026-01-01T00:00:00.000Z',
+      kind: 'output',
+      stream: 'agent-jsonl',
+      bytes: 8,
+      outputOffsetBytes: 0,
+      preview: `token ${GH_TOKEN} from /Users/anton/projects/revisium`,
+      parsedType: '/home/anton/private-type',
+      artifactRef: '/Users/anton/top-level-artifact',
+      metadata: { token: GH_TOKEN },
+      snapshot: {
+        runId: 'run-redact',
+        attemptId: 'attempt_1',
+        stepId: '/private/tmp/snapshot-step',
+        stepKey: '/Volumes/secrets/snapshot-key',
+        role: 'developer',
+        runner: 'claude-code',
+        pid: 123,
+        status: 'failed',
+        startedAt: '2026-01-01T00:00:00.000Z',
+        lastEventAt: '2026-01-01T00:00:01.000Z',
+        lastStream: 'agent_jsonl',
+        stdoutBytes: 8,
+        stderrBytes: 1,
+        eventCount: 2,
+        artifactRef: '/Users/anton/run-redact/attempt_1',
+        error: `failed at /Users/anton/secret with ${GH_TOKEN}`,
+        metadata: { cwd: '/Users/anton/secret' },
+      },
+    },
+  ];
+  const service = new AgentObservabilityService({
+    artifactRoot: join(tmpdir(), 'missing-observability-root'),
+    runExists: () => true,
+    dbos: {
+      getEvent: async () => null,
+      readStream: async function* <T>() {
+        for (const event of events) yield event as T;
+      },
+    },
+  });
+
+  const page = await service.readAgentOutputEvents({ runId: 'run-redact', limit: 1 });
+
+  const event = page.events[0];
+  assert.equal(event?.stream, 'agent-jsonl');
+  assert.equal(event?.stepId, '[REDACTED_PATH]');
+  assert.equal(event?.stepKey, '[REDACTED_PATH]');
+  assert.equal(event?.preview?.includes('/Users/anton'), false);
+  assert.equal(event?.preview?.includes(GH_TOKEN), false);
+  assert.equal(event?.parsedType, '[REDACTED_PATH]');
+  assert.equal(event?.snapshot?.stepId, '[REDACTED_PATH]');
+  assert.equal(event?.snapshot?.stepKey, '[REDACTED_PATH]');
+  assert.equal(event?.snapshot?.artifactRef, '[REDACTED_PATH]');
+  assert.equal(event?.snapshot?.error?.includes('/Users/anton'), false);
+  assert.equal(event?.snapshot?.error?.includes(GH_TOKEN), false);
+  assert.equal(event?.snapshot?.lastStream, undefined);
+  const serialized = JSON.stringify(page);
+  assert.equal(serialized.includes('agent_jsonl'), false);
+  assert.equal(serialized.includes('metadata'), false);
+  assert.equal(serialized.includes('top-level-artifact'), false);
+});
+
+test('agent observability: readAgentOutputEvents awaits generator cleanup after timeout', async () => {
+  let cleanupStarted = false;
+  let cleanupFinished = false;
+  const generator = manualGenerator<AgentOutputEvent>({
+    next: () => new Promise<IteratorResult<AgentOutputEvent, void>>(() => undefined),
+    return: async () => {
+      cleanupStarted = true;
+      await Promise.resolve();
+      cleanupFinished = true;
+      return { done: true, value: undefined };
+    },
+  });
+  const service = new AgentObservabilityService({
+    artifactRoot: join(tmpdir(), 'missing-observability-root'),
+    runExists: () => true,
+    dbos: {
+      getEvent: async () => null,
+      readStream: <T>() => generator as unknown as AsyncGenerator<T, void, unknown>,
+    },
+  });
+
+  const page = await service.readAgentOutputEvents({ runId: 'run-timeout', timeoutMs: 1 });
+
+  assert.deepEqual(page.events, []);
+  assert.equal(cleanupStarted, true);
+  assert.equal(cleanupFinished, true);
+});
+
+test('agent observability: readAgentOutputEvents awaits generator cleanup after stream failure', async () => {
+  const streamError = new Error('stream failed');
+  let cleanupFinished = false;
+  const generator = manualGenerator<AgentOutputEvent>({
+    next: async () => {
+      throw streamError;
+    },
+    return: async () => {
+      await Promise.resolve();
+      cleanupFinished = true;
+      return { done: true, value: undefined };
+    },
+  });
+  const service = new AgentObservabilityService({
+    artifactRoot: join(tmpdir(), 'missing-observability-root'),
+    runExists: () => true,
+    dbos: {
+      getEvent: async () => null,
+      readStream: <T>() => generator as unknown as AsyncGenerator<T, void, unknown>,
+    },
+  });
+
+  await assert.rejects(() => service.readAgentOutputEvents({ runId: 'run-failure' }), streamError);
+  assert.equal(cleanupFinished, true);
 });
 
 test('agent observability: getAgentActivity derives multi-attempt state from stream snapshots', async () => {
