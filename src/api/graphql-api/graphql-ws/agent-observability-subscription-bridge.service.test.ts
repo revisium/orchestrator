@@ -149,7 +149,7 @@ test('AgentObservabilitySubscriptionBridge rejects subscribers instead of replay
   await assert.rejects(() => iterator.next(), (error) => {
     const err = error as { code?: string; message?: string };
     assert.equal(err.code, 'AGENT_OBSERVABILITY_REFETCH_REQUIRED');
-    assert.match(err.message ?? '', /bounded live-tail warmup|refetch current agent observability state/);
+    assert.equal(err.message, 'agent observability subscription is no longer current; refetch current agent observability state before resubscribing');
     return true;
   });
 });
@@ -221,16 +221,18 @@ test('AgentObservabilitySubscriptionBridge contains watch failures and tells cli
   await assert.rejects(() => iterator.next(), (error) => {
     const err = error as { code?: string; message?: string };
     assert.equal(err.code, 'AGENT_OBSERVABILITY_REFETCH_REQUIRED');
-    assert.match(err.message ?? '', /stream cursor expired|refetch current agent observability state/);
+    assert.equal(err.message, 'agent observability subscription is no longer current; refetch current agent observability state before resubscribing');
+    assert.doesNotMatch(err.message ?? '', /stream cursor expired/);
     return true;
   });
 
   assert.equal(warnings.length, 1);
   assert.match(warnings[0] ?? '', /STREAM_CURSOR_EXPIRED|stream cursor expired/);
-  assert.match(warnings[0] ?? '', /refetch current agent observability state/);
+  assert.match(warnings[0] ?? '', /AGENT_OBSERVABILITY_REFETCH_REQUIRED/);
 });
 
-test('AgentObservabilitySubscriptionBridge rejects subscribers with Error instances for non-Error watch failures', async () => {
+test('AgentObservabilitySubscriptionBridge sanitizes non-Error watch failures for subscribers', async () => {
+  const warnings: string[] = [];
   const api = {
     async *watchAgentActivity() {
       const error: unknown = 'cursor expired';
@@ -242,19 +244,24 @@ test('AgentObservabilitySubscriptionBridge rejects subscribers with Error instan
     },
   };
   const bridge = new AgentObservabilitySubscriptionBridge(api as never);
-  (bridge as unknown as { logger: { warn: () => void } }).logger = { warn: () => undefined };
+  (bridge as unknown as { logger: { warn: (message: string) => void } }).logger = {
+    warn: (message) => warnings.push(message),
+  };
 
   const iterator = bridge.subscribeToActivity('run_1');
   await assert.rejects(() => iterator.next(), (error) => {
     assert.ok(error instanceof Error);
     const err = error as { code?: string; message?: string };
     assert.equal(err.code, 'AGENT_OBSERVABILITY_REFETCH_REQUIRED');
-    assert.match(err.message ?? '', /cursor expired|refetch current agent observability state/);
+    assert.equal(err.message, 'agent observability subscription is no longer current; refetch current agent observability state before resubscribing');
+    assert.doesNotMatch(err.message ?? '', /cursor expired/);
     return true;
   });
+  assert.match(warnings[0] ?? '', /cursor expired/);
 });
 
-test('AgentObservabilitySubscriptionBridge serializes object watch failures without default object stringification', async () => {
+test('AgentObservabilitySubscriptionBridge logs object watch failure diagnostics without exposing them to subscribers', async () => {
+  const warnings: string[] = [];
   const api = {
     async *watchAgentActivity() {
       throw { reason: 'cursor expired', cursor: 'c1' };
@@ -265,7 +272,9 @@ test('AgentObservabilitySubscriptionBridge serializes object watch failures with
     },
   };
   const bridge = new AgentObservabilitySubscriptionBridge(api as never);
-  (bridge as unknown as { logger: { warn: () => void } }).logger = { warn: () => undefined };
+  (bridge as unknown as { logger: { warn: (message: string) => void } }).logger = {
+    warn: (message) => warnings.push(message),
+  };
 
   const iterator = bridge.subscribeToActivity('run_1');
   await assert.rejects(() => iterator.next(), (error) => {
@@ -273,10 +282,11 @@ test('AgentObservabilitySubscriptionBridge serializes object watch failures with
     const err = error as { code?: string; message?: string };
     assert.equal(err.code, 'AGENT_OBSERVABILITY_REFETCH_REQUIRED');
     assert.doesNotMatch(err.message ?? '', /\[object Object\]/);
-    assert.match(err.message ?? '', /"reason":"cursor expired"/);
-    assert.match(err.message ?? '', /refetch current agent observability state/);
+    assert.doesNotMatch(err.message ?? '', /cursor expired/);
+    assert.equal(err.message, 'agent observability subscription is no longer current; refetch current agent observability state before resubscribing');
     return true;
   });
+  assert.match(warnings[0] ?? '', /"reason":"cursor expired"/);
 });
 
 test('AgentObservabilitySubscriptionBridge serializes object iterator throw reasons without default object stringification', async () => {
@@ -326,7 +336,46 @@ test('AgentObservabilitySubscriptionBridge watch failure preempts buffered paylo
   await assert.rejects(() => iterator.next(), (error) => {
     const err = error as { code?: string; message?: string };
     assert.equal(err.code, 'AGENT_OBSERVABILITY_REFETCH_REQUIRED');
-    assert.match(err.message ?? '', /stream cursor expired|refetch current agent observability state/);
+    assert.equal(err.message, 'agent observability subscription is no longer current; refetch current agent observability state before resubscribing');
+    assert.doesNotMatch(err.message ?? '', /stream cursor expired/);
     return true;
   });
+});
+
+test('AgentObservabilitySubscriptionBridge fails only the slow subscriber when its live buffer overflows', async () => {
+  const warnings: string[] = [];
+  const api = {
+    async *watchAgentActivity() {
+      yield activity();
+    },
+    async *watchAgentOutput() {
+      await delay(35);
+      for (let i = 0; i < 1_002; i += 1) {
+        yield outputEvent({ cursor: `live-${i}`, preview: `live ${i}` });
+      }
+    },
+  };
+  const bridge = new AgentObservabilitySubscriptionBridge(api as never);
+  (bridge as unknown as { logger: { warn: (message: string) => void } }).logger = {
+    warn: (message) => warnings.push(message),
+  };
+
+  const slow = bridge.subscribeToOutput('run_1');
+  const fast = bridge.subscribeToOutput('run_1');
+  const fastReads = Array.from({ length: 1_002 }, () => fast.next());
+  await delay(80);
+
+  await assert.rejects(() => slow.next(), (error) => {
+    const err = error as { code?: string; message?: string };
+    assert.equal(err.code, 'AGENT_OBSERVABILITY_REFETCH_REQUIRED');
+    assert.equal(err.message, 'agent observability subscription is no longer current; refetch current agent observability state before resubscribing');
+    return true;
+  });
+
+  const fastResults = await Promise.all(fastReads);
+  assert.equal(fastResults.every((result) => result.done === false), true);
+  assert.equal((fastResults[0]?.value as { runAgentOutputAppended: { cursor: string } }).runAgentOutputAppended.cursor, 'live-0');
+  assert.equal((fastResults.at(-1)?.value as { runAgentOutputAppended: { cursor: string } }).runAgentOutputAppended.cursor, 'live-1001');
+  assert.match(warnings.join('\n'), /subscriber queue overflow/);
+  await fast.return?.(undefined);
 });

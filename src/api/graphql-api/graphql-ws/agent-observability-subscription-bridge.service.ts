@@ -18,9 +18,13 @@ type WatchState = {
 };
 
 type SubscriptionIterator<T> = AsyncIterator<T> & AsyncIterable<T>;
+type SubscriptionPushResult = 'accepted' | 'closed' | 'overflow';
 
 const LIVE_TAIL_WARMUP_IDLE_MS = 25;
 const LIVE_TAIL_WARMUP_MAX_EVENTS = 1_000;
+const SUBSCRIPTION_QUEUE_MAX_VALUES = 1_000;
+const SUBSCRIPTION_REFETCH_CODE = 'AGENT_OBSERVABILITY_REFETCH_REQUIRED';
+const SUBSCRIPTION_REFETCH_MESSAGE = 'agent observability subscription is no longer current; refetch current agent observability state before resubscribing';
 
 export class AgentObservabilitySubscriptionError extends Error {
   constructor(
@@ -73,7 +77,7 @@ export class AgentObservabilitySubscriptionBridge implements OnModuleDestroy {
       .catch((error) => {
         if (abort.signal.aborted) return;
         const subscriptionError = toSubscriptionError(error);
-        this.logger.warn(`${topic} watch stopped for ${runId}: ${subscriptionError.message}`);
+        this.logger.warn(`${topic} watch stopped for ${runId}: ${subscriptionError.code}; ${diagnosticMessage(error)}`);
         for (const item of state.subscribers) item.fail(subscriptionError);
       })
       .finally(() => {
@@ -122,7 +126,12 @@ export class AgentObservabilitySubscriptionBridge implements OnModuleDestroy {
   private publish(topic: Topic, runId: string, payload: Record<string, unknown>): void {
     const state = this.watchers.get(watcherKey(topic, runId));
     if (!state) return;
-    for (const subscriber of state.subscribers) subscriber.push(payload);
+    for (const subscriber of state.subscribers) {
+      const result = subscriber.push(payload);
+      if (result === 'overflow') {
+        this.logger.warn(`${topic} subscriber queue overflow for ${runId}: ${SUBSCRIPTION_REFETCH_CODE}; queued values exceeded ${SUBSCRIPTION_QUEUE_MAX_VALUES}`);
+      }
+    }
   }
 }
 
@@ -130,7 +139,7 @@ function watcherKey(topic: Topic, runId: string): string {
   return `${topic}:${runId}`;
 }
 
-function errorMessage(error: unknown): string {
+function diagnosticMessage(error: unknown): string {
   return stringifyReason(error);
 }
 
@@ -154,10 +163,12 @@ function stringifyReason(reason: unknown): string {
   }
 }
 
-function toSubscriptionError(error: unknown): AgentObservabilitySubscriptionError {
-  if (error instanceof AgentObservabilitySubscriptionError) return error;
-  const message = `${errorMessage(error)}; refetch current agent observability state before resubscribing`;
-  return new AgentObservabilitySubscriptionError('AGENT_OBSERVABILITY_REFETCH_REQUIRED', message);
+function toSubscriptionError(_error: unknown): AgentObservabilitySubscriptionError {
+  return refetchRequiredSubscriptionError();
+}
+
+function refetchRequiredSubscriptionError(): AgentObservabilitySubscriptionError {
+  return new AgentObservabilitySubscriptionError(SUBSCRIPTION_REFETCH_CODE, SUBSCRIPTION_REFETCH_MESSAGE);
 }
 
 async function consumeLiveTail<T>(
@@ -196,10 +207,7 @@ async function consumeLiveTail<T>(
 }
 
 function liveTailOverflowError(): AgentObservabilitySubscriptionError {
-  return new AgentObservabilitySubscriptionError(
-    'AGENT_OBSERVABILITY_REFETCH_REQUIRED',
-    'agent observability stream history exceeded the bounded live-tail warmup; refetch current agent observability state before resubscribing',
-  );
+  return refetchRequiredSubscriptionError();
 }
 
 async function nextWithTimeout<T>(
@@ -229,8 +237,12 @@ class SubscriptionQueue<T> implements SubscriptionIterator<T> {
   private readonly waiters: Array<QueueWaiter<T>> = [];
   private closed = false;
   private error: Error | undefined;
+  private released = false;
 
-  constructor(private readonly onReturn: () => void) {}
+  constructor(
+    private readonly onReturn: () => void,
+    private readonly maxValues = SUBSCRIPTION_QUEUE_MAX_VALUES,
+  ) {}
 
   [Symbol.asyncIterator](): SubscriptionIterator<T> {
     return this;
@@ -247,24 +259,30 @@ class SubscriptionQueue<T> implements SubscriptionIterator<T> {
 
   async return(): Promise<IteratorResult<T>> {
     this.close();
-    this.onReturn();
+    this.release();
     return { done: true, value: undefined };
   }
 
   async throw(error?: unknown): Promise<IteratorResult<T>> {
     this.close();
-    this.onReturn();
+    this.release();
     throw toError(error, 'subscription iterator thrown');
   }
 
-  push(value: T): void {
-    if (this.closed || this.error) return;
+  push(value: T): SubscriptionPushResult {
+    if (this.closed || this.error) return 'closed';
     const waiter = this.waiters.shift();
     if (waiter) {
       waiter.resolve({ done: false, value });
-      return;
+      return 'accepted';
+    }
+    if (this.values.length >= this.maxValues) {
+      this.fail(refetchRequiredSubscriptionError());
+      this.release();
+      return 'overflow';
     }
     this.values.push(value);
+    return 'accepted';
   }
 
   fail(error: unknown): void {
@@ -278,5 +296,11 @@ class SubscriptionQueue<T> implements SubscriptionIterator<T> {
     if (this.closed) return;
     this.closed = true;
     for (const waiter of this.waiters.splice(0)) waiter.resolve({ done: true, value: undefined });
+  }
+
+  private release(): void {
+    if (this.released) return;
+    this.released = true;
+    this.onReturn();
   }
 }
