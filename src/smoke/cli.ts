@@ -4,10 +4,17 @@ import { dirname, join } from 'node:path';
 
 let tsxCliPath: string | undefined;
 
+type SpawnCli = typeof spawn;
+
 export type CliResult = {
   stdout: string;
   stderr: string;
   status: number | null;
+};
+
+export type RunCliDeps = {
+  spawn?: SpawnCli;
+  tsxCliPath?: string;
 };
 
 function resolveTsxCliPath(): string {
@@ -21,9 +28,10 @@ function resolveTsxCliPath(): string {
   return tsxCliPath;
 }
 
-export function runCli(args: string[]): Promise<CliResult> {
+export function runCli(args: string[], deps: RunCliDeps = {}): Promise<CliResult> {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [resolveTsxCliPath(), 'src/cli/index.ts', ...args], {
+    const spawnCli = deps.spawn ?? spawn;
+    const child = spawnCli(process.execPath, [deps.tsxCliPath ?? resolveTsxCliPath(), 'src/cli/index.ts', ...args], {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '';
