@@ -1,7 +1,11 @@
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
-import { createControlPlaneDataAccess } from '../src/control-plane/index.js';
+import { guardSmokeIsolation } from '../src/smoke/isolation.js';
+
+guardSmokeIsolation({ scriptName: 'smoke:create-run' });
+
+const { createControlPlaneDataAccess } = await import('../src/control-plane/index.js');
 
 const require = createRequire(import.meta.url);
 const tsxPackagePath = require.resolve('tsx/package.json');

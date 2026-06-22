@@ -20,9 +20,23 @@ type StartOptions = {
 type LogsOptions = {
   lines?: string;
   follow?: boolean;
+  data?: string;
 };
 
+type NamespaceOptions = {
+  port?: string;
+  pgPort?: string;
+  data?: string;
+};
+
+function applyNamespaceEnv(options: NamespaceOptions): void {
+  if (options.data) process.env.REVO_DATA_DIR = options.data;
+  if (options.port) process.env.REVO_PORT = options.port;
+  if (options.pgPort) process.env.REVO_PG_PORT = options.pgPort;
+}
+
 async function startRevisium(options: StartOptions): Promise<void> {
+  applyNamespaceEnv(options);
   try {
     const { runtime, alreadyRunning } = await ensureRevisium(options);
     if (alreadyRunning) {
@@ -41,7 +55,8 @@ async function startRevisium(options: StartOptions): Promise<void> {
   }
 }
 
-async function stopRevisium(): Promise<void> {
+async function stopRevisium(options: NamespaceOptions = {}): Promise<void> {
+  applyNamespaceEnv(options);
   const runtime = readRuntime();
   if (!runtime) {
     console.log('not running');
@@ -61,7 +76,8 @@ async function stopRevisium(): Promise<void> {
   console.log('stopped');
 }
 
-async function statusRevisium(): Promise<void> {
+async function statusRevisium(options: NamespaceOptions = {}): Promise<void> {
+  applyNamespaceEnv(options);
   const runtime = readRuntime();
   if (!runtime || !isAlive(runtime.pid)) {
     if (runtime) removeRuntime();
@@ -77,6 +93,7 @@ async function statusRevisium(): Promise<void> {
 }
 
 function logsRevisium(options: LogsOptions): void {
+  applyNamespaceEnv(options);
   const { logFile } = getConfig();
   const lines = Number(options.lines ?? 50);
   if (!Number.isInteger(lines) || lines <= 0) {
@@ -105,12 +122,13 @@ export function registerRevisium(program: Command): void {
     .option('--data <dir>', 'Standalone data directory')
     .action(startRevisium);
 
-  revisium.command('stop').action(stopRevisium);
-  revisium.command('status').action(statusRevisium);
+  revisium.command('stop').option('--data <dir>', 'Standalone data directory').action(stopRevisium);
+  revisium.command('status').option('--data <dir>', 'Standalone data directory').action(statusRevisium);
 
   revisium
     .command('logs')
     .option('-n, --lines <lines>', 'Number of log lines', '50')
     .option('-f, --follow', 'Follow log output')
+    .option('--data <dir>', 'Standalone data directory')
     .action(logsRevisium);
 }
