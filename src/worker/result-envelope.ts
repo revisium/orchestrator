@@ -72,6 +72,9 @@ export function agentResultFromStructured(structured: unknown): AgentResult {
 export type TransportEnvelope = {
   text: string;
   isError: boolean;
+  permissionDenials?: unknown;
+  terminalReason?: string;
+  sessionId?: string;
   costUsd?: number;
   inputTokens?: number;
   outputTokens?: number;
@@ -98,6 +101,10 @@ function readFinalText(obj: Record<string, unknown>): string {
   return '';
 }
 
+function readNonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
 // Layer A. Parse defensively; field names are read only inside this module, so a CLI drift is a
 // one-file change. Throws only when stdout is not parseable JSON.
 export function parseTransportEnvelope(stdout: string): TransportEnvelope {
@@ -118,6 +125,9 @@ export function parseTransportEnvelope(stdout: string): TransportEnvelope {
   return {
     text: readFinalText(obj),
     isError: Boolean(obj.is_error),
+    permissionDenials: obj.permission_denials,
+    terminalReason: readNonEmptyString(obj.terminal_reason),
+    sessionId: readNonEmptyString(obj.session_id),
     costUsd: readNumber(obj.total_cost_usd) ?? readNumber(obj.cost_usd),
     inputTokens: readNumber(usage?.input_tokens),
     outputTokens: readNumber(usage?.output_tokens),
