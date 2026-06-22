@@ -218,39 +218,48 @@ function candidateFromContentArray(value: unknown): unknown {
   return undefined;
 }
 
-function structuredCandidateFromTerminalEvent(event: Record<string, unknown>): unknown {
-  if (event.type !== 'turn.completed') return undefined;
+const TERMINAL_STRUCTURED_KEYS = ['structured_output', 'structuredOutput', 'final_output', 'finalOutput'] as const;
+const TERMINAL_OBJECT_KEYS = ['output', 'result'] as const;
+const TERMINAL_CONTENT_HOLDER_KEYS = ['output'] as const;
+const TERMINAL_TEXT_KEYS = ['output_text', 'text', 'result'] as const;
 
-  const directKeys = ['structured_output', 'structuredOutput', 'final_output', 'finalOutput'];
-  for (const key of directKeys) {
-    if (isStructuredCandidate(event[key])) return event[key];
+function structuredCandidateFromObjectKeys(
+  source: Record<string, unknown>,
+  keys: readonly string[],
+): unknown {
+  for (const key of keys) {
+    const candidate = source[key];
+    if (isStructuredCandidate(candidate)) return candidate;
   }
-  if (isStructuredCandidate(event.output)) return event.output;
-  if (isStructuredCandidate(event.result)) return event.result;
+  return undefined;
+}
 
-  const item = maybeObject(event.item);
-  if (item) {
-    if (isStructuredCandidate(item.output)) return item.output;
-    const contentCandidate = candidateFromContentArray(item.content);
-    if (isStructuredCandidate(contentCandidate)) return contentCandidate;
-  }
+function structuredCandidateFromContentHolder(value: unknown): unknown {
+  const obj = maybeObject(value);
+  if (!obj) return undefined;
 
-  const message = maybeObject(event.message);
-  if (message) {
-    if (isStructuredCandidate(message.output)) return message.output;
-    const contentCandidate = candidateFromContentArray(message.content);
-    if (isStructuredCandidate(contentCandidate)) return contentCandidate;
-  }
+  const outputCandidate = structuredCandidateFromObjectKeys(obj, TERMINAL_CONTENT_HOLDER_KEYS);
+  return outputCandidate ?? candidateFromContentArray(obj.content);
+}
 
-  const textKeys = ['output_text', 'text', 'result'];
-  for (const key of textKeys) {
-    const value = readString(event[key]);
+function structuredCandidateFromTextKeys(source: Record<string, unknown>): unknown {
+  for (const key of TERMINAL_TEXT_KEYS) {
+    const value = readString(source[key]);
     if (!value) continue;
     const parsed = parseJsonObjectText(value);
     if (isStructuredCandidate(parsed)) return parsed;
   }
-
   return undefined;
+}
+
+function structuredCandidateFromTerminalEvent(event: Record<string, unknown>): unknown {
+  if (event.type !== 'turn.completed') return undefined;
+
+  return structuredCandidateFromObjectKeys(event, TERMINAL_STRUCTURED_KEYS)
+    ?? structuredCandidateFromObjectKeys(event, TERMINAL_OBJECT_KEYS)
+    ?? structuredCandidateFromContentHolder(event.item)
+    ?? structuredCandidateFromContentHolder(event.message)
+    ?? structuredCandidateFromTextKeys(event);
 }
 
 function eventFailureMessage(event: Record<string, unknown>): string | undefined {

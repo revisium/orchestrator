@@ -254,6 +254,21 @@ test('codex runner: parses strict structured final result from JSON text in fina
   });
 });
 
+test('codex runner: prefers nested content over nested result in final JSONL item', async () => {
+  await withTempRoot(async (root) => {
+    const stdout = jsonl({
+      type: 'turn.completed',
+      item: {
+        result: finalResult({ output: 'nested result must be ignored' }),
+        content: [{ type: 'output_text', text: JSON.stringify(finalResult({ output: 'nested content wins' })) }],
+      },
+    });
+
+    const result = await runWith(fakeExecutor(ok(stdout), []), root);
+    assert.equal(result.output, 'nested content wins');
+  });
+});
+
 test('codex runner: rejects malformed JSONL and missing or invalid structured output', async () => {
   await withTempRoot(async (root) => {
     await assert.rejects(
