@@ -185,9 +185,8 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
 
       const agent = agentResultFromStructured(transport.structuredOutput);
       const costs = buildUsageCosts(step, profile, transport);
-      reporter?.finished({ exitCode: result.code, timedOut: result.timedOut });
-
       const attemptResult = buildAttemptResult(agent, step, costs, processSnapshot);
+      reporter?.finished({ exitCode: result.code, timedOut: result.timedOut });
       if (hasPermissionDenials(transport.permissionDenials)) {
         reporter?.status('permission_blocked', { preview: permissionDenialsPreview(transport) });
       }

@@ -59,7 +59,8 @@ export function boundedPreviewValue(value: unknown, depth = 0): unknown {
 }
 
 export function boundedPreview(value: unknown): string {
-  const preview = JSON.stringify(boundedPreviewValue(value));
+  const bounded = boundedPreviewValue(value);
+  const preview = JSON.stringify(bounded) ?? String(bounded);
   return preview.length > OBSERVABILITY_PREVIEW_MAX_CHARS
     ? `${preview.slice(0, OBSERVABILITY_PREVIEW_MAX_CHARS)}...`
     : preview;

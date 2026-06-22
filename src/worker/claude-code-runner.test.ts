@@ -423,6 +423,42 @@ test('claude-code runner: reports Claude final JSON metadata as parsed events', 
   assert.match(permissionEvent?.preview ?? '', /Write/);
 });
 
+test('claude-code runner: does not report finished when AttemptResult construction fails', async () => {
+  const events: CapturedReporterEvent[] = [];
+  const stdout = structuredTransport({
+    verdict: 'approved',
+    output: 'ok',
+    nextSteps: ['bad'],
+    needsHuman: false,
+  });
+  const runner = createClaudeCodeRunner({
+    executor: fakeExecutor(ok(stdout), []),
+    resolveCwd: async () => '/workspace/repo',
+    timeoutMs: 5_000,
+  });
+
+  await assert.rejects(
+    () =>
+      runner({
+        role: makeRole('architect'),
+        profile: PROFILE,
+        context: 'ctx',
+        attemptId: ATTEMPT_ID,
+        step: BASE_STEP,
+        reporter: capturingReporter(events),
+      }),
+    /agent result nextSteps\[0\] is not an object/,
+  );
+
+  assert.equal(events.some((event) => event.kind === 'finished'), false);
+  assert.deepEqual(events.at(-1), {
+    kind: 'failed',
+    message: 'agent result nextSteps[0] is not an object',
+    exitCode: undefined,
+    timedOut: undefined,
+  });
+});
+
 test('claude-code runner: reports is_error metadata before failing the attempt', async () => {
   const events: CapturedReporterEvent[] = [];
   const stdout = JSON.stringify({ is_error: true, result: 'model refused' });
