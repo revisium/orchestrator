@@ -47,17 +47,25 @@ test('runCli constructs a tsx command and collects stdout/stderr', async () => {
 });
 
 test('runCli resolves the local tsx CLI path when no override is supplied', async () => {
-  let call: SpawnCall | undefined;
+  const calls: SpawnCall[] = [];
   await runCli(['--version'], {
     spawn: fakeSpawn((spawnCall, child) => {
-      call = spawnCall;
+      calls.push(spawnCall);
+      queueMicrotask(() => child.emit('close', 0));
+    }),
+  });
+  await runCli(['--help'], {
+    spawn: fakeSpawn((spawnCall, child) => {
+      calls.push(spawnCall);
       queueMicrotask(() => child.emit('close', 0));
     }),
   });
 
-  assert.equal(call?.command, process.execPath);
-  assert.match(call?.args[0] ?? '', /tsx/);
-  assert.deepEqual(call?.args.slice(1), ['src/cli/index.ts', '--version']);
+  assert.equal(calls[0]?.command, process.execPath);
+  assert.match(calls[0]?.args[0] ?? '', /tsx/);
+  assert.equal(calls[1]?.args[0], calls[0]?.args[0]);
+  assert.deepEqual(calls[0]?.args.slice(1), ['src/cli/index.ts', '--version']);
+  assert.deepEqual(calls[1]?.args.slice(1), ['src/cli/index.ts', '--help']);
 });
 
 test('runCli rejects when spawning the CLI fails', async () => {

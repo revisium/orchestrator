@@ -7,6 +7,7 @@ import {
   logsRevisium,
   registerRevisium,
   startRevisium,
+  stopRevisium,
   statusRevisium,
   type RevisiumDeps,
 } from './revisium.js';
@@ -136,6 +137,19 @@ test('startRevisium reports ensure errors without throwing', async () => {
   assert.deepEqual(exitCodes, [1]);
 });
 
+test('startRevisium reports non-Error ensure failures without throwing', async () => {
+  const { deps, errors, exitCodes } = makeDeps({
+    ensureRevisium: async () => {
+      throw new String('cannot start');
+    },
+  });
+
+  await startRevisium({ data: '/tmp/revo-start-string-error' }, deps);
+
+  assert.deepEqual(errors, ['cannot start']);
+  assert.deepEqual(exitCodes, [1]);
+});
+
 test('revisium status --data uses the selected namespace and removes stale runtime', async () => {
   let removed = false;
   const { deps, env, logs } = makeDeps({
@@ -191,6 +205,27 @@ test('revisium stop --data uses the selected namespace and escalates a stuck pro
   assert.deepEqual(logs, ['stopped']);
 });
 
+test('stopRevisium removes runtime after a graceful process exit', async () => {
+  let removed = false;
+  const { deps, logs, kills } = makeDeps({
+    readRuntime: () => RUNTIME,
+    isAlive: () => true,
+    waitForExit: async (_pid, timeoutMs) => {
+      assert.equal(timeoutMs, 20_000);
+      return true;
+    },
+    removeRuntime: () => {
+      removed = true;
+    },
+  });
+
+  await stopRevisium({ data: '/tmp/revo-stop-graceful' }, deps);
+
+  assert.equal(removed, true);
+  assert.deepEqual(kills, [{ pid: 12345, signal: 'SIGTERM' }]);
+  assert.deepEqual(logs, ['stopped']);
+});
+
 test('revisium logs --data reads the selected namespace log file', async () => {
   const { deps, env, logs } = makeDeps({
     tailLines: (path, lines) => {
@@ -214,4 +249,26 @@ test('logsRevisium rejects invalid line counts before reading a log file', () =>
   });
 
   assert.throws(() => logsRevisium({ data: '/tmp/revo-logs', lines: '0' }, deps), /Invalid line count: 0/);
+});
+
+test('logsRevisium follow mode tails the selected namespace log file', () => {
+  const { deps, env, exitCodes } = makeDeps({
+    spawn: ((command: string, args: readonly string[], options: unknown) => {
+      assert.equal(env.REVO_DATA_DIR, '/tmp/revo-logs-follow');
+      assert.equal(command, 'tail');
+      assert.deepEqual(args, ['-n', '3', '-f', '/tmp/revo-logs-follow/standalone.log']);
+      assert.deepEqual(options, { stdio: 'inherit' });
+      return {
+        on: (event: string, listener: (code: number | null) => void) => {
+          assert.equal(event, 'exit');
+          listener(null);
+          return undefined;
+        },
+      };
+    }) as unknown as typeof spawn,
+  });
+
+  logsRevisium({ data: '/tmp/revo-logs-follow', lines: '3', follow: true }, deps);
+
+  assert.deepEqual(exitCodes, [0]);
 });

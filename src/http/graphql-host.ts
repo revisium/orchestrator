@@ -19,6 +19,14 @@ export type StartedGraphqlHost = {
   url: string;
 };
 
+export type GraphqlHostDeps = {
+  isPortFree: typeof isPortFree;
+};
+
+const defaultDeps: GraphqlHostDeps = {
+  isPortFree,
+};
+
 function parsePort(raw: string | undefined): number {
   if (!raw) return resolveDefaultGraphqlPort();
   const candidate = raw.trim();
@@ -44,12 +52,15 @@ export function resolveGraphqlHostOptions(options: GraphqlHostOptions = {}): Req
   };
 }
 
-export async function startGraphqlHost(options: GraphqlHostOptions = {}): Promise<StartedGraphqlHost> {
+export async function startGraphqlHost(
+  options: GraphqlHostOptions = {},
+  deps: GraphqlHostDeps = defaultDeps,
+): Promise<StartedGraphqlHost> {
   const resolved = resolveGraphqlHostOptions(options);
   if (resolved.host !== DEFAULT_GRAPHQL_HOST) {
     throw new Error(`GraphQL host must bind ${DEFAULT_GRAPHQL_HOST} in v1; received ${resolved.host}`);
   }
-  if (!(await isPortFree(resolved.port))) {
+  if (!(await deps.isPortFree(resolved.port))) {
     throw new Error(
       `GraphQL port ${resolved.port} is already in use; set REVO_GRAPHQL_PORT or --port to a free isolated port.`,
     );

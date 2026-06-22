@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { assertSmokeIsolation, resolveSmokeIsolation } from './isolation.js';
+import { assertSmokeIsolation, printSmokeIsolation, resolveSmokeIsolation } from './isolation.js';
 
 function withEnv(env: Record<string, string | undefined>, fn: () => void): void {
   const previous = new Map<string, string | undefined>();
@@ -67,6 +67,20 @@ test('smoke isolation rejects production defaults', () => {
   });
 });
 
+test('smoke isolation rejects a bare temp root data dir', () => {
+  withEnv({
+    REVO_DATA_DIR: tmpdir(),
+    REVO_PORT: '29422',
+    REVO_PG_PORT: '25640',
+    REVO_DBOS_DB: 'dbos_smoke_isolation',
+  }, () => {
+    assert.throws(
+      () => resolveSmokeIsolation({ scriptName: 'smoke:control-plane' }),
+      /REVO_DATA_DIR must be task-specific/,
+    );
+  });
+});
+
 test('smoke isolation accepts temp data dir, non-default ports, and isolated DBOS db', () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'revo-smoke-isolation-'));
   try {
@@ -108,4 +122,33 @@ test('GraphQL smoke isolation requires explicit non-derived GraphQL port', () =>
   } finally {
     rmSync(dataDir, { recursive: true, force: true });
   }
+});
+
+test('printSmokeIsolation emits the resolved namespace values', () => {
+  const oldLog = console.log;
+  const logs: string[] = [];
+  console.log = (message?: unknown) => {
+    logs.push(String(message ?? ''));
+  };
+  try {
+    printSmokeIsolation({
+      scriptName: 'smoke:graphql',
+      dataDir: '/tmp/revo-smoke-print',
+      httpPort: 29422,
+      pgPort: 25640,
+      dbosDb: 'dbos_smoke_print',
+      graphqlPort: 29424,
+    });
+  } finally {
+    console.log = oldLog;
+  }
+
+  assert.deepEqual(logs, [
+    'smokeIsolationScript=smoke:graphql',
+    'smokeIsolationDataDir=/tmp/revo-smoke-print',
+    'smokeIsolationHttpPort=29422',
+    'smokeIsolationPgPort=25640',
+    'smokeIsolationDbosDb=dbos_smoke_print',
+    'smokeIsolationGraphqlPort=29424',
+  ]);
 });
