@@ -5,6 +5,7 @@
  *   - dev:ping, dev:status (slice 0001)
  *   - run start (slice 0003 — enqueues a DBOS workflow, needs the host)
  *   - run create (resolves installed playbooks/profiles through host services)
+ *   - run activity / attempts / logs (agent observability through host API)
  *   - inbox resolve --approve|--reject (slice 0004 — signals a parked workflow, needs DBOS)
  *   - mcp (local stdio MCP server over the host services)
  *
@@ -27,6 +28,9 @@
 /** Commands that require the Nest/DBOS host context (colon-style, no subcommand needed). */
 const HOST_COMMANDS = new Set(['dev:ping', 'dev:status', 'mcp']);
 
+/** `run` subcommands that route through host services. */
+const HOST_RUN_SUBCOMMANDS = new Set(['start', 'create', 'activity', 'attempts', 'logs']);
+
 /** Flags that force host-free regardless of the command. */
 const HELP_FLAGS = new Set(['--help', '-h', '--version', '-v']);
 
@@ -35,6 +39,11 @@ const GATE_FLAGS = new Set(['--approve', '--reject']);
 
 function firstCommand(args: string[]): string | undefined {
   return args.find((a) => !a.startsWith('-'));
+}
+
+function firstSubcommand(args: string[], command: string): string | undefined {
+  const commandIdx = args.indexOf(command);
+  return args.slice(commandIdx + 1).find((a) => !a.startsWith('-'));
 }
 
 export function isMcpCommand(argv: string[]): boolean {
@@ -59,23 +68,16 @@ export function needsHost(argv: string[]): boolean {
 
   // M5: `run start` is host-requiring.
   // Current contract: `run create` is host-requiring because it resolves installed route data.
+  // Slice 126: agent observability commands route through TaskControlPlaneApiService.
   if (command === 'run') {
-    const commandIdx = args.indexOf(command);
-    const sub = args.slice(commandIdx + 1).find((a) => !a.startsWith('-'));
-    if (sub === 'start') return true;
-    if (sub === 'create') return true;
-    return false;
+    const sub = firstSubcommand(args, command);
+    return sub !== undefined && HOST_RUN_SUBCOMMANDS.has(sub);
   }
 
   // G4/G6: `inbox resolve --approve|--reject` is host-requiring (gate path — signals DBOS).
   // `inbox list`/`show` and `inbox resolve --answer` (non-gate) stay host-free.
   if (command === 'inbox') {
-    const commandIdx = args.indexOf(command);
-    const sub = args.slice(commandIdx + 1).find((a) => !a.startsWith('-'));
-    if (sub === 'resolve') {
-      return args.some((a) => GATE_FLAGS.has(a));
-    }
-    return false;
+    return firstSubcommand(args, command) === 'resolve' && args.some((a) => GATE_FLAGS.has(a));
   }
 
   return HOST_COMMANDS.has(command);

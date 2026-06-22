@@ -5,7 +5,15 @@ import { promisify } from 'node:util';
 import { Inject, Injectable } from '@nestjs/common';
 import { baseUrl, getConfig, isAlive, isHealthy, readRuntime } from '../cli/config.js';
 import { AgentObservabilityService, type GetAgentLogInput } from '../observability/agent-observability.service.js';
-import type { AgentAttemptSummary, AgentLogChunk, AgentOutputEvent, AgentRunActivity, WatchAgentOutputInput } from '../observability/types.js';
+import type {
+  AgentAttemptSummary,
+  AgentLogChunk,
+  AgentOutputEvent,
+  AgentRunActivity,
+  ReadAgentOutputEventsInput,
+  ReadAgentOutputEventsResult,
+  WatchAgentOutputInput,
+} from '../observability/types.js';
 import { ControlPlaneError } from '../control-plane/errors.js';
 import type { InboxItem } from '../control-plane/inbox.js';
 import { DbosService } from '../engine/dbos.service.js';
@@ -1120,6 +1128,10 @@ export class TaskControlPlaneApiService {
 
   getAgentLog(input: GetAgentLogInput): Promise<AgentLogChunk> {
     return this.observability.getAgentLog(input);
+  }
+
+  readAgentOutputEvents(input: ReadAgentOutputEventsInput): Promise<ReadAgentOutputEventsResult> {
+    return this.observability.readAgentOutputEvents(input);
   }
 
   watchAgentActivity(input: WatchAgentOutputInput): AsyncIterable<AgentRunActivity> {

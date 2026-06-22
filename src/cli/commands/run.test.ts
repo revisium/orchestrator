@@ -22,8 +22,16 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { Command } from 'commander';
-import { runStartCore, type RunStartDeps, createRunCore, type CreateRunDeps, registerRun } from './run.js';
+import {
+  buildAgentLogInput,
+  runStartCore,
+  type RunStartDeps,
+  createRunCore,
+  type CreateRunDeps,
+  registerRun,
+} from './run.js';
 import { LIVE_COST_WARNING } from '../live-guard.js';
 import type { PollOpts } from './poll-workflow-state.js';
 import type { INestApplicationContext } from '@nestjs/common';
@@ -53,6 +61,76 @@ test('public run CLI help exposes create-run params without runner override flag
   assert.equal(help.includes('--live'), false);
   assert.equal(help.includes('--params'), true);
   assert.equal(help.includes('--pipeline-id'), true);
+});
+
+test('public run CLI help exposes plural agent observability commands without changing legacy log', () => {
+  const program = new Command();
+  registerRun(program);
+  const run = program.commands.find((command) => command.name() === 'run');
+  assert.ok(run);
+  const commandNames = run.commands.map((command) => command.name());
+
+  assert.ok(commandNames.includes('log'));
+  assert.ok(commandNames.includes('activity'));
+  assert.ok(commandNames.includes('attempts'));
+  assert.ok(commandNames.includes('logs'));
+
+  const legacyLog = run.commands.find((command) => command.name() === 'log');
+  const logs = run.commands.find((command) => command.name() === 'logs');
+  assert.ok(legacyLog);
+  assert.ok(logs);
+  assert.equal(legacyLog.helpInformation().includes('--attempt-id'), false);
+  assert.equal(logs.helpInformation().includes('--attempt-id'), true);
+  assert.equal(logs.helpInformation().includes('--tail-bytes'), true);
+});
+
+test('run logs input builder defaults to combined bounded tail', () => {
+  assert.deepEqual(buildAgentLogInput('run-1', { json: false }), {
+    runId: 'run-1',
+    stream: 'combined',
+    tailBytes: 65_536,
+  });
+});
+
+test('run logs input builder preserves explicit stream and offset range', () => {
+  assert.deepEqual(buildAgentLogInput('run-1', {
+    json: true,
+    attemptId: 'attempt-1',
+    stream: 'stdout',
+    offsetBytes: '10',
+    limitBytes: '20',
+  }), {
+    runId: 'run-1',
+    attemptId: 'attempt-1',
+    stream: 'stdout',
+    offsetBytes: 10,
+    limitBytes: 20,
+  });
+});
+
+test('run logs input builder rejects unbounded or conflicting reads before delegation', () => {
+  assert.throws(
+    () => buildAgentLogInput('run-1', { json: false, tailBytes: '2', offsetBytes: '0' }),
+    /tail-bytes cannot be combined/,
+  );
+  assert.throws(
+    () => buildAgentLogInput('run-1', { json: false, limitBytes: '1048577' }),
+    /maximum is 1048576/,
+  );
+  assert.throws(
+    () => buildAgentLogInput('run-1', { json: false, stream: 'agent_jsonl' }),
+    /Invalid --stream/,
+  );
+});
+
+test('new run agent observability CLI commands delegate only through TaskControlPlaneApiService', () => {
+  const source = readFileSync(new URL('./run.ts', import.meta.url), 'utf8');
+  for (const forbidden of ['AgentObservabilityService', 'ArtifactStore']) {
+    assert.equal(source.includes(forbidden), false, `${forbidden} must not be imported by CLI`);
+  }
+  assert.match(source, /api\.getAgentActivity/);
+  assert.match(source, /api\.getAgentAttempts/);
+  assert.match(source, /api\.getAgentLog/);
 });
 
 /**

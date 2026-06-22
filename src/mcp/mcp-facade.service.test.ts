@@ -4,6 +4,7 @@ import { McpFacadeService } from './mcp-facade.service.js';
 import { MCP_TOOL_NAMES } from './mcp-capabilities.js';
 import type { TaskControlPlaneApiService } from '../task-control-plane/task-control-plane-api.service.js';
 import { ControlPlaneError } from '../control-plane/errors.js';
+import { AgentObservabilityError } from '../observability/types.js';
 import { CreateRunWorkflowError } from '../run/create-run.js';
 
 test('McpFacadeService.getCapabilities exposes the MCP transport surface', () => {
@@ -18,6 +19,11 @@ test('McpFacadeService.getCapabilities exposes the MCP transport surface', () =>
   assert.ok(capabilities.tools.includes('simulate_route'));
   assert.ok(capabilities.tools.includes('get_pr_readiness'));
   assert.ok(capabilities.tools.includes('list_pr_feedback'));
+  assert.ok(capabilities.tools.includes('get_agent_activity'));
+  assert.ok(capabilities.tools.includes('get_agent_attempts'));
+  assert.ok(capabilities.tools.includes('get_agent_log'));
+  assert.ok(capabilities.tools.includes('tail_agent_log'));
+  assert.ok(capabilities.tools.includes('read_agent_output_events'));
 });
 
 test('McpFacadeService delegates product operations to TaskControlPlaneApiService', async () => {
@@ -71,4 +77,65 @@ test('McpFacadeService delegates PR readiness tools to TaskControlPlaneApiServic
   assert.deepEqual(await facade.getPrReadiness({ repo: 'owner/repo', prNumber: 1 }), { verdict: 'ready' });
   assert.deepEqual(await facade.listPrFeedback({ repo: 'owner/repo', prNumber: 1 }), { developerFixes: [] });
   assert.deepEqual(calls, ['getPrReadiness', 'listPrFeedback']);
+});
+
+test('McpFacadeService delegates agent observability tools to TaskControlPlaneApiService', async () => {
+  const calls: Array<{ name: string; input: unknown }> = [];
+  const api = {
+    async getAgentActivity(input: unknown) {
+      calls.push({ name: 'getAgentActivity', input });
+      return { runId: input, aggregateStatus: 'running' };
+    },
+    async getAgentAttempts(input: unknown) {
+      calls.push({ name: 'getAgentAttempts', input });
+      return [];
+    },
+    async getAgentLog(input: unknown) {
+      calls.push({ name: 'getAgentLog', input });
+      return { runId: 'run-1', attemptId: 'attempt-1', stream: 'combined', offsetBytes: 0, truncated: false, content: '' };
+    },
+    async readAgentOutputEvents(input: unknown) {
+      calls.push({ name: 'readAgentOutputEvents', input });
+      return { runId: 'run-1', events: [], cursorExpired: false };
+    },
+  } as unknown as TaskControlPlaneApiService;
+  const facade = new McpFacadeService(api);
+
+  assert.deepEqual(await facade.getAgentActivity('run-1'), { runId: 'run-1', aggregateStatus: 'running' });
+  assert.deepEqual(await facade.getAgentAttempts('run-1'), []);
+  assert.equal((await facade.getAgentLog({ runId: 'run-1', stream: 'combined', tailBytes: 65_536 })).stream, 'combined');
+  assert.deepEqual(await facade.tailAgentLog({ runId: 'run-1', limit: 100, timeoutMs: 250 }), { runId: 'run-1', events: [], cursorExpired: false });
+  assert.deepEqual(await facade.readAgentOutputEvents({ runId: 'run-1', cursor: 'c1', limit: 1 }), { runId: 'run-1', events: [], cursorExpired: false });
+  assert.deepEqual(calls, [
+    { name: 'getAgentActivity', input: 'run-1' },
+    { name: 'getAgentAttempts', input: 'run-1' },
+    { name: 'getAgentLog', input: { runId: 'run-1', stream: 'combined', tailBytes: 65_536 } },
+    { name: 'readAgentOutputEvents', input: { runId: 'run-1', limit: 100, timeoutMs: 250 } },
+    { name: 'readAgentOutputEvents', input: { runId: 'run-1', cursor: 'c1', limit: 1 } },
+  ]);
+});
+
+test('McpFacadeService exposes agent observability application error codes', async () => {
+  const api = {
+    async getAgentLog() {
+      throw new AgentObservabilityError('RUN_NOT_FOUND', 'run was not found');
+    },
+    async readAgentOutputEvents() {
+      throw new AgentObservabilityError('RUN_NOT_FOUND', 'run was not found');
+    },
+  } as unknown as TaskControlPlaneApiService;
+  const facade = new McpFacadeService(api);
+
+  await assert.rejects(
+    () => facade.getAgentLog({ runId: 'missing', stream: 'combined' }),
+    /RUN_NOT_FOUND: run was not found/,
+  );
+  await assert.rejects(
+    () => facade.tailAgentLog({ runId: 'missing', timeoutMs: 1 }),
+    /RUN_NOT_FOUND: run was not found/,
+  );
+  await assert.rejects(
+    () => facade.readAgentOutputEvents({ runId: 'missing', timeoutMs: 1 }),
+    /RUN_NOT_FOUND: run was not found/,
+  );
 });
