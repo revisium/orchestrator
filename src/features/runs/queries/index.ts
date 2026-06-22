@@ -1,4 +1,7 @@
 import {
+  GetAgentActivityHandler,
+  GetAgentAttemptsHandler,
+  GetAgentLogHandler,
   GetRunAttemptsHandler,
   GetRunDigestHandler,
   GetRunEventsHandler,
@@ -10,6 +13,9 @@ import {
 } from './handlers/runs-query.handlers.js';
 
 export const runsQueryHandlers = [
+  GetAgentActivityHandler,
+  GetAgentAttemptsHandler,
+  GetAgentLogHandler,
   GetRunAttemptsHandler,
   GetRunDigestHandler,
   GetRunEventsHandler,

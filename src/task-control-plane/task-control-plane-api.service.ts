@@ -4,6 +4,8 @@ import { basename, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { Inject, Injectable } from '@nestjs/common';
 import { baseUrl, getConfig, isAlive, isHealthy, readRuntime } from '../cli/config.js';
+import { AgentObservabilityService, type GetAgentLogInput } from '../observability/agent-observability.service.js';
+import type { AgentAttemptSummary, AgentLogChunk, AgentRunActivity } from '../observability/types.js';
 import { ControlPlaneError } from '../control-plane/errors.js';
 import type { InboxItem } from '../control-plane/inbox.js';
 import { DbosService } from '../engine/dbos.service.js';
@@ -364,6 +366,8 @@ export class TaskControlPlaneApiService {
     private readonly pipeline: PipelineService,
     @Inject(DbosService)
     private readonly dbos: DbosService,
+    @Inject(AgentObservabilityService)
+    private readonly observability: AgentObservabilityService,
     private readonly prReadiness: PrReadinessService = new PrReadinessService(),
   ) {}
 
@@ -1104,5 +1108,17 @@ export class TaskControlPlaneApiService {
 
   listPrFeedback(input: GetPrReadinessInput) {
     return this.prReadiness.listPrFeedback(input);
+  }
+
+  getAgentActivity(runId: string): Promise<AgentRunActivity | null> {
+    return this.observability.getAgentActivity(runId);
+  }
+
+  getAgentAttempts(runId: string): Promise<AgentAttemptSummary[]> {
+    return this.observability.listAgentAttempts(runId);
+  }
+
+  getAgentLog(input: GetAgentLogInput): Promise<AgentLogChunk> {
+    return this.observability.getAgentLog(input);
   }
 }

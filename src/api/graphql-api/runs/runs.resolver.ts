@@ -4,10 +4,16 @@ import { GraphQLJSON } from 'graphql-scalars';
 import { RunsApiService } from '../../../features/runs/runs-api.service.js';
 import { GraphqlParamTypes } from '../share/graphql-param-types.js';
 import { CreateRunInput } from './inputs/create-run.input.js';
+import { GetAgentLogInput } from './inputs/get-agent-log.input.js';
 import { GetRunAttemptsInput } from './inputs/get-run-attempts.input.js';
 import { GetRunEventsInput } from './inputs/get-run-events.input.js';
 import { ListRunsInput } from './inputs/list-runs.input.js';
 import { SimulateRouteInput } from './inputs/simulate-route.input.js';
+import {
+  AgentAttemptModel,
+  AgentLogChunkModel,
+  AgentRunActivityModel,
+} from './model/agent-activity.model.js';
 import { CreateRunResultModel } from './model/create-run-result.model.js';
 import { RunAttemptConnection } from './model/run-attempt.model.js';
 import { RunConnection } from './model/run-connection.model.js';
@@ -42,6 +48,24 @@ export class RunsResolver {
   @GraphqlParamTypes(GetRunAttemptsInput)
   runAttempts(@Args('data', { type: () => GetRunAttemptsInput }) data: GetRunAttemptsInput) {
     return this.api.getRunAttempts(data);
+  }
+
+  @Query(() => AgentRunActivityModel, { nullable: true })
+  @GraphqlParamTypes(String)
+  runAgentActivity(@Args('runId', { type: () => ID }) runId: string) {
+    return this.api.getAgentActivity({ runId });
+  }
+
+  @Query(() => [AgentAttemptModel])
+  @GraphqlParamTypes(String)
+  runAgentAttempts(@Args('runId', { type: () => ID }) runId: string) {
+    return this.api.getAgentAttempts({ runId });
+  }
+
+  @Query(() => AgentLogChunkModel)
+  @GraphqlParamTypes(GetAgentLogInput)
+  runAgentLog(@Args('data', { type: () => GetAgentLogInput }) data: GetAgentLogInput) {
+    return this.api.getAgentLog({ ...data, stream: data.stream });
   }
 
   @Query(() => RunDigestModel)
