@@ -23,15 +23,13 @@ import pg from 'pg';
  * progress fully separate from the dev one. Validated to a safe identifier because the name is
  * interpolated into a non-parameterizable `CREATE DATABASE` (CREATE DATABASE cannot bind params).
  */
-function resolveDbosDbName(): string {
+export function resolveDbosDbName(): string {
   const name = process.env['REVO_DBOS_DB'] ?? 'dbos';
   if (!/^[a-z_][a-z0-9_]*$/i.test(name)) {
     throw new Error(`Invalid REVO_DBOS_DB '${name}': must be a SQL identifier (/^[a-z_][a-z0-9_]*$/i)`);
   }
   return name;
 }
-
-const DBOS_DB_NAME = resolveDbosDbName();
 const MAINTENANCE_DB = 'postgres';
 
 /** PostgreSQL SQLSTATE for "database already exists" (duplicate_database). */
@@ -76,6 +74,7 @@ export async function ensurePostgres(
   opts: Partial<PostgresCredentials> = {},
   deps: EnsurePostgresDeps = {},
 ): Promise<void> {
+  const dbosDbName = resolveDbosDbName();
   const { user, password, adminDb } = { ...DEFAULT_CREDS, ...opts };
   // pg.Client.connect() returns Promise<Client> while ClientLike.connect() returns
   // Promise<void>; they are structurally compatible at the call sites used here, but
@@ -90,7 +89,7 @@ export async function ensurePostgres(
     await client.connect();
     const result = await client.query(
       `SELECT count(*)::text AS count FROM pg_database WHERE datname = $1`,
-      [DBOS_DB_NAME],
+      [dbosDbName],
     );
     const exists = result.rows[0]?.count !== '0';
     if (!exists) {
@@ -99,7 +98,7 @@ export async function ensurePostgres(
       // PostgreSQL raises 42P04 (duplicate_database) for the loser. Treat it as success
       // (idempotent — the database now exists). Re-throw any other error.
       try {
-        await client.query(`CREATE DATABASE ${DBOS_DB_NAME}`);
+        await client.query(`CREATE DATABASE ${dbosDbName}`);
       } catch (err) {
         if ((err as { code?: string }).code === PG_SQLSTATE_DUPLICATE_DATABASE) {
           // Another concurrent host already created it — this is fine.
@@ -127,5 +126,5 @@ export function dbosSystemDatabaseUrl(
   user = 'revisium',
   password = 'password',
 ): string {
-  return `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@localhost:${pgPort}/${DBOS_DB_NAME}`;
+  return `postgresql://${encodeURIComponent(user)}:${encodeURIComponent(password)}@localhost:${pgPort}/${resolveDbosDbName()}`;
 }

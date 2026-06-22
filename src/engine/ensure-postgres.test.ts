@@ -11,7 +11,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { dbosSystemDatabaseUrl, ensurePostgres, type ClientLike } from './ensure-postgres.js';
+import { dbosSystemDatabaseUrl, ensurePostgres, resolveDbosDbName, type ClientLike } from './ensure-postgres.js';
 
 /** PostgreSQL SQLSTATE 42P04 = duplicate_database — named constant, not magic string. */
 const PG_SQLSTATE_DUPLICATE_DATABASE = '42P04';
@@ -39,6 +39,21 @@ test('dbosSystemDatabaseUrl: never hardcodes the port', () => {
 test('dbosSystemDatabaseUrl: contains the dbos database name', () => {
   const url = dbosSystemDatabaseUrl(15440);
   assert.ok(url.endsWith('/dbos'), 'URL must end with /dbos');
+});
+
+test('dbosSystemDatabaseUrl: uses isolated REVO_DBOS_DB at call time', () => {
+  const oldDb = process.env.REVO_DBOS_DB;
+  process.env.REVO_DBOS_DB = 'dbos_smoke_isolated';
+  try {
+    assert.equal(resolveDbosDbName(), 'dbos_smoke_isolated');
+    assert.equal(dbosSystemDatabaseUrl(15441), 'postgresql://revisium:password@localhost:15441/dbos_smoke_isolated');
+  } finally {
+    if (oldDb === undefined) {
+      delete process.env.REVO_DBOS_DB;
+    } else {
+      process.env.REVO_DBOS_DB = oldDb;
+    }
+  }
 });
 
 // ── ensurePostgres with injectable ClientLike (F20) ──────────────────────────

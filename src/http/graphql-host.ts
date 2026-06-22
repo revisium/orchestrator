@@ -2,7 +2,7 @@ import type { INestApplication } from '@nestjs/common';
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { addWsServer } from '../api/graphql-api/graphql-ws/ws.js';
-import { resolveDefaultGraphqlPort } from '../config.js';
+import { isPortFree, resolveDefaultGraphqlPort } from '../config.js';
 import { GraphqlHostModule } from './graphql-host.module.js';
 
 export const DEFAULT_GRAPHQL_HOST = '127.0.0.1';
@@ -17,6 +17,14 @@ export type StartedGraphqlHost = {
   host: string;
   port: number;
   url: string;
+};
+
+export type GraphqlHostDeps = {
+  isPortFree: typeof isPortFree;
+};
+
+const defaultDeps: GraphqlHostDeps = {
+  isPortFree,
 };
 
 function parsePort(raw: string | undefined): number {
@@ -44,10 +52,18 @@ export function resolveGraphqlHostOptions(options: GraphqlHostOptions = {}): Req
   };
 }
 
-export async function startGraphqlHost(options: GraphqlHostOptions = {}): Promise<StartedGraphqlHost> {
+export async function startGraphqlHost(
+  options: GraphqlHostOptions = {},
+  deps: GraphqlHostDeps = defaultDeps,
+): Promise<StartedGraphqlHost> {
   const resolved = resolveGraphqlHostOptions(options);
   if (resolved.host !== DEFAULT_GRAPHQL_HOST) {
     throw new Error(`GraphQL host must bind ${DEFAULT_GRAPHQL_HOST} in v1; received ${resolved.host}`);
+  }
+  if (!(await deps.isPortFree(resolved.port))) {
+    throw new Error(
+      `GraphQL port ${resolved.port} is already in use; set REVO_GRAPHQL_PORT or --port to a free isolated port.`,
+    );
   }
 
   const app = await NestFactory.create(GraphqlHostModule, { logger: ['error', 'warn'] });

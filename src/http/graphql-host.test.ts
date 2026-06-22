@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   DEFAULT_GRAPHQL_HOST,
+  startGraphqlHost,
   resolveGraphqlHostOptions,
 } from './graphql-host.js';
 import { resolveDefaultGraphqlPort } from '../config.js';
@@ -61,4 +62,11 @@ test('resolveGraphqlHostOptions rejects invalid environment ports', () => {
       process.env.REVO_GRAPHQL_PORT = oldPort;
     }
   }
+});
+
+test('startGraphqlHost fails actionably when the resolved port is occupied', async () => {
+  await assert.rejects(
+    () => startGraphqlHost({ port: 19425 }, { isPortFree: async () => false }),
+    /GraphQL port 19425 is already in use; set REVO_GRAPHQL_PORT or --port to a free isolated port/,
+  );
 });
