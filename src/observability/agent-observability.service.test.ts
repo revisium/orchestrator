@@ -122,8 +122,13 @@ test('agent observability: distinguishes missing run and existing run with no at
       assertObsError(error, 'RUN_NOT_FOUND');
       return true;
     });
+    await assert.rejects(() => missing.getAgentActivity('run-missing'), (error) => {
+      assertObsError(error, 'RUN_NOT_FOUND');
+      return true;
+    });
 
     const empty = new AgentObservabilityService({ artifactRoot: root, runExists: () => true });
+    assert.equal(await empty.getAgentActivity('run-empty'), null);
     assert.deepEqual(await empty.listAgentAttempts('run-empty'), []);
     await assert.rejects(() => empty.getAgentLog({ runId: 'run-empty', stream: 'stdout' }), (error) => {
       assertObsError(error, 'NO_AGENT_ATTEMPT_AVAILABLE');
@@ -749,8 +754,8 @@ test('agent observability: getAgentActivity derives multi-attempt state from str
       snapshot: {
         runId: 'run-activity',
         attemptId: 'attempt_2',
-        stepId: 'step-2',
-        stepKey: 'reviewer',
+        stepId: '/Users/anton/private-step',
+        stepKey: '/Users/anton/private-key',
         role: 'reviewer',
         runner: 'claude-code',
         status: 'running',
@@ -760,7 +765,8 @@ test('agent observability: getAgentActivity derives multi-attempt state from str
         stdoutBytes: 7,
         stderrBytes: 0,
         eventCount: 1,
-        artifactRef: 'run-activity/attempt_2',
+        artifactRef: '/Users/anton/run-activity/attempt_2',
+        error: 'failed in /Users/anton/projects/revisium with ghp_12345678901234567890',
       },
     },
   ];
@@ -781,6 +787,90 @@ test('agent observability: getAgentActivity derives multi-attempt state from str
   assert.equal(activity?.latestActivityAt, '2026-01-01T00:00:03.000Z');
   assert.equal(activity?.latestOutputAt, '2026-01-01T00:00:03.000Z');
   assert.deepEqual(activity?.attempts.map((attempt) => attempt.attemptId), ['attempt_1', 'attempt_2']);
+  const reviewer = activity?.attempts[1];
+  assert.equal(reviewer?.stepId, '[REDACTED_PATH]');
+  assert.equal(reviewer?.stepKey, '[REDACTED_PATH]');
+  assert.equal(reviewer?.artifactRef, '[REDACTED_PATH]');
+  assert.equal(reviewer?.error?.includes('/Users/anton'), false);
+  assert.equal(reviewer?.error?.includes('ghp_12345678901234567890'), false);
+});
+
+test('agent observability: getAgentActivity checks run existence before stale DBOS activity', async () => {
+  let eventRead = false;
+  let streamRead = false;
+  const service = new AgentObservabilityService({
+    artifactRoot: join(tmpdir(), 'missing-observability-root'),
+    runExists: () => false,
+    dbos: {
+      async getEvent<T>(): Promise<T> {
+        eventRead = true;
+        return {
+          runId: 'run-missing',
+          aggregateStatus: 'running',
+          latestActivityAt: '2026-01-01T00:00:00.000Z',
+          attempts: [],
+        } as T;
+      },
+      readStream<T>() {
+        streamRead = true;
+        return (async function* () {
+          yield {
+            cursor: 'stale',
+            runId: 'run-missing',
+            attemptId: 'attempt_1',
+            stepId: 'step-1',
+            at: '2026-01-01T00:00:00.000Z',
+            kind: 'status',
+          } as T;
+        })();
+      },
+    },
+  });
+
+  await assert.rejects(() => service.getAgentActivity('run-missing'), (error) => {
+    assertObsError(error, 'RUN_NOT_FOUND');
+    return true;
+  });
+  assert.equal(eventRead, false);
+  assert.equal(streamRead, false);
+});
+
+test('agent observability: getAgentActivity redacts DBOS event snapshot errors', async () => {
+  const service = new AgentObservabilityService({
+    artifactRoot: join(tmpdir(), 'missing-observability-root'),
+    runExists: () => true,
+    dbos: {
+      async getEvent<T>(): Promise<T> {
+        return {
+          runId: 'run-event',
+          aggregateStatus: 'failed',
+          latestActivityAt: '2026-01-01T00:00:01.000Z',
+          attempts: [{
+            runId: 'run-event',
+            attemptId: 'attempt_1',
+            stepId: 'step-1',
+            role: 'developer',
+            runner: 'claude-code',
+            status: 'failed',
+            startedAt: '2026-01-01T00:00:00.000Z',
+            lastEventAt: '2026-01-01T00:00:01.000Z',
+            stdoutBytes: 0,
+            stderrBytes: 1,
+            eventCount: 1,
+            artifactRef: '/Users/anton/run-event/attempt_1',
+            error: 'stderr at /Users/anton/secret with github_pat_12345678901234567890',
+          }],
+        } as T;
+      },
+      readStream: async function* () {},
+    },
+  });
+
+  const activity = await service.getAgentActivity('run-event');
+
+  assert.equal(activity?.attempts[0]?.artifactRef, '[REDACTED_PATH]');
+  assert.equal(activity?.attempts[0]?.error?.includes('/Users/anton'), false);
+  assert.equal(activity?.attempts[0]?.error?.includes('github_pat_12345678901234567890'), false);
 });
 
 test('agent observability: readAgentOutputEvents reports cursorExpired when requested cursor is unavailable', async () => {

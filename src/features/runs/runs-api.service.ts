@@ -1,6 +1,9 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { CommandBus, QueryBus } from '@nestjs/cqrs';
 import { CreateRunCommand, type CreateRunCommandData } from './commands/impl/create-run.command.js';
+import { GetAgentActivityQuery, type GetAgentActivityQueryData } from './queries/impl/get-agent-activity.query.js';
+import { GetAgentAttemptsQuery, type GetAgentAttemptsQueryData } from './queries/impl/get-agent-attempts.query.js';
+import { GetAgentLogQuery, type GetAgentLogQueryData } from './queries/impl/get-agent-log.query.js';
 import { GetRunAttemptsQuery, type GetRunAttemptsQueryData } from './queries/impl/get-run-attempts.query.js';
 import { GetRunDigestQuery, type GetRunDigestQueryData } from './queries/impl/get-run-digest.query.js';
 import { GetRunEventsQuery, type GetRunEventsQueryData } from './queries/impl/get-run-events.query.js';
@@ -51,5 +54,17 @@ export class RunsApiService {
 
   createRun(data: CreateRunCommandData) {
     return this.commandBus.execute(new CreateRunCommand(data));
+  }
+
+  getAgentActivity(data: GetAgentActivityQueryData) {
+    return this.queryBus.execute(new GetAgentActivityQuery(data));
+  }
+
+  getAgentAttempts(data: GetAgentAttemptsQueryData) {
+    return this.queryBus.execute(new GetAgentAttemptsQuery(data));
+  }
+
+  getAgentLog(data: GetAgentLogQueryData) {
+    return this.queryBus.execute(new GetAgentLogQuery(data));
   }
 }
