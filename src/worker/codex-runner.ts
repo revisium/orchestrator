@@ -1,13 +1,20 @@
 import { join } from 'node:path';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import type { ModelProfile, Role } from '../control-plane/definitions.js';
-import type { CostRecord, Step } from '../control-plane/steps.js';
+import type { Step } from '../control-plane/steps.js';
 import type { AgentActivityReporter } from '../observability/agent-activity-reporter.js';
-import type { ArtifactStore, ProcessArtifactSnapshot } from './artifact-store.js';
+import type { ArtifactStore } from './artifact-store.js';
 import type { ExecRequest, ProcessExecutor } from './process-executor.js';
-import type { AttemptResult, NewStepSpec, RunAgent } from './runner.js';
+import type { RunAgent } from './runner.js';
 import { RunAgentError } from './runner.js';
-import { normalizeNextSteps } from './result-envelope.js';
+import {
+  boundedPreview,
+  boundedPreviewValue,
+  buildAttemptResult,
+  buildUsageCosts,
+  runnerError,
+  tail,
+} from './runner-common.js';
 
 export type CodexRunnerDeps = {
   executor: ProcessExecutor;
@@ -37,11 +44,6 @@ type CodexJsonlSummary = {
 
 const DEFAULT_TIMEOUT_MS = 600_000;
 const DEFAULT_COMMAND = 'codex';
-const ERROR_TAIL = 2_000;
-const OBSERVABILITY_PREVIEW_MAX_CHARS = 1_000;
-const OBSERVABILITY_ARRAY_MAX_ITEMS = 5;
-const OBSERVABILITY_OBJECT_MAX_KEYS = 12;
-const OBSERVABILITY_STRING_MAX_CHARS = 120;
 
 export const CODEX_OUTPUT_SCHEMA = {
   type: 'object',
@@ -86,62 +88,6 @@ All fields are required: verdict, output, artifacts, nextSteps, needsHuman, less
 Use null for nullable fields when they do not apply. Do not put the result only in prose.
 `;
 
-function tail(text: string): string {
-  const trimmed = text.trim();
-  return trimmed.length > ERROR_TAIL ? trimmed.slice(-ERROR_TAIL) : trimmed;
-}
-
-function boundedString(value: string, maxChars = OBSERVABILITY_STRING_MAX_CHARS): string {
-  return value.length > maxChars ? `${value.slice(0, maxChars)}...` : value;
-}
-
-function boundedPreviewValue(value: unknown, depth = 0): unknown {
-  if (value === null || value === undefined) return value;
-  if (typeof value === 'string') return boundedString(value);
-  if (typeof value === 'number' || typeof value === 'boolean') return value;
-  if (depth >= 3) return '[object]';
-  if (Array.isArray(value)) {
-    const limited = value.slice(0, OBSERVABILITY_ARRAY_MAX_ITEMS).map((entry) => boundedPreviewValue(entry, depth + 1));
-    if (value.length > OBSERVABILITY_ARRAY_MAX_ITEMS) {
-      limited.push(`[${value.length - OBSERVABILITY_ARRAY_MAX_ITEMS} more]`);
-    }
-    return limited;
-  }
-  if (typeof value === 'object') {
-    const out: Record<string, unknown> = {};
-    const entries = Object.entries(value).slice(0, OBSERVABILITY_OBJECT_MAX_KEYS);
-    for (const [key, entry] of entries) out[key] = boundedPreviewValue(entry, depth + 1);
-    const keyCount = Object.keys(value).length;
-    if (keyCount > OBSERVABILITY_OBJECT_MAX_KEYS) out._truncatedKeys = keyCount - OBSERVABILITY_OBJECT_MAX_KEYS;
-    return out;
-  }
-  return `[${typeof value}]`;
-}
-
-function boundedPreview(value: unknown): string {
-  const preview = JSON.stringify(boundedPreviewValue(value));
-  return preview.length > OBSERVABILITY_PREVIEW_MAX_CHARS
-    ? `${preview.slice(0, OBSERVABILITY_PREVIEW_MAX_CHARS)}...`
-    : preview;
-}
-
-function withProcessArtifact(agentArtifacts: unknown, process: ProcessArtifactSnapshot | undefined): unknown {
-  if (!process) return agentArtifacts;
-  const processEntry = {
-    ref: process.ref,
-    stdoutTail: process.stdoutTail,
-    stderrTail: process.stderrTail,
-  };
-  if (agentArtifacts && typeof agentArtifacts === 'object' && !Array.isArray(agentArtifacts)) {
-    return { ...agentArtifacts, process: processEntry };
-  }
-  return { agent: agentArtifacts ?? null, process: processEntry };
-}
-
-function runnerError(message: string, process: ProcessArtifactSnapshot | undefined): RunAgentError {
-  return new RunAgentError(message, withProcessArtifact(undefined, process));
-}
-
 function writeCodexOutputSchema(processDir: string): string {
   mkdirSync(processDir, { recursive: true });
   const schemaPath = join(processDir, 'codex-output.schema.json');
@@ -181,7 +127,7 @@ const WORKSPACE_WRITE_RIGHTS = new Set([
 ]);
 
 function normalizedPolicyLabel(value: string | undefined): string {
-  return (value ?? '').trim().toLowerCase().replace(/_/g, '-').replace(/\s+/g, ' ');
+  return (value ?? '').trim().toLowerCase().replaceAll('_', '-').replace(/\s+/g, ' ');
 }
 
 function isWriteToolName(tool: string): boolean {
@@ -344,38 +290,61 @@ function usageFromEvent(event: Record<string, unknown>): {
   };
 }
 
-function parseCodexJsonl(stdout: string, reporter?: AgentActivityReporter): CodexJsonlSummary {
+function parseJsonlEvent(line: string, lineNumber: number): Record<string, unknown> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line) as unknown;
+  } catch {
+    throw new Error(`codex exec returned malformed JSONL at line ${lineNumber}`);
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error(`codex exec returned non-object JSONL at line ${lineNumber}`);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function reportJsonlEvent(event: Record<string, unknown>, reporter?: AgentActivityReporter): void {
+  reporter?.parsed({ type: readString(event.type) ?? 'event', preview: boundedPreview(event) });
+}
+
+function applyUsageSummary(summary: CodexJsonlSummary, event: Record<string, unknown>): void {
+  const usage = usageFromEvent(event);
+  summary.costUsd = usage.costUsd ?? summary.costUsd;
+  summary.inputTokens = usage.inputTokens ?? summary.inputTokens;
+  summary.outputTokens = usage.outputTokens ?? summary.outputTokens;
+}
+
+function applyFailureSummary(summary: CodexJsonlSummary, event: Record<string, unknown>): void {
+  const failure = eventFailureMessage(event);
+  if (!failure) return;
+  summary.failedMessage = failure;
+  summary.permissionBlocked ||= permissionBlockedText(event);
+}
+
+function applyStructuredSummary(summary: CodexJsonlSummary, event: Record<string, unknown>): void {
+  const structured = structuredCandidateFromTerminalEvent(event);
+  if (structured !== undefined) summary.finalStructured = structured;
+}
+
+function summarizeCodexEvents(events: Record<string, unknown>[]): CodexJsonlSummary {
+  if (events.length === 0) throw new Error('codex exec did not return JSONL events');
   const summary: CodexJsonlSummary = { permissionBlocked: false };
-  const lines = stdout.split(/\r?\n/).filter((line) => line.trim().length > 0);
-  if (lines.length === 0) throw new Error('codex exec did not return JSONL events');
-
-  for (const [index, line] of lines.entries()) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(line) as unknown;
-    } catch {
-      throw new Error(`codex exec returned malformed JSONL at line ${index + 1}`);
-    }
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      throw new Error(`codex exec returned non-object JSONL at line ${index + 1}`);
-    }
-    const event = parsed as Record<string, unknown>;
-    reporter?.parsed({ type: readString(event.type) ?? 'event', preview: boundedPreview(event) });
-
-    const usage = usageFromEvent(event);
-    summary.costUsd = usage.costUsd ?? summary.costUsd;
-    summary.inputTokens = usage.inputTokens ?? summary.inputTokens;
-    summary.outputTokens = usage.outputTokens ?? summary.outputTokens;
-
-    const failure = eventFailureMessage(event);
-    if (failure) {
-      summary.failedMessage = failure;
-      summary.permissionBlocked ||= permissionBlockedText(event);
-    }
-    const structured = structuredCandidateFromTerminalEvent(event);
-    if (structured !== undefined) summary.finalStructured = structured;
+  for (const event of events) {
+    applyUsageSummary(summary, event);
+    applyFailureSummary(summary, event);
+    applyStructuredSummary(summary, event);
   }
   return summary;
+}
+
+function parseCodexJsonl(stdout: string, reporter?: AgentActivityReporter): CodexJsonlSummary {
+  const lines = stdout.split(/\r?\n/).filter((line) => line.trim().length > 0);
+  const events = lines.map((line, index) => {
+    const event = parseJsonlEvent(line, index + 1);
+    reportJsonlEvent(event, reporter);
+    return event;
+  });
+  return summarizeCodexEvents(events);
 }
 
 function createStreamingJsonlCollector(reporter?: AgentActivityReporter): {
@@ -390,15 +359,11 @@ function createStreamingJsonlCollector(reporter?: AgentActivityReporter): {
   function parseLine(line: string): void {
     if (line.trim().length === 0) return;
     try {
-      const parsed = JSON.parse(line) as unknown;
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        throw new Error('non-object JSONL event');
-      }
-      const event = parsed as Record<string, unknown>;
+      const event = parseJsonlEvent(line, parsedEvents.length + 1);
       parsedEvents.push(event);
-      reporter?.parsed({ type: readString(event.type) ?? 'event', preview: boundedPreview(event) });
-    } catch {
-      parseError = new Error(`codex exec returned malformed JSONL at line ${parsedEvents.length + 1}`);
+      reportJsonlEvent(event, reporter);
+    } catch (err) {
+      parseError = err instanceof Error ? err : new Error(String(err));
     }
   }
 
@@ -414,22 +379,7 @@ function createStreamingJsonlCollector(reporter?: AgentActivityReporter): {
       if (received.length === 0) return parseCodexJsonl(fallbackStdout, reporter);
       parseLine(buffered);
       if (parseError) throw parseError;
-      const summary: CodexJsonlSummary = { permissionBlocked: false };
-      if (parsedEvents.length === 0) throw new Error('codex exec did not return JSONL events');
-      for (const event of parsedEvents) {
-        const usage = usageFromEvent(event);
-        summary.costUsd = usage.costUsd ?? summary.costUsd;
-        summary.inputTokens = usage.inputTokens ?? summary.inputTokens;
-        summary.outputTokens = usage.outputTokens ?? summary.outputTokens;
-        const failure = eventFailureMessage(event);
-        if (failure) {
-          summary.failedMessage = failure;
-          summary.permissionBlocked ||= permissionBlockedText(event);
-        }
-        const structured = structuredCandidateFromTerminalEvent(event);
-        if (structured !== undefined) summary.finalStructured = structured;
-      }
-      return summary;
+      return summarizeCodexEvents(parsedEvents);
     },
   };
 }
@@ -440,37 +390,41 @@ type SchemaValidationIssue = {
 };
 
 function validateCodexOutputAgainstSchema(value: unknown): SchemaValidationIssue[] {
-  const issues: SchemaValidationIssue[] = [];
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return [{ path: '$', message: 'must be an object' }];
   }
-
   const obj = value as Record<string, unknown>;
-  const required = CODEX_OUTPUT_SCHEMA.required;
-  const allowed = new Set(Object.keys(CODEX_OUTPUT_SCHEMA.properties));
+  return [
+    ...missingRequiredIssues(obj),
+    ...additionalPropertyIssues(obj),
+    ...fieldTypeIssues(obj),
+    ...nextStepEntryIssues(obj),
+  ];
+}
 
-  for (const key of required) {
-    if (!(key in obj)) issues.push({ path: `$.${key}`, message: 'is required' });
-  }
+function missingRequiredIssues(obj: Record<string, unknown>): SchemaValidationIssue[] {
+  return CODEX_OUTPUT_SCHEMA.required
+    .filter((key) => !(key in obj))
+    .map((key) => ({ path: `$.${key}`, message: 'is required' }));
+}
 
+function additionalPropertyIssues(obj: Record<string, unknown>): SchemaValidationIssue[] {
   if (CODEX_OUTPUT_SCHEMA.additionalProperties === false) {
-    for (const key of Object.keys(obj)) {
-      if (!allowed.has(key)) issues.push({ path: `$.${key}`, message: 'is not allowed by schema' });
-    }
+    const allowed = new Set(Object.keys(CODEX_OUTPUT_SCHEMA.properties));
+    return Object.keys(obj)
+      .filter((key) => !allowed.has(key))
+      .map((key) => ({ path: `$.${key}`, message: 'is not allowed by schema' }));
   }
+  return [];
+}
 
+function fieldTypeIssues(obj: Record<string, unknown>): SchemaValidationIssue[] {
+  const issues: SchemaValidationIssue[] = [];
   if ('verdict' in obj && (typeof obj.verdict !== 'string' || obj.verdict.trim().length === 0)) {
     issues.push({ path: '$.verdict', message: 'must be a non-empty string' });
   }
   if ('nextSteps' in obj && obj.nextSteps !== null && !Array.isArray(obj.nextSteps)) {
     issues.push({ path: '$.nextSteps', message: 'must be an array or null' });
-  }
-  if (Array.isArray(obj.nextSteps)) {
-    for (const [index, entry] of obj.nextSteps.entries()) {
-      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
-        issues.push({ path: `$.nextSteps[${index}]`, message: 'must be an object' });
-      }
-    }
   }
   if ('needsHuman' in obj && obj.needsHuman !== null && typeof obj.needsHuman !== 'boolean') {
     issues.push({ path: '$.needsHuman', message: 'must be a boolean or null' });
@@ -480,6 +434,15 @@ function validateCodexOutputAgainstSchema(value: unknown): SchemaValidationIssue
   }
 
   return issues;
+}
+
+function nextStepEntryIssues(obj: Record<string, unknown>): SchemaValidationIssue[] {
+  if (!Array.isArray(obj.nextSteps)) return [];
+  return obj.nextSteps.flatMap((entry, index) =>
+    entry && typeof entry === 'object' && !Array.isArray(entry)
+      ? []
+      : [{ path: `$.nextSteps[${index}]`, message: 'must be an object' }],
+  );
 }
 
 function normalizeCodexResult(structured: unknown): CodexAgentResult {
@@ -497,54 +460,6 @@ function normalizeCodexResult(structured: unknown): CodexAgentResult {
     nextSteps: Array.isArray(obj.nextSteps) ? obj.nextSteps : [],
     needsHuman: obj.needsHuman === true,
     lesson: typeof obj.lesson === 'string' ? obj.lesson : undefined,
-  };
-}
-
-function buildCosts(step: Step, profile: ModelProfile, summary: CodexJsonlSummary): CostRecord[] {
-  const inputTokens = summary.inputTokens ?? 0;
-  const outputTokens = summary.outputTokens ?? 0;
-  const reportedUsd = typeof summary.costUsd === 'number' && Number.isFinite(summary.costUsd) ? summary.costUsd : undefined;
-  if (inputTokens === 0 && outputTokens === 0 && reportedUsd === undefined) return [];
-  const computed =
-    (inputTokens / 1_000_000) * profile.costPerInput +
-    (outputTokens / 1_000_000) * profile.costPerOutput;
-  return [
-    {
-      modelProfile: step.modelProfile,
-      inputTokens,
-      outputTokens,
-      costAmount: reportedUsd ?? computed,
-      currency: 'USD',
-    },
-  ];
-}
-
-function successResult(
-  agent: CodexAgentResult,
-  step: Step,
-  costs: CostRecord[],
-  processSnapshot: ProcessArtifactSnapshot | undefined,
-): AttemptResult {
-  if (agent.needsHuman) {
-    return {
-      output: agent.output,
-      verdict: agent.verdict,
-      artifacts: withProcessArtifact(agent.artifacts, processSnapshot),
-      nextSteps: [],
-      costs,
-      needsHuman: true,
-      lesson: agent.lesson,
-    };
-  }
-  const nextSteps: NewStepSpec[] = normalizeNextSteps(agent.nextSteps, step);
-  return {
-    output: agent.output,
-    verdict: agent.verdict,
-    artifacts: withProcessArtifact(agent.artifacts, processSnapshot),
-    nextSteps,
-    costs,
-    needsHuman: false,
-    lesson: agent.lesson,
   };
 }
 
@@ -621,9 +536,9 @@ export function createCodexRunner(deps: CodexRunnerDeps): RunAgent {
       }
 
       const agent = normalizeCodexResult(summary.finalStructured);
-      const costs = buildCosts(step, profile, summary);
+      const costs = buildUsageCosts(step, profile, summary);
       reporter?.finished({ exitCode: result.code, timedOut: result.timedOut });
-      return successResult(agent, step, costs, processSnapshot);
+      return buildAttemptResult(agent, step, costs, processSnapshot);
     } catch (err) {
       if (err instanceof RunAgentError) throw err;
       const processSnapshot = processArtifact?.finish({ error: String(err) });
