@@ -691,7 +691,7 @@ async function withGeneratorCleanup<T>(
 
 function normalizeOutputEvent(runId: string, value: unknown): AgentOutputEvent | null {
   const event = asRecord(value);
-  if (!event || event.runId !== runId) return null;
+  if (event?.runId !== runId) return null;
   const fields = normalizeOutputEventFields(event);
   if (!fields) return null;
   const normalized: AgentOutputEvent = {
@@ -837,7 +837,7 @@ function normalizeActivitySnapshotFields(snapshot: Record<string, unknown>): Act
     eventCount: normalizeNonNegativeInteger(snapshot.eventCount),
     artifactRef: normalizeNonEmptyString(snapshot.artifactRef),
   };
-  if (Object.values(fields).some((field) => field === undefined)) return undefined;
+  if (Object.values(fields).includes(undefined)) return undefined;
   return fields as ActivitySnapshotFields;
 }
 
