@@ -16,6 +16,10 @@ function json(value: unknown) {
 const runIdSchema = z.string().min(1).describe('Run ID');
 const inboxIdSchema = z.string().min(1).describe('Inbox item ID');
 const limitSchema = z.number().int().positive().max(500).optional();
+const agentOutputLimitSchema = z.number().int().positive().max(1000).optional().default(100);
+const agentStreamSchema = z.enum(['stdout', 'stderr', 'events', 'combined']);
+const agentLogByteSchema = z.number().int().positive().max(1048576).optional();
+const agentLogOffsetSchema = z.number().int().nonnegative().max(1048576).optional();
 const paramsSchema = z.record(z.string(), z.unknown()).optional();
 const prReadinessInputSchema = {
   repo: z.string().min(1).describe('GitHub repository in owner/name form, for example revisium/agent-orchestrator'),
@@ -26,6 +30,12 @@ const prReadinessInputSchema = {
   includeComments: z.boolean().optional().default(true),
   includeReviewThreads: z.boolean().optional().default(true),
 };
+
+function assertValidAgentLogRange(input: { offsetBytes?: number; limitBytes?: number; tailBytes?: number }): void {
+  if (input.tailBytes !== undefined && (input.offsetBytes !== undefined || input.limitBytes !== undefined)) {
+    throw new Error('VALIDATION_FAILURE: tailBytes cannot be combined with offsetBytes or limitBytes');
+  }
+}
 
 export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService): void {
   server.registerTool(
@@ -214,6 +224,80 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
       annotations: { readOnlyHint: true },
     },
     async (input) => json(await facade.getRunLog(input)),
+  );
+
+  server.registerTool(
+    'get_agent_activity',
+    {
+      description: 'Return current agent activity for a run, or null when no activity exists.',
+      inputSchema: {
+        runId: runIdSchema,
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ runId }) => json(await facade.getAgentActivity(runId)),
+  );
+
+  server.registerTool(
+    'get_agent_attempts',
+    {
+      description: 'List agent attempt artifact summaries for a run.',
+      inputSchema: {
+        runId: runIdSchema,
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ runId }) => json(await facade.getAgentAttempts(runId)),
+  );
+
+  server.registerTool(
+    'get_agent_log',
+    {
+      description: 'Read bounded agent log content for a run attempt.',
+      inputSchema: {
+        runId: runIdSchema,
+        attemptId: z.string().min(1).optional(),
+        stream: agentStreamSchema,
+        offsetBytes: agentLogOffsetSchema,
+        limitBytes: agentLogByteSchema,
+        tailBytes: agentLogByteSchema,
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async (input) => {
+      assertValidAgentLogRange(input);
+      return json(await facade.getAgentLog(input));
+    },
+  );
+
+  server.registerTool(
+    'tail_agent_log',
+    {
+      description: 'Read one finite page of agent output events. Poll with nextCursor; this is not a subscription.',
+      inputSchema: {
+        runId: runIdSchema,
+        cursor: z.string().min(1).optional(),
+        limit: agentOutputLimitSchema,
+        timeoutMs: z.number().int().positive().optional().default(250),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async (input) => json(await facade.tailAgentLog(input)),
+  );
+
+  server.registerTool(
+    'read_agent_output_events',
+    {
+      description: 'Read a bounded run-global page of agent output events.',
+      inputSchema: {
+        runId: runIdSchema,
+        cursor: z.string().min(1).optional(),
+        limit: agentOutputLimitSchema,
+        timeoutMs: z.number().int().positive().optional().default(250),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async (input) => json(await facade.readAgentOutputEvents(input)),
   );
 
   server.registerTool(

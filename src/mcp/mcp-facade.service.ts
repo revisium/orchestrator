@@ -5,6 +5,7 @@ import {
   type RepositoryValidation,
 } from '../task-control-plane/task-control-plane-api.service.js';
 import { ControlPlaneError } from '../control-plane/errors.js';
+import { AgentObservabilityError } from '../observability/types.js';
 import { CreateRunWorkflowError } from '../run/create-run.js';
 import { MCP_TOOL_NAMES } from './mcp-capabilities.js';
 
@@ -17,6 +18,15 @@ function formatCause(error: unknown): string {
   }
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+function exposeApplicationError<T>(promise: Promise<T>): Promise<T> {
+  return promise.catch((error: unknown) => {
+    if (error instanceof AgentObservabilityError) {
+      throw new Error(`${error.code}: ${error.message}`);
+    }
+    throw error;
+  });
 }
 
 @Injectable()
@@ -104,6 +114,33 @@ export class McpFacadeService {
 
   getRunLog(input: { runId: string; limit?: number }) {
     return this.api.getRunLog(input);
+  }
+
+  getAgentActivity(runId: string) {
+    return exposeApplicationError(this.api.getAgentActivity(runId));
+  }
+
+  getAgentAttempts(runId: string) {
+    return exposeApplicationError(this.api.getAgentAttempts(runId));
+  }
+
+  getAgentLog(input: {
+    runId: string;
+    attemptId?: string;
+    stream: 'stdout' | 'stderr' | 'events' | 'combined';
+    offsetBytes?: number;
+    limitBytes?: number;
+    tailBytes?: number;
+  }) {
+    return exposeApplicationError(this.api.getAgentLog(input));
+  }
+
+  tailAgentLog(input: { runId: string; cursor?: string; limit?: number; timeoutMs?: number }) {
+    return exposeApplicationError(this.api.readAgentOutputEvents(input));
+  }
+
+  readAgentOutputEvents(input: { runId: string; cursor?: string; limit?: number; timeoutMs?: number }) {
+    return exposeApplicationError(this.api.readAgentOutputEvents(input));
   }
 
   getRunDigest(runId: string) {

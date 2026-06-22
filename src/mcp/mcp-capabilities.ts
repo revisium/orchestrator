@@ -13,6 +13,11 @@ export const MCP_TOOL_NAMES = [
   'get_run',
   'get_run_events',
   'get_run_log',
+  'get_agent_activity',
+  'get_agent_attempts',
+  'get_agent_log',
+  'tail_agent_log',
+  'read_agent_output_events',
   'get_run_digest',
   'wait_for_run',
   'list_inbox',
@@ -40,7 +45,7 @@ export const MCP_INSTRUCTIONS = `Revo is a local-first software-development task
 
 Use these tools to manage tasks end-to-end from your coding agent:
 - create and start runs;
-- inspect run status, events, attempts, and digests;
+- inspect run status, events, attempts, agent activity, bounded logs, and digests;
 - resolve human inbox gates and questions;
 - inspect installed playbooks, roles, and pipelines;
 - inspect PR readiness and actionable review feedback before resuming work;

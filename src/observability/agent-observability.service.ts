@@ -136,12 +136,13 @@ export class AgentObservabilityService {
     const cursor = input.cursor === undefined ? undefined : validateCursor(input.cursor);
     const limit = validateEventLimit(input.limit);
     const timeoutMs = validateStreamTimeout(input.timeoutMs);
+    await this.assertRunExists(safeRunId);
     if (!this.dbos) {
       return { runId: safeRunId, events: [], cursorExpired: cursor !== undefined };
     }
 
     const generator = this.dbos.readStream<AgentOutputEvent>(safeRunId, AGENT_OUTPUT_STREAM_KEY);
-    try {
+    return withGeneratorCleanup(generator, async () => {
       const page = await readBoundedOutputEvents({
         generator,
         runId: safeRunId,
@@ -155,9 +156,7 @@ export class AgentObservabilityService {
         nextCursor: page.events.at(-1)?.cursor,
         cursorExpired: hasExpiredCursor(cursor, page.cursorFound),
       };
-    } finally {
-      void generator.return(undefined).catch(() => undefined);
-    }
+    });
   }
 
   async *watchAgentOutput(input: WatchAgentOutputInput): AsyncGenerator<AgentOutputEvent, void, unknown> {
@@ -323,7 +322,7 @@ export class AgentObservabilityService {
     const generator = this.dbos.readStream<AgentOutputEvent>(runId, AGENT_OUTPUT_STREAM_KEY);
     const snapshots = new Map<string, AgentActivitySnapshot>();
     let scanned = 0;
-    try {
+    await withGeneratorCleanup(generator, async () => {
       while (scanned < MAX_STREAM_ACTIVITY_SCAN_EVENTS) {
         const next = await nextWithTimeout(generator, DEFAULT_STREAM_READ_TIMEOUT_MS);
         if (next === 'timeout' || next.done) break;
@@ -331,9 +330,7 @@ export class AgentObservabilityService {
         const event = normalizeOutputEvent(runId, next.value);
         if (event?.snapshot) snapshots.set(event.attemptId, event.snapshot);
       }
-    } finally {
-      void generator.return(undefined).catch(() => undefined);
-    }
+    });
     if (scanned >= MAX_STREAM_ACTIVITY_SCAN_EVENTS) return null;
     if (snapshots.size === 0) return null;
     return this.buildRunActivity(runId, [...snapshots.values()]);
@@ -633,14 +630,53 @@ async function nextWithTimeout<T>(
   }
 }
 
+async function withGeneratorCleanup<T>(
+  generator: AsyncGenerator<AgentOutputEvent, void, unknown>,
+  read: () => Promise<T>,
+): Promise<T> {
+  let result: T | undefined;
+  let hasResult = false;
+  let primaryError: unknown;
+  try {
+    result = await read();
+    hasResult = true;
+  } catch (error) {
+    primaryError = error;
+  }
+
+  let cleanupError: unknown;
+  try {
+    await generator.return(undefined);
+  } catch (error) {
+    cleanupError = error;
+  }
+
+  if (primaryError !== undefined) throw primaryError;
+  if (cleanupError !== undefined) throw cleanupError;
+  if (hasResult) return result as T;
+  throw validationFailure('stream reader did not produce a result');
+}
+
 function normalizeOutputEvent(runId: string, value: unknown): AgentOutputEvent | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const event = value as AgentOutputEvent;
+  const event = value as Record<string, unknown>;
   if (event.runId !== runId) return null;
-  if (typeof event.cursor !== 'string' || event.cursor.length === 0) return null;
-  if (typeof event.attemptId !== 'string' || event.attemptId.length === 0) return null;
-  if (typeof event.stepId !== 'string') return null;
-  if (typeof event.at !== 'string') return null;
+  if (typeof event.cursor !== 'string') return null;
+  let cursor: string;
+  try {
+    cursor = validateCursor(event.cursor);
+  } catch {
+    return null;
+  }
+  if (typeof event.attemptId !== 'string') return null;
+  let attemptId: string;
+  try {
+    attemptId = validateSegment(event.attemptId, 'attemptId');
+  } catch {
+    return null;
+  }
+  if (typeof event.stepId !== 'string' || event.stepId.length === 0) return null;
+  if (typeof event.at !== 'string' || event.at.length === 0) return null;
   if (
     event.kind !== 'activity' &&
     event.kind !== 'output' &&
@@ -649,7 +685,110 @@ function normalizeOutputEvent(runId: string, value: unknown): AgentOutputEvent |
   ) {
     return null;
   }
-  return event;
+  const normalized: AgentOutputEvent = {
+    cursor,
+    runId,
+    attemptId,
+    stepId: redactPublicText(event.stepId),
+    at: event.at,
+    kind: event.kind,
+  };
+  if (typeof event.stepKey === 'string' && event.stepKey.length > 0) normalized.stepKey = redactPublicText(event.stepKey);
+  const attemptSeq = normalizeNonNegativeInteger(event.attemptSeq);
+  if (attemptSeq !== undefined) normalized.attemptSeq = attemptSeq;
+  const stream = normalizeOutputStream(event.stream);
+  if (stream) normalized.stream = stream;
+  const bytes = normalizeNonNegativeInteger(event.bytes);
+  if (bytes !== undefined) normalized.bytes = bytes;
+  const outputOffsetBytes = normalizeNonNegativeInteger(event.outputOffsetBytes);
+  if (outputOffsetBytes !== undefined) normalized.outputOffsetBytes = outputOffsetBytes;
+  if (typeof event.preview === 'string') normalized.preview = redactPublicText(event.preview);
+  if (typeof event.parsedType === 'string') normalized.parsedType = redactPublicText(event.parsedType);
+  const statusHint = normalizeActivityStatus(event.statusHint);
+  if (statusHint) normalized.statusHint = statusHint;
+  const snapshot = normalizeActivitySnapshotForOutput(runId, attemptId, event.snapshot);
+  if (snapshot) normalized.snapshot = snapshot;
+  return normalized;
+}
+
+function normalizeOutputStream(value: unknown): AgentOutputEvent['stream'] | undefined {
+  if (value === undefined) return undefined;
+  if (value === 'stdout' || value === 'stderr' || value === 'agent-jsonl') return value;
+  return undefined;
+}
+
+function normalizeActivityStatus(value: unknown): AgentActivityStatus | undefined {
+  if (
+    value === 'starting' ||
+    value === 'running' ||
+    value === 'idle' ||
+    value === 'permission_blocked' ||
+    value === 'cancelled' ||
+    value === 'exited' ||
+    value === 'timed_out' ||
+    value === 'failed'
+  ) {
+    return value;
+  }
+  return undefined;
+}
+
+function normalizeActivitySnapshotForOutput(
+  runId: string,
+  attemptId: string,
+  value: unknown,
+): AgentActivitySnapshot | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const snapshot = value as Record<string, unknown>;
+  if (snapshot.runId !== runId || snapshot.attemptId !== attemptId) return undefined;
+  if (typeof snapshot.stepId !== 'string' || snapshot.stepId.length === 0) return undefined;
+  const status = normalizeActivityStatus(snapshot.status);
+  const stdoutBytes = normalizeNonNegativeInteger(snapshot.stdoutBytes);
+  const stderrBytes = normalizeNonNegativeInteger(snapshot.stderrBytes);
+  const eventCount = normalizeNonNegativeInteger(snapshot.eventCount);
+  if (!status) return undefined;
+  if (
+    typeof snapshot.role !== 'string' ||
+    typeof snapshot.runner !== 'string' ||
+    typeof snapshot.startedAt !== 'string' ||
+    typeof snapshot.lastEventAt !== 'string' ||
+    stdoutBytes === undefined ||
+    stderrBytes === undefined ||
+    eventCount === undefined ||
+    typeof snapshot.artifactRef !== 'string' ||
+    snapshot.artifactRef.length === 0
+  ) {
+    return undefined;
+  }
+  const normalized: AgentActivitySnapshot = {
+    runId,
+    attemptId,
+    stepId: redactPublicText(snapshot.stepId),
+    role: redactPublicText(snapshot.role),
+    runner: redactPublicText(snapshot.runner),
+    status,
+    startedAt: snapshot.startedAt,
+    lastEventAt: snapshot.lastEventAt,
+    stdoutBytes,
+    stderrBytes,
+    eventCount,
+    artifactRef: redactPublicText(snapshot.artifactRef),
+  };
+  if (typeof snapshot.stepKey === 'string' && snapshot.stepKey.length > 0) normalized.stepKey = redactPublicText(snapshot.stepKey);
+  if (typeof snapshot.pid === 'number' && Number.isInteger(snapshot.pid) && snapshot.pid > 0) normalized.pid = snapshot.pid;
+  if (typeof snapshot.lastOutputAt === 'string') normalized.lastOutputAt = snapshot.lastOutputAt;
+  const lastStream = normalizeOutputStream(snapshot.lastStream);
+  if (lastStream) normalized.lastStream = lastStream;
+  if (typeof snapshot.exitCode === 'number' && Number.isInteger(snapshot.exitCode)) normalized.exitCode = snapshot.exitCode;
+  if (snapshot.exitCode === null) normalized.exitCode = null;
+  if (typeof snapshot.timedOut === 'boolean') normalized.timedOut = snapshot.timedOut;
+  if (typeof snapshot.error === 'string') normalized.error = redactPublicText(snapshot.error);
+  return normalized;
+}
+
+function normalizeNonNegativeInteger(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) return undefined;
+  return value;
 }
 
 function redactActivitySnapshot(snapshot: AgentActivitySnapshot): AgentActivitySnapshot {

@@ -5,7 +5,7 @@ import { buildProgram } from './program.js';
 const argv = process.argv;
 
 if (needsHost(argv)) {
-  // Host path: dev:ping, dev:status (and future run/work when they move onto DBOS).
+  // Host path: dev/status, workflow-mutating commands, MCP, and host-backed observability.
   // Nest/DBOS/AppModule are imported lazily so the host-free path never loads them.
   const mcpCommand = isMcpCommand(argv);
   if (mcpCommand) {
@@ -23,7 +23,7 @@ if (needsHost(argv)) {
     await app.close();
   }
 } else {
-  // Host-free path: revisium start/stop/status/logs, bootstrap, run, work,
+  // Host-free path: revisium start/stop/status/logs, bootstrap, legacy read-only run subcommands, work,
   // --help, --version, empty/unknown commands.
   // Nest/DBOS are NOT loaded here — fast and safe for daemon-management commands.
   await buildProgram().parseAsync(argv);

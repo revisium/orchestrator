@@ -53,6 +53,22 @@ test('needsHost: run events → false', () => {
   assert.equal(needsHost(argv('run', 'events', 'run-1')), false);
 });
 
+test('needsHost: run activity → true (host-requiring)', () => {
+  assert.equal(needsHost(argv('run', 'activity', 'run-1')), true);
+});
+
+test('needsHost: run attempts → true (host-requiring)', () => {
+  assert.equal(needsHost(argv('run', 'attempts', 'run-1')), true);
+});
+
+test('needsHost: run logs → true (host-requiring)', () => {
+  assert.equal(needsHost(argv('run', 'logs', 'run-1')), true);
+});
+
+test('needsHost: run logs --help → false (help wins)', () => {
+  assert.equal(needsHost(argv('run', 'logs', '--help')), false);
+});
+
 test('needsHost: run cancel → false', () => {
   assert.equal(needsHost(argv('run', 'cancel', 'run-1')), false);
 });

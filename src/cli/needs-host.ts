@@ -5,6 +5,7 @@
  *   - dev:ping, dev:status (slice 0001)
  *   - run start (slice 0003 — enqueues a DBOS workflow, needs the host)
  *   - run create (resolves installed playbooks/profiles through host services)
+ *   - run activity / attempts / logs (agent observability through host API)
  *   - inbox resolve --approve|--reject (slice 0004 — signals a parked workflow, needs DBOS)
  *   - mcp (local stdio MCP server over the host services)
  *
@@ -59,11 +60,15 @@ export function needsHost(argv: string[]): boolean {
 
   // M5: `run start` is host-requiring.
   // Current contract: `run create` is host-requiring because it resolves installed route data.
+  // Slice 126: agent observability commands route through TaskControlPlaneApiService.
   if (command === 'run') {
     const commandIdx = args.indexOf(command);
     const sub = args.slice(commandIdx + 1).find((a) => !a.startsWith('-'));
     if (sub === 'start') return true;
     if (sub === 'create') return true;
+    if (sub === 'activity') return true;
+    if (sub === 'attempts') return true;
+    if (sub === 'logs') return true;
     return false;
   }
 

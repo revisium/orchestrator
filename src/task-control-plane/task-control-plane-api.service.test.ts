@@ -288,6 +288,34 @@ test('TaskControlPlaneApiService agent observability reads DBOS activity through
   assert.equal(activity?.attempts[0]?.attemptId, 'attempt-1');
 });
 
+test('TaskControlPlaneApiService reads bounded agent output events through sealed observability verbs', async () => {
+  const api = makeApi({
+    dbosService: {
+      async *readStream<T>(workflowID: string, key: string): AsyncGenerator<T, void, unknown> {
+        assert.equal(workflowID, 'run-1');
+        assert.equal(key, 'agent-output');
+        yield {
+          cursor: 'cursor-1',
+          runId: 'run-1',
+          attemptId: 'attempt-1',
+          stepId: 'step-1',
+          at: '2026-06-20T10:00:00.000Z',
+          kind: 'output',
+          stream: 'stdout',
+          preview: 'hello',
+        } as T;
+      },
+    },
+  });
+
+  const page = await api.readAgentOutputEvents({ runId: 'run-1', limit: 1, timeoutMs: 1 });
+
+  assert.equal(page.runId, 'run-1');
+  assert.equal(page.events[0]?.cursor, 'cursor-1');
+  assert.equal(page.nextCursor, 'cursor-1');
+  assert.equal(page.cursorExpired, false);
+});
+
 test('TaskControlPlaneApiService agent observability preserves existing-run empty states', async () => {
   const api = makeApi();
 
@@ -300,10 +328,17 @@ test('TaskControlPlaneApiService agent observability preserves existing-run empt
 });
 
 test('TaskControlPlaneApiService agent observability reports missing runs as application errors', async () => {
+  let streamRead = false;
   const api = makeApi({
     runService: {
       async getRun() {
         return null;
+      },
+    },
+    dbosService: {
+      readStream() {
+        streamRead = true;
+        return (async function* () {})();
       },
     },
   });
@@ -312,6 +347,11 @@ test('TaskControlPlaneApiService agent observability reports missing runs as app
     () => api.getAgentActivity('missing-run'),
     (error: unknown) => error instanceof AgentObservabilityError && error.code === 'RUN_NOT_FOUND',
   );
+  await assert.rejects(
+    () => api.readAgentOutputEvents({ runId: 'missing-run', timeoutMs: 1 }),
+    (error: unknown) => error instanceof AgentObservabilityError && error.code === 'RUN_NOT_FOUND',
+  );
+  assert.equal(streamRead, false);
 });
 
 test('TaskControlPlaneApiService.getRunWorkflow returns UI projection through sealed verbs', async () => {
