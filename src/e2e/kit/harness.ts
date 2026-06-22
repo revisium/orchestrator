@@ -1,7 +1,10 @@
 import 'reflect-metadata';
+import { join } from 'node:path';
 import { HostLifecycle } from '../../host/host.lifecycle.js';
 import { DbosService } from '../../engine/dbos.service.js';
+import { getConfig } from '../../cli/config.js';
 import { createClientTransport } from '../../control-plane/client-transport.js';
+import { AgentObservabilityService } from '../../observability/agent-observability.service.js';
 import { RolesService } from '../../revisium/roles.service.js';
 import { RunService } from '../../revisium/run.service.js';
 import { InboxService } from '../../revisium/inbox.service.js';
@@ -76,7 +79,15 @@ export async function createRunHarness(opts: RunHarnessOptions = {}): Promise<Ru
 
   const worktrees = new WorktreeService(runs);
   const pipeline = new PipelineService(dbos, roles, runs, inbox, integrator, worktrees, agent);
-  const api = new TaskControlPlaneApiService(runs, inbox, roles, playbooks, pipeline, dbos);
+  const observability = new AgentObservabilityService({
+    artifactRoot: join(getConfig().dataDir, 'run-artifacts'),
+    runExists: async (id) => Boolean(await runs.getRun(id)),
+    dbos: {
+      getEvent: (workflowID, key, opts) => dbos.getEvent(workflowID, key, opts),
+      readStream: (workflowID, key) => dbos.readStream(workflowID, key),
+    },
+  });
+  const api = new TaskControlPlaneApiService(runs, inbox, roles, playbooks, pipeline, dbos, observability);
 
   await lifecycle.onApplicationBootstrap();
 

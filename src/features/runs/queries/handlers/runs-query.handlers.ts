@@ -1,7 +1,19 @@
 import { Inject } from '@nestjs/common';
 import { IQueryHandler, QueryHandler } from '@nestjs/cqrs';
 import { TaskControlPlaneApiService } from '../../../../task-control-plane/task-control-plane-api.service.js';
+import type {
+  AgentActivitySnapshot,
+  AgentAttemptSummary,
+  AgentLogChunk,
+  AgentLogStream as DomainAgentLogStream,
+  AgentOutputStream as DomainAgentOutputStream,
+  AgentRunActivity,
+  AgentActivityStatus,
+} from '../../../../observability/types.js';
 import { connectionFetchLimit, toConnection } from '../../../shared/connection.js';
+import { GetAgentActivityQuery } from '../impl/get-agent-activity.query.js';
+import { GetAgentAttemptsQuery } from '../impl/get-agent-attempts.query.js';
+import { GetAgentLogQuery } from '../impl/get-agent-log.query.js';
 import { GetRunAttemptsQuery } from '../impl/get-run-attempts.query.js';
 import { GetRunDigestQuery } from '../impl/get-run-digest.query.js';
 import { GetRunEventsQuery } from '../impl/get-run-events.query.js';
@@ -203,5 +215,147 @@ export class SimulateRouteHandler implements IQueryHandler<SimulateRouteQuery> {
 
   execute(query: SimulateRouteQuery) {
     return this.api.simulateRoute(query.data);
+  }
+}
+
+function toDate(value: string | undefined): Date {
+  if (!value) return new Date(0);
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? new Date(0) : parsed;
+}
+
+function mapLastStream(stream: DomainAgentOutputStream | undefined): AgentOutputStream | undefined {
+  if (!stream) return undefined;
+  if (stream === 'agent-jsonl') return 'agent_jsonl';
+  return stream;
+}
+
+type AgentOutputStream = 'stdout' | 'stderr' | 'agent_jsonl';
+
+type AgentAttemptReadModel = Omit<AgentAttemptSummary, 'startedAt' | 'finishedAt'> & {
+  startedAt: Date;
+  finishedAt?: Date;
+};
+
+type AgentActivityReadModel = Omit<AgentActivitySnapshot, 'status' | 'startedAt' | 'lastEventAt' | 'lastOutputAt' | 'lastStream'> & {
+  status: AgentActivityStatus;
+  startedAt: Date;
+  lastEventAt: Date;
+  lastOutputAt?: Date;
+  lastStream?: AgentOutputStream;
+};
+
+type AgentRunActivityReadModel = Omit<AgentRunActivity, 'aggregateStatus' | 'latestActivityAt' | 'latestOutputAt' | 'attempts'> & {
+  aggregateStatus: AgentActivityStatus;
+  latestActivityAt: Date;
+  latestOutputAt?: Date;
+  attempts: AgentActivityReadModel[];
+};
+
+type AgentLogChunkReadModel = Omit<AgentLogChunk, 'stream'> & {
+  stream: DomainAgentLogStream;
+};
+
+function mapAgentAttempt(attempt: AgentAttemptSummary): AgentAttemptReadModel {
+  return {
+    runId: attempt.runId,
+    attemptId: attempt.attemptId,
+    stepId: attempt.stepId,
+    stepKey: attempt.stepKey,
+    role: attempt.role,
+    runner: attempt.runner,
+    artifactRef: attempt.artifactRef,
+    startedAt: toDate(attempt.startedAt),
+    finishedAt: attempt.finishedAt ? toDate(attempt.finishedAt) : undefined,
+    status: attempt.status,
+    exitCode: attempt.exitCode ?? null,
+    timedOut: attempt.timedOut,
+    stdoutBytes: attempt.stdoutBytes,
+    stderrBytes: attempt.stderrBytes,
+  };
+}
+
+function mapAgentActivity(snapshot: AgentActivitySnapshot): AgentActivityReadModel {
+  return {
+    runId: snapshot.runId,
+    attemptId: snapshot.attemptId,
+    stepId: snapshot.stepId,
+    stepKey: snapshot.stepKey,
+    role: snapshot.role,
+    runner: snapshot.runner,
+    pid: snapshot.pid,
+    status: snapshot.status,
+    startedAt: toDate(snapshot.startedAt),
+    lastEventAt: toDate(snapshot.lastEventAt),
+    lastOutputAt: snapshot.lastOutputAt ? toDate(snapshot.lastOutputAt) : undefined,
+    lastStream: mapLastStream(snapshot.lastStream),
+    stdoutBytes: snapshot.stdoutBytes,
+    stderrBytes: snapshot.stderrBytes,
+    eventCount: snapshot.eventCount,
+    artifactRef: snapshot.artifactRef,
+    exitCode: snapshot.exitCode ?? null,
+    timedOut: snapshot.timedOut,
+    error: snapshot.error,
+  };
+}
+
+function mapAgentRunActivity(activity: AgentRunActivity): AgentRunActivityReadModel {
+  return {
+    runId: activity.runId,
+    aggregateStatus: activity.aggregateStatus,
+    latestActivityAt: toDate(activity.latestActivityAt),
+    latestOutputAt: activity.latestOutputAt ? toDate(activity.latestOutputAt) : undefined,
+    attempts: activity.attempts.map(mapAgentActivity),
+  };
+}
+
+function mapAgentLogChunk(chunk: AgentLogChunk): AgentLogChunkReadModel {
+  return {
+    runId: chunk.runId,
+    attemptId: chunk.attemptId,
+    stream: chunk.stream,
+    offsetBytes: chunk.offsetBytes,
+    nextOffsetBytes: chunk.nextOffsetBytes,
+    totalBytes: chunk.totalBytes,
+    truncated: chunk.truncated,
+    content: chunk.content,
+  };
+}
+
+@QueryHandler(GetAgentActivityQuery)
+export class GetAgentActivityHandler implements IQueryHandler<GetAgentActivityQuery> {
+  constructor(@Inject(TaskControlPlaneApiService) private readonly api: TaskControlPlaneApiService) {}
+
+  async execute(query: GetAgentActivityQuery): Promise<AgentRunActivityReadModel | null> {
+    const activity = await this.api.getAgentActivity(query.data.runId);
+    if (!activity) return null;
+    return mapAgentRunActivity(activity);
+  }
+}
+
+@QueryHandler(GetAgentAttemptsQuery)
+export class GetAgentAttemptsHandler implements IQueryHandler<GetAgentAttemptsQuery> {
+  constructor(@Inject(TaskControlPlaneApiService) private readonly api: TaskControlPlaneApiService) {}
+
+  async execute(query: GetAgentAttemptsQuery): Promise<AgentAttemptReadModel[]> {
+    const attempts = await this.api.getAgentAttempts(query.data.runId);
+    return attempts.map(mapAgentAttempt);
+  }
+}
+
+@QueryHandler(GetAgentLogQuery)
+export class GetAgentLogHandler implements IQueryHandler<GetAgentLogQuery> {
+  constructor(@Inject(TaskControlPlaneApiService) private readonly api: TaskControlPlaneApiService) {}
+
+  async execute(query: GetAgentLogQuery): Promise<AgentLogChunkReadModel> {
+    const chunk = await this.api.getAgentLog({
+      runId: query.data.runId,
+      attemptId: query.data.attemptId,
+      stream: query.data.stream,
+      offsetBytes: query.data.offsetBytes,
+      limitBytes: query.data.limitBytes,
+      tailBytes: query.data.tailBytes,
+    });
+    return mapAgentLogChunk(chunk);
   }
 }

@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { ControlPlaneError } from '../control-plane/errors.js';
 import type { InboxItem } from '../control-plane/inbox.js';
 import type { DbosService } from '../engine/dbos.service.js';
+import { AgentObservabilityError, AgentObservabilityService } from '../observability/index.js';
 import type { PipelineService } from '../pipeline/pipeline.service.js';
 import type { InboxService } from '../revisium/inbox.service.js';
 import type { PlaybooksService } from '../revisium/playbooks.service.js';
@@ -185,9 +186,19 @@ function makeApi(overrides: {
     async getEvent() {
       return null;
     },
+    async *readStream() {},
     async signal() {},
     ...overrides.dbosService,
   };
+  const artifactRoot = join(mkdtempSync(join(tmpdir(), 'revo-agent-observability-')), 'run-artifacts');
+  const observabilityService = new AgentObservabilityService({
+    artifactRoot,
+    runExists: async (runId) => Boolean(await runService.getRun?.(runId)),
+    dbos: {
+      getEvent: (workflowID, key, opts) => dbosService.getEvent!(workflowID, key, opts),
+      readStream: (workflowID, key) => dbosService.readStream!(workflowID, key),
+    },
+  });
   return new TaskControlPlaneApiService(
     runService as RunService,
     inboxService as InboxService,
@@ -195,6 +206,7 @@ function makeApi(overrides: {
     playbooksService as PlaybooksService,
     pipelineService as PipelineService,
     dbosService as DbosService,
+    observabilityService,
   );
 }
 
@@ -238,6 +250,68 @@ test('TaskControlPlaneApiService.getRunProgress returns NOT_STARTED when DBOS ha
   assert.equal(progress.workflowStatus, 'NOT_STARTED');
   assert.equal(progress.graphCursor, null);
   assert.equal(progress.updatedAt.toISOString(), '2026-06-13T00:00:00.000Z');
+});
+
+test('TaskControlPlaneApiService agent observability reads DBOS activity through sealed verbs', async () => {
+  const api = makeApi({
+    dbosService: {
+      async getEvent<T>(workflowID: string, key: string, opts?: { timeoutSeconds?: number }): Promise<T> {
+        assert.equal(workflowID, 'run-1');
+        assert.equal(key, 'agent-activity');
+        assert.deepEqual(opts, { timeoutSeconds: 0 });
+        return {
+          runId: 'run-1',
+          aggregateStatus: 'running',
+          latestActivityAt: '2026-06-20T10:00:01.000Z',
+          attempts: [{
+            runId: 'run-1',
+            attemptId: 'attempt-1',
+            stepId: 'step-1',
+            role: 'developer',
+            runner: 'claude-code',
+            status: 'running',
+            startedAt: '2026-06-20T10:00:00.000Z',
+            lastEventAt: '2026-06-20T10:00:01.000Z',
+            stdoutBytes: 0,
+            stderrBytes: 0,
+            eventCount: 1,
+            artifactRef: 'run-1/attempt-1',
+          }],
+        } as T;
+      },
+    },
+  });
+
+  const activity = await api.getAgentActivity('run-1');
+
+  assert.equal(activity?.runId, 'run-1');
+  assert.equal(activity?.attempts[0]?.attemptId, 'attempt-1');
+});
+
+test('TaskControlPlaneApiService agent observability preserves existing-run empty states', async () => {
+  const api = makeApi();
+
+  assert.equal(await api.getAgentActivity('run-1'), null);
+  assert.deepEqual(await api.getAgentAttempts('run-1'), []);
+  await assert.rejects(
+    () => api.getAgentLog({ runId: 'run-1', stream: 'stdout' }),
+    (error: unknown) => error instanceof AgentObservabilityError && error.code === 'NO_AGENT_ATTEMPT_AVAILABLE',
+  );
+});
+
+test('TaskControlPlaneApiService agent observability reports missing runs as application errors', async () => {
+  const api = makeApi({
+    runService: {
+      async getRun() {
+        return null;
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => api.getAgentActivity('missing-run'),
+    (error: unknown) => error instanceof AgentObservabilityError && error.code === 'RUN_NOT_FOUND',
+  );
 });
 
 test('TaskControlPlaneApiService.getRunWorkflow returns UI projection through sealed verbs', async () => {

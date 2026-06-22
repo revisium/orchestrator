@@ -24,6 +24,9 @@ test('GraphQL facade services wrap query-bus requests', async () => {
   await new RunsApiService(queryBus, commandBus).listRuns({});
   await new RunsApiService(queryBus, commandBus).getRun({ runId: 'run_1' });
   await new RunsApiService(queryBus, commandBus).getRunEvents({ runId: 'run_1' });
+  await new RunsApiService(queryBus, commandBus).getAgentActivity({ runId: 'run_1' });
+  await new RunsApiService(queryBus, commandBus).getAgentAttempts({ runId: 'run_1' });
+  await new RunsApiService(queryBus, commandBus).getAgentLog({ runId: 'run_1', stream: 'stdout' });
   await new RunsApiService(queryBus, commandBus).getRunProgress({ runId: 'run_1' });
   await new RunsApiService(queryBus, commandBus).getRunDigest({ runId: 'run_1' });
   await new RunsApiService(queryBus, commandBus).simulateRoute({ title: 'Build' });
@@ -48,6 +51,9 @@ test('GraphQL facade services wrap query-bus requests', async () => {
     'ListRunsQuery',
     'GetRunQuery',
     'GetRunEventsQuery',
+    'GetAgentActivityQuery',
+    'GetAgentAttemptsQuery',
+    'GetAgentLogQuery',
     'GetRunProgressQuery',
     'GetRunDigestQuery',
     'SimulateRouteQuery',

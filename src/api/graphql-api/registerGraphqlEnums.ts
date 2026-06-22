@@ -1,3 +1,12 @@
+import { registerEnumType } from '@nestjs/graphql';
+import {
+  AgentActivityStatus,
+  AgentLogStream,
+  AgentOutputStream,
+} from './runs/model/agent-activity.model.js';
+
 export function registerGraphqlEnums(): void {
-  // Slice 0 has no public enums yet. Later slices register domain enums here.
+  registerEnumType(AgentLogStream, { name: 'AgentLogStream' });
+  registerEnumType(AgentActivityStatus, { name: 'AgentActivityStatus' });
+  registerEnumType(AgentOutputStream, { name: 'AgentOutputStream' });
 }

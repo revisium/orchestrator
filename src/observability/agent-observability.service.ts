@@ -115,6 +115,7 @@ export class AgentObservabilityService {
 
   async getAgentActivity(runId: string): Promise<AgentRunActivity | null> {
     const safeRunId = validateSegment(runId, 'runId');
+    await this.assertRunExists(safeRunId);
     const eventSnapshot = await this.dbos?.getEvent<AgentRunActivity>(
       safeRunId,
       AGENT_ACTIVITY_EVENT_KEY,
@@ -282,7 +283,7 @@ export class AgentObservabilityService {
       attempts = await this.listAgentAttempts(runId);
     } catch (err) {
       if (err instanceof AgentObservabilityError) {
-        if (err.code === 'RUN_NOT_FOUND' || err.code === 'NO_AGENT_ATTEMPT_AVAILABLE') return null;
+        if (err.code === 'NO_AGENT_ATTEMPT_AVAILABLE') return null;
       }
       throw err;
     }
@@ -339,7 +340,7 @@ export class AgentObservabilityService {
   }
 
   private buildRunActivity(runId: string, attempts: AgentActivitySnapshot[]): AgentRunActivity {
-    return buildRunActivity(runId, attempts.map((attempt) => this.classifySnapshot(attempt)));
+    return buildRunActivity(runId, attempts.map((attempt) => this.classifySnapshot(redactActivitySnapshot(attempt))));
   }
 
   private classifyActivity(activity: AgentRunActivity): AgentRunActivity {
@@ -352,6 +353,12 @@ export class AgentObservabilityService {
     if (latestAt === undefined) return snapshot;
     if (this.now() - latestAt < this.idleThresholdMs) return snapshot;
     return { ...snapshot, status: 'idle' };
+  }
+
+  private async assertRunExists(runId: string): Promise<void> {
+    if (!this.runExists) return;
+    const exists = await this.runExists(runId);
+    if (!exists) throw new AgentObservabilityError('RUN_NOT_FOUND', 'run was not found');
   }
 
   private async resolveRunDirectory(runId: string): Promise<ExistingRunDirectory> {
@@ -643,6 +650,18 @@ function normalizeOutputEvent(runId: string, value: unknown): AgentOutputEvent |
     return null;
   }
   return event;
+}
+
+function redactActivitySnapshot(snapshot: AgentActivitySnapshot): AgentActivitySnapshot {
+  return {
+    ...snapshot,
+    stepId: redactPublicText(snapshot.stepId),
+    ...(snapshot.stepKey ? { stepKey: redactPublicText(snapshot.stepKey) } : {}),
+    role: redactPublicText(snapshot.role),
+    runner: redactPublicText(snapshot.runner),
+    artifactRef: redactPublicText(snapshot.artifactRef),
+    ...(snapshot.error ? { error: redactPublicText(snapshot.error) } : {}),
+  };
 }
 
 function buildRunActivity(runId: string, attempts: AgentActivitySnapshot[]): AgentRunActivity {

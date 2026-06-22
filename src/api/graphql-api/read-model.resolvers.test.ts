@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { InboxResolver } from './inbox/inbox.resolver.js';
 import { MethodResolver } from './method/method.resolver.js';
 import { PrResolver } from './pr/pr.resolver.js';
+import { AgentLogStream } from './runs/model/agent-activity.model.js';
 import { RunDigestResolver } from './runs/run-digest.resolver.js';
 import { RunEventsResolver } from './runs/run-events.resolver.js';
 import { RunProgressResolver } from './runs/run-progress.resolver.js';
@@ -14,6 +15,9 @@ test('read-model resolvers delegate to domain api services', async () => {
     listRuns: (data: unknown) => (calls.push(`runs:${JSON.stringify(data)}`), 'runs'),
     getRun: (data: unknown) => (calls.push(`run:${JSON.stringify(data)}`), 'run'),
     getRunEvents: (data: unknown) => (calls.push(`events:${JSON.stringify(data)}`), 'events'),
+    getAgentActivity: (data: unknown) => (calls.push(`agentActivity:${JSON.stringify(data)}`), 'agentActivity'),
+    getAgentAttempts: (data: unknown) => (calls.push(`agentAttempts:${JSON.stringify(data)}`), 'agentAttempts'),
+    getAgentLog: (data: unknown) => (calls.push(`agentLog:${JSON.stringify(data)}`), 'agentLog'),
     getRunProgress: (data: unknown) => (calls.push(`progress:${JSON.stringify(data)}`), 'progress'),
     getRunDigest: (data: unknown) => (calls.push(`digest:${JSON.stringify(data)}`), 'digest'),
     simulateRoute: (data: unknown) => (calls.push(`route:${JSON.stringify(data)}`), 'route'),
@@ -44,6 +48,9 @@ test('read-model resolvers delegate to domain api services', async () => {
   assert.equal(new RunsResolver(runsApi as never).runs(), 'runs');
   assert.equal(new RunsResolver(runsApi as never).run('run_1'), 'run');
   assert.equal(new RunsResolver(runsApi as never).runEvents({ runId: 'run_1', first: 1 }), 'events');
+  assert.equal(new RunsResolver(runsApi as never).runAgentActivity('run_1'), 'agentActivity');
+  assert.equal(new RunsResolver(runsApi as never).runAgentAttempts('run_1'), 'agentAttempts');
+  assert.equal(new RunsResolver(runsApi as never).runAgentLog({ runId: 'run_1', stream: AgentLogStream.stdout }), 'agentLog');
   assert.equal(new RunsResolver(runsApi as never).runDigest('run_1'), 'digest');
   assert.equal(new RunsResolver(runsApi as never).simulateRoute({ title: 'Build' }), 'route');
   assert.equal(new RunsResolver(runsApi as never).createRun({ title: 'Build', repo: '.' }), 'create');
@@ -68,6 +75,9 @@ test('read-model resolvers delegate to domain api services', async () => {
   assert.equal(new PrResolver(prApi as never).prFeedback({ repo: 'revisium/orchestrator' }), 'feedback');
   assert.ok(calls.some((call) => call === 'digest:{"runId":"run_1"}'));
   assert.ok(calls.some((call) => call === 'events:{"runId":"run_1","type":"created","first":1,"after":"cursor"}'));
+  assert.ok(calls.some((call) => call === 'agentActivity:{"runId":"run_1"}'));
+  assert.ok(calls.some((call) => call === 'agentAttempts:{"runId":"run_1"}'));
+  assert.ok(calls.some((call) => call === 'agentLog:{"runId":"run_1","stream":"stdout"}'));
   assert.equal(calls.filter((call) => call === 'progress:{"runId":"run_1"}').length, 2);
   assert.ok(calls.some((call) => call === 'create:{"title":"Build","repo":"."}'));
   assert.ok(calls.some((call) => call === 'approve:{"inboxId":"inbox_1"}'));

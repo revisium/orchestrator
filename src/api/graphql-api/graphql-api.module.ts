@@ -9,6 +9,7 @@ import { PrApiModule } from '../../features/pr/pr-api.module.js';
 import { RunsApiModule } from '../../features/runs/runs-api.module.js';
 import { SystemApiModule } from '../../features/system/system-api.module.js';
 import { createGraphqlMetricsPlugin } from '../../infrastructure/metrics/graphql/graphql-metrics.js';
+import { AgentObservabilityExceptionFilter } from './filters/agent-observability-exception.filter.js';
 import { GraphQLValidationExceptionFilter } from './filters/graphql-validation-exception.filter.js';
 import { PubSubModule } from './graphql-ws/pubsub.module.js';
 import { InboxResolver } from './inbox/inbox.resolver.js';
@@ -48,6 +49,7 @@ import { SystemResolver } from './system/system.resolver.js';
     }),
   ],
   providers: [
+    { provide: APP_FILTER, useClass: AgentObservabilityExceptionFilter },
     { provide: APP_FILTER, useClass: GraphQLValidationExceptionFilter },
     InboxResolver,
     InboxSubscriptionResolver,

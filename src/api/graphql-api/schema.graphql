@@ -1,3 +1,85 @@
+type AgentActivity {
+  artifactRef: String!
+  attemptId: ID!
+  error: String
+  eventCount: Int!
+  exitCode: Int
+  lastEventAt: DateTime!
+  lastOutputAt: DateTime
+  lastStream: AgentOutputStream
+  pid: Int
+  role: String!
+  runId: ID!
+  runner: String!
+  startedAt: DateTime!
+  status: AgentActivityStatus!
+  stderrBytes: Int!
+  stdoutBytes: Int!
+  stepId: ID!
+  stepKey: String
+  timedOut: Boolean
+}
+
+enum AgentActivityStatus {
+  cancelled
+  exited
+  failed
+  idle
+  permission_blocked
+  running
+  starting
+  timed_out
+}
+
+type AgentAttempt {
+  artifactRef: String!
+  attemptId: ID!
+  exitCode: Int
+  finishedAt: DateTime
+  role: String!
+  runId: ID!
+  runner: String!
+  startedAt: DateTime!
+  status: String!
+  stderrBytes: Int!
+  stdoutBytes: Int!
+  stepId: ID!
+  stepKey: String
+  timedOut: Boolean
+}
+
+type AgentLogChunk {
+  attemptId: ID!
+  content: String!
+  nextOffsetBytes: Int
+  offsetBytes: Int!
+  runId: ID!
+  stream: AgentLogStream!
+  totalBytes: Int
+  truncated: Boolean!
+}
+
+enum AgentLogStream {
+  combined
+  events
+  stderr
+  stdout
+}
+
+enum AgentOutputStream {
+  agent_jsonl
+  stderr
+  stdout
+}
+
+type AgentRunActivity {
+  aggregateStatus: AgentActivityStatus!
+  attempts: [AgentActivity!]!
+  latestActivityAt: DateTime!
+  latestOutputAt: DateTime
+  runId: ID!
+}
+
 type AlternativeRoleGroupModel {
   groupId: String!
   resolution: String!
@@ -65,6 +147,15 @@ type GateRiskModel {
   risk: String!
   title: String!
   topic: String
+}
+
+input GetAgentLogInput {
+  attemptId: ID
+  limitBytes: Int
+  offsetBytes: Int
+  runId: ID!
+  stream: AgentLogStream!
+  tailBytes: Int
 }
 
 input GetRunAttemptsInput {
@@ -332,6 +423,9 @@ type Query {
   role(id: ID!): RoleModel!
   roles(data: ListMethodInput): RoleConnection!
   run(id: ID!): RunModel!
+  runAgentActivity(runId: ID!): AgentRunActivity
+  runAgentAttempts(runId: ID!): [AgentAttempt!]!
+  runAgentLog(data: GetAgentLogInput!): AgentLogChunk!
   runAttempts(data: GetRunAttemptsInput!): RunAttemptConnection!
   runDigest(id: ID!): RunDigestModel!
   runEvents(data: GetRunEventsInput!): RunEventConnection!
