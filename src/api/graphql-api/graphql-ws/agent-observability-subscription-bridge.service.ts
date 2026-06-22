@@ -134,6 +134,11 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function toError(error: unknown, fallbackMessage: string): Error {
+  if (error instanceof Error) return error;
+  return new Error(error === undefined ? fallbackMessage : String(error));
+}
+
 function toSubscriptionError(error: unknown): AgentObservabilitySubscriptionError {
   if (error instanceof AgentObservabilitySubscriptionError) return error;
   const message = `${errorMessage(error)}; refetch current agent observability state before resubscribing`;
@@ -167,7 +172,7 @@ async function consumeLiveTail<T>(
         if (skipped > LIVE_TAIL_WARMUP_MAX_EVENTS) throw liveTailOverflowError();
         continue;
       }
-      await publish(next.value);
+      publish(next.value);
     }
   } finally {
     signal.removeEventListener('abort', abort);
@@ -208,7 +213,7 @@ class SubscriptionQueue<T> implements SubscriptionIterator<T> {
   private readonly values: T[] = [];
   private readonly waiters: Array<QueueWaiter<T>> = [];
   private closed = false;
-  private error: unknown;
+  private error: Error | undefined;
 
   constructor(private readonly onReturn: () => void) {}
 
@@ -234,7 +239,7 @@ class SubscriptionQueue<T> implements SubscriptionIterator<T> {
   async throw(error?: unknown): Promise<IteratorResult<T>> {
     this.close();
     this.onReturn();
-    throw error;
+    throw toError(error, 'subscription iterator thrown');
   }
 
   push(value: T): void {
@@ -249,9 +254,9 @@ class SubscriptionQueue<T> implements SubscriptionIterator<T> {
 
   fail(error: unknown): void {
     if (this.closed || this.error) return;
-    this.error = error;
+    this.error = toError(error, 'subscription queue failed');
     this.values.splice(0);
-    for (const waiter of this.waiters.splice(0)) waiter.reject(error);
+    for (const waiter of this.waiters.splice(0)) waiter.reject(this.error);
   }
 
   close(): void {

@@ -230,6 +230,30 @@ test('AgentObservabilitySubscriptionBridge contains watch failures and tells cli
   assert.match(warnings[0] ?? '', /refetch current agent observability state/);
 });
 
+test('AgentObservabilitySubscriptionBridge rejects subscribers with Error instances for non-Error watch failures', async () => {
+  const api = {
+    async *watchAgentActivity() {
+      const error: unknown = 'cursor expired';
+      throw error;
+      yield activity();
+    },
+    async *watchAgentOutput() {
+      yield await Promise.reject(new Error('unused'));
+    },
+  };
+  const bridge = new AgentObservabilitySubscriptionBridge(api as never);
+  (bridge as unknown as { logger: { warn: () => void } }).logger = { warn: () => undefined };
+
+  const iterator = bridge.subscribeToActivity('run_1');
+  await assert.rejects(() => iterator.next(), (error) => {
+    assert.ok(error instanceof Error);
+    const err = error as { code?: string; message?: string };
+    assert.equal(err.code, 'AGENT_OBSERVABILITY_REFETCH_REQUIRED');
+    assert.match(err.message ?? '', /cursor expired|refetch current agent observability state/);
+    return true;
+  });
+});
+
 test('AgentObservabilitySubscriptionBridge watch failure preempts buffered payloads for slow subscribers', async () => {
   const api = {
     async *watchAgentActivity() {
