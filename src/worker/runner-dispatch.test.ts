@@ -25,14 +25,30 @@ test('createRunAgent: delegates claude-code to the injected runner', async () =>
   assert.equal(seen.length, 1, 'claude-code runner invoked once');
 });
 
-test('createRunAgent: codex throws RUNNER_NOT_IMPLEMENTED', async () => {
+test('createRunAgent: codex throws RUNNER_NOT_IMPLEMENTED when not wired', async () => {
   const claudeCode: RunAgent = async () => SENTINEL;
   const runAgent = createRunAgent({ claudeCode });
 
   await assert.rejects(
     () => runAgent(callArgs(makeRole('developer', { runner: 'codex' }))),
-    /RUNNER_NOT_IMPLEMENTED: codex/,
+    /RUNNER_NOT_IMPLEMENTED: codex runner not wired/,
   );
+});
+
+test('createRunAgent: delegates codex to the injected runner', async () => {
+  const codexResult: AttemptResult = { output: { ran: 'codex' }, nextSteps: [], costs: [], needsHuman: false };
+  const seen: Role[] = [];
+  const claudeCode: RunAgent = async () => SENTINEL;
+  const codex: RunAgent = async (args) => {
+    seen.push(args.role);
+    return codexResult;
+  };
+
+  const runAgent = createRunAgent({ claudeCode, codex });
+  const result = await runAgent(callArgs(makeRole('developer', { runner: 'codex' })));
+
+  assert.equal(result, codexResult, 'returns exactly what the injected codex runner returns');
+  assert.equal(seen.length, 1, 'codex runner invoked once');
 });
 
 test('createRunAgent: an unknown runner throws RUNNER_NOT_IMPLEMENTED', async () => {

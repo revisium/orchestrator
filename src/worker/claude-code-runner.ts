@@ -1,18 +1,17 @@
 import type { ProcessExecutor, ExecRequest } from './process-executor.js';
-import type { RunAgent, AttemptResult } from './runner.js';
+import type { RunAgent } from './runner.js';
 import { RunAgentError } from './runner.js';
-import type { ArtifactStore, ProcessArtifactSnapshot } from './artifact-store.js';
-import type { Step, CostRecord } from '../control-plane/steps.js';
-import type { ModelProfile } from '../control-plane/definitions.js';
+import type { ArtifactStore } from './artifact-store.js';
+import type { Step } from '../control-plane/steps.js';
 import type { AgentActivityReporter } from '../observability/agent-activity-reporter.js';
 import {
   AGENT_RESULT_SCHEMA,
   STRUCTURED_RESULT_NOTE,
   agentResultFromStructured,
   parseTransportEnvelope,
-  normalizeNextSteps,
   type TransportEnvelope,
 } from './result-envelope.js';
+import { boundedPreview, buildAttemptResult, buildUsageCosts, runnerError, tail } from './runner-common.js';
 
 // The ONE place Claude Code CLI specifics live. The runner hides the protocol entirely: the loop sees
 // only the RunAgent interface. Process spawning goes through an injected ProcessExecutor (the
@@ -28,54 +27,6 @@ export type ClaudeCodeRunnerDeps = {
 
 const DEFAULT_TIMEOUT_MS = 600_000;
 const DEFAULT_COMMAND = 'claude';
-const ERROR_TAIL = 2_000;
-const OBSERVABILITY_PREVIEW_MAX_CHARS = 1_000;
-const OBSERVABILITY_ARRAY_MAX_ITEMS = 5;
-const OBSERVABILITY_OBJECT_MAX_KEYS = 12;
-const OBSERVABILITY_STRING_MAX_CHARS = 120;
-
-function tail(text: string): string {
-  const trimmed = text.trim();
-  return trimmed.length > ERROR_TAIL ? trimmed.slice(-ERROR_TAIL) : trimmed;
-}
-
-function boundedString(value: string, maxChars = OBSERVABILITY_STRING_MAX_CHARS): string {
-  return value.length > maxChars ? `${value.slice(0, maxChars)}...` : value;
-}
-
-function boundedPreviewValue(value: unknown, depth = 0): unknown {
-  if (value === null || value === undefined) return value;
-  if (typeof value === 'string') return boundedString(value);
-  if (typeof value === 'number' || typeof value === 'boolean') return value;
-  if (depth >= 3) return '[object]';
-  if (Array.isArray(value)) {
-    const limited = value.slice(0, OBSERVABILITY_ARRAY_MAX_ITEMS).map((entry) => boundedPreviewValue(entry, depth + 1));
-    if (value.length > OBSERVABILITY_ARRAY_MAX_ITEMS) {
-      limited.push(`[${value.length - OBSERVABILITY_ARRAY_MAX_ITEMS} more]`);
-    }
-    return limited;
-  }
-  if (typeof value === 'object') {
-    const out: Record<string, unknown> = {};
-    const entries = Object.entries(value).slice(0, OBSERVABILITY_OBJECT_MAX_KEYS);
-    for (const [key, entry] of entries) {
-      out[key] = boundedPreviewValue(entry, depth + 1);
-    }
-    const keyCount = Object.keys(value).length;
-    if (keyCount > OBSERVABILITY_OBJECT_MAX_KEYS) {
-      out._truncatedKeys = keyCount - OBSERVABILITY_OBJECT_MAX_KEYS;
-    }
-    return out;
-  }
-  return `[${typeof value}]`;
-}
-
-function boundedPreview(value: unknown): string {
-  const preview = JSON.stringify(boundedPreviewValue(value));
-  return preview.length > OBSERVABILITY_PREVIEW_MAX_CHARS
-    ? `${preview.slice(0, OBSERVABILITY_PREVIEW_MAX_CHARS)}...`
-    : preview;
-}
 
 function hasPermissionDenials(value: unknown): boolean {
   if (Array.isArray(value)) return value.length > 0;
@@ -164,44 +115,6 @@ function buildPrompt(context: string, attemptId: string): string {
   return [context, idempotencyLine, STRUCTURED_RESULT_NOTE].join('\n');
 }
 
-// One CostRecord from the transport envelope. Prefer the CLI-reported USD; else compute from tokens.
-// Zero tokens with no reported cost → empty costs (keeps zero-cost paths truly free).
-function buildCosts(step: Step, profile: ModelProfile, env: TransportEnvelope): CostRecord[] {
-  const inputTokens = env.inputTokens ?? 0;
-  const outputTokens = env.outputTokens ?? 0;
-  const reportedUsd = (typeof env.costUsd === 'number' && Number.isFinite(env.costUsd)) ? env.costUsd : undefined;
-  if (inputTokens === 0 && outputTokens === 0 && reportedUsd === undefined) return [];
-  const computed =
-    (inputTokens / 1_000_000) * profile.costPerInput +
-    (outputTokens / 1_000_000) * profile.costPerOutput;
-  return [
-    {
-      modelProfile: step.modelProfile,
-      inputTokens,
-      outputTokens,
-      costAmount: reportedUsd ?? computed,
-      currency: 'USD',
-    },
-  ];
-}
-
-function withProcessArtifact(agentArtifacts: unknown, process: ProcessArtifactSnapshot | undefined): unknown {
-  if (!process) return agentArtifacts;
-  const processEntry = {
-    ref: process.ref,
-    stdoutTail: process.stdoutTail,
-    stderrTail: process.stderrTail,
-  };
-  if (agentArtifacts && typeof agentArtifacts === 'object' && !Array.isArray(agentArtifacts)) {
-    return { ...agentArtifacts, process: processEntry };
-  }
-  return { agent: agentArtifacts ?? null, process: processEntry };
-}
-
-function runnerError(message: string, process: ProcessArtifactSnapshot | undefined): RunAgentError {
-  return new RunAgentError(message, withProcessArtifact(undefined, process));
-}
-
 export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
   const fallbackTimeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const command = deps.command ?? DEFAULT_COMMAND;
@@ -271,39 +184,13 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
       }
 
       const agent = agentResultFromStructured(transport.structuredOutput);
-      const costs = buildCosts(step, profile, transport);
+      const costs = buildUsageCosts(step, profile, transport);
+      const attemptResult = buildAttemptResult(agent, step, costs, processSnapshot);
       reporter?.finished({ exitCode: result.code, timedOut: result.timedOut });
-
-      // needsHuman: do NOT write nextSteps — the loop parks via the existing awaiting_approval path.
-      if (agent.needsHuman) {
-        const parked: AttemptResult = {
-          output: agent.output,
-          verdict: agent.verdict,
-          artifacts: withProcessArtifact(agent.artifacts, processSnapshot),
-          nextSteps: [],
-          costs,
-          needsHuman: true,
-          lesson: agent.lesson,
-        };
-        if (hasPermissionDenials(transport.permissionDenials)) {
-          reporter?.status('permission_blocked', { preview: permissionDenialsPreview(transport) });
-        }
-        return parked;
-      }
-
-      const success: AttemptResult = {
-        output: agent.output,
-        verdict: agent.verdict,
-        artifacts: withProcessArtifact(agent.artifacts, processSnapshot),
-        nextSteps: normalizeNextSteps(agent.nextSteps, step),
-        costs,
-        needsHuman: false,
-        lesson: agent.lesson,
-      };
       if (hasPermissionDenials(transport.permissionDenials)) {
         reporter?.status('permission_blocked', { preview: permissionDenialsPreview(transport) });
       }
-      return success;
+      return attemptResult;
     } catch (err) {
       if (err instanceof RunAgentError) throw err;
       const processSnapshot = processArtifact?.finish({ error: String(err) });
