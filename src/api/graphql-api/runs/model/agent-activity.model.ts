@@ -24,6 +24,13 @@ export enum AgentOutputStream {
   agent_jsonl = 'agent_jsonl',
 }
 
+export enum AgentOutputEventKind {
+  activity = 'activity',
+  output = 'output',
+  parsed_event = 'parsed_event',
+  status = 'status',
+}
+
 @ObjectType('AgentAttempt')
 export class AgentAttemptModel {
   @Field(() => ID)
@@ -145,6 +152,48 @@ export class AgentRunActivityModel {
 
   @Field(() => [AgentActivityModel])
   attempts!: AgentActivityModel[];
+}
+
+@ObjectType('AgentOutputEvent')
+export class AgentOutputEventModel {
+  @Field(() => String)
+  cursor!: string;
+
+  @Field(() => ID)
+  runId!: string;
+
+  @Field(() => ID)
+  attemptId!: string;
+
+  @Field(() => Int, { nullable: true })
+  attemptSeq?: number;
+
+  @Field(() => ID)
+  stepId!: string;
+
+  @Field(() => String, { nullable: true })
+  stepKey?: string;
+
+  @Field(() => Date)
+  at!: Date;
+
+  @Field(() => AgentOutputEventKind)
+  kind!: AgentOutputEventKind;
+
+  @Field(() => AgentOutputStream, { nullable: true })
+  stream?: AgentOutputStream;
+
+  @Field(() => Int, { nullable: true })
+  bytes?: number;
+
+  @Field(() => String, { nullable: true })
+  preview?: string;
+
+  @Field(() => String, { nullable: true })
+  parsedType?: string;
+
+  @Field(() => AgentActivityStatus, { nullable: true })
+  statusHint?: AgentActivityStatus;
 }
 
 @ObjectType('AgentLogChunk')

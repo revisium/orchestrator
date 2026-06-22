@@ -66,6 +66,29 @@ enum AgentLogStream {
   stdout
 }
 
+type AgentOutputEvent {
+  at: DateTime!
+  attemptId: ID!
+  attemptSeq: Int
+  bytes: Int
+  cursor: String!
+  kind: AgentOutputEventKind!
+  parsedType: String
+  preview: String
+  runId: ID!
+  statusHint: AgentActivityStatus
+  stepId: ID!
+  stepKey: String
+  stream: AgentOutputStream
+}
+
+enum AgentOutputEventKind {
+  activity
+  output
+  parsed_event
+  status
+}
+
 enum AgentOutputStream {
   agent_jsonl
   stderr
@@ -697,6 +720,8 @@ input SimulateRouteInput {
 type Subscription {
   inboxItemAdded(data: RunSubscriptionInput): InboxItemModel!
   inboxItemResolved(data: RunSubscriptionInput): InboxItemModel!
+  runAgentActivityUpdated(runId: ID!): AgentRunActivity!
+  runAgentOutputAppended(runId: ID!): AgentOutputEvent!
   runCostRecorded(data: RunSubscriptionInput): RunCostModel!
   runEventAppended(data: RunSubscriptionInput): RunEventModel!
   runProgressUpdated(data: RunSubscriptionInput): RunProgressModel!
