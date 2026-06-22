@@ -131,12 +131,24 @@ function watcherKey(topic: Topic, runId: string): string {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return stringifyReason(error);
 }
 
 function toError(error: unknown, fallbackMessage: string): Error {
   if (error instanceof Error) return error;
-  return new Error(error === undefined ? fallbackMessage : String(error));
+  return new Error(error === undefined ? fallbackMessage : stringifyReason(error));
+}
+
+function stringifyReason(reason: unknown): string {
+  if (reason instanceof Error) return reason.message;
+  if (typeof reason === 'string') return reason;
+  if (reason === undefined) return 'undefined';
+  if (reason === null || typeof reason !== 'object') return String(reason);
+  try {
+    return JSON.stringify(reason) ?? 'unserializable object';
+  } catch {
+    return 'unserializable object';
+  }
 }
 
 function toSubscriptionError(error: unknown): AgentObservabilitySubscriptionError {
