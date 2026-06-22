@@ -4,6 +4,7 @@ import { redactTokens } from '../runners/gh-identity.js';
 
 export type ProcessArtifactRef = {
   ref: string;
+  dirPath: string;
   stdoutPath: string;
   stderrPath: string;
   metaPath: string;
@@ -37,6 +38,7 @@ export type ProcessArtifactStart = {
 };
 
 export type ArtifactStore = {
+  resolveAttemptDir(runId: string, attemptId: string): string;
   startProcess(input: ProcessArtifactStart): ProcessArtifactWriter;
 };
 
@@ -69,6 +71,12 @@ export function createArtifactStore(rootDir: string, opts: { tailBytes?: number 
   const tailBytes = opts.tailBytes ?? DEFAULT_TAIL_BYTES;
 
   return {
+    resolveAttemptDir(runIdValue: string, attemptIdValue: string): string {
+      const runId = safeSegment(runIdValue, 'runId');
+      const attemptId = safeSegment(attemptIdValue, 'attemptId');
+      return join(root, runId, attemptId);
+    },
+
     startProcess(input: ProcessArtifactStart): ProcessArtifactWriter {
       const runId = safeSegment(input.runId, 'runId');
       const attemptId = safeSegment(input.attemptId, 'attemptId');
@@ -101,7 +109,7 @@ export function createArtifactStore(rootDir: string, opts: { tailBytes?: number 
       });
       appendFileSync(eventsPath, JSON.stringify({ type: 'process_started', at: startedAt.toISOString() }) + '\n', 'utf8');
 
-      const artifactRef: ProcessArtifactRef = { ref, stdoutPath, stderrPath, metaPath, eventsPath };
+      const artifactRef: ProcessArtifactRef = { ref, dirPath: dir, stdoutPath, stderrPath, metaPath, eventsPath };
       const snapshot = (): ProcessArtifactSnapshot => ({ ref, stdoutTail, stderrTail });
 
       return {
