@@ -83,6 +83,49 @@ function fakeReporter(events: string[]): AgentActivityReporter {
   };
 }
 
+type CapturedReporterEvent =
+  | { kind: 'started' }
+  | { kind: 'spawned'; pid: number }
+  | { kind: 'output'; stream: 'stdout' | 'stderr'; chunk: string }
+  | { kind: 'parsed'; type?: string; preview?: string }
+  | { kind: 'status'; status: string; preview?: string }
+  | { kind: 'finished'; exitCode?: number | null; timedOut?: boolean }
+  | { kind: 'failed'; message: string; exitCode?: number | null; timedOut?: boolean };
+
+function capturingReporter(events: CapturedReporterEvent[]): AgentActivityReporter {
+  return {
+    started: () => { events.push({ kind: 'started' }); },
+    spawned: (pid) => { events.push({ kind: 'spawned', pid }); },
+    output: (stream, chunk) => { events.push({ kind: 'output', stream, chunk }); },
+    parsed: (event) => { events.push({ kind: 'parsed', type: event.type, preview: event.preview }); },
+    status: (status, detail) => { events.push({ kind: 'status', status, preview: detail?.preview }); },
+    finished: (event) => { events.push({ kind: 'finished', exitCode: event.exitCode, timedOut: event.timedOut }); },
+    failed: (error, detail) => {
+      events.push({
+        kind: 'failed',
+        message: error instanceof Error ? error.message : String(error),
+        exitCode: detail?.exitCode,
+        timedOut: detail?.timedOut,
+      });
+    },
+    flush: async () => undefined,
+    snapshot: () => ({
+      runId: BASE_STEP.runId,
+      attemptId: ATTEMPT_ID,
+      stepId: BASE_STEP.id,
+      role: 'architect',
+      runner: 'claude-code',
+      status: 'running',
+      startedAt: new Date(0).toISOString(),
+      lastEventAt: new Date(0).toISOString(),
+      stdoutBytes: 0,
+      stderrBytes: 0,
+      eventCount: 0,
+      artifactRef: `${BASE_STEP.runId}/${ATTEMPT_ID}`,
+    }),
+  };
+}
+
 function run(executor: ProcessExecutor, roleOverrides = {}) {
   const runner = createClaudeCodeRunner({
     executor,
@@ -332,8 +375,141 @@ test('claude-code runner: reports spawn, stdout, stderr, parsed, and finished li
     'stdout:transport chunk',
     'stderr:diagnostic chunk',
     'parsed:result',
+    'parsed:usage',
     'finished:0:false',
   ]);
+});
+
+test('claude-code runner: reports Claude final JSON metadata as parsed events', async () => {
+  const events: CapturedReporterEvent[] = [];
+  const stdout = structuredTransport(
+    { verdict: 'approved', output: 'ok', artifacts: { keep: true }, nextSteps: [], needsHuman: false },
+    {
+      session_id: 'session-123',
+      terminal_reason: 'permission_denied',
+      permission_denials: [{ tool_name: 'Write', reason: 'not allowed' }],
+    },
+  );
+  const runner = createClaudeCodeRunner({
+    executor: fakeExecutor(ok(stdout), []),
+    resolveCwd: async () => '/workspace/repo',
+    timeoutMs: 5_000,
+  });
+
+  const result = await runner({
+    role: makeRole('architect'),
+    profile: PROFILE,
+    context: 'ctx',
+    attemptId: ATTEMPT_ID,
+    step: BASE_STEP,
+    reporter: capturingReporter(events),
+  });
+
+  assert.equal(result.output, 'ok', 'AttemptResult output still comes from structured_output');
+  assert.deepEqual(result.artifacts, { keep: true }, 'agent artifacts are preserved');
+  const parsedTypes = events
+    .filter((event): event is Extract<CapturedReporterEvent, { kind: 'parsed' }> => event.kind === 'parsed')
+    .map((event) => event.type);
+  assert.deepEqual(parsedTypes, ['result', 'usage', 'session_id', 'terminal_reason', 'permission_denials']);
+  const usageEvent = events.find(
+    (event): event is Extract<CapturedReporterEvent, { kind: 'parsed' }> =>
+      event.kind === 'parsed' && event.type === 'usage',
+  );
+  assert.match(usageEvent?.preview ?? '', /total_cost_usd/);
+  const permissionEvent = events.find(
+    (event): event is Extract<CapturedReporterEvent, { kind: 'parsed' }> =>
+      event.kind === 'parsed' && event.type === 'permission_denials',
+  );
+  assert.match(permissionEvent?.preview ?? '', /Write/);
+});
+
+test('claude-code runner: reports is_error metadata before failing the attempt', async () => {
+  const events: CapturedReporterEvent[] = [];
+  const stdout = JSON.stringify({ is_error: true, result: 'model refused' });
+  const runner = createClaudeCodeRunner({
+    executor: fakeExecutor(ok(stdout), []),
+    resolveCwd: async () => '/workspace/repo',
+    timeoutMs: 5_000,
+  });
+
+  await assert.rejects(() =>
+    runner({
+      role: makeRole('architect'),
+      profile: PROFILE,
+      context: 'ctx',
+      attemptId: ATTEMPT_ID,
+      step: BASE_STEP,
+      reporter: capturingReporter(events),
+    }),
+  );
+
+  assert.deepEqual(events.slice(-2), [
+    { kind: 'parsed', type: 'is_error', preview: '{"is_error":true}' },
+    { kind: 'failed', message: 'claude-code runner reported is_error: model refused', exitCode: 0, timedOut: undefined },
+  ]);
+});
+
+test('claude-code runner: clean exit with permission_denials reports terminal permission_blocked', async () => {
+  const events: CapturedReporterEvent[] = [];
+  const stdout = structuredTransport(
+    { verdict: 'approved', output: 'ok', nextSteps: [], needsHuman: false },
+    { permission_denials: [{ tool_name: 'Edit', reason: 'denied by policy' }] },
+  );
+  const runner = createClaudeCodeRunner({
+    executor: fakeExecutor(ok(stdout), []),
+    resolveCwd: async () => '/workspace/repo',
+    timeoutMs: 5_000,
+  });
+
+  const result = await runner({
+    role: makeRole('architect'),
+    profile: PROFILE,
+    context: 'ctx',
+    attemptId: ATTEMPT_ID,
+    step: BASE_STEP,
+    reporter: capturingReporter(events),
+  });
+
+  assert.equal(result.output, 'ok');
+  assert.equal(result.verdict, 'approved');
+  assert.equal(result.needsHuman, false);
+  assert.equal(result.nextSteps.length, 0);
+  assert.deepEqual(events.at(-2), { kind: 'finished', exitCode: 0, timedOut: false });
+  assert.equal(events.at(-1)?.kind, 'status');
+  assert.equal((events.at(-1) as Extract<CapturedReporterEvent, { kind: 'status' }> | undefined)?.status, 'permission_blocked');
+});
+
+test('claude-code runner: permission_denials parsed preview is bounded', async () => {
+  const events: CapturedReporterEvent[] = [];
+  const denials = Array.from({ length: 8 }, (_value, index) => ({
+    tool_name: `Tool${index}`,
+    reason: 'x'.repeat(2_000),
+  }));
+  const stdout = structuredTransport(
+    { verdict: 'approved', output: 'ok', nextSteps: [], needsHuman: false },
+    { permission_denials: denials },
+  );
+  const runner = createClaudeCodeRunner({
+    executor: fakeExecutor(ok(stdout), []),
+    resolveCwd: async () => '/workspace/repo',
+    timeoutMs: 5_000,
+  });
+
+  await runner({
+    role: makeRole('architect'),
+    profile: PROFILE,
+    context: 'ctx',
+    attemptId: ATTEMPT_ID,
+    step: BASE_STEP,
+    reporter: capturingReporter(events),
+  });
+
+  const permissionEvent = events.find(
+    (event): event is Extract<CapturedReporterEvent, { kind: 'parsed' }> =>
+      event.kind === 'parsed' && event.type === 'permission_denials',
+  );
+  assert.ok((permissionEvent?.preview?.length ?? 0) <= 1_003, 'runner bounds metadata before reporter redaction');
+  assert.match(permissionEvent?.preview ?? '', /\[3 more\]/);
 });
 
 test('claude-code runner: reported total_cost_usd of 0 with non-zero tokens yields cost 0 (not token-computed)', async () => {
@@ -375,6 +551,31 @@ test('claude-code runner: throws on timeout (mentions the timeout)', async () =>
     () => run(fakeExecutor({ code: null, stdout: '', stderr: '', timedOut: true }, [])),
     /exceeded 5000ms/,
   );
+});
+
+test('claude-code runner: reports timed_out lifecycle on timeout', async () => {
+  const events: CapturedReporterEvent[] = [];
+  const runner = createClaudeCodeRunner({
+    executor: fakeExecutor({ code: null, stdout: '', stderr: '', timedOut: true }, []),
+    resolveCwd: async () => '/workspace/repo',
+    timeoutMs: 5_000,
+  });
+
+  await assert.rejects(() =>
+    runner({
+      role: makeRole('architect'),
+      profile: PROFILE,
+      context: 'ctx',
+      attemptId: ATTEMPT_ID,
+      step: BASE_STEP,
+      reporter: capturingReporter(events),
+    }),
+  );
+
+  assert.deepEqual(events, [
+    { kind: 'started' },
+    { kind: 'failed', message: 'claude-code runner exceeded 5000ms', exitCode: null, timedOut: true },
+  ]);
 });
 
 // ─── error → lesson ─────────────────────────────────────────────────────────
@@ -461,6 +662,36 @@ test('claude-code runner: non-JSON stdout throws the transport lesson', async ()
     () => run(fakeExecutor(ok('this is not json'), [])),
     /transport envelope/,
   );
+});
+
+test('claude-code runner: reports failed lifecycle on malformed final JSON', async () => {
+  const events: CapturedReporterEvent[] = [];
+  const runner = createClaudeCodeRunner({
+    executor: fakeExecutor(ok('this is not json'), []),
+    resolveCwd: async () => '/workspace/repo',
+    timeoutMs: 5_000,
+  });
+
+  await assert.rejects(() =>
+    runner({
+      role: makeRole('architect'),
+      profile: PROFILE,
+      context: 'ctx',
+      attemptId: ATTEMPT_ID,
+      step: BASE_STEP,
+      reporter: capturingReporter(events),
+    }),
+  );
+
+  assert.deepEqual(events, [
+    { kind: 'started' },
+    {
+      kind: 'failed',
+      message: 'claude -p did not return parseable JSON (transport envelope)',
+      exitCode: undefined,
+      timedOut: undefined,
+    },
+  ]);
 });
 
 test('claude-code runner: missing structured_output throws the structured result lesson', async () => {

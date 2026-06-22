@@ -672,8 +672,8 @@ function buildRunActivity(runId: string, attempts: AgentActivitySnapshot[]): Age
 
 function aggregateStatus(attempts: AgentActivitySnapshot[]): AgentActivityStatus {
   const statuses = new Set(attempts.map((attempt) => attempt.status));
-  if (statuses.has('cancelled')) return 'cancelled';
   if (statuses.has('timed_out')) return 'timed_out';
+  if (statuses.has('cancelled')) return 'cancelled';
   if (statuses.has('failed')) return 'failed';
   if (statuses.has('permission_blocked')) return 'permission_blocked';
   if (statuses.has('running') || statuses.has('starting')) return 'running';

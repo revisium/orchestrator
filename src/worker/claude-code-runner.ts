@@ -4,6 +4,7 @@ import { RunAgentError } from './runner.js';
 import type { ArtifactStore, ProcessArtifactSnapshot } from './artifact-store.js';
 import type { Step, CostRecord } from '../control-plane/steps.js';
 import type { ModelProfile } from '../control-plane/definitions.js';
+import type { AgentActivityReporter } from '../observability/agent-activity-reporter.js';
 import {
   AGENT_RESULT_SCHEMA,
   STRUCTURED_RESULT_NOTE,
@@ -28,10 +29,98 @@ export type ClaudeCodeRunnerDeps = {
 const DEFAULT_TIMEOUT_MS = 600_000;
 const DEFAULT_COMMAND = 'claude';
 const ERROR_TAIL = 2_000;
+const OBSERVABILITY_PREVIEW_MAX_CHARS = 1_000;
+const OBSERVABILITY_ARRAY_MAX_ITEMS = 5;
+const OBSERVABILITY_OBJECT_MAX_KEYS = 12;
+const OBSERVABILITY_STRING_MAX_CHARS = 120;
 
 function tail(text: string): string {
   const trimmed = text.trim();
   return trimmed.length > ERROR_TAIL ? trimmed.slice(-ERROR_TAIL) : trimmed;
+}
+
+function boundedString(value: string, maxChars = OBSERVABILITY_STRING_MAX_CHARS): string {
+  return value.length > maxChars ? `${value.slice(0, maxChars)}...` : value;
+}
+
+function boundedPreviewValue(value: unknown, depth = 0): unknown {
+  if (value === null || value === undefined) return value;
+  if (typeof value === 'string') return boundedString(value);
+  if (typeof value === 'number' || typeof value === 'boolean') return value;
+  if (depth >= 3) return '[object]';
+  if (Array.isArray(value)) {
+    const limited = value.slice(0, OBSERVABILITY_ARRAY_MAX_ITEMS).map((entry) => boundedPreviewValue(entry, depth + 1));
+    if (value.length > OBSERVABILITY_ARRAY_MAX_ITEMS) {
+      limited.push(`[${value.length - OBSERVABILITY_ARRAY_MAX_ITEMS} more]`);
+    }
+    return limited;
+  }
+  if (typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    const entries = Object.entries(value).slice(0, OBSERVABILITY_OBJECT_MAX_KEYS);
+    for (const [key, entry] of entries) {
+      out[key] = boundedPreviewValue(entry, depth + 1);
+    }
+    const keyCount = Object.keys(value).length;
+    if (keyCount > OBSERVABILITY_OBJECT_MAX_KEYS) {
+      out._truncatedKeys = keyCount - OBSERVABILITY_OBJECT_MAX_KEYS;
+    }
+    return out;
+  }
+  return `[${typeof value}]`;
+}
+
+function boundedPreview(value: unknown): string {
+  const preview = JSON.stringify(boundedPreviewValue(value));
+  return preview.length > OBSERVABILITY_PREVIEW_MAX_CHARS
+    ? `${preview.slice(0, OBSERVABILITY_PREVIEW_MAX_CHARS)}...`
+    : preview;
+}
+
+function hasPermissionDenials(value: unknown): boolean {
+  if (Array.isArray(value)) return value.length > 0;
+  if (typeof value === 'string') return value.trim().length > 0;
+  if (value && typeof value === 'object') return Object.keys(value).length > 0;
+  return value === true;
+}
+
+function permissionDenialsPreview(transport: TransportEnvelope): string {
+  return boundedPreview({ permission_denials: transport.permissionDenials });
+}
+
+function hasUsageSummary(transport: TransportEnvelope): boolean {
+  return transport.costUsd !== undefined || transport.inputTokens !== undefined || transport.outputTokens !== undefined;
+}
+
+function reportTransportMetadata(reporter: AgentActivityReporter | undefined, transport: TransportEnvelope): void {
+  if (transport.isError) {
+    reporter?.parsed({ type: 'is_error', preview: boundedPreview({ is_error: true }) });
+  }
+  if (hasUsageSummary(transport)) {
+    reporter?.parsed({
+      type: 'usage',
+      preview: boundedPreview({
+        total_cost_usd: transport.costUsd,
+        input_tokens: transport.inputTokens,
+        output_tokens: transport.outputTokens,
+      }),
+    });
+  }
+  if (transport.sessionId) {
+    reporter?.parsed({ type: 'session_id', preview: boundedPreview({ session_id: transport.sessionId }) });
+  }
+  if (transport.terminalReason) {
+    reporter?.parsed({
+      type: 'terminal_reason',
+      preview: boundedPreview({ terminal_reason: transport.terminalReason }),
+    });
+  }
+  if (hasPermissionDenials(transport.permissionDenials)) {
+    reporter?.parsed({
+      type: 'permission_denials',
+      preview: permissionDenialsPreview(transport),
+    });
+  }
 }
 
 /** Read a positive number from a parsed model_profiles.params object, trying camel + snake keys. */
@@ -175,6 +264,7 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
 
       const transport = parseTransportEnvelope(result.stdout);
       reporter?.parsed({ type: 'result', preview: transport.text });
+      reportTransportMetadata(reporter, transport);
       if (transport.isError) {
         reporter?.failed(`claude-code runner reported is_error: ${tail(transport.text)}`, { exitCode: result.code });
         throw runnerError(`claude-code runner reported is_error: ${tail(transport.text)}`, processSnapshot);
@@ -195,6 +285,9 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
           needsHuman: true,
           lesson: agent.lesson,
         };
+        if (hasPermissionDenials(transport.permissionDenials)) {
+          reporter?.status('permission_blocked', { preview: permissionDenialsPreview(transport) });
+        }
         return parked;
       }
 
@@ -207,6 +300,9 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
         needsHuman: false,
         lesson: agent.lesson,
       };
+      if (hasPermissionDenials(transport.permissionDenials)) {
+        reporter?.status('permission_blocked', { preview: permissionDenialsPreview(transport) });
+      }
       return success;
     } catch (err) {
       if (err instanceof RunAgentError) throw err;

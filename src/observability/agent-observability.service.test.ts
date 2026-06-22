@@ -1027,6 +1027,45 @@ test('agent observability: idle classification does not overwrite terminal statu
   assert.equal(activity?.aggregateStatus, 'failed');
 });
 
+test('agent observability: timed_out aggregate status outranks cancelled', async () => {
+  const service = new AgentObservabilityService({
+    artifactRoot: join(tmpdir(), 'missing-observability-root'),
+    dbos: {
+      getEvent: async () => null,
+      readStream: async function* <T>() {
+        for (const status of ['cancelled', 'timed_out'] as const) {
+          yield {
+            cursor: `agent-output-v1:attempt_${status}:status:${status}:1`,
+            runId: 'run-timeout-precedence',
+            attemptId: `attempt_${status}`,
+            stepId: `step-${status}`,
+            at: '2026-01-01T00:00:00.000Z',
+            kind: 'status',
+            snapshot: {
+              runId: 'run-timeout-precedence',
+              attemptId: `attempt_${status}`,
+              stepId: `step-${status}`,
+              role: 'developer',
+              runner: 'claude-code',
+              status,
+              startedAt: '2026-01-01T00:00:00.000Z',
+              lastEventAt: '2026-01-01T00:00:00.000Z',
+              stdoutBytes: 0,
+              stderrBytes: 0,
+              eventCount: 1,
+              artifactRef: `run-timeout-precedence/attempt_${status}`,
+            },
+          } satisfies AgentOutputEvent as T;
+        }
+      },
+    },
+  });
+
+  const activity = await service.getAgentActivity('run-timeout-precedence');
+
+  assert.equal(activity?.aggregateStatus, 'timed_out');
+});
+
 test('agent observability: getAgentActivity scans beyond the first 1000 stream events for latest snapshots', async () => {
   const events: AgentOutputEvent[] = Array.from({ length: 1_050 }, (_, i) => ({
     cursor: `agent-output-v1:attempt_1:output:stdout:${i}:1`,
