@@ -351,7 +351,7 @@ export class GetAgentLogHandler implements IQueryHandler<GetAgentLogQuery> {
     const chunk = await this.api.getAgentLog({
       runId: query.data.runId,
       attemptId: query.data.attemptId,
-      stream: query.data.stream as DomainAgentLogStream,
+      stream: query.data.stream,
       offsetBytes: query.data.offsetBytes,
       limitBytes: query.data.limitBytes,
       tailBytes: query.data.tailBytes,
