@@ -171,6 +171,11 @@ function resolveLogTargets(target: string | undefined): LogTarget[] {
 /** `revo logs [target]` — print the tail of the daemon logs; a pure file read (works when down). */
 async function logsStack(target: string | undefined, options: LogsOptions): Promise<void> {
   applyProfileEnv(options);
+  if (target !== undefined && target !== 'host' && target !== 'standalone') {
+    console.error(`Invalid logs target "${target}". Use "host" or "standalone".`);
+    process.exitCode = 1;
+    return;
+  }
   const requested = Number(options.lines ?? DEFAULT_LOG_LINES);
   const lines = Number.isInteger(requested) && requested > 0 ? requested : DEFAULT_LOG_LINES;
   const targets = resolveLogTargets(target);
