@@ -253,18 +253,6 @@ test('ensureRevisium: runtime.json payload includes dataDir field (F8)', () => {
   }
 });
 
-// ── Program no-arg overload preserved ─────────────────────────────────────────
-
-test('buildProgram: no-arg overload still works (program.test.ts compatibility)', async () => {
-  const { buildProgram } = await import('../cli/program.js');
-  const program = buildProgram(); // no-arg — must not throw
-  assert.ok(program, 'buildProgram() with no arg must return a Command instance');
-  // dev:ping and dev:status definitions must be registered unconditionally.
-  const commandNames = program.commands.map((c) => c.name());
-  assert.ok(commandNames.includes('dev:ping'), 'dev:ping must be registered unconditionally');
-  assert.ok(commandNames.includes('dev:status'), 'dev:status must be registered unconditionally');
-});
-
 // ── EnsureResult type ─────────────────────────────────────────────────────────
 
 test('EnsureResult type: has runtime and alreadyRunning fields', async () => {

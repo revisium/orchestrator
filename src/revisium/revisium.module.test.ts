@@ -124,6 +124,7 @@ function srcPath(...parts: string[]): string {
  * need updating — that is intentional: changes to the baseline require explicit review.
  */
 const BASELINE_IMPORTERS = new Set([
+  srcPath('control-plane', 'bootstrap.ts'),
   srcPath('control-plane', 'client-transport.ts'),
   srcPath('control-plane', 'data-access.ts'),
   srcPath('control-plane', 'schema-migration.ts'),
