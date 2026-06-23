@@ -34,7 +34,7 @@ export function buildProgram(app?: INestApplicationContext): Command {
   registerPlaybook(program);
   registerRun(program, app);
   registerInbox(program, app); // G6: forward app so gate resolve path can access DbosService
-  registerMcp(program, app);
+  registerMcp(program); // thin stdio↔daemon bridge — no AppModule (ADR 0006)
   registerDev(program, app);
   registerServe(program);
   return program;

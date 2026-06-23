@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { isMcpCommand, needsHost } from './needs-host.js';
+import { needsHost } from './needs-host.js';
 
 // Helper: build a process.argv-style array (node + script + args).
 function argv(...args: string[]): string[] {
@@ -85,18 +85,8 @@ test('needsHost: work → false', () => {
   assert.equal(needsHost(argv('work', '--once')), false);
 });
 
-test('needsHost: mcp → true (stdio server uses host services)', () => {
-  assert.equal(needsHost(argv('mcp')), true);
-});
-
-test('needsHost: mcp --help → false (help wins)', () => {
-  assert.equal(needsHost(argv('mcp', '--help')), false);
-});
-
-test('isMcpCommand: true only for executable mcp command', () => {
-  assert.equal(isMcpCommand(argv('mcp')), true);
-  assert.equal(isMcpCommand(argv('mcp', '--help')), false);
-  assert.equal(isMcpCommand(argv('run', 'create', '--title', 'mcp', '--repo', '.')), false);
+test('needsHost: mcp → false (thin stdio bridge to the daemon, no AppModule — ADR 0006)', () => {
+  assert.equal(needsHost(argv('mcp')), false);
 });
 
 test('needsHost: serve is host-free until the command starts the HTTP GraphQL host', () => {

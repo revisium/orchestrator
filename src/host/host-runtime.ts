@@ -15,6 +15,8 @@ import { getConfig, isAlive } from '../config.js';
 export type HostRuntimeState = {
   pid: number;
   graphqlPort: number;
+  /** Local port of the daemon's MCP (StreamableHTTP) endpoint that `revo mcp` bridges to. */
+  mcpPort: number;
   startedAt: string;
   profile: string;
 };

@@ -26,7 +26,7 @@ import {
 
 after(() => rmSync(TMP, { recursive: true, force: true }));
 
-const STATE = { pid: process.pid, graphqlPort: 19223, startedAt: '2026-06-23T00:00:00.000Z', profile: 'default' };
+const STATE = { pid: process.pid, graphqlPort: 19223, mcpPort: 19224, startedAt: '2026-06-23T00:00:00.000Z', profile: 'default' };
 
 test('host-runtime: write → read round-trips the { pid, graphqlPort, startedAt, profile } shape', () => {
   writeHostRuntime(STATE);

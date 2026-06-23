@@ -10,13 +10,15 @@
  *      stale empty head until a restart (a fresh client resolves head per call, a cached scope does not).
  *   3. startGraphqlHost — boots Nest (HostLifecycle re-ensures Revisium = no-op, ensures Postgres,
  *      DBOS.launch — recovery once) and serves GraphQL + WS.
- *   4. host.json — written LAST; its presence is the "fully ready" signal ensureHost waits on, so a
+ *   4. McpHttpService — the MCP front door (StreamableHTTP) that `revo mcp` bridges to.
+ *   5. host.json — written LAST; its presence is the "fully ready" signal ensureHost waits on, so a
  *      client never observes a not-yet-bootstrapped stack.
  *
  * SIGTERM/SIGINT closes the Nest app (→ DBOS.shutdown via HostLifecycle.onApplicationShutdown) and
- * clears only its own host.json (compare-and-delete). Spawned detached by ensureHost; never built on
- * the per-command CLI path (that path is removed — nothing else launches DBOS).
+ * the MCP server, and clears only its own host.json (compare-and-delete). Spawned detached by
+ * ensureHost; never built on the per-command CLI path (that path is removed — nothing else launches DBOS).
  */
+import { type Server as HttpServer } from 'node:http';
 import { getConfig } from '../config.js';
 import { startGraphqlHost } from '../http/graphql-host.js';
 import { ensureRevisium } from './ensure-revisium.js';
@@ -26,7 +28,15 @@ import {
   seedDefaultPlaybook,
   seedDefaultPlaybookBestEffort,
 } from '../control-plane/seed-default-playbook.js';
+import { McpFacadeService } from '../mcp/mcp-facade.service.js';
+import { McpHttpService } from '../mcp/mcp-http.service.js';
 import { removeHostRuntimeIfMatches, writeHostRuntime } from './host-runtime.js';
+
+/** MCP endpoint port: REVO_MCP_PORT, else the GraphQL port + 1 (kept in the profile band). */
+function resolveMcpPort(graphqlPort: number): number {
+  const env = process.env['REVO_MCP_PORT'];
+  return env && /^\d+$/.test(env.trim()) ? Number(env.trim()) : graphqlPort + 1;
+}
 
 export async function runHostDaemon(): Promise<void> {
   // 1. Standalone up first, then 2. all control-plane writes via fresh client scopes — BEFORE the
@@ -40,13 +50,20 @@ export async function runHostDaemon(): Promise<void> {
   // 3. Now bring up the Nest/GraphQL/DBOS layer (HostLifecycle re-ensures Revisium = no-op).
   const started = await startGraphqlHost();
 
+  // 4. MCP front door over StreamableHTTP, served by the same host (single DBOS owner). Construct it
+  // with the DI-resolved facade (the host app's TaskControlPlaneApiService is injected into it).
+  const mcpPort = resolveMcpPort(started.port);
+  const mcpFacade = started.app.get(McpFacadeService, { strict: false });
+  const mcpServer: HttpServer = await new McpHttpService(mcpFacade).start(mcpPort);
+
   const startedAt = new Date().toISOString();
   const snapshot = { pid: process.pid, startedAt };
 
-  // 4. Ready signal — written last.
+  // 5. Ready signal — written last.
   writeHostRuntime({
     pid: process.pid,
     graphqlPort: started.port,
+    mcpPort,
     startedAt,
     profile: getConfig().profile,
   });
@@ -55,6 +72,7 @@ export async function runHostDaemon(): Promise<void> {
   const shutdown = (): void => {
     if (closing) return;
     closing = true;
+    mcpServer.close();
     started.app
       .close() // → HostLifecycle.onApplicationShutdown → DBOS.shutdown()
       .catch(() => undefined)

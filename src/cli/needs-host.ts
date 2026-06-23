@@ -7,7 +7,7 @@
  *   - run create (resolves installed playbooks/profiles through host services)
  *   - run activity / attempts / logs (agent observability through host API)
  *   - inbox resolve --approve|--reject (slice 0004 — signals a parked workflow, needs DBOS)
- *   - mcp (local stdio MCP server over the host services)
+ *   (mcp is now a thin stdio→daemon bridge — host-free; ADR 0006)
  *
  * Other read-only run subcommands (list/show/events) remain host-free.
  * inbox list/show and inbox resolve --answer (non-gate) remain host-free.
@@ -26,7 +26,7 @@
  */
 
 /** Commands that require the Nest/DBOS host context (colon-style, no subcommand needed). */
-const HOST_COMMANDS = new Set(['dev:ping', 'dev:status', 'mcp']);
+const HOST_COMMANDS = new Set(['dev:ping', 'dev:status']);
 
 /** `run` subcommands that route through host services. */
 const HOST_RUN_SUBCOMMANDS = new Set(['start', 'create', 'activity', 'attempts', 'logs']);
@@ -44,12 +44,6 @@ function firstCommand(args: string[]): string | undefined {
 function firstSubcommand(args: string[], command: string): string | undefined {
   const commandIdx = args.indexOf(command);
   return args.slice(commandIdx + 1).find((a) => !a.startsWith('-'));
-}
-
-export function isMcpCommand(argv: string[]): boolean {
-  const args = argv.slice(2);
-  if (args.some((a) => HELP_FLAGS.has(a))) return false;
-  return firstCommand(args) === 'mcp';
 }
 
 /**
