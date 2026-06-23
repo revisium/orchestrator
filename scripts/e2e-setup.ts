@@ -9,33 +9,22 @@
 // Run-events accumulate in the never-committed draft; past some size a filtered+ordered event query
 // starts dropping the newest row (see memory: stale-draft). To keep the reused test home healthy we
 // reset it once the run count crosses a threshold — fast reuse most runs, an occasional clean slate.
+//
+// Bootstrap + default-playbook seed run IN-PROCESS (the same path `revo start` uses on the daemon) —
+// the `revo bootstrap`/`revo revisium` CLI commands were removed (ADR 0006: CLI is lifecycle-only).
 import 'reflect-metadata';
-import { spawn } from 'node:child_process';
 import { rmSync } from 'node:fs';
-import { join } from 'node:path';
 import { ensureRevisium } from '../src/host/ensure-revisium.js';
+import { bootstrapControlPlane } from '../src/control-plane/bootstrap.js';
+import { seedDefaultPlaybook, seedDefaultPlaybookBestEffort } from '../src/control-plane/seed-default-playbook.js';
 import { createClientTransport } from '../src/control-plane/client-transport.js';
 import { ControlPlaneError } from '../src/control-plane/errors.js';
-import { getConfig, readRuntime, isAlive, repoRoot } from '../src/config.js';
+import { getConfig, readRuntime, removeRuntime, isAlive } from '../src/config.js';
 import { PlaybooksService } from '../src/revisium/playbooks.service.js';
 import { PLAYBOOK_SOURCE } from '../src/e2e/kit/env.js';
 
 const PLAYBOOK_ID = 'revisium-agent-playbook'; // matches scenarios.ts PLAYBOOK_ID
 const RESET_AT_RUNS = 100; // reset the test home once it has accumulated this many runs (draft hygiene)
-
-// Run the CLI from SOURCE via tsx (NOT bin/revo.js → dist/, which is a stale prebuilt that ignores
-// the REVO_DATA_DIR/REVO_PORT overrides and would target the dev daemon instead of the test home).
-const TSX_BIN = join(repoRoot, 'node_modules', '.bin', 'tsx');
-const CLI_ENTRY = join(repoRoot, 'src', 'cli', 'index.ts');
-
-/** Spawn the source CLI `revo <args>` inheriting env (so REVO_DATA_DIR/REVO_PORT/… target the test home). */
-function runRevo(args: string[]): Promise<number> {
-  return new Promise((resolve) => {
-    const child = spawn(TSX_BIN, [CLI_ENTRY, ...args], { stdio: 'inherit', env: process.env, cwd: repoRoot });
-    child.on('error', () => resolve(1));
-    child.on('exit', (code) => resolve(code ?? 1));
-  });
-}
 
 /** Bootstrapped? assertReady throws BOOTSTRAP_NOT_APPLIED on a fresh (un-bootstrapped) home. */
 async function isBootstrapped(): Promise<boolean> {
@@ -60,9 +49,22 @@ async function runCount(): Promise<number> {
 
 /** Stop the test daemon, wipe its data dir, and spawn a fresh one (clean draft). */
 async function resetHome(): Promise<void> {
-  await runRevo(['revisium', 'stop']); // kills the pid + removes runtime.json
   const rt = readRuntime();
-  if (rt?.pid && isAlive(rt.pid)) process.kill(rt.pid); // belt-and-braces if stop missed it
+  if (rt?.pid) {
+    // Stop the test daemon and WAIT for it to exit before wiping — process.kill is async, so deleting
+    // pgdata out from under a live embedded Postgres races shutdown (port/file contention, flaky e2e).
+    try {
+      if (isAlive(rt.pid)) process.kill(rt.pid, 'SIGTERM');
+    } catch (err) {
+      if ((err as { code?: string }).code !== 'ESRCH') throw err; // already gone — fine
+    }
+    const deadline = Date.now() + 5_000;
+    while (isAlive(rt.pid) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (isAlive(rt.pid)) process.kill(rt.pid, 'SIGKILL');
+  }
+  removeRuntime();
   rmSync(getConfig().dataDir, { recursive: true, force: true });
   await ensureRevisium(); // fresh spawn recreates the data dir + embedded Postgres
 }
@@ -95,8 +97,13 @@ async function main(): Promise<void> {
 
   if (!(await isBootstrapped())) {
     console.log('[e2e setup] bootstrapping control-plane');
-    const code = await runRevo(['bootstrap', '--commit']);
-    if (code !== 0) throw new Error(`bootstrap failed (exit ${code})`);
+    const rt = readRuntime();
+    if (!rt) throw new Error('standalone runtime missing before bootstrap');
+    await bootstrapControlPlane(rt.httpPort);
+    // Seed the built-in default playbook (Group M e2e relies on this), best-effort like `revo bootstrap`.
+    await seedDefaultPlaybookBestEffort(() =>
+      seedDefaultPlaybook(new PlaybooksService(createClientTransport('head'))),
+    );
   }
 
   await ensurePlaybook();

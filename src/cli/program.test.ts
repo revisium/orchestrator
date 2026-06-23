@@ -13,11 +13,11 @@ test('readPackageVersion: returns the version from package.json (not a hardcoded
   assert.equal(readPackageVersion(), expectedVersion());
 });
 
-test('buildProgram: registers playbook install command', () => {
+test('buildProgram: registers lifecycle commands (start/stop/status)', () => {
   const program = buildProgram();
-  const playbook = program.commands.find((cmd) => cmd.name() === 'playbook');
-  assert.ok(playbook, 'playbook command must be registered');
-  assert.ok(playbook.commands.some((cmd) => cmd.name() === 'install'), 'playbook install must be registered');
+  for (const name of ['start', 'stop', 'status']) {
+    assert.ok(program.commands.some((cmd) => cmd.name() === name), `${name} command must be registered`);
+  }
 });
 
 test('buildProgram: registers mcp command', () => {
