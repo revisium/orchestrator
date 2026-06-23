@@ -41,6 +41,7 @@ export type RevoConfig = ConfigFile & {
   dataDir: string;
   profile: ProfileName;
   logFile: string;
+  hostLogFile: string;
   runtimeFile: string;
 };
 
@@ -128,6 +129,7 @@ export function getConfig(): RevoConfig {
     preferredPort,
     preferredPgPort,
     logFile: join(dataDir, 'standalone.log'),
+    hostLogFile: join(dataDir, 'host.log'),
     runtimeFile: join(dataDir, 'runtime.json'),
   };
 

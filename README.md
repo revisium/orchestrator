@@ -20,8 +20,8 @@ a post-MVP goal; see [`docs/architecture-overview.md`](./docs/architecture-overv
 `revo` is one daemonized product. **`revo start`** brings up the whole stack — the standalone
 Revisium daemon plus the Revo host daemon that owns DBOS and serves the GraphQL + MCP front doors —
 and bootstraps the control-plane so it is ready to use. The CLI is lifecycle-only
-(`start` / `stop` / `status`); orchestration (runs, inbox, …) is reached over **MCP** (agents) or
-**GraphQL** (UI/scripts), both served by the daemon.
+(`start` / `stop` / `status` / `restart` / `doctor` / `logs`); orchestration (runs, inbox, …) is
+reached over **MCP** (agents) or **GraphQL** (UI/scripts), both served by the daemon.
 
 Run a source checkout alongside an installed package without collisions via a named **profile**
 (`--profile dev`, or `REVO_PROFILE=dev`): the `dev` profile shifts the whole port band off the
@@ -30,7 +30,10 @@ Run a source checkout alongside an installed package without collisions via a na
 ```sh
 pnpm install
 pnpm run revo -- start --profile dev    # standalone + host daemon, bootstrapped & ready
-pnpm run revo -- status --profile dev
+pnpm run revo -- status --profile dev   # stack health summary
+pnpm run revo -- doctor --profile dev   # diagnose process / port / profile issues
+pnpm run revo -- logs --profile dev     # tail host + standalone logs (-f to follow)
+pnpm run revo -- restart --profile dev  # stop, then start
 pnpm run revo -- stop --profile dev
 ```
 
