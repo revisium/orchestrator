@@ -135,6 +135,47 @@ export function parseTransportEnvelope(stdout: string): TransportEnvelope {
   };
 }
 
+/**
+ * Reduce the runner's stdout to the single terminal `result` JSON object, then hand it to
+ * parseTransportEnvelope. Handles BOTH shapes:
+ *   - legacy `--output-format json`     → the whole stdout is one `{...}` object;
+ *   - `--output-format stream-json`     → a JSONL stream (system/assistant/user/… lines) whose LAST
+ *                                          line is `{"type":"result",...}`.
+ * Confirmed by experiment (2026-06-23): under stream-json the terminal result still carries
+ * `structured_output`, `usage`, and `total_cost_usd`, so verdict/cost extraction is unchanged.
+ * Throws when no result object is present (the runner maps that to a lesson-bearing failure).
+ */
+export function extractTerminalResult(stdout: string): string {
+  const trimmed = stdout.trim();
+  if (trimmed === '') throw new Error('claude -p produced no output (no result envelope)');
+  // Legacy single-object form: the whole stdout parses as one object. Accept only a terminal
+  // result (`type` 'result' or absent — the legacy `--output-format json` blob is `type:'result'`);
+  // a lone non-result stream event (e.g. `{"type":"assistant",…}`) must fall through so the JSONL
+  // scan reports the clear "no result event" error rather than failing later on a missing result.
+  try {
+    const whole = JSON.parse(trimmed);
+    if (whole !== null && typeof whole === 'object' && !Array.isArray(whole)) {
+      const type = (whole as Record<string, unknown>).type;
+      if (type === undefined || type === 'result') return trimmed;
+    }
+  } catch {
+    // Not a single object → fall through to the JSONL scan.
+  }
+  // stream-json: the terminal result is the LAST line with `"type":"result"`.
+  const lines = trimmed.split(/\r?\n/);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i].trim();
+    if (line === '') continue;
+    try {
+      const obj = JSON.parse(line) as Record<string, unknown>;
+      if (obj !== null && typeof obj === 'object' && obj.type === 'result') return line;
+    } catch {
+      // skip a partial/non-JSON line
+    }
+  }
+  throw new Error('claude -p stream contained no result event (transport envelope)');
+}
+
 // Map each raw nextSteps entry to NewStepSpec. Require role/kind/input; default taskId and
 // modelProfile from the current step so the agent never needs to know IDs. Throw a lesson-bearing
 // error (naming the index) on a malformed entry.

@@ -160,11 +160,56 @@ test('claude-code runner: builds the documented claude -p invocation', async () 
   );
   assert.deepEqual(
     req?.args.slice(req.args.indexOf('--output-format'), req.args.indexOf('--output-format') + 2),
-    ['--output-format', 'json'],
-    'args include --output-format json',
+    ['--output-format', 'stream-json'],
+    'args include --output-format stream-json (incremental transcript)',
   );
+  assert.ok(req?.args.includes('--verbose'), 'stream-json requires --verbose in -p mode');
   assert.equal(req?.cwd, '/workspace/repo', 'cwd comes from resolveCwd');
   assert.ok(req?.input?.includes(ATTEMPT_ID), 'prompt delivered on stdin includes the attemptId');
+});
+
+test('claude-code runner: stream-json — reports a per-turn transcript and extracts the terminal result', async () => {
+  // JSONL as claude emits over stream-json: system/assistant/tool turns, then a terminal `result`.
+  const streamLines = [
+    JSON.stringify({ type: 'system', subtype: 'init' }),
+    JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Reading files' }] } }),
+    JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Edit' }] } }),
+    JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result' }] } }),
+    structuredTransport({ verdict: 'approved', output: 'done' }),
+  ];
+  const fullStdout = streamLines.join('\n') + '\n';
+  // Feed in two chunks, splitting line 3 mid-way to exercise the partial-line buffer.
+  const splitAt = streamLines.slice(0, 2).join('\n').length + 1 + 10;
+  const streamingExecutor: ProcessExecutor = async (req) => {
+    req.onStdoutChunk?.(fullStdout.slice(0, splitAt));
+    req.onStdoutChunk?.(fullStdout.slice(splitAt));
+    return ok(fullStdout);
+  };
+
+  const events: CapturedReporterEvent[] = [];
+  const runner = createClaudeCodeRunner({ executor: streamingExecutor, resolveCwd: async () => '/workspace/repo', timeoutMs: 5_000 });
+  const result = await runner({
+    role: makeRole('architect'),
+    profile: PROFILE,
+    context: 'ctx',
+    attemptId: ATTEMPT_ID,
+    step: BASE_STEP,
+    reporter: capturingReporter(events),
+  });
+
+  // verdict/output extracted from the terminal result line of the stream
+  assert.equal(result.verdict, 'approved', 'verdict comes from the stream terminal result');
+  assert.equal(result.output, 'done');
+
+  // per-turn transcript reported as parsed events (NOT the terminal result line — reported separately)
+  const parsed = events.filter((e): e is Extract<CapturedReporterEvent, { kind: 'parsed' }> => e.kind === 'parsed');
+  const types = parsed.map((e) => e.type);
+  assert.ok(types.includes('assistant'), 'assistant turns are reported');
+  assert.ok(types.includes('user'), 'tool_result turn is reported');
+  assert.ok(
+    parsed.some((e) => e.preview?.includes('[tool_use:Edit]')),
+    'tool_use preview names the tool',
+  );
 });
 
 test('claude-code runner: no allowed-tools flag when role.allowedTools is empty', async () => {
@@ -352,7 +397,8 @@ test('claude-code runner: reports spawn, stdout, stderr, parsed, and finished li
   const runner = createClaudeCodeRunner({
     executor: async (req) => {
       req.onSpawn?.(456);
-      req.onStdoutChunk?.('transport chunk');
+      // stream-json: a stdout line is parsed into a per-turn `parsed` event (not a raw stdout event).
+      req.onStdoutChunk?.('{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}\n');
       req.onStderrChunk?.('diagnostic chunk');
       return ok(stdout, { stderr: 'diagnostic chunk' });
     },
@@ -372,7 +418,7 @@ test('claude-code runner: reports spawn, stdout, stderr, parsed, and finished li
   assert.deepEqual(events, [
     'started',
     'spawned:456',
-    'stdout:transport chunk',
+    'parsed:assistant',
     'stderr:diagnostic chunk',
     'parsed:result',
     'parsed:usage',
@@ -723,7 +769,8 @@ test('claude-code runner: reports failed lifecycle on malformed final JSON', asy
     { kind: 'started' },
     {
       kind: 'failed',
-      message: 'claude -p did not return parseable JSON (transport envelope)',
+      // stream-json: stdout with no terminal `result` line fails at extraction, before envelope parse.
+      message: 'claude -p stream contained no result event (transport envelope)',
       exitCode: undefined,
       timedOut: undefined,
     },

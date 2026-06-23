@@ -8,6 +8,7 @@ import {
   AGENT_RESULT_SCHEMA,
   STRUCTURED_RESULT_NOTE,
   agentResultFromStructured,
+  extractTerminalResult,
   parseTransportEnvelope,
   type TransportEnvelope,
 } from './result-envelope.js';
@@ -86,13 +87,37 @@ function readParamNum(params: unknown, ...keys: string[]): number | undefined {
   return undefined;
 }
 
+// Summarize one stream-json event into a short, redaction-safe preview for the observability feed.
+// Assistant turns surface their text + tool names; tool results are marked; anything else by type.
+function streamEventPreview(evt: Record<string, unknown>): string | undefined {
+  const message = evt.message as Record<string, unknown> | undefined;
+  const content = message?.content;
+  if (Array.isArray(content)) {
+    const parts = content.map((raw) => {
+      const block = raw as Record<string, unknown>;
+      if (block.type === 'text' && typeof block.text === 'string') return block.text;
+      if (block.type === 'tool_use' && typeof block.name === 'string') return `[tool_use:${block.name}]`;
+      if (block.type === 'tool_result') return '[tool_result]';
+      return `[${String(block.type)}]`;
+    });
+    const joined = parts.join(' ').trim();
+    return joined.length > 0 ? joined.slice(0, 500) : undefined;
+  }
+  if (typeof evt.result === 'string') return evt.result.slice(0, 500);
+  return undefined;
+}
+
 // CLI invocation — the only place flags are assembled. EXACT flag set is confirmed by the manual
 // Step-6 smoke before --runner defaults to auto. The permission mode keeps the headless run
 // non-interactive: a tool not in allowedTools is auto-denied (no TTY can prompt in -p mode).
 // 0008 #5: permissionMode is now per-role DATA (was hardcoded 'default'); model_profiles.params
 // (previously unused "{}") is threaded in — a configured maxTurns maps to claude's --max-turns.
 function buildArgs(modelId: string, allowedTools: string[], permissionMode: string, params: unknown): string[] {
-  const args = ['-p', '--model', modelId, '--output-format', 'json', '--permission-mode', permissionMode];
+  // stream-json (NOT json): claude emits a JSONL transcript — one event per turn (assistant text,
+  // tool_use, tool_result) plus a terminal `result` line — so the runner can stream live per-turn
+  // observability AND still extract the final structured result. `--verbose` is required by claude
+  // for stream-json in `-p` mode. Confirmed by experiment before this change (slice 128).
+  const args = ['-p', '--model', modelId, '--output-format', 'stream-json', '--verbose', '--permission-mode', permissionMode];
   // Constrain the final message to the agent-result schema -> a reliable `verdict` in structured_output.
   // No prose fallback is accepted.
   args.push('--json-schema', AGENT_RESULT_SCHEMA);
@@ -141,6 +166,23 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
         timeoutMs,
       });
       reporter?.started();
+      // stream-json arrives as JSONL; buffer partial chunks and report ONE observability event per
+      // COMPLETE line — this is the live per-turn transcript. The terminal `result` line is skipped
+      // here and reported below via reportTransportMetadata (after extraction), to avoid duplication.
+      let stdoutLineBuffer = '';
+      const reportStreamLine = (line: string): void => {
+        const trimmed = line.trim();
+        if (trimmed === '') return;
+        let evt: Record<string, unknown>;
+        try {
+          evt = JSON.parse(trimmed) as Record<string, unknown>;
+        } catch {
+          return; // a partial or non-JSON line — ignore
+        }
+        const type = typeof evt.type === 'string' ? evt.type : 'event';
+        if (type === 'result') return;
+        reporter?.parsed({ type, preview: streamEventPreview(evt) });
+      };
       const req: ExecRequest = {
         command,
         args,
@@ -150,7 +192,12 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
         onSpawn: (pid) => reporter?.spawned(pid),
         onStdoutChunk: (chunk) => {
           processArtifact?.appendStdout(chunk);
-          reporter?.output('stdout', chunk);
+          stdoutLineBuffer += chunk;
+          let nl: number;
+          while ((nl = stdoutLineBuffer.indexOf('\n')) >= 0) {
+            reportStreamLine(stdoutLineBuffer.slice(0, nl));
+            stdoutLineBuffer = stdoutLineBuffer.slice(nl + 1);
+          }
         },
         onStderrChunk: (chunk) => {
           processArtifact?.appendStderr(chunk);
@@ -159,6 +206,8 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
       };
 
       const result = await deps.executor(req);
+      // Flush a trailing partial line (the result line normally ends in \n, so this is usually empty).
+      if (stdoutLineBuffer.trim() !== '') reportStreamLine(stdoutLineBuffer);
       const processSnapshot = processArtifact?.finish({ code: result.code, timedOut: result.timedOut });
 
       // Timeout / process failure → throw; the loop's catch → failStep returns the step to ready
@@ -175,7 +224,7 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
         );
       }
 
-      const transport = parseTransportEnvelope(result.stdout);
+      const transport = parseTransportEnvelope(extractTerminalResult(result.stdout));
       reporter?.parsed({ type: 'result', preview: transport.text });
       reportTransportMetadata(reporter, transport);
       if (transport.isError) {
