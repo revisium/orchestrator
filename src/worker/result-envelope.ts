@@ -148,10 +148,16 @@ export function parseTransportEnvelope(stdout: string): TransportEnvelope {
 export function extractTerminalResult(stdout: string): string {
   const trimmed = stdout.trim();
   if (trimmed === '') throw new Error('claude -p produced no output (no result envelope)');
-  // Legacy single-object form: the whole stdout parses as one object.
+  // Legacy single-object form: the whole stdout parses as one object. Accept only a terminal
+  // result (`type` 'result' or absent — the legacy `--output-format json` blob is `type:'result'`);
+  // a lone non-result stream event (e.g. `{"type":"assistant",…}`) must fall through so the JSONL
+  // scan reports the clear "no result event" error rather than failing later on a missing result.
   try {
     const whole = JSON.parse(trimmed);
-    if (whole !== null && typeof whole === 'object' && !Array.isArray(whole)) return trimmed;
+    if (whole !== null && typeof whole === 'object' && !Array.isArray(whole)) {
+      const type = (whole as Record<string, unknown>).type;
+      if (type === undefined || type === 'result') return trimmed;
+    }
   } catch {
     // Not a single object → fall through to the JSONL scan.
   }

@@ -31,6 +31,8 @@ test('extractTerminalResult: throws when the stream has no result event', () => 
   const lines = [JSON.stringify({ type: 'system' }), JSON.stringify({ type: 'assistant', message: { content: [] } })];
   assert.throws(() => extractTerminalResult(lines.join('\n')), /no result event/);
   assert.throws(() => extractTerminalResult(''), /no output/);
+  // A lone non-result stream object must NOT be accepted by the legacy fast-path.
+  assert.throws(() => extractTerminalResult(JSON.stringify({ type: 'assistant', message: {} })), /no result event/);
 });
 
 // ─── transport envelope (layer A) ─────────────────────────────────────────────
