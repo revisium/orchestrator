@@ -10,7 +10,6 @@
  */
 import { spawn } from 'node:child_process';
 import { closeSync, openSync } from 'node:fs';
-import { join } from 'node:path';
 import { getConfig, isAlive, resolveDefaultGraphqlPort } from '../config.js';
 import {
   isHostRunning,
@@ -80,7 +79,7 @@ export function daemonSpawnArgv(entry: string = process.argv[1]): [string, strin
 }
 
 function spawnDaemon(): void {
-  const out = openSync(join(getConfig().dataDir, 'host.log'), 'a');
+  const out = openSync(getConfig().hostLogFile, 'a');
   const [cmd, args] = daemonSpawnArgv();
   // env inheritance carries the resolved profile (REVO_PROFILE / REVO_* knobs) to the daemon.
   const child = spawn(cmd, args, { detached: true, stdio: ['ignore', out, out], env: process.env });

@@ -1,6 +1,6 @@
 /**
- * Private helpers shared between `revisium.ts` (stop/logs) and `ensure-revisium.ts`.
- * Extracted to avoid duplication (F9).
+ * Process + log helpers shared by the lifecycle CLI (`lifecycle.ts`: stop/logs) and the daemon
+ * bring-up path (`ensure-revisium.ts`). Extracted to avoid duplication (F9).
  */
 import { existsSync, readFileSync } from 'node:fs';
 import { isAlive } from '../config.js';
