@@ -2,10 +2,36 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   agentResultFromStructured,
+  extractTerminalResult,
   parseTransportEnvelope,
   normalizeNextSteps,
 } from './result-envelope.js';
 import { BASE_STEP } from './test-fixtures.js';
+
+// ─── terminal-result extraction (json blob OR stream-json JSONL) ───────────────
+
+test('extractTerminalResult: returns the whole stdout for a single-object (legacy json) blob', () => {
+  const blob = JSON.stringify({ type: 'result', is_error: false, result: 'ok', structured_output: { verdict: 'approved', output: 'ok' } });
+  assert.equal(extractTerminalResult(blob), blob);
+  assert.equal(parseTransportEnvelope(extractTerminalResult(blob)).isError, false);
+});
+
+test('extractTerminalResult: picks the terminal result line out of a stream-json JSONL stream', () => {
+  const lines = [
+    JSON.stringify({ type: 'system', subtype: 'init' }),
+    JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'working' }] } }),
+    JSON.stringify({ type: 'result', is_error: false, result: 'done', structured_output: { verdict: 'clean', output: 'done' } }),
+  ];
+  const env = parseTransportEnvelope(extractTerminalResult(lines.join('\n') + '\n'));
+  assert.equal(env.text, 'done');
+  assert.deepEqual(env.structuredOutput, { verdict: 'clean', output: 'done' });
+});
+
+test('extractTerminalResult: throws when the stream has no result event', () => {
+  const lines = [JSON.stringify({ type: 'system' }), JSON.stringify({ type: 'assistant', message: { content: [] } })];
+  assert.throws(() => extractTerminalResult(lines.join('\n')), /no result event/);
+  assert.throws(() => extractTerminalResult(''), /no output/);
+});
 
 // ─── transport envelope (layer A) ─────────────────────────────────────────────
 
