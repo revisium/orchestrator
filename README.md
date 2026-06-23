@@ -32,7 +32,7 @@ pnpm install
 pnpm run revo -- start --profile dev    # standalone + host daemon, bootstrapped & ready
 pnpm run revo -- status --profile dev   # stack health summary
 pnpm run revo -- doctor --profile dev   # diagnose process / port / profile issues
-pnpm run revo -- logs --profile dev     # tail host + standalone logs (-f to follow)
+pnpm run revo -- logs --profile dev     # tail host + standalone logs; add -f to follow
 pnpm run revo -- restart --profile dev  # stop, then start
 pnpm run revo -- stop --profile dev
 ```

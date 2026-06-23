@@ -45,7 +45,7 @@ export function buildDoctorReport(o: DoctorObservation): DoctorReport {
     issues.push(
       `Host daemon (pid ${o.host.pid}) is running but its GraphQL front door on port ${o.host.port} is not responding.`,
     );
-  } else if (!o.host.present && o.standalone.present) {
+  } else if (!o.host.present && o.standalone.alive) {
     issues.push('Host daemon is not running while the standalone daemon is — the stack is partial. Run `revo start`.');
   }
 
@@ -56,7 +56,7 @@ export function buildDoctorReport(o: DoctorObservation): DoctorReport {
     issues.push(
       `Standalone Revisium (pid ${o.standalone.pid}) is running but unhealthy on port ${o.standalone.port}.`,
     );
-  } else if (!o.standalone.present && o.host.present) {
+  } else if (!o.standalone.present && o.host.alive) {
     issues.push(
       'Standalone Revisium is not running while the host daemon is — the stack is partial. Run `revo restart`.',
     );

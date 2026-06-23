@@ -81,3 +81,25 @@ test('standalone up but host absent → partial stack, suggests start', () => {
   assert.equal(r.issues.length, 1);
   assert.match(r.issues[0], /Host daemon is not running.*partial.*revo start/);
 });
+
+// A stale tier (present-but-dead) must NOT be reported as "running" by the other tier's
+// partial-stack message — that gates on `alive`, so only the stale issue surfaces.
+test('stale host + standalone absent reports only the stale host, not a partial stack', () => {
+  const r = buildDoctorReport({
+    host: { present: true, alive: false, healthy: false, pid: 999, port: 19223 },
+    standalone: absent,
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.issues.length, 1);
+  assert.match(r.issues[0], /Stale host\.json/);
+});
+
+test('stale standalone + host absent reports only the stale standalone, not a partial stack', () => {
+  const r = buildDoctorReport({
+    host: absent,
+    standalone: { present: true, alive: false, healthy: false, pid: 888, port: 19222 },
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.issues.length, 1);
+  assert.match(r.issues[0], /Stale runtime\.json/);
+});
