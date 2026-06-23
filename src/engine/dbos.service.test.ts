@@ -133,6 +133,18 @@ test('DbosService: setConfig forwards logLevel for stdio-safe host modes', async
   }
 });
 
+test('DbosService: setConfig disables the DBOS admin server (no port 3001 bind)', async () => {
+  const recorded = patchDbos({});
+  try {
+    const { DbosService } = await import('./dbos.service.js');
+    const svc = new DbosService();
+    svc.setConfig('postgresql://revisium:password@localhost:15440/dbos');
+    assert.equal(recorded.config?.runAdminServer, false);
+  } finally {
+    restoreDbos();
+  }
+});
+
 test('DbosService: launch() is idempotent — second call is a no-op (E6)', async () => {
   let launchCallCount = 0;
   patchDbos({ launch: async () => { launchCallCount += 1; } });

@@ -297,9 +297,12 @@ export class DbosService {
         throw new Error('Cannot reconfigure DBOS after launch.');
       }
     }
+    // Admin server is unused (cancel patches a Revisium row, not the DBOS admin API); disabling it
+    // frees port 3001 so multiple profiles/hosts coexist without an admin-bind collision (ADR 0006).
     DBOS.setConfig({
       name: 'agent-orchestrator',
       systemDatabaseUrl,
+      runAdminServer: false,
       ...(options.logLevel ? { logLevel: options.logLevel } : {}),
     });
     DbosService.configured = nextConfig;
