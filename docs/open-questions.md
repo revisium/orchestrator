@@ -99,7 +99,7 @@ How do the real projects do releases / version publication — npm, internal reg
 Before building the data-access layer (Plan 0002), resolve **Q2** and **Q3** (both BLOCKING for that slice)
 against a running standalone:
 
-1. Read `@revisium/client` types/README in `/Users/anton/projects/revisium/revisium-client`.
+1. Read the `@revisium/client` types/README (installed under `node_modules/@revisium/client`).
 2. Probe the live standalone REST/Swagger at the resolved port (`/api`) for filter/sort and revision endpoints.
 3. Record each **Answer** here with the exact call + date, then update
    [repo-layer-contract.md](./repo-layer-contract.md) to drop the corresponding **OPEN** flag.

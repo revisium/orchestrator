@@ -227,8 +227,8 @@ positioned after the integrator** whose `kind` is `status`.
 
 ## Steps
 
-Each step lists exact files, a **Verify** command, and **Stop if** conditions. Run from repo root
-(`/Users/anton/projects/revisium/agent-orchestrator`). Node `>=24.11.1 <25`.
+Each step lists exact files, a **Verify** command, and **Stop if** conditions. Run from the repo
+root. Node `>=24.11.1 <25`.
 
 ### 1. Define the `kind` vocabulary + carry it on the binding contract
 
