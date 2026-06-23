@@ -23,13 +23,13 @@ after(() => rmSync(TMP, { recursive: true, force: true }));
 test('daemonSpawnArgv: dev (.ts entry) re-invokes node with the tsx loader', () => {
   const [cmd, args] = daemonSpawnArgv('/x/src/cli/index.ts');
   assert.equal(cmd, process.execPath);
-  assert.deepEqual(args, ['--import', 'tsx', '/x/src/cli/index.ts', 'system', '__daemon']);
+  assert.deepEqual(args, ['--import', 'tsx', '/x/src/cli/index.ts', '__daemon']);
 });
 
 test('daemonSpawnArgv: prod (.js entry) re-invokes node directly (no loader)', () => {
   const [cmd, args] = daemonSpawnArgv('/x/dist/cli/index.js');
   assert.equal(cmd, process.execPath);
-  assert.deepEqual(args, ['/x/dist/cli/index.js', 'system', '__daemon']);
+  assert.deepEqual(args, ['/x/dist/cli/index.js', '__daemon']);
 });
 
 test('expectedGraphqlPort: REVO_GRAPHQL_PORT wins; otherwise derives httpPort+1', () => {

@@ -30,6 +30,7 @@ import {
 } from '../control-plane/seed-default-playbook.js';
 import { McpFacadeService } from '../mcp/mcp-facade.service.js';
 import { McpHttpService } from '../mcp/mcp-http.service.js';
+import { TaskControlPlaneApiService } from '../task-control-plane/task-control-plane-api.service.js';
 import { removeHostRuntimeIfMatches, writeHostRuntime } from './host-runtime.js';
 
 /** MCP endpoint port: REVO_MCP_PORT, else the GraphQL port + 1 (kept in the profile band). */
@@ -50,11 +51,12 @@ export async function runHostDaemon(): Promise<void> {
   // 3. Now bring up the Nest/GraphQL/DBOS layer (HostLifecycle re-ensures Revisium = no-op).
   const started = await startGraphqlHost();
 
-  // 4. MCP front door over StreamableHTTP, served by the same host (single DBOS owner). Construct it
-  // with the DI-resolved facade (the host app's TaskControlPlaneApiService is injected into it).
+  // 4. MCP front door over StreamableHTTP, served by the same host (single DBOS owner). Build the
+  // facade from the DI-resolved TaskControlPlaneApiService (the surface the GraphQL resolvers use):
+  // resolving McpFacadeService itself via app.get left its injected `api` undefined, so construct it.
   const mcpPort = resolveMcpPort(started.port);
-  const mcpFacade = started.app.get(McpFacadeService, { strict: false });
-  const mcpServer: HttpServer = await new McpHttpService(mcpFacade).start(mcpPort);
+  const api = started.app.get(TaskControlPlaneApiService, { strict: false });
+  const mcpServer: HttpServer = await new McpHttpService(new McpFacadeService(api)).start(mcpPort);
 
   const startedAt = new Date().toISOString();
   const snapshot = { pid: process.pid, startedAt };

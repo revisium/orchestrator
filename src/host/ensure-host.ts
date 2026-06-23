@@ -72,7 +72,7 @@ async function waitForReady(timeoutMs: number): Promise<HostRuntimeState | null>
  * `entry` defaults to this process's script; it is a parameter so the dev/prod split is unit-testable.
  */
 export function daemonSpawnArgv(entry: string = process.argv[1]): [string, string[]] {
-  const daemonArgs = ['system', '__daemon'];
+  const daemonArgs = ['__daemon'];
   if (entry.endsWith('.ts')) {
     return [process.execPath, ['--import', 'tsx', entry, ...daemonArgs]];
   }

@@ -1,17 +1,13 @@
 /**
- * bootstrap.test.ts — unit tests for the default-playbook seed wiring (slice 5, plan 0015).
- *
- * Covers the LOGGING POLICY of `seedDefaultPlaybookBestEffort` — the branch that maps each seed
- * outcome (installed / already-installed / raced / thrown) to operator-facing stderr — without a
- * live daemon. `runSeed`/`log` are injected (the codebase's CLI-helper pattern; cf. pollWorkflowState).
- *
- * The daemon-backed `runDefaultPlaybookSeed` default + the bootstrap call-site are exercised by the
- * Group M e2e (seed-default-playbook.e2e.test.ts), which runs `revo bootstrap --commit` for real.
+ * Unit tests for the LOGGING POLICY of `seedDefaultPlaybookBestEffort` — the branch that maps each
+ * seed outcome (installed / already-installed / raced / thrown) to operator-facing stderr — without a
+ * live daemon. `runSeed`/`log` are injected. The daemon-backed call-site is exercised by the
+ * seed-default-playbook e2e and the `revo start` real-app run.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { seedDefaultPlaybookBestEffort, type SeedDefaultPlaybookResult } from '../../control-plane/seed-default-playbook.js';
-import type { PlaybookInstallResult } from '../../playbook/playbook-installer.js';
+import { seedDefaultPlaybookBestEffort, type SeedDefaultPlaybookResult } from './seed-default-playbook.js';
+import type { PlaybookInstallResult } from '../playbook/playbook-installer.js';
 
 const INSTALL_RESULT: PlaybookInstallResult = {
   playbookId: 'revisium-default',

@@ -4,8 +4,8 @@
  *
  * These manage the WHOLE stack: the Revo host daemon (single DBOS owner, serves GraphQL/MCP) and,
  * underneath it, the standalone Revisium daemon. They are pure process managers — they never build
- * an AppModule or launch DBOS themselves (only the daemon does). The hidden `system __daemon`
- * command is the detached daemon entrypoint that `ensureHost` spawns.
+ * an AppModule or launch DBOS themselves (only the daemon does). The hidden `__daemon` command is
+ * the detached daemon entrypoint that `ensureHost` spawns.
  */
 import { Command } from 'commander';
 import {
@@ -118,9 +118,8 @@ export function registerLifecycle(program: Command): void {
     .option('--profile <name>', 'Runtime profile (default|dev)')
     .action((options: ProfileOptions) => statusStack(options));
 
-  // Internal: the detached daemon entrypoint spawned by ensureHost. Not a day-to-day command.
-  const system = program.command('system').description('Internal/debug component commands');
-  system
+  // Internal: the detached daemon entrypoint spawned by ensureHost (not a user-facing command).
+  program
     .command('__daemon', { hidden: true })
     .description('Run the host daemon in the foreground (internal — spawned by `revo start`)')
     .action(() => runHostDaemon());
