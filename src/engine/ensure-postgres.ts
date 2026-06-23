@@ -17,14 +17,16 @@
  * live Postgres. The production default constructs a real `pg.Client`.
  */
 import pg from 'pg';
+import { PROFILES, resolveProfileName } from '../config.js';
 
 /**
- * DBOS system-database name. Overridable via `REVO_DBOS_DB` so the e2e/CI daemon keeps its DBOS
- * progress fully separate from the dev one. Validated to a safe identifier because the name is
- * interpolated into a non-parameterizable `CREATE DATABASE` (CREATE DATABASE cannot bind params).
+ * DBOS system-database name. `REVO_DBOS_DB` overrides; otherwise it falls back to the active
+ * profile's db (default `dbos`, dev `dbos_dev`) so a profiled host keeps its DBOS progress separate.
+ * Validated to a safe identifier because the name is interpolated into a non-parameterizable
+ * `CREATE DATABASE` (CREATE DATABASE cannot bind params).
  */
 export function resolveDbosDbName(): string {
-  const name = process.env['REVO_DBOS_DB'] ?? 'dbos';
+  const name = process.env['REVO_DBOS_DB'] ?? PROFILES[resolveProfileName()].dbosDb;
   if (!/^[a-z_][a-z0-9_]*$/i.test(name)) {
     throw new Error(`Invalid REVO_DBOS_DB '${name}': must be a SQL identifier (/^[a-z_][a-z0-9_]*$/i)`);
   }
