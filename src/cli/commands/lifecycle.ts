@@ -28,6 +28,7 @@ function applyProfileEnv(options: ProfileOptions): void {
   if (options.profile) process.env['REVO_PROFILE'] = options.profile;
 }
 
+/** `revo start` — bring up the whole stack (host daemon + standalone) and print its endpoints. */
 async function startStack(options: ProfileOptions): Promise<void> {
   applyProfileEnv(options);
   const { profile, dataDir } = getConfig();
@@ -45,6 +46,7 @@ async function startStack(options: ProfileOptions): Promise<void> {
   }
 }
 
+/** Stop a pid gracefully: SIGTERM, then SIGKILL if it has not exited within the grace period. */
 async function stopProcess(pid: number): Promise<void> {
   if (!isAlive(pid)) return;
   killTree(pid, 'SIGTERM');
@@ -54,6 +56,7 @@ async function stopProcess(pid: number): Promise<void> {
   }
 }
 
+/** `revo stop` — stop the host daemon first (it owns DBOS), then the standalone Revisium daemon. */
 async function stopStack(options: ProfileOptions): Promise<void> {
   applyProfileEnv(options);
   let stopped = false;
@@ -76,6 +79,7 @@ async function stopStack(options: ProfileOptions): Promise<void> {
   console.log(stopped ? 'stopped' : 'not running');
 }
 
+/** `revo status` — summarize the stack: profile, data dir, host daemon, and Revisium health. */
 async function statusStack(options: ProfileOptions): Promise<void> {
   applyProfileEnv(options);
   const { profile, dataDir } = getConfig();
@@ -99,6 +103,7 @@ async function statusStack(options: ProfileOptions): Promise<void> {
   }
 }
 
+/** Register the lifecycle commands (start/stop/status) + the hidden `__daemon` entrypoint. */
 export function registerLifecycle(program: Command): void {
   program
     .command('start')

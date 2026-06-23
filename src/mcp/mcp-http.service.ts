@@ -15,10 +15,20 @@ import { MCP_INSTRUCTIONS } from './mcp-capabilities.js';
 import { McpFacadeService } from './mcp-facade.service.js';
 import { registerRevoMcpTools } from './mcp-tools.js';
 
+/** Cap the request body so a malformed/oversized local request can't balloon daemon memory. */
+const MAX_BODY_BYTES = 4 * 1024 * 1024;
+
 function readBody(req: IncomingMessage): Promise<unknown> {
   return new Promise((resolve, reject) => {
     let raw = '';
+    let size = 0;
     req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > MAX_BODY_BYTES) {
+        reject(new Error('request body too large'));
+        req.destroy();
+        return;
+      }
       raw += chunk;
     });
     req.on('end', () => {
@@ -43,7 +53,10 @@ export class McpHttpService {
   /** Bind the MCP endpoint on 127.0.0.1:port. Returns the http.Server so the daemon can close it. */
   async start(port: number): Promise<HttpServer> {
     const server = createServer((req, res) => {
-      void this.dispatch(req, res);
+      this.dispatch(req, res).catch(() => {
+        // A dispatch failure must still return a deterministic response, never an unhandled rejection.
+        if (!res.headersSent) res.writeHead(500).end();
+      });
     });
     await new Promise<void>((resolve, reject) => {
       server.once('error', reject);
@@ -55,6 +68,7 @@ export class McpHttpService {
     return server;
   }
 
+  /** Handle one HTTP request: POST → a fresh stateless McpServer + StreamableHTTP transport; else 405. */
   private async dispatch(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (req.method !== 'POST') {
       res.writeHead(405).end();

@@ -5,7 +5,7 @@ reviewer → integrator), hosted in **NestJS**. **DBOS** owns durable progress �
 from the first unfinished step — while **Revisium** owns meaning: roles, policy, inbox, events. Workflow-as-data is
 a post-MVP goal; see [`docs/architecture-overview.md`](./docs/architecture-overview.md).
 
-> 🚧 **Early alpha.** The end-to-end MVP works — `run create` → plan gate → implement → review → PR → merge
+> 🚧 **Early alpha.** The end-to-end MVP works — create a run → plan gate → implement → review → PR → merge
 > gate — see [`docs/roadmap.md`](./docs/roadmap.md).
 
 ## Start here
@@ -76,38 +76,23 @@ only when that is intentional.
 
 ```sh
 export REVO_SMOKE_REPO=/path/to/local/sandbox-repo
-
-pnpm run revo -- run create \
-  --title "live observability smoke" \
-  --repo "$REVO_SMOKE_REPO" \
-  --pipeline-id local-change \
-  --params '{"smoke":"live-observability"}' \
-  --start
+pnpm run revo -- start --profile dev   # standalone + host daemon (serves GraphQL + MCP), ready
 ```
 
-Read the resulting run through the CLI:
+Drive and observe a run through the daemon's front doors — there are no `run`/`serve` CLI commands.
+From an agent, use the MCP tools (`create_run`, `start_run`, then `get_agent_activity` /
+`get_agent_log`). From a UI or script, use the GraphQL front door the daemon already serves at
+`http://127.0.0.1:$REVO_GRAPHQL_PORT/graphql` — create a run:
 
-```sh
-RUN_ID=<run id>
-ATTEMPT_ID=<attempt id>
-
-pnpm run revo -- run activity "$RUN_ID" --json
-pnpm run revo -- run attempts "$RUN_ID" --json
-pnpm run revo -- run logs "$RUN_ID" \
-  --attempt-id "$ATTEMPT_ID" \
-  --stream stdout \
-  --offset-bytes 0 \
-  --limit-bytes 4096 \
-  --json
+```graphql
+mutation Create($data: CreateRunInput!) {
+  createRun(data: $data) {
+    runId
+  }
+}
 ```
 
-Start the local GraphQL front door on the development GraphQL port:
-
-```sh
-pnpm run revo -- serve --host 127.0.0.1 --port "$REVO_GRAPHQL_PORT"
-```
-
-Then query `http://127.0.0.1:$REVO_GRAPHQL_PORT/graphql`:
+Then observe it over the same endpoint:
 
 ```graphql
 query Activity($runId: ID!) {

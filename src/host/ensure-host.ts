@@ -91,6 +91,7 @@ function spawnDaemon(): void {
 
 export type EnsureHostOptions = { timeoutMs?: number; recheckMs?: number };
 
+/** Attach to the running host daemon, or spawn one if absent — the only way the stack acquires a host. */
 export async function ensureHost(options: EnsureHostOptions = {}): Promise<EnsureHostResult> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const recheckMs = options.recheckMs ?? DEFAULT_RECHECK_MS;
@@ -110,6 +111,10 @@ export async function ensureHost(options: EnsureHostOptions = {}): Promise<Ensur
   }
 
   // No live daemon — clear a stale host.json (dead pid), then spawn a fresh detached one.
+  // Known limitation (matches ensureRevisium's deferred concurrent-cold-start): this check-then-spawn
+  // is not atomic, so two ensureHost() callers racing with no live daemon could both spawn `__daemon`.
+  // The second daemon's startGraphqlHost fails fast (the GraphQL port is already bound) and exits, so
+  // it cannot become a second DBOS owner; full cross-process spawn locking is deferred.
   if (existing) removeHostRuntime();
   spawnDaemon();
   const ready = await waitForReady(timeoutMs);

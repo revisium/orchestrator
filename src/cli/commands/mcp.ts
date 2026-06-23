@@ -50,6 +50,7 @@ async function runMcpBridge(): Promise<void> {
   }
 }
 
+/** Register `revo mcp` — the thin stdio bridge to the daemon's MCP front door (no AppModule/DBOS). */
 export function registerMcp(program: Command): void {
   program
     .command('mcp')

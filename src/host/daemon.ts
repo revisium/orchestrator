@@ -39,6 +39,7 @@ function resolveMcpPort(graphqlPort: number): number {
   return env && /^\d+$/.test(env.trim()) ? Number(env.trim()) : graphqlPort + 1;
 }
 
+/** The detached host-daemon entrypoint (spawned by ensureHost): boot the stack, then serve + stay alive. */
 export async function runHostDaemon(): Promise<void> {
   // 1. Standalone up first, then 2. all control-plane writes via fresh client scopes — BEFORE the
   // service layer (startGraphqlHost) caches its read scope, so same-boot reads see a ready control-plane.
@@ -51,39 +52,48 @@ export async function runHostDaemon(): Promise<void> {
   // 3. Now bring up the Nest/GraphQL/DBOS layer (HostLifecycle re-ensures Revisium = no-op).
   const started = await startGraphqlHost();
 
-  // 4. MCP front door over StreamableHTTP, served by the same host (single DBOS owner). Build the
-  // facade from the DI-resolved TaskControlPlaneApiService (the surface the GraphQL resolvers use):
-  // resolving McpFacadeService itself via app.get left its injected `api` undefined, so construct it.
-  const mcpPort = resolveMcpPort(started.port);
-  const api = started.app.get(TaskControlPlaneApiService, { strict: false });
-  const mcpServer: HttpServer = await new McpHttpService(new McpFacadeService(api)).start(mcpPort);
+  // 4. MCP front door + 5. host.json. Wrapped so a failure AFTER startGraphqlHost (DBOS already
+  // launched) never leaves a live DBOS owner without host.json: on error we close the MCP server +
+  // Nest app (→ DBOS.shutdown) and exit non-zero, so ensureHost reports the failure, not a zombie.
+  let mcpServer: HttpServer | undefined;
+  try {
+    // Build the MCP facade from the DI-resolved TaskControlPlaneApiService (the surface the GraphQL
+    // resolvers use): resolving McpFacadeService itself via app.get left its injected `api` undefined.
+    const mcpPort = resolveMcpPort(started.port);
+    const api = started.app.get(TaskControlPlaneApiService, { strict: false });
+    mcpServer = await new McpHttpService(new McpFacadeService(api)).start(mcpPort);
 
-  const startedAt = new Date().toISOString();
-  const snapshot = { pid: process.pid, startedAt };
+    const startedAt = new Date().toISOString();
+    const snapshot = { pid: process.pid, startedAt };
 
-  // 5. Ready signal — written last.
-  writeHostRuntime({
-    pid: process.pid,
-    graphqlPort: started.port,
-    mcpPort,
-    startedAt,
-    profile: getConfig().profile,
-  });
+    // host.json is written LAST — its presence is the "fully ready" signal ensureHost waits on.
+    writeHostRuntime({
+      pid: process.pid,
+      graphqlPort: started.port,
+      mcpPort,
+      startedAt,
+      profile: getConfig().profile,
+    });
 
-  let closing = false;
-  const shutdown = (): void => {
-    if (closing) return;
-    closing = true;
-    mcpServer.close();
-    started.app
-      .close() // → HostLifecycle.onApplicationShutdown → DBOS.shutdown()
-      .catch(() => undefined)
-      .finally(() => {
-        removeHostRuntimeIfMatches(snapshot);
-        process.exit(0);
-      });
-  };
-
-  process.on('SIGTERM', shutdown);
-  process.on('SIGINT', shutdown);
+    const runningMcp = mcpServer;
+    let closing = false;
+    const shutdown = (): void => {
+      if (closing) return;
+      closing = true;
+      runningMcp.close();
+      started.app
+        .close() // → HostLifecycle.onApplicationShutdown → DBOS.shutdown()
+        .catch(() => undefined)
+        .finally(() => {
+          removeHostRuntimeIfMatches(snapshot);
+          process.exit(0);
+        });
+    };
+    process.on('SIGTERM', shutdown);
+    process.on('SIGINT', shutdown);
+  } catch (err) {
+    mcpServer?.close();
+    await started.app.close().catch(() => undefined);
+    throw err;
+  }
 }

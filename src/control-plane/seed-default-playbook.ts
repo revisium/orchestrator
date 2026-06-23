@@ -113,7 +113,7 @@ export async function seedDefaultPlaybookBestEffort(
   } catch (err) {
     log(
       `Default playbook seed failed (schema bootstrap still applied): ${String(err)}. ` +
-        'Re-run with `revo playbook install control-plane/default-playbook --commit`.',
+        'Re-run `revo start` to retry the default-playbook seed.',
     );
   }
 }

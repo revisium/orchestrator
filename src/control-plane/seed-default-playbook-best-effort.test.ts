@@ -56,5 +56,5 @@ test('seedDefaultPlaybookBestEffort: reports a seed failure WITHOUT throwing (be
   );
   assert.equal(out.lines.length, 1);
   assert.match(out.lines[0], /seed failed \(schema bootstrap still applied\): .*PLAYBOOK_INVALID_CATALOG/);
-  assert.match(out.lines[0], /revo playbook install/);
+  assert.match(out.lines[0], /revo start/);
 });

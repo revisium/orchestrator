@@ -50,7 +50,20 @@ async function runCount(): Promise<number> {
 /** Stop the test daemon, wipe its data dir, and spawn a fresh one (clean draft). */
 async function resetHome(): Promise<void> {
   const rt = readRuntime();
-  if (rt?.pid && isAlive(rt.pid)) process.kill(rt.pid); // stop the test daemon
+  if (rt?.pid) {
+    // Stop the test daemon and WAIT for it to exit before wiping — process.kill is async, so deleting
+    // pgdata out from under a live embedded Postgres races shutdown (port/file contention, flaky e2e).
+    try {
+      if (isAlive(rt.pid)) process.kill(rt.pid, 'SIGTERM');
+    } catch (err) {
+      if ((err as { code?: string }).code !== 'ESRCH') throw err; // already gone — fine
+    }
+    const deadline = Date.now() + 5_000;
+    while (isAlive(rt.pid) && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    if (isAlive(rt.pid)) process.kill(rt.pid, 'SIGKILL');
+  }
   removeRuntime();
   rmSync(getConfig().dataDir, { recursive: true, force: true });
   await ensureRevisium(); // fresh spawn recreates the data dir + embedded Postgres

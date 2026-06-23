@@ -16,6 +16,19 @@ import { applyAdditiveSchemaMigration } from './schema-migration.js';
 type BootstrapRow = { tableId: string; rowId: string; data: Record<string, unknown> };
 type BootstrapConfig = { rows?: BootstrapRow[]; commitMessage?: string };
 
+/**
+ * True ONLY for a Revisium "not found" (404) response. Existence probes use this so a 5xx/auth/network
+ * fault is NOT silently treated as "absent" (which would wrongly run a create path on a broken backend).
+ */
+function isNotFoundError(err: unknown): boolean {
+  if (err && typeof err === 'object') {
+    const e = err as { status?: unknown; statusCode?: unknown };
+    if (e.status === 404 || e.statusCode === 404) return true;
+  }
+  return /\b404\b|not found|NOT_FOUND/i.test(err instanceof Error ? err.message : String(err));
+}
+
+/** Absolute path to the committed control-plane bootstrap config (table schemas + seed rows). */
 export function bootstrapConfigPath(): string {
   return join(repoRoot, 'control-plane', 'bootstrap.config.json');
 }
@@ -24,11 +37,13 @@ export function bootstrapConfigPath(): string {
  * Ensure the control-plane project/schema/seed exist. Safe to call on every daemon boot — when
  * already bootstrapped it issues only existence checks and returns without writing.
  */
-export async function bootstrapControlPlane(httpPort: number): Promise<void> {
+export async function bootstrapControlPlane(
+  httpPort: number,
+  client: RevisiumClient = new RevisiumClient({ baseUrl: baseUrl(httpPort) }),
+): Promise<void> {
   const { org, project, branch } = getConfig();
   const configPath = bootstrapConfigPath();
   const config = JSON.parse(readFileSync(configPath, 'utf8')) as BootstrapConfig;
-  const client = new RevisiumClient({ baseUrl: baseUrl(httpPort) });
   const orgScope = client.org(org);
   const projectScope = orgScope.project(project);
 
@@ -36,7 +51,8 @@ export async function bootstrapControlPlane(httpPort: number): Promise<void> {
   let projectExists = true;
   try {
     await projectScope.get();
-  } catch {
+  } catch (err) {
+    if (!isNotFoundError(err)) throw err;
     projectExists = false;
   }
   if (!projectExists) {
@@ -57,7 +73,8 @@ export async function bootstrapControlPlane(httpPort: number): Promise<void> {
     let rowExists = true;
     try {
       await draft.getRow(row.tableId, row.rowId);
-    } catch {
+    } catch (err) {
+      if (!isNotFoundError(err)) throw err;
       rowExists = false;
     }
     if (!rowExists) {
@@ -75,14 +92,12 @@ export async function bootstrapControlPlane(httpPort: number): Promise<void> {
  * seed when it runs before the daemon's service layer exists. A fresh client resolves the current head
  * each call, so it reflects bootstrap/earlier commits made in the same boot (unlike a cached scope).
  */
-export async function listInstalledPlaybooks(httpPort: number): Promise<Array<{ id: string }>> {
+export async function listInstalledPlaybooks(
+  httpPort: number,
+  client: RevisiumClient = new RevisiumClient({ baseUrl: baseUrl(httpPort) }),
+): Promise<Array<{ id: string }>> {
   const { org, project, branch } = getConfig();
-  const head = await new RevisiumClient({ baseUrl: baseUrl(httpPort) }).revision({
-    org,
-    project,
-    branch,
-    revision: 'head',
-  });
+  const head = await client.revision({ org, project, branch, revision: 'head' });
   const rows = await head.getRows('playbooks', { first: 1000 });
   return (rows.edges ?? []).flatMap((edge) => (edge.node ? [{ id: edge.node.id }] : []));
 }
