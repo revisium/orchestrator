@@ -17,7 +17,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import os from 'node:os';
-import { readRuntime, resolveDefaultGraphqlPort, resolvePorts } from './config.js';
+import { readRuntime, resolveDefaultGraphqlPort, resolveProfileConfig, resolveProfileName, resolvePorts } from './config.js';
 
 const TMP = mkdtempSync(join(os.tmpdir(), 'revo-config-contract-'));
 process.env['REVO_DATA_DIR'] = TMP;
@@ -70,4 +70,37 @@ test('runtime.json contract: resolvePorts ignores stale ports and falls back to 
 test('runtime.json contract: resolveDefaultGraphqlPort rejects invalid live base ports', () => {
   writeFileSync(RUNTIME_FILE, JSON.stringify({ ...CONTRACT, httpPort: -1, pid: process.pid }));
   assert.throws(() => resolveDefaultGraphqlPort(), /invalid HTTP port/);
+});
+
+// ── Profiles (pure resolvers — pass env explicitly so they ignore the file-level cache/env) ────
+
+test('profiles: resolveProfileName defaults to `default`, accepts `dev`, rejects unknown', () => {
+  assert.equal(resolveProfileName({}), 'default');
+  assert.equal(resolveProfileName({ REVO_PROFILE: '' }), 'default');
+  assert.equal(resolveProfileName({ REVO_PROFILE: 'dev' }), 'dev');
+  assert.throws(() => resolveProfileName({ REVO_PROFILE: 'prod' }), /Unknown REVO_PROFILE 'prod'/);
+});
+
+test('profiles: dev shifts the band off the committed defaults (+400 ports, -dev data dir)', () => {
+  const raw = { dataDir: '~/.revisium-orchestrator', preferredPort: 19222, preferredPgPort: 15440 };
+  assert.deepEqual(resolveProfileConfig(raw, { REVO_PROFILE: 'dev' }), {
+    profile: 'dev',
+    dataDir: '~/.revisium-orchestrator-dev',
+    preferredPort: 19622,
+    preferredPgPort: 15840,
+  });
+  assert.deepEqual(resolveProfileConfig(raw, {}), {
+    profile: 'default',
+    dataDir: '~/.revisium-orchestrator',
+    preferredPort: 19222,
+    preferredPgPort: 15440,
+  });
+});
+
+test('profiles: explicit REVO_* env overrides the profile band per knob', () => {
+  const raw = { dataDir: '~/.revisium-orchestrator', preferredPort: 19222, preferredPgPort: 15440 };
+  const resolved = resolveProfileConfig(raw, { REVO_PROFILE: 'dev', REVO_PORT: '40000', REVO_DATA_DIR: '/tmp/custom' });
+  assert.equal(resolved.preferredPort, 40000); // explicit REVO_PORT wins over the dev band 19622
+  assert.equal(resolved.dataDir, '/tmp/custom'); // explicit REVO_DATA_DIR wins over the -dev suffix
+  assert.equal(resolved.preferredPgPort, 15840); // unset → dev band still applies
 });

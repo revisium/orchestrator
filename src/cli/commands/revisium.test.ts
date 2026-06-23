@@ -44,6 +44,7 @@ function makeDeps(overrides: Partial<RevisiumDeps> = {}): {
       preferredPgPort: 15440,
       autoDiscover: true,
       dataDir: env.REVO_DATA_DIR ?? '/tmp/revo-data',
+      profile: 'default',
       org: 'admin',
       project: 'control-plane',
       branch: 'master',

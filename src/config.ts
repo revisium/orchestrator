@@ -24,8 +24,22 @@ type ConfigFile = {
   branch: string;
 };
 
+/**
+ * Runtime profiles let an installed package (`default`) and a source checkout (`dev`) run on one
+ * machine at once: a profile shifts the whole isolation band off the committed defaults, so the two
+ * never share a port, data dir, or `dbos` database. Custom layouts set the REVO_* knobs directly
+ * instead of adding a profile here. The single source of band constants (offset/suffix/db name).
+ */
+export const PROFILES = {
+  default: { suffix: '', portOffset: 0, dbosDb: 'dbos' },
+  dev: { suffix: '-dev', portOffset: 400, dbosDb: 'dbos_dev' },
+} as const;
+
+export type ProfileName = keyof typeof PROFILES;
+
 export type RevoConfig = ConfigFile & {
   dataDir: string;
+  profile: ProfileName;
   logFile: string;
   runtimeFile: string;
 };
@@ -49,11 +63,47 @@ function loadConfig(): ConfigFile {
 let cachedConfig: RevoConfig | null = null;
 
 /** Parse a positive-integer env var, or undefined if unset/invalid. */
-function numEnv(name: string): number | undefined {
-  const raw = process.env[name];
+function numEnv(name: string, env: NodeJS.ProcessEnv = process.env): number | undefined {
+  const raw = env[name];
   if (raw === undefined) return undefined;
   const n = Number.parseInt(raw, 10);
   return Number.isFinite(n) && n > 0 ? n : undefined;
+}
+
+/** Resolve the active profile from REVO_PROFILE (default `default`); unknown names fail loudly. */
+export function resolveProfileName(env: NodeJS.ProcessEnv = process.env): ProfileName {
+  const raw = env['REVO_PROFILE'];
+  if (!raw) return 'default';
+  if (Object.prototype.hasOwnProperty.call(PROFILES, raw)) return raw as ProfileName;
+  throw new Error(
+    `Unknown REVO_PROFILE '${raw}'. Known profiles: ${Object.keys(PROFILES).join(', ')}. ` +
+      'Set REVO_DATA_DIR/REVO_PORT/REVO_PG_PORT/REVO_DBOS_DB explicitly for a custom layout.',
+  );
+}
+
+export type ProfileConfig = {
+  profile: ProfileName;
+  dataDir: string;
+  preferredPort: number;
+  preferredPgPort: number;
+};
+
+/**
+ * Layer profile + env into the data dir and ports: the profile sets the band, then an explicit
+ * REVO_* env var overrides that single knob. Pure (no fs) so the precedence is unit-testable.
+ */
+export function resolveProfileConfig(
+  raw: Pick<ConfigFile, 'dataDir' | 'preferredPort' | 'preferredPgPort'>,
+  env: NodeJS.ProcessEnv = process.env,
+): ProfileConfig {
+  const profile = resolveProfileName(env);
+  const band = PROFILES[profile];
+  return {
+    profile,
+    dataDir: env['REVO_DATA_DIR'] ?? `${raw.dataDir}${band.suffix}`,
+    preferredPort: numEnv('REVO_PORT', env) ?? raw.preferredPort + band.portOffset,
+    preferredPgPort: numEnv('REVO_PG_PORT', env) ?? raw.preferredPgPort + band.portOffset,
+  };
 }
 
 /**
@@ -67,14 +117,16 @@ export function getConfig(): RevoConfig {
   if (cachedConfig) return cachedConfig;
 
   const rawConfig = loadConfig();
-  const dataDir = expandHome(process.env['REVO_DATA_DIR'] ?? rawConfig.dataDir);
+  const { profile, dataDir: profileDataDir, preferredPort, preferredPgPort } = resolveProfileConfig(rawConfig);
+  const dataDir = expandHome(profileDataDir);
   mkdirSync(dataDir, { recursive: true });
 
   cachedConfig = {
     ...rawConfig,
+    profile,
     dataDir,
-    preferredPort: numEnv('REVO_PORT') ?? rawConfig.preferredPort,
-    preferredPgPort: numEnv('REVO_PG_PORT') ?? rawConfig.preferredPgPort,
+    preferredPort,
+    preferredPgPort,
     logFile: join(dataDir, 'standalone.log'),
     runtimeFile: join(dataDir, 'runtime.json'),
   };
