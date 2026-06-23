@@ -56,6 +56,23 @@ test('dbosSystemDatabaseUrl: uses isolated REVO_DBOS_DB at call time', () => {
   }
 });
 
+test('resolveDbosDbName: falls back to the active profile db when REVO_DBOS_DB is unset (dev → dbos_dev)', () => {
+  const oldDb = process.env.REVO_DBOS_DB;
+  const oldProfile = process.env.REVO_PROFILE;
+  delete process.env.REVO_DBOS_DB;
+  try {
+    process.env.REVO_PROFILE = 'dev';
+    assert.equal(resolveDbosDbName(), 'dbos_dev');
+    delete process.env.REVO_PROFILE;
+    assert.equal(resolveDbosDbName(), 'dbos');
+  } finally {
+    if (oldDb === undefined) delete process.env.REVO_DBOS_DB;
+    else process.env.REVO_DBOS_DB = oldDb;
+    if (oldProfile === undefined) delete process.env.REVO_PROFILE;
+    else process.env.REVO_PROFILE = oldProfile;
+  }
+});
+
 // ── ensurePostgres with injectable ClientLike (F20) ──────────────────────────
 //
 // Helper: build a fake ClientLike that exercises the REAL ensurePostgres logic.
