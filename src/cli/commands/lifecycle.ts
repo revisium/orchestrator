@@ -8,6 +8,7 @@
  * the detached daemon entrypoint that `ensureHost` spawns.
  */
 import { Command } from 'commander';
+import { closeSync, existsSync, openSync, readSync, statSync } from 'node:fs';
 import {
   baseUrl,
   getConfig,
@@ -16,10 +17,13 @@ import {
   readRuntime,
   removeRuntime,
 } from '../config.js';
-import { killTree, waitForExit } from './revisium-helpers.js';
+import { killTree, tailLines, waitForExit } from './revisium-helpers.js';
+import { buildDoctorReport } from './doctor-report.js';
 import { ensureHost, expectedGraphqlPort, isGraphqlHealthy } from '../../host/ensure-host.js';
 import { runHostDaemon } from '../../host/daemon.js';
 import { isHostRunning, readHostRuntime, removeHostRuntime } from '../../host/host-runtime.js';
+
+const DEFAULT_LOG_LINES = 50;
 
 type ProfileOptions = { profile?: string };
 
@@ -103,7 +107,128 @@ async function statusStack(options: ProfileOptions): Promise<void> {
   }
 }
 
-/** Register the lifecycle commands (start/stop/status) + the hidden `__daemon` entrypoint. */
+/** `revo restart` — stop then start the whole stack (same profile). The dev code-reload primitive. */
+async function restartStack(options: ProfileOptions): Promise<void> {
+  applyProfileEnv(options);
+  console.log('Restarting Revo stack…');
+  await stopStack(options);
+  await startStack(options);
+}
+
+/** `revo doctor` — diagnose the stack as a pure client: process/port/profile/stale-file health. */
+async function doctorStack(options: ProfileOptions): Promise<void> {
+  applyProfileEnv(options);
+  const { profile, dataDir } = getConfig();
+
+  const host = readHostRuntime();
+  const hostAlive = host !== null && isAlive(host.pid);
+  const hostHealthy = host !== null && hostAlive && (await isGraphqlHealthy(host.graphqlPort));
+
+  const standalone = readRuntime();
+  const standaloneAlive = standalone !== null && isAlive(standalone.pid);
+  const standaloneHealthy = standalone !== null && standaloneAlive && (await isHealthy(standalone.httpPort));
+
+  const report = buildDoctorReport({
+    host: {
+      present: host !== null,
+      alive: hostAlive,
+      healthy: hostHealthy,
+      pid: host?.pid ?? null,
+      port: host?.graphqlPort ?? null,
+    },
+    standalone: {
+      present: standalone !== null,
+      alive: standaloneAlive,
+      healthy: standaloneHealthy,
+      pid: standalone?.pid ?? null,
+      port: standalone?.httpPort ?? null,
+    },
+  });
+
+  console.log(`Profile: ${profile}`);
+  console.log(`Data dir: ${dataDir}`);
+  if (report.ok) {
+    console.log('OK — stack is healthy.');
+    return;
+  }
+  for (const issue of report.issues) console.log(`✗ ${issue}`);
+  process.exitCode = 1;
+}
+
+type LogsOptions = ProfileOptions & { lines?: string; follow?: boolean };
+type LogTarget = { label: string; file: string };
+
+/** Resolve which logs to read: `host`, `standalone`, or both (default). Profile-scoped paths. */
+function resolveLogTargets(target: string | undefined): LogTarget[] {
+  const { logFile, hostLogFile } = getConfig();
+  const host: LogTarget = { label: 'host', file: hostLogFile };
+  const standalone: LogTarget = { label: 'standalone', file: logFile };
+  if (target === 'host') return [host];
+  if (target === 'standalone') return [standalone];
+  return [host, standalone];
+}
+
+/** `revo logs [target]` — print the tail of the daemon logs; a pure file read (works when down). */
+async function logsStack(target: string | undefined, options: LogsOptions): Promise<void> {
+  applyProfileEnv(options);
+  if (target !== undefined && target !== 'host' && target !== 'standalone') {
+    console.error(`Invalid logs target "${target}". Use "host" or "standalone".`);
+    process.exitCode = 1;
+    return;
+  }
+  const requested = Number(options.lines ?? DEFAULT_LOG_LINES);
+  const lines = Number.isInteger(requested) && requested > 0 ? requested : DEFAULT_LOG_LINES;
+  const targets = resolveLogTargets(target);
+
+  for (const { label, file } of targets) {
+    const tail = tailLines(file, lines);
+    console.log(`==> [${label}] ${file} <==`);
+    console.log(tail === '' ? '(no log yet)' : tail);
+    console.log('');
+  }
+
+  if (options.follow) await followLogs(targets);
+}
+
+/**
+ * Follow mode: poll each log for bytes appended past a tracked offset and stream them, labelled,
+ * until interrupted (Ctrl-C). The daemons open their logs append-only (no rotation), so a byte
+ * offset is a stable cursor; a shrink (manual truncate) simply resyncs to the new end.
+ */
+async function followLogs(targets: LogTarget[]): Promise<void> {
+  const offsets = new Map<string, number>();
+  for (const { file } of targets) offsets.set(file, existsSync(file) ? statSync(file).size : 0);
+
+  for (;;) {
+    for (const { label, file } of targets) {
+      if (!existsSync(file)) continue;
+      const size = statSync(file).size;
+      const from = offsets.get(file) ?? 0;
+      if (size > from) {
+        const fd = openSync(file, 'r');
+        try {
+          const buf = Buffer.alloc(size - from);
+          readSync(fd, buf, 0, buf.length, from);
+          process.stdout.write(prefixLines(label, buf.toString('utf8')));
+        } finally {
+          closeSync(fd);
+        }
+      }
+      offsets.set(file, size);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+}
+
+/** Prefix each non-empty line of a streamed chunk with its tier label for interleaved follow output. */
+function prefixLines(label: string, chunk: string): string {
+  return chunk
+    .split('\n')
+    .map((line) => (line === '' ? line : `[${label}] ${line}`))
+    .join('\n');
+}
+
+/** Register the lifecycle commands (start/stop/status/restart/doctor/logs) + the hidden `__daemon` entrypoint. */
 export function registerLifecycle(program: Command): void {
   program
     .command('start')
@@ -122,6 +247,26 @@ export function registerLifecycle(program: Command): void {
     .description('Show Revo stack status (host daemon, Revisium, profile)')
     .option('--profile <name>', 'Runtime profile (default|dev)')
     .action((options: ProfileOptions) => statusStack(options));
+
+  program
+    .command('restart')
+    .description('Restart the Revo stack (stop, then start)')
+    .option('--profile <name>', 'Runtime profile (default|dev)')
+    .action((options: ProfileOptions) => restartStack(options));
+
+  program
+    .command('doctor')
+    .description('Diagnose the Revo stack (process/port/profile health)')
+    .option('--profile <name>', 'Runtime profile (default|dev)')
+    .action((options: ProfileOptions) => doctorStack(options));
+
+  program
+    .command('logs [target]')
+    .description('Tail Revo logs (target: host | standalone; default both)')
+    .option('--profile <name>', 'Runtime profile (default|dev)')
+    .option('-n, --lines <count>', 'Lines to show from the end', String(DEFAULT_LOG_LINES))
+    .option('-f, --follow', 'Stream new log output until interrupted')
+    .action((target: string | undefined, options: LogsOptions) => logsStack(target, options));
 
   // Internal: the detached daemon entrypoint spawned by ensureHost (not a user-facing command).
   program
