@@ -4,6 +4,7 @@ import { readPackageVersion } from '../package-info.js';
 import { registerBootstrap } from './commands/bootstrap.js';
 import { registerDev } from './commands/dev.js';
 import { registerInbox } from './commands/inbox.js';
+import { registerLifecycle } from './commands/lifecycle.js';
 import { registerMcp } from './commands/mcp.js';
 import { registerPlaybook } from './commands/playbook.js';
 import { registerRevisium } from './commands/revisium.js';
@@ -27,6 +28,7 @@ export function buildProgram(app?: INestApplicationContext): Command {
     .name('revo')
     .description('Agent orchestrator CLI')
     .version(readPackageVersion(), '-v, --version', 'Print the revo version');
+  registerLifecycle(program);
   registerRevisium(program);
   registerBootstrap(program);
   registerPlaybook(program);
