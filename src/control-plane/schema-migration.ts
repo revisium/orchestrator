@@ -1,6 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { RevisiumClient } from '@revisium/client';
-import { baseUrl, getConfig } from '../config.js';
+import { type RevisionScope } from '@revisium/client';
 
 type JsonRecord = Record<string, unknown>;
 
@@ -59,16 +58,16 @@ function loadBootstrapTables(configPath: string): BootstrapTable[] {
   });
 }
 
-export async function applyAdditiveSchemaMigration(input: {
-  configPath: string;
-  httpPort: number;
-  commit?: boolean;
-}): Promise<{ updatedTables: string[]; patches: number }> {
-  const { org, project, branch } = getConfig();
-  const client = new RevisiumClient({ baseUrl: baseUrl(input.httpPort) });
-  const scope = await client.branch({ org, project, branch });
-  const draft = scope.draft();
-  const tables = loadBootstrapTables(input.configPath);
+/**
+ * Apply the bootstrap.config.json table schemas additively onto a caller-provided DRAFT scope:
+ * create missing tables, patch additive drift on existing ones. Does NOT commit — the caller owns the
+ * scope and commits the whole bootstrap once (one `client.revision('draft')` → tables + rows → commit).
+ */
+export async function applyAdditiveSchemaMigration(
+  draft: RevisionScope,
+  configPath: string,
+): Promise<{ updatedTables: string[]; patches: number }> {
+  const tables = loadBootstrapTables(configPath);
   const updatedTables: string[] = [];
   let patchCount = 0;
 
@@ -91,10 +90,6 @@ export async function applyAdditiveSchemaMigration(input: {
     await draft.updateTable(table.id, patches);
     updatedTables.push(table.id);
     patchCount += patches.length;
-  }
-
-  if (input.commit !== false && patchCount > 0) {
-    await draft.commit('revo bootstrap schema migration');
   }
 
   return { updatedTables, patches: patchCount };

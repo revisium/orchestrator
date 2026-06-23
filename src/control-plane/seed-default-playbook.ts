@@ -88,3 +88,32 @@ export function createDaemonInstaller(
       new PlaybookInstaller({ access: createVersionedMeaningAccess({}) }).install(options),
   };
 }
+
+/**
+ * Run {@link seedDefaultPlaybook} as a BEST-EFFORT step: report the outcome but never throw. The
+ * schema is the critical bootstrap artifact; a playbook-seed failure must not fail stack bring-up
+ * (it is logged so the operator can re-run the install). `runSeed`/`log` are injected so the logging
+ * policy is unit-testable without a live daemon.
+ */
+export async function seedDefaultPlaybookBestEffort(
+  runSeed: () => Promise<SeedDefaultPlaybookResult>,
+  log: (message: string) => void = (message) => console.error(message),
+): Promise<void> {
+  try {
+    const outcome = await runSeed();
+    if (outcome.status === 'installed') {
+      const { result } = outcome;
+      log(
+        `Seeded default playbook ${result.playbookId} ` +
+          `(${result.roles} roles, ${result.pipelines} pipelines).`,
+      );
+    } else if (outcome.status === 'already-installed') {
+      log('Default playbook already installed — skipping seed.');
+    }
+  } catch (err) {
+    log(
+      `Default playbook seed failed (schema bootstrap still applied): ${String(err)}. ` +
+        'Re-run with `revo playbook install control-plane/default-playbook --commit`.',
+    );
+  }
+}

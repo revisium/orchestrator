@@ -10,8 +10,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { seedDefaultPlaybookBestEffort } from './bootstrap.js';
-import type { SeedDefaultPlaybookResult } from '../../control-plane/seed-default-playbook.js';
+import { seedDefaultPlaybookBestEffort, type SeedDefaultPlaybookResult } from '../../control-plane/seed-default-playbook.js';
 import type { PlaybookInstallResult } from '../../playbook/playbook-installer.js';
 
 const INSTALL_RESULT: PlaybookInstallResult = {

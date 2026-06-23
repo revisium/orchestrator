@@ -11,8 +11,13 @@
 import { spawn } from 'node:child_process';
 import { closeSync, openSync } from 'node:fs';
 import { join } from 'node:path';
-import { getConfig, resolveDefaultGraphqlPort } from '../config.js';
-import { isHostRunning, readHostRuntime, type HostRuntimeState } from './host-runtime.js';
+import { getConfig, isAlive, resolveDefaultGraphqlPort } from '../config.js';
+import {
+  isHostRunning,
+  readHostRuntime,
+  removeHostRuntime,
+  type HostRuntimeState,
+} from './host-runtime.js';
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 /** Budget to let an alive-but-not-yet-healthy daemon finish booting before giving up. */
@@ -46,11 +51,17 @@ export async function isGraphqlHealthy(port: number): Promise<boolean> {
   }
 }
 
-async function waitForGraphqlHealth(port: number, timeoutMs: number): Promise<boolean> {
+/**
+ * Ready = `host.json` present with a LIVE pid AND GraphQL answering. The daemon writes host.json
+ * last (after the control-plane bootstrap), so readiness implies the whole stack is usable — not
+ * merely that the GraphQL socket is open.
+ */
+async function waitForReady(timeoutMs: number): Promise<HostRuntimeState | null> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    if (await isGraphqlHealthy(port)) return true;
-    if (Date.now() >= deadline) return false;
+    const runtime = readHostRuntime();
+    if (runtime && isAlive(runtime.pid) && (await isGraphqlHealthy(runtime.graphqlPort))) return runtime;
+    if (Date.now() >= deadline) return null;
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
   }
 }
@@ -83,32 +94,29 @@ export type EnsureHostOptions = { timeoutMs?: number; recheckMs?: number };
 export async function ensureHost(options: EnsureHostOptions = {}): Promise<EnsureHostResult> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const recheckMs = options.recheckMs ?? DEFAULT_RECHECK_MS;
-  const port = expectedGraphqlPort();
   const existing = readHostRuntime();
 
   if (existing && isHostRunning()) {
     if (await isGraphqlHealthy(existing.graphqlPort)) {
       return { runtime: existing, alreadyRunning: true };
     }
-    // Alive but unhealthy — likely mid-boot. Wait rather than spawn a duplicate (port collision).
-    if (await waitForGraphqlHealth(existing.graphqlPort, recheckMs)) {
-      const ready = readHostRuntime();
-      if (ready) return { runtime: ready, alreadyRunning: true };
-    }
+    // Alive but not ready — likely mid-boot/bootstrap. Wait; never spawn a duplicate (port collision).
+    const ready = await waitForReady(recheckMs);
+    if (ready) return { runtime: ready, alreadyRunning: true };
     throw new Error(
       `Revo host daemon (pid ${existing.pid}) is alive but not healthy on GraphQL port ` +
         `${existing.graphqlPort}. Stop it with \`revo stop\` and retry.`,
     );
   }
 
+  // No live daemon — clear a stale host.json (dead pid), then spawn a fresh detached one.
+  if (existing) removeHostRuntime();
   spawnDaemon();
-  if (!(await waitForGraphqlHealth(port, timeoutMs))) {
+  const ready = await waitForReady(timeoutMs);
+  if (!ready) {
     throw new Error(
-      `Revo host daemon did not become healthy on GraphQL port ${port} within ${timeoutMs / 1000}s` +
-        ' — see `revo logs`.',
+      `Revo host daemon did not become ready within ${timeoutMs / 1000}s — see \`revo logs\`.`,
     );
   }
-  const written = readHostRuntime();
-  if (!written) throw new Error('host.json missing after the daemon reported healthy');
-  return { runtime: written, alreadyRunning: false };
+  return { runtime: ready, alreadyRunning: false };
 }
