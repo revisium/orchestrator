@@ -86,8 +86,8 @@ export class McpHttpService {
     const server = new McpServer({ name: 'revo', version: readPackageVersion() }, { instructions: MCP_INSTRUCTIONS });
     registerRevoMcpTools(server, this.facade);
     res.on('close', () => {
-      void transport.close();
-      void server.close();
+      transport.close().catch(() => undefined);
+      server.close().catch(() => undefined);
     });
     await server.connect(transport);
     await transport.handleRequest(req, res, body);
