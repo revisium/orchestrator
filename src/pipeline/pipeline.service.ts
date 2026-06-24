@@ -37,6 +37,7 @@ import { buildContext, ContextMissingError } from '../worker/build-context.js';
 import type { RunAgent, AttemptResult } from '../worker/runner.js';
 import { artifactsFromRunAgentError } from '../worker/runner.js';
 import { fnv1a64Hex } from '../control-plane/steps.js';
+import { getConfig } from '../config.js';
 import type { AppendEventInput } from '../run/append-event.js';
 import {
   createAgentActivityReporter,
@@ -195,7 +196,7 @@ export function makeRunStep(deps: RunStepDeps) {
     // 4. Build the agent context string.
     let context: string;
     try {
-      context = await buildContext(da, step, loadedRole, runContext);
+      context = await buildContext(da, step, loadedRole, runContext, getConfig().dataDir);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       await appendEvent({
