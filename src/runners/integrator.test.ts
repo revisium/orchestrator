@@ -183,14 +183,19 @@ test('preflightLive: clean feature branch not based on origin/base → needsHuma
   assert.ok(result.lesson.includes('not based on fresh origin/master'), `lesson: ${result.lesson}`);
 });
 
-test('preflightLive: clean base branch but HEAD sha differs from origin/master → needsHuman', async () => {
+test('preflightLive: clean base branch BEHIND origin → self-heals via fast-forward → ok (slice 142)', async () => {
+  const calls: string[] = [];
   const deps: IntegratorDeps = {
     execGit: (args, _cwd) => {
+      calls.push(args.join(' '));
       if (args[0] === 'fetch') return '';
       if (args[0] === 'status' && args[1] === '--porcelain') return '';
       if (args[0] === 'rev-parse' && args[1] === '--abbrev-ref') return 'master\n';
       if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'aaa111\n';
       if (args[0] === 'rev-parse' && args[1] === 'origin/master') return 'bbb222\n';
+      // base behind: HEAD is an ancestor of origin/master → success
+      if (args[0] === 'merge-base' && args[1] === '--is-ancestor' && args[2] === 'HEAD' && args[3] === 'origin/master') return '';
+      if (args[0] === 'merge' && args[1] === '--ff-only' && args[2] === 'origin/master') return '';
       throw new Error(`unexpected: ${args.join(' ')}`);
     },
     execGh: neverGh,
@@ -199,7 +204,30 @@ test('preflightLive: clean base branch but HEAD sha differs from origin/master �
   };
 
   const result = await preflightLive('task-001', 'master', deps);
-  assert.ok('needsHuman' in result, 'behind origin/master must block');
+  assert.ok('ok' in result && result.ok === true, 'a base merely behind origin self-heals, not blocks');
+  assert.ok(calls.includes('merge --ff-only origin/master'), 'fast-forwarded the clean base to origin/master');
+});
+
+test('preflightLive: clean base branch DIVERGED from origin → needsHuman (no silent reset)', async () => {
+  const deps: IntegratorDeps = {
+    execGit: (args, _cwd) => {
+      if (args[0] === 'fetch') return '';
+      if (args[0] === 'status' && args[1] === '--porcelain') return '';
+      if (args[0] === 'rev-parse' && args[1] === '--abbrev-ref') return 'master\n';
+      if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'aaa111\n';
+      if (args[0] === 'rev-parse' && args[1] === 'origin/master') return 'bbb222\n';
+      // diverged: HEAD is NOT an ancestor of origin/master → throw
+      if (args[0] === 'merge-base' && args[1] === '--is-ancestor') throw new Error('not ancestor');
+      throw new Error(`unexpected: ${args.join(' ')}`);
+    },
+    execGh: neverGh,
+    resolveTaskCwd: makeResolveTaskCwd(),
+    resolveRunCwd: makeResolveRunCwd(),
+  };
+
+  const result = await preflightLive('task-001', 'master', deps);
+  assert.ok('needsHuman' in result, 'a diverged base must block (never auto-reset away local commits)');
+  assert.ok(result.lesson.includes('DIVERGED'), `lesson: ${result.lesson}`);
 });
 
 test('preflightLive: fetch failure → needsHuman (no-base lesson)', async () => {
