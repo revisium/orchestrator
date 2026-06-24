@@ -7,7 +7,15 @@ import type { RunOutputRow } from '../run/run-outputs.js';
 type AwaitGate = Extract<Decision, { type: 'awaitGate' }>;
 
 function row(nodeId: string, payload: unknown, ordinal = 0): RunOutputRow {
-  return { runId: 'run-1', nodeId, ordinal, name: `${nodeId}-out`, schemaRef: `schema:${nodeId}`, payload };
+  return {
+    runId: 'run-1',
+    nodeId,
+    ordinal,
+    name: `${nodeId}-out`,
+    schemaRef: `schema:${nodeId}`,
+    payload,
+    attemptId: `${nodeId}#${ordinal}`,
+  };
 }
 function outputs(...rows: RunOutputRow[]): Map<string, RunOutputRow[]> {
   const m = new Map<string, RunOutputRow[]>();
@@ -50,7 +58,7 @@ test('a missing producer omits the artifact (best-effort) and never throws', () 
   assert.deepEqual(summary.reviewerVerdict, { verdict: 'approved' });
 });
 
-test('an over-budget artifact becomes a head preview + dereferenceable payload_ref (no full payload)', () => {
+test('an over-budget artifact becomes a head preview + an attempt locator (no full payload)', () => {
   const big = 'x'.repeat(GATE_ARTIFACT_MAX + 5_000);
   const out = outputs(row('analyst', { plan: big }, 2));
   const summary = buildGateSummary(gate({ gatedArtifact: { node: 'analyst', as: 'plan' } }), out, 'approved');
@@ -60,7 +68,32 @@ test('an over-budget artifact becomes a head preview + dereferenceable payload_r
   assert.equal(art.truncated, true);
   assert.equal(art.payload, undefined, 'the full payload is NOT inlined when over budget');
   assert.equal(art.preview?.length, GATE_PREVIEW_CHARS);
-  assert.equal(art.payloadRef, 'out:run-1|analyst|2', 'ref points at the run_outputs row for dereference');
+  assert.equal(art.payloadRef, 'attempt:analyst#2', 'locator points at the producing attempt (full artifact via its agent log)');
+});
+
+test('secrets + token shapes are scrubbed from the inlined payload AND the over-budget preview', () => {
+  const token = `ghp_${'A'.repeat(36)}`;
+  // Within budget → inlined payload is redacted.
+  const small = buildGateSummary(
+    gate({ gatedArtifact: { node: 'analyst', as: 'plan' } }),
+    outputs(row('analyst', { note: `deploy with ${token}`, password: 'hunter2' })),
+    'approved',
+  );
+  const payload = small.gatedArtifact?.payload as { note: string; password: string };
+  assert.ok(!JSON.stringify(payload).includes(token), 'token shape scrubbed from the inlined payload');
+  assert.ok(!JSON.stringify(payload).includes('hunter2'), 'secret-named key value scrubbed from the inlined payload');
+
+  // Over budget → the preview is derived from the redacted serialization, so the token never leaks.
+  // (filler uses spaces so it stays large after redaction — a contiguous alphanumeric run would be
+  // absorbed into the token-shape match.)
+  const big = buildGateSummary(
+    gate({ gatedArtifact: { node: 'analyst', as: 'plan' } }),
+    outputs(row('analyst', { token, filler: 'lorem ipsum dolor '.repeat(1_200) })),
+    'approved',
+  );
+  assert.equal(big.gatedArtifact?.truncated, true);
+  assert.ok(!big.gatedArtifact?.preview?.includes(token), 'token shape scrubbed from the over-budget preview');
+  assert.ok((big.gatedArtifact?.preview?.length ?? 0) > 0, 'preview present');
 });
 
 test('iteration:latest picks the most recent ordinal; a pinned number selects that ordinal', () => {

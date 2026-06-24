@@ -45,6 +45,8 @@ import type { ExecutionProfile, RouteDecision, RouteRoleBinding } from './route-
 import { runnerNeedsLivePreflight, runnerUsesRealIntegrator } from './route-contract.js';
 import type { IntegratorInput, IntegratorOutput, IntegratorBlocked, ConfirmMergeOutput, PrFeedback, RespondThreadsOutput } from '../runners/integrator.js';
 import type { AppendEventInput } from '../run/append-event.js';
+import { redactEventPayload } from '../run/append-event.js';
+import { redactSecrets } from '../control-plane/inbox.js';
 import type { RunOutputRow } from '../run/run-outputs.js';
 import type { Decision as GateDecision } from './await-human.js';
 import type { CompleteRunResult } from '../run/complete-run.js';
@@ -250,9 +252,10 @@ function gateTopicFor(reason: string): 'plan' | 'merge' | 'question' {
 
 // D3 — enrich the gate inbox row with the artifact under review + the reviewer verdict, inline, so an
 // approver decides without digging the agent log. `pushInbox` has no size cap (unlike run-outputs'
-// PAYLOAD_MAX), so the artifact is budgeted HERE: over-budget → a head preview + a payload_ref to the
-// run_outputs row, never the full payload. The inbox id is keyed by runId|gateKey only, so a larger
-// context does not change it → pushInbox stays idempotent on replay.
+// PAYLOAD_MAX), so the artifact is budgeted HERE: over-budget → a head preview + a payload_ref locator,
+// never the full payload. The inbox id is keyed by runId|gateKey only, so a larger context does not
+// change it → pushInbox stays idempotent on replay. The payload is also secret/token redacted at this
+// build site (pushInbox only masks secret-NAMED keys, not token SHAPES in free-text) — see gateArtifactView.
 export const GATE_ARTIFACT_MAX = 16_000;
 export const GATE_PREVIEW_CHARS = 4_000;
 
@@ -284,16 +287,23 @@ function resolveGateRow(
   return produced[produced.length - 1]; // 'latest' (and 'all' → the most recent for an inline view)
 }
 
-/** Inline artifact view with the 16KB budget: over-budget → head preview + dereferenceable payload_ref. */
+/**
+ * Inline artifact view with the 16KB budget. Secrets + token shapes are scrubbed BEFORE inlining or
+ * previewing — mirroring run-outputs.ts (the sibling persist boundary): pushInbox only masks
+ * secret-NAMED keys, so a token shape (`ghp_…`) in a free-text field (e.g. pollPr's prFeedback) would
+ * otherwise persist verbatim. Over-budget → a head preview (of the redacted serialization) + an
+ * `attempt:` locator (the full artifact is recoverable from that attempt's agent log).
+ */
 function gateArtifactView(row: RunOutputRow, as?: string): GateArtifactView {
   const base = { nodeId: row.nodeId, name: as ?? row.name, schemaRef: row.schemaRef };
-  const serialized = JSON.stringify(row.payload ?? null);
-  if (serialized.length <= GATE_ARTIFACT_MAX) return { ...base, payload: row.payload };
+  const safe = redactEventPayload(redactSecrets(row.payload) ?? null);
+  const serialized = JSON.stringify(safe ?? null);
+  if (serialized.length <= GATE_ARTIFACT_MAX) return { ...base, payload: safe };
   return {
     ...base,
     truncated: true,
     preview: serialized.slice(0, GATE_PREVIEW_CHARS),
-    payloadRef: `out:${row.runId}|${row.nodeId}|${row.ordinal}`,
+    payloadRef: `attempt:${row.attemptId ?? ''}`,
   };
 }
 
