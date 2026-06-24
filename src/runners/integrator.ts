@@ -212,13 +212,36 @@ export async function preflightLive(
   }
 
   if (headBranch === base && headSha !== originSha) {
-    return {
-      needsHuman: true,
-      lesson:
-        `target repo base branch is not on fresh origin/${base} ` +
-        `(HEAD=${headBranch}@${headSha.slice(0, 8)}, expected ${base}@${originSha.slice(0, 8)}); ` +
-        `pull ${base}, then retry --live`,
-    };
+    // The clean base branch isn't at origin/<base>. SELF-HEAL instead of dead-ending: a sibling run
+    // merging advances origin/<base>, and the old hard block forced a manual `git pull` + re-run for
+    // every other in-flight run (slice 142 / dogfood). The tree is already clean (step 2), so if the
+    // base is simply BEHIND (HEAD is an ancestor of origin/<base>) we fast-forward it — exactly what
+    // `git pull --ff-only` does, and harmless for worktree-isolated runs (they re-cut from origin anyway).
+    // Only a genuinely DIVERGED base (local commits absent from the remote) still blocks for a human.
+    let behind = false;
+    try {
+      execGit(['merge-base', '--is-ancestor', 'HEAD', `origin/${base}`], cwd);
+      behind = true;
+    } catch {
+      behind = false; // not an ancestor → diverged (or unrelated)
+    }
+    if (!behind) {
+      return {
+        needsHuman: true,
+        lesson:
+          `target repo base branch ${base} has DIVERGED from origin/${base} ` +
+          `(HEAD=${headSha.slice(0, 8)} has local commits absent from origin/${base}@${originSha.slice(0, 8)}); ` +
+          `reconcile manually, then retry --live`,
+      };
+    }
+    try {
+      execGit(['merge', '--ff-only', `origin/${base}`], cwd); // clean + ancestor → cannot conflict
+    } catch (err) {
+      return {
+        needsHuman: true,
+        lesson: `live preflight: fast-forward of ${base} to origin/${base} failed — ${String(err)}; pull ${base} manually and retry --live`,
+      };
+    }
   }
 
   if (headBranch !== base) {
