@@ -87,6 +87,56 @@ test('H2: a feature run drives plan + merge gates entirely through MCP tools', {
   }
 });
 
+test('H11: wait_for_any_gate / watch_runs drive a feature run to completion with the gate inbox inline', { skip: e2eSkip }, async () => {
+  type WatchResult = {
+    transitions: Array<{ runId: string; state: string; inbox?: { id: string } }>;
+    cursor: string;
+    timedOut: boolean;
+  };
+  const target = createTargetRepo();
+  try {
+    const created = await inv<{ runId: string }>('create_run', {
+      title: 'E2E MCP watch gates',
+      repo: target.worktree,
+      pipelineId: 'feature-development',
+      start: false,
+    });
+    h.developerWrites.set(created.runId, target.worktree);
+    await inv('start_run', { runId: created.runId });
+
+    let cursor: string | undefined;
+    // wait_for_any_gate holds the request open and polls; a few bounded re-calls cover a slow first gate.
+    const nextGate = async (): Promise<string> => {
+      for (let i = 0; i < 6; i++) {
+        const res = await inv<WatchResult>('wait_for_any_gate', { runIds: [created.runId], timeoutMs: 10_000, cursor });
+        cursor = res.cursor;
+        const gate = res.transitions.find((t) => t.state === 'pending_gate');
+        if (gate) {
+          assert.equal(gate.runId, created.runId);
+          assert.ok(gate.inbox?.id, 'wait_for_any_gate returns the gate inbox inline (no get_agent_attempts dig)');
+          return gate.inbox.id;
+        }
+      }
+      throw new Error('no gate surfaced via wait_for_any_gate');
+    };
+
+    for (let g = 0; g < 2; g++) {
+      const inboxId = await nextGate(); // a NEW gate id each round → the cursor reports it past the prior one
+      await inv('approve_gate', { inboxId, resolvedBy: 'mcp-e2e' });
+    }
+
+    let done = false;
+    for (let i = 0; i < 6 && !done; i++) {
+      const res = await inv<WatchResult>('watch_runs', { runIds: [created.runId], timeoutMs: 10_000, cursor });
+      cursor = res.cursor;
+      done = res.transitions.some((t) => t.state === 'completed');
+    }
+    assert.ok(done, 'watch_runs surfaces the terminal transition');
+  } finally {
+    target.cleanup();
+  }
+});
+
 test('H3: create_run → cancel_run marks the run cancelled', { skip: e2eSkip }, async () => {
   const created = await inv<{ runId: string }>('create_run', {
     title: 'E2E MCP cancel',

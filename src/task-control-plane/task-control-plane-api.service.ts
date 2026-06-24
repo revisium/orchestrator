@@ -70,6 +70,20 @@ export type RunProgress = {
   updatedAt: Date;
 };
 
+/**
+ * The resolved, actionable state of a single run — the tagged union `resolveRunState` returns.
+ * Reused by `waitForRun` (single run) and the `RunWatchService` watch primitives (fan-out, slice 141 D2).
+ */
+export type RunState = {
+  runId: string;
+  state: 'pending_gate' | 'question' | 'running' | 'blocked' | 'failed' | 'completed';
+  nextAction: string;
+  runStatus: string;
+  workflowStatus: string;
+  inbox?: InboxItem;
+  latestBlockingEvent?: unknown;
+};
+
 type GitResult = {
   ok: boolean;
   stdout: string;
@@ -761,15 +775,12 @@ export class TaskControlPlaneApiService {
     }
   }
 
-  private async resolveRunState(runId: string): Promise<{
-    runId: string;
-    state: 'pending_gate' | 'question' | 'running' | 'blocked' | 'failed' | 'completed';
-    nextAction: string;
-    runStatus: string;
-    workflowStatus: string;
-    inbox?: InboxItem;
-    latestBlockingEvent?: unknown;
-  }> {
+  /**
+   * Resolve a single run to its actionable state. Public so `RunWatchService` (slice 141 D2) can
+   * fan it out across many runs; it is a point-in-time level read (gate = `inbox.find(approval)`),
+   * not an event cursor — the watch primitive layers at-least-once + idempotent delivery on top.
+   */
+  async resolveRunState(runId: string): Promise<RunState> {
     const detail = await this.runs.showRun(runId);
     if (!detail) throw new ControlPlaneError('ROW_NOT_FOUND', `run not found: ${runId}`);
     const [inbox, events, workflow] = await Promise.all([

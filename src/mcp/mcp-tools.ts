@@ -150,14 +150,46 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
     'wait_for_run',
     {
       description: 'Resolve current run state and next action: pending_gate, question, running, blocked, failed, completed.',
+      // Cap matches the MCP inner-hop SDK timeout budget (~60s): a longer busy-poll dies at the transport,
+      // not the daemon. To wait across runs, prefer wait_for_any_gate / watch_runs.
       inputSchema: {
         runId: runIdSchema,
-        timeoutMs: z.number().int().nonnegative().max(120000).optional(),
+        timeoutMs: z.number().int().nonnegative().max(45000).optional(),
         intervalMs: z.number().int().positive().max(10000).optional(),
       },
       annotations: { readOnlyHint: true },
     },
     async (input) => json(await facade.waitForRun(input)),
+  );
+
+  server.registerTool(
+    'wait_for_any_gate',
+    {
+      description:
+        'Bounded long-poll: block until ANY watched run hits an approval/question gate, returning the gate (with its inbox row) and a resume cursor. Returns immediately if one is already gated; otherwise holds the request open (≤45s) and returns {timedOut:true, cursor} so you can re-call with the cursor for gap-free, idempotent polling. Omit runIds to watch all active runs (capped).',
+      inputSchema: {
+        runIds: z.array(z.string().min(1)).max(50).optional().describe('Runs to watch; omit to watch all active runs'),
+        timeoutMs: z.number().int().nonnegative().max(45000).optional().describe('Server hold (clamped ≤45s)'),
+        cursor: z.string().optional().describe('Resume cursor from a prior call; suppresses already-delivered gates'),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async (input, extra) => json(await facade.waitForAnyGate({ ...input, signal: extra?.signal })),
+  );
+
+  server.registerTool(
+    'watch_runs',
+    {
+      description:
+        'Like wait_for_any_gate, but also surfaces terminal (completed/failed) and blocked transitions — block until any watched run hits the next actionable state. Returns {transitions, cursor, timedOut}; re-call with the cursor to continue. Omit runIds to watch all active runs (capped).',
+      inputSchema: {
+        runIds: z.array(z.string().min(1)).max(50).optional().describe('Runs to watch; omit to watch all active runs'),
+        timeoutMs: z.number().int().nonnegative().max(45000).optional().describe('Server hold (clamped ≤45s)'),
+        cursor: z.string().optional().describe('Resume cursor from a prior call; suppresses already-delivered transitions'),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async (input, extra) => json(await facade.watchRuns({ ...input, signal: extra?.signal })),
   );
 
   server.registerTool(

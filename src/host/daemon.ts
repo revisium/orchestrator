@@ -30,7 +30,9 @@ import {
 } from '../control-plane/seed-default-playbook.js';
 import { McpFacadeService } from '../mcp/mcp-facade.service.js';
 import { McpHttpService } from '../mcp/mcp-http.service.js';
+import { RunWatchService, type WatchPubSub } from '../task-control-plane/run-watch.service.js';
 import { TaskControlPlaneApiService } from '../task-control-plane/task-control-plane-api.service.js';
+import { APP_PUB_SUB } from '../api/graphql-api/graphql-ws/constants.js';
 import { hostCodeVersion, removeHostRuntimeIfMatches, writeHostRuntime } from './host-runtime.js';
 import { acquireQueueOwnership } from './queue-ownership.js';
 
@@ -76,7 +78,17 @@ export async function runHostDaemon(): Promise<void> {
     // resolvers use): resolving McpFacadeService itself via app.get left its injected `api` undefined.
     const mcpPort = resolveMcpPort(started.port);
     const api = started.app.get(TaskControlPlaneApiService, { strict: false });
-    mcpServer = await new McpHttpService(new McpFacadeService(api)).start(mcpPort);
+    // Option A (slice 141 D2): give the watch primitive APP_PUB_SUB so a gate/terminal wakes a held
+    // long-poll instead of polling. PubSubModule is @Global, so it resolves off the started handle; if
+    // it can't, RunWatchService degrades to its internal poll (option B) — same correctness.
+    let watchPubSub: WatchPubSub | undefined;
+    try {
+      watchPubSub = started.app.get<WatchPubSub>(APP_PUB_SUB, { strict: false });
+    } catch {
+      watchPubSub = undefined;
+    }
+    const runWatch = new RunWatchService(api, watchPubSub);
+    mcpServer = await new McpHttpService(new McpFacadeService(api, runWatch)).start(mcpPort);
 
     const startedAt = new Date().toISOString();
     const snapshot = { pid: process.pid, startedAt };
