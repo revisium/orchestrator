@@ -6,6 +6,7 @@ import type { TaskControlPlaneApiService } from '../task-control-plane/task-cont
 import { ControlPlaneError } from '../control-plane/errors.js';
 import { AgentObservabilityError } from '../observability/types.js';
 import { CreateRunWorkflowError } from '../run/create-run.js';
+import { RunWatchService } from '../task-control-plane/run-watch.service.js';
 
 test('McpFacadeService.getCapabilities exposes the MCP transport surface', () => {
   const facade = new McpFacadeService({} as TaskControlPlaneApiService);
@@ -24,6 +25,50 @@ test('McpFacadeService.getCapabilities exposes the MCP transport surface', () =>
   assert.ok(capabilities.tools.includes('get_agent_log'));
   assert.ok(capabilities.tools.includes('tail_agent_log'));
   assert.ok(capabilities.tools.includes('read_agent_output_events'));
+  assert.ok(capabilities.tools.includes('wait_for_any_gate'));
+  assert.ok(capabilities.tools.includes('watch_runs'));
+});
+
+test('McpFacadeService delegates the watch primitives to the injected RunWatchService', async () => {
+  const api = {} as TaskControlPlaneApiService;
+  const calls: Array<{ method: string; input: unknown }> = [];
+  const runWatch = {
+    async waitForAnyGate(input: unknown) {
+      calls.push({ method: 'waitForAnyGate', input });
+      return { transitions: [{ runId: 'r1', state: 'pending_gate', nextAction: 'approve' }], cursor: 'c1', timedOut: false };
+    },
+    async watchRuns(input: unknown) {
+      calls.push({ method: 'watchRuns', input });
+      return { transitions: [], cursor: 'c2', timedOut: true };
+    },
+  } as unknown as RunWatchService;
+  const facade = new McpFacadeService(api, runWatch);
+
+  const gateResult = await facade.waitForAnyGate({ runIds: ['r1'], timeoutMs: 1000 });
+  const watchResult = await facade.watchRuns({ cursor: 'c1' });
+
+  assert.deepEqual(calls[0], { method: 'waitForAnyGate', input: { runIds: ['r1'], timeoutMs: 1000 } });
+  assert.deepEqual(calls[1], { method: 'watchRuns', input: { cursor: 'c1' } });
+  assert.equal(gateResult.transitions[0]?.runId, 'r1');
+  assert.equal(watchResult.timedOut, true);
+});
+
+test('McpFacadeService lazily builds a poll-fallback watch when none is injected', async () => {
+  // Construct the facade the e2e/stdio path does (api only); the watch must still work over the api.
+  const api = {
+    async resolveRunState(runId: string) {
+      return { runId, state: 'pending_gate', nextAction: 'approve', runStatus: 'running', workflowStatus: 'PENDING', inbox: { id: 'ix' } };
+    },
+    async listRuns() {
+      return [];
+    },
+  } as unknown as TaskControlPlaneApiService;
+  const facade = new McpFacadeService(api);
+
+  const result = await facade.waitForAnyGate({ runIds: ['r1'], timeoutMs: 0 });
+
+  assert.equal(result.transitions[0]?.runId, 'r1');
+  assert.equal(result.transitions[0]?.inbox?.id, 'ix');
 });
 
 test('McpFacadeService delegates product operations to TaskControlPlaneApiService', async () => {

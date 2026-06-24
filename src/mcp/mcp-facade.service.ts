@@ -7,6 +7,7 @@ import {
 import { ControlPlaneError } from '../control-plane/errors.js';
 import { AgentObservabilityError } from '../observability/types.js';
 import { CreateRunWorkflowError } from '../run/create-run.js';
+import { RunWatchService, type WatchInput, type WatchResult } from '../task-control-plane/run-watch.service.js';
 import { MCP_TOOL_NAMES } from './mcp-capabilities.js';
 
 export type { RepositoryContext, RepositoryValidation };
@@ -31,7 +32,23 @@ function exposeApplicationError<T>(promise: Promise<T>): Promise<T> {
 
 @Injectable()
 export class McpFacadeService {
-  constructor(private readonly api: TaskControlPlaneApiService) {}
+  /**
+   * `runWatch` is injected by the daemon with a pubSub-backed instance (slice 141 D2, option A). When
+   * absent (e2e/stdio/tests construct the facade with only the api), we lazily build a poll-fallback
+   * watch (option B) — equivalent correctness, slightly higher latency.
+   */
+  private runWatchInstance?: RunWatchService;
+
+  constructor(
+    private readonly api: TaskControlPlaneApiService,
+    runWatch?: RunWatchService,
+  ) {
+    this.runWatchInstance = runWatch;
+  }
+
+  private get runWatch(): RunWatchService {
+    return (this.runWatchInstance ??= new RunWatchService(this.api));
+  }
 
   getCapabilities() {
     return {
@@ -149,6 +166,14 @@ export class McpFacadeService {
 
   waitForRun(input: { runId: string; timeoutMs?: number; intervalMs?: number }) {
     return this.api.waitForRun(input);
+  }
+
+  waitForAnyGate(input: WatchInput): Promise<WatchResult> {
+    return this.runWatch.waitForAnyGate(input);
+  }
+
+  watchRuns(input: WatchInput): Promise<WatchResult> {
+    return this.runWatch.watchRuns(input);
   }
 
   listInbox(filter?: { status?: 'pending' | 'resolved'; runId?: string; limit?: number }) {

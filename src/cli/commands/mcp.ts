@@ -9,6 +9,14 @@ import { ensureHost } from '../../host/ensure-host.js';
 import { readHostRuntime } from '../../host/host-runtime.js';
 
 /**
+ * Explicit inner-hop (bridge→daemon) request timeout. Matches the SDK's DEFAULT_REQUEST_TIMEOUT_MSEC
+ * but pins it intentionally: the daemon's longest tool (wait_for_any_gate / watch_runs) holds a single
+ * request ≤45s, comfortably under this — so a bounded long-poll resolves over the bridge, while a hung
+ * daemon call still fails fast instead of waiting forever.
+ */
+const INNER_HOP_TIMEOUT_MS = 60_000;
+
+/**
  * `revo mcp` — a thin stdio↔daemon MCP bridge (ADR 0006). It ensures the host daemon is up, then
  * proxies tool list/call from the stdio client (Claude Code) to the daemon's in-process MCP server
  * over StreamableHTTP. It does NOT build AppModule or launch DBOS — the daemon is the single DBOS
@@ -30,7 +38,9 @@ async function runMcpBridge(): Promise<void> {
   // Downstream stdio server (faces Claude Code) — forwards tools to the daemon's MCP server.
   const server = new Server({ name: 'revo', version }, { capabilities: { tools: {} } });
   server.setRequestHandler(ListToolsRequestSchema, () => upstream.listTools());
-  server.setRequestHandler(CallToolRequestSchema, (request) => upstream.callTool(request.params));
+  server.setRequestHandler(CallToolRequestSchema, (request) =>
+    upstream.callTool(request.params, undefined, { timeout: INNER_HOP_TIMEOUT_MS }),
+  );
 
   const transport = new StdioServerTransport();
   const closed = new Promise<void>((resolve) => {

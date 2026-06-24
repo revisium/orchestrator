@@ -69,3 +69,43 @@ test('get_agent_log MCP tool validates conflicting bounded read inputs before fa
   assert.equal((parseToolText(result) as { stream: string }).stream, 'combined');
   assert.deepEqual(calls, [{ runId: 'run-1', stream: 'combined', tailBytes: 65_536 }]);
 });
+
+test('wait_for_any_gate and watch_runs are registered with a hold cap ≤45s', async () => {
+  const { z } = await import('zod');
+  const { server, tools } = makeServer();
+  registerRevoMcpTools(server as never, {} as McpFacadeService);
+  const names = tools.map((tool) => tool.name);
+  assert.ok(names.includes('wait_for_any_gate'));
+  assert.ok(names.includes('watch_runs'));
+
+  // The cap is the binding fix: a wait above the inner-hop budget dies at the transport. Includes
+  // wait_for_run, whose 120000 cap was lowered to 45000 in the same slice.
+  for (const name of ['wait_for_run', 'wait_for_any_gate', 'watch_runs']) {
+    const tool = tools.find((registered) => registered.name === name);
+    assert.ok(tool, name);
+    const schema = z.object(tool.config.inputSchema as Record<string, never>);
+    assert.equal(schema.safeParse({ runId: 'r', runIds: ['r'], timeoutMs: 45_001 }).success, false, `${name} rejects >45s`);
+    assert.equal(schema.safeParse({ runId: 'r', runIds: ['r'], timeoutMs: 45_000 }).success, true, `${name} accepts 45s`);
+  }
+});
+
+test('wait_for_any_gate handler forwards the request abort signal to the facade', async () => {
+  const { server, tools } = makeServer();
+  let received: { runIds?: string[]; signal?: AbortSignal } | undefined;
+  const facade = {
+    async waitForAnyGate(input: { runIds?: string[]; signal?: AbortSignal }) {
+      received = input;
+      return { transitions: [], cursor: 'c', timedOut: true };
+    },
+  } as unknown as McpFacadeService;
+  registerRevoMcpTools(server as never, facade);
+  const tool = tools.find((registered) => registered.name === 'wait_for_any_gate');
+  assert.ok(tool);
+
+  const ac = new AbortController();
+  const invoke = tool.handler as unknown as (input: unknown, extra: unknown) => Promise<unknown>;
+  await invoke({ runIds: ['r1'] }, { signal: ac.signal });
+
+  assert.deepEqual(received?.runIds, ['r1']);
+  assert.equal(received?.signal, ac.signal);
+});
