@@ -9,6 +9,7 @@
  */
 import { Command } from 'commander';
 import { closeSync, existsSync, openSync, readSync, statSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import {
   baseUrl,
   getConfig,
@@ -21,7 +22,47 @@ import { killTree, tailLines, waitForExit } from './revisium-helpers.js';
 import { buildDoctorReport } from './doctor-report.js';
 import { ensureHost, expectedGraphqlPort, isGraphqlHealthy } from '../../host/ensure-host.js';
 import { runHostDaemon } from '../../host/daemon.js';
-import { isHostRunning, readHostRuntime, removeHostRuntime } from '../../host/host-runtime.js';
+import {
+  hostCodeVersion,
+  isHostRunning,
+  readHostRuntime,
+  removeHostRuntime,
+  type HostRuntimeState,
+} from '../../host/host-runtime.js';
+import type { RuntimeState } from '../config.js';
+
+// Resolve lsof to a FIXED absolute path — never via $PATH (S4036: a writable PATH entry could shadow
+// the binary). null if lsof isn't installed, in which case port-owner detection/reaping degrade to no-op.
+const LSOF_PATH = ['/usr/sbin/lsof', '/usr/bin/lsof', '/bin/lsof'].find((p) => existsSync(p)) ?? null;
+
+/** PID listening on a local TCP port (via lsof), or null. Best-effort — null on any failure. */
+function listenerPid(port: number): number | null {
+  if (LSOF_PATH === null) return null;
+  try {
+    const out = execFileSync(LSOF_PATH, ['-nP', `-tiTCP:${port}`, '-sTCP:LISTEN'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    const pid = Number(out.split(/\r?\n/)[0]);
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null; // no listener / lsof error
+  }
+}
+
+/** The four ports a profile's stack uses (host GraphQL+MCP, standalone HTTP+Postgres), deduped. */
+function profilePortList(host: HostRuntimeState | null, standalone: RuntimeState | null): number[] {
+  const cfg = getConfig();
+  const gql = host?.graphqlPort ?? expectedGraphqlPort();
+  return [
+    ...new Set([
+      gql,
+      host?.mcpPort ?? gql + 1,
+      standalone?.httpPort ?? cfg.preferredPort,
+      standalone?.pgPort ?? cfg.preferredPgPort,
+    ]),
+  ];
+}
 
 const DEFAULT_LOG_LINES = 50;
 
@@ -63,24 +104,38 @@ async function stopProcess(pid: number): Promise<void> {
 /** `revo stop` — stop the host daemon first (it owns DBOS), then the standalone Revisium daemon. */
 async function stopStack(options: ProfileOptions): Promise<void> {
   applyProfileEnv(options);
+  const host = readHostRuntime();
+  const standalone = readRuntime();
+  const ports = profilePortList(host, standalone);
   let stopped = false;
 
   // Host first (it owns DBOS); then the standalone daemon underneath it.
-  const host = readHostRuntime();
   if (host && isAlive(host.pid)) {
     await stopProcess(host.pid);
     stopped = true;
   }
   removeHostRuntime();
 
-  const standalone = readRuntime();
   if (standalone && isAlive(standalone.pid)) {
     await stopProcess(standalone.pid);
     stopped = true;
   }
   removeRuntime();
 
-  console.log(stopped ? 'stopped' : 'not running');
+  // Reap any orphan/duplicate still holding a profile port (slice 139) — a daemon/standalone NOT
+  // tracked by host.json/runtime.json. Without this, `revo stop` leaves a zoo that can silently serve
+  // runs off the shared DBOS queue.
+  let reaped = 0;
+  for (const port of ports) {
+    const pid = listenerPid(port);
+    if (pid !== null && isAlive(pid)) {
+      await stopProcess(pid);
+      reaped += 1;
+    }
+  }
+
+  if (reaped > 0) console.log(`stopped (reaped ${reaped} orphan process${reaped === 1 ? '' : 'es'})`);
+  else console.log(stopped ? 'stopped' : 'not running');
 }
 
 /** `revo status` — summarize the stack: profile, data dir, host daemon, and Revisium health. */
@@ -128,6 +183,25 @@ async function doctorStack(options: ProfileOptions): Promise<void> {
   const standaloneAlive = standalone !== null && isAlive(standalone.pid);
   const standaloneHealthy = standalone !== null && standaloneAlive && (await isHealthy(standalone.httpPort));
 
+  // Detect untracked/duplicate daemons on the profile ports + a stale-version daemon (slice 139): a
+  // listener whose pid isn't the tracked host/standalone is an orphan or a second daemon (the zoo).
+  const gql = host?.graphqlPort ?? expectedGraphqlPort();
+  const portChecks: Array<{ label: string; port: number; expected: number | null }> = [
+    { label: 'GraphQL', port: gql, expected: host?.pid ?? null },
+    { label: 'MCP', port: host?.mcpPort ?? gql + 1, expected: host?.pid ?? null },
+    { label: 'standalone HTTP', port: standalone?.httpPort ?? getConfig().preferredPort, expected: standalone?.pid ?? null },
+    { label: 'Postgres', port: standalone?.pgPort ?? getConfig().preferredPgPort, expected: standalone?.pid ?? null },
+  ];
+  const unexpectedPortOwners: Array<{ label: string; port: number; pid: number }> = [];
+  for (const check of portChecks) {
+    const pid = listenerPid(check.port);
+    if (pid !== null && pid !== check.expected) {
+      unexpectedPortOwners.push({ label: check.label, port: check.port, pid });
+    }
+  }
+  const versionMismatch =
+    host?.version !== undefined ? { running: host.version, current: hostCodeVersion() } : undefined;
+
   const report = buildDoctorReport({
     host: {
       present: host !== null,
@@ -143,6 +217,8 @@ async function doctorStack(options: ProfileOptions): Promise<void> {
       pid: standalone?.pid ?? null,
       port: standalone?.httpPort ?? null,
     },
+    unexpectedPortOwners,
+    versionMismatch,
   });
 
   console.log(`Profile: ${profile}`);

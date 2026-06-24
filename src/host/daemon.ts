@@ -31,7 +31,7 @@ import {
 import { McpFacadeService } from '../mcp/mcp-facade.service.js';
 import { McpHttpService } from '../mcp/mcp-http.service.js';
 import { TaskControlPlaneApiService } from '../task-control-plane/task-control-plane-api.service.js';
-import { removeHostRuntimeIfMatches, writeHostRuntime } from './host-runtime.js';
+import { hostCodeVersion, removeHostRuntimeIfMatches, writeHostRuntime } from './host-runtime.js';
 import { acquireQueueOwnership } from './queue-ownership.js';
 
 /** MCP endpoint port: REVO_MCP_PORT, else the GraphQL port + 1 (kept in the profile band). */
@@ -88,6 +88,7 @@ export async function runHostDaemon(): Promise<void> {
       mcpPort,
       startedAt,
       profile: getConfig().profile,
+      version: hostCodeVersion(),
     });
 
     const runningMcp = mcpServer;
