@@ -31,6 +31,13 @@ const prReadinessInputSchema = {
   includeReviewThreads: z.boolean().optional().default(true),
 };
 
+// Shared by the bounded long-poll watch tools (wait_for_any_gate / watch_runs).
+const watchInputSchema = {
+  runIds: z.array(z.string().min(1)).max(50).optional().describe('Runs to watch; omit to watch all active runs'),
+  timeoutMs: z.number().int().nonnegative().max(45000).optional().describe('Server hold (clamped ≤45s)'),
+  cursor: z.string().optional().describe('Resume cursor from a prior call; suppresses already-delivered transitions'),
+};
+
 function assertValidAgentLogRange(input: { offsetBytes?: number; limitBytes?: number; tailBytes?: number }): void {
   if (input.tailBytes !== undefined && (input.offsetBytes !== undefined || input.limitBytes !== undefined)) {
     throw new Error('VALIDATION_FAILURE: tailBytes cannot be combined with offsetBytes or limitBytes');
@@ -167,11 +174,7 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
     {
       description:
         'Bounded long-poll: block until ANY watched run hits an approval/question gate, returning the gate (with its inbox row) and a resume cursor. Returns immediately if one is already gated; otherwise holds the request open (≤45s) and returns {timedOut:true, cursor} so you can re-call with the cursor for gap-free, idempotent polling. Omit runIds to watch all active runs (capped).',
-      inputSchema: {
-        runIds: z.array(z.string().min(1)).max(50).optional().describe('Runs to watch; omit to watch all active runs'),
-        timeoutMs: z.number().int().nonnegative().max(45000).optional().describe('Server hold (clamped ≤45s)'),
-        cursor: z.string().optional().describe('Resume cursor from a prior call; suppresses already-delivered gates'),
-      },
+      inputSchema: watchInputSchema,
       annotations: { readOnlyHint: true },
     },
     async (input, extra) => json(await facade.waitForAnyGate({ ...input, signal: extra?.signal })),
@@ -182,11 +185,7 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
     {
       description:
         'Like wait_for_any_gate, but also surfaces terminal (completed/failed) and blocked transitions — block until any watched run hits the next actionable state. Returns {transitions, cursor, timedOut}; re-call with the cursor to continue. Omit runIds to watch all active runs (capped).',
-      inputSchema: {
-        runIds: z.array(z.string().min(1)).max(50).optional().describe('Runs to watch; omit to watch all active runs'),
-        timeoutMs: z.number().int().nonnegative().max(45000).optional().describe('Server hold (clamped ≤45s)'),
-        cursor: z.string().optional().describe('Resume cursor from a prior call; suppresses already-delivered transitions'),
-      },
+      inputSchema: watchInputSchema,
       annotations: { readOnlyHint: true },
     },
     async (input, extra) => json(await facade.watchRuns({ ...input, signal: extra?.signal })),
