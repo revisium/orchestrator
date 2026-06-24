@@ -67,6 +67,57 @@ test('matching version + no rogue ports → no false issues', () => {
   assert.deepEqual(r.issues, []);
 });
 
+test('rogue queue poller → flags a foreign executor on the dbos DB with its backend pids', () => {
+  const r = buildDoctorReport({
+    host: healthy(100, 19223),
+    standalone: healthy(101, 19222),
+    queuePollerRogues: [
+      { pid: 501, executorId: 'local', applicationName: 'dbos_transact_local_' },
+      { pid: 502, executorId: 'local', applicationName: 'dbos_transact_local_' },
+    ],
+  });
+  assert.equal(r.ok, false);
+  assert.ok(
+    r.issues.some((i) => /foreign executor "local".*501, 502.*dev-tasks.*pkill/.test(i)),
+    'reports the foreign executor, its backend pids, and the reap remedy',
+  );
+});
+
+test('rogue census groups by executor: distinct foreign executors → distinct issues', () => {
+  const r = buildDoctorReport({
+    host: healthy(100, 19223),
+    standalone: healthy(101, 19222),
+    queuePollerRogues: [
+      { pid: 601, executorId: 'local', applicationName: 'dbos_transact_local_' },
+      { pid: 602, executorId: 'revo-dev', applicationName: 'dbos_transact_revo-dev_1' },
+    ],
+  });
+  assert.equal(r.ok, false);
+  assert.equal(r.issues.filter((i) => i.includes('foreign executor')).length, 2);
+});
+
+test('census unavailable (no superuser / DB unreachable) → warns, never reports clean', () => {
+  const r = buildDoctorReport({
+    host: healthy(100, 19223),
+    standalone: healthy(101, 19222),
+    queuePollerRogues: [],
+    rogueCensusUnavailable: true,
+  });
+  assert.equal(r.ok, false);
+  assert.ok(r.issues.some((i) => /Could not census.*single-ownership could not be verified/.test(i)));
+});
+
+test('census ran clean (no rogues, available) → no false issue', () => {
+  const r = buildDoctorReport({
+    host: healthy(100, 19223),
+    standalone: healthy(101, 19222),
+    queuePollerRogues: [],
+    rogueCensusUnavailable: false,
+  });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.issues, []);
+});
+
 test('both tiers healthy → ok with no issues', () => {
   const r = buildDoctorReport({ host: healthy(100, 19223), standalone: healthy(101, 19222) });
   assert.equal(r.ok, true);

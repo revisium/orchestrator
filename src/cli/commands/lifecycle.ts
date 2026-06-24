@@ -8,6 +8,7 @@
  * the detached daemon entrypoint that `ensureHost` spawns.
  */
 import { Command } from 'commander';
+import pg from 'pg';
 import { closeSync, existsSync, openSync, readSync, statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import {
@@ -21,6 +22,9 @@ import {
 import { killTree, tailLines, waitForExit } from './revisium-helpers.js';
 import { buildDoctorReport } from './doctor-report.js';
 import { isPidWithin } from './process-tree.js';
+import { classifyQueuePollerRogues } from '../../host/queue-poller-census.js';
+import { dbosExecutorId } from '../../host/dbos-identity.js';
+import { resolveDbosDbName } from '../../engine/ensure-postgres.js';
 import { ensureHost, expectedGraphqlPort, isGraphqlHealthy } from '../../host/ensure-host.js';
 import { runHostDaemon } from '../../host/daemon.js';
 import {
@@ -171,6 +175,47 @@ async function restartStack(options: ProfileOptions): Promise<void> {
   await startStack(options);
 }
 
+type QueuePollerRogue = { pid: number; executorId: string; applicationName: string };
+
+/**
+ * Census the profile's `dbos` database for FOREIGN DBOS queue pollers (slice 140) — a legacy/duplicate
+ * daemon polling `dev-tasks` under an executor id that is not this profile's pinned owner. Connects to
+ * the maintenance `postgres` db (pg_stat_activity is cluster-wide) and inspects `dbos_transact_%`
+ * connections on the dbos db. Best-effort: returns `unavailable:true` when the DB is unreachable or the
+ * role can't see other backends, so `doctor` warns rather than falsely reporting "clean".
+ */
+async function censusQueuePollers(
+  profile: string,
+  pgPort: number,
+): Promise<{ rogues: QueuePollerRogue[]; unavailable: boolean }> {
+  const client = new pg.Client(`postgresql://revisium:password@localhost:${pgPort}/postgres`);
+  try {
+    await client.connect();
+    // Without privilege to see OTHER backends, pg_stat_activity hides their application_name → a silent
+    // empty roster. Superuser OR pg_read_all_stats membership both suffice; anything less is reported as
+    // "unavailable", never as "no rogues".
+    const cap = await client.query(
+      `SELECT (current_setting('is_superuser') = 'on'
+               OR pg_has_role(current_user, 'pg_read_all_stats', 'MEMBER')) AS can_see`,
+    );
+    if (cap.rows[0]?.['can_see'] !== true) return { rogues: [], unavailable: true };
+    const res = await client.query(
+      `SELECT pid, application_name AS app, backend_start AS started
+         FROM pg_stat_activity WHERE datname = $1 AND application_name LIKE 'dbos_transact_%'`,
+      [resolveDbosDbName()],
+    );
+    const rogues = classifyQueuePollerRogues(
+      res.rows.map((r) => ({ pid: Number(r['pid']), applicationName: String(r['app']), backendStart: r['started'] })),
+      dbosExecutorId(profile),
+    ).map((r) => ({ pid: r.pid, executorId: r.executorId, applicationName: r.applicationName }));
+    return { rogues, unavailable: false };
+  } catch {
+    return { rogues: [], unavailable: true };
+  } finally {
+    await client.end().catch(() => undefined);
+  }
+}
+
 /** `revo doctor` — diagnose the stack as a pure client: process/port/profile/stale-file health. */
 async function doctorStack(options: ProfileOptions): Promise<void> {
   applyProfileEnv(options);
@@ -210,6 +255,16 @@ async function doctorStack(options: ProfileOptions): Promise<void> {
   const versionMismatch =
     host?.version !== undefined ? { running: host.version, current: hostCodeVersion() } : undefined;
 
+  // Rogue queue-poller census — only when the standalone (and thus its Postgres) is alive; a foreign
+  // executor connected to the dbos DB is a legacy/duplicate daemon the lock can't stop (slice 140).
+  let queuePollerRogues: QueuePollerRogue[] | undefined;
+  let rogueCensusUnavailable: boolean | undefined;
+  if (standalone && standaloneAlive) {
+    const census = await censusQueuePollers(profile, standalone.pgPort);
+    queuePollerRogues = census.rogues;
+    rogueCensusUnavailable = census.unavailable;
+  }
+
   const report = buildDoctorReport({
     host: {
       present: host !== null,
@@ -227,6 +282,8 @@ async function doctorStack(options: ProfileOptions): Promise<void> {
     },
     unexpectedPortOwners,
     versionMismatch,
+    queuePollerRogues,
+    rogueCensusUnavailable,
   });
 
   console.log(`Profile: ${profile}`);
