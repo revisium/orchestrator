@@ -32,6 +32,7 @@ import { McpFacadeService } from '../mcp/mcp-facade.service.js';
 import { McpHttpService } from '../mcp/mcp-http.service.js';
 import { TaskControlPlaneApiService } from '../task-control-plane/task-control-plane-api.service.js';
 import { removeHostRuntimeIfMatches, writeHostRuntime } from './host-runtime.js';
+import { acquireQueueOwnership } from './queue-ownership.js';
 
 /** MCP endpoint port: REVO_MCP_PORT, else the GraphQL port + 1 (kept in the profile band). */
 function resolveMcpPort(graphqlPort: number): number {
@@ -44,6 +45,20 @@ export async function runHostDaemon(): Promise<void> {
   // 1. Standalone up first, then 2. all control-plane writes via fresh client scopes — BEFORE the
   // service layer (startGraphqlHost) caches its read scope, so same-boot reads see a ready control-plane.
   const { runtime } = await ensureRevisium();
+
+  // Singleton gate (slice 139): exactly ONE host daemon per profile may own + poll the dev-tasks
+  // queue. Acquired here — BEFORE DBOS.launch()/queue polling (startGraphqlHost) — so a daemon that
+  // lost a concurrent cold-start race exits cleanly without ever touching the queue; ensureHost then
+  // attaches to the winner via host.json. Crash-safe: the connection-scoped advisory lock frees itself
+  // if this process dies.
+  const ownership = await acquireQueueOwnership(getConfig().profile, runtime.pgPort);
+  if (!ownership.owned) {
+    console.error(
+      `[host] profile "${getConfig().profile}" is already owned by another daemon — exiting; the owner serves the queue.`,
+    );
+    process.exit(0);
+  }
+
   await bootstrapControlPlane(runtime.httpPort);
   await seedDefaultPlaybookBestEffort(() =>
     seedDefaultPlaybook(createDaemonInstaller(() => listInstalledPlaybooks(runtime.httpPort))),
@@ -85,8 +100,13 @@ export async function runHostDaemon(): Promise<void> {
         .close() // → HostLifecycle.onApplicationShutdown → DBOS.shutdown()
         .catch(() => undefined)
         .finally(() => {
-          removeHostRuntimeIfMatches(snapshot);
-          process.exit(0);
+          ownership
+            .release() // free the dev-tasks ownership lock for the next daemon
+            .catch(() => undefined)
+            .finally(() => {
+              removeHostRuntimeIfMatches(snapshot);
+              process.exit(0);
+            });
         });
     };
     process.on('SIGTERM', shutdown);
@@ -94,6 +114,7 @@ export async function runHostDaemon(): Promise<void> {
   } catch (err) {
     mcpServer?.close();
     await started.app.close().catch(() => undefined);
+    await ownership.release().catch(() => undefined);
     throw err;
   }
 }
