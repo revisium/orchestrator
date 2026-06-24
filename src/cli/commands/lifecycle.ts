@@ -21,13 +21,21 @@ import {
 } from '../config.js';
 import { killTree, tailLines, waitForExit } from './revisium-helpers.js';
 import { buildDoctorReport } from './doctor-report.js';
-import { isPidWithin } from './process-tree.js';
+import { isPidWithin, listProcesses, parentPid, processStartTime } from './process-tree.js';
+import {
+  classifyRevoProcess,
+  evictByTermination,
+  selectReapTargets,
+  type EvictionOutcome,
+  type RevoProc,
+} from './rogue-reaper.js';
 import { classifyQueuePollerRogues } from '../../host/queue-poller-census.js';
 import { dbosExecutorId } from '../../host/dbos-identity.js';
 import { resolveDbosDbName } from '../../engine/ensure-postgres.js';
 import { ensureHost, expectedGraphqlPort, isGraphqlHealthy } from '../../host/ensure-host.js';
 import { runHostDaemon } from '../../host/daemon.js';
 import {
+  allTrackedHostPids,
   hostCodeVersion,
   isHostRunning,
   readHostRuntime,
@@ -107,12 +115,18 @@ async function stopProcess(pid: number): Promise<void> {
 }
 
 /** `revo stop` — stop the host daemon first (it owns DBOS), then the standalone Revisium daemon. */
-async function stopStack(options: ProfileOptions): Promise<void> {
+async function stopStack(options: ProfileOptions & { all?: boolean }): Promise<void> {
   applyProfileEnv(options);
   const host = readHostRuntime();
   const standalone = readRuntime();
   const ports = profilePortList(host, standalone);
   let stopped = false;
+
+  // `--all`: evict rogue queue CONNECTIONS while the standalone Postgres is still up (slice 140) —
+  // must happen BEFORE we stop the standalone below, or there is no DB to evict against.
+  if (options.all && standalone && isAlive(standalone.pid)) {
+    await evictQueuePollers(getConfig().profile, standalone.pgPort);
+  }
 
   // Host first (it owns DBOS); then the standalone daemon underneath it.
   if (host && isAlive(host.pid)) {
@@ -139,7 +153,14 @@ async function stopStack(options: ProfileOptions): Promise<void> {
     }
   }
 
-  if (reaped > 0) console.log(`stopped (reaped ${reaped} orphan process${reaped === 1 ? '' : 'es'})`);
+  // `--all`: also reap untracked rogue daemon/mcp PROCESSES machine-wide (durable stop — a killed
+  // connection alone reconnects), protecting every profile's tracked tree.
+  const reapedProcs = options.all ? await reapRogueProcesses() : 0;
+
+  const parts: string[] = [];
+  if (reaped > 0) parts.push(`${reaped} orphan port owner${reaped === 1 ? '' : 's'}`);
+  if (reapedProcs > 0) parts.push(`${reapedProcs} rogue process${reapedProcs === 1 ? '' : 'es'}`);
+  if (parts.length > 0) console.log(`stopped (reaped ${parts.join(', ')})`);
   else console.log(stopped ? 'stopped' : 'not running');
 }
 
@@ -216,8 +237,86 @@ async function censusQueuePollers(
   }
 }
 
+type EvictResult = EvictionOutcome & { unavailable: boolean; cannotEvict: boolean };
+
+/**
+ * EVICT rogue queue connections (slice 140 Phase 2): `pg_terminate_backend` every foreign DBOS poller
+ * on this profile's `dbos` DB, in a TOCTOU loop (a rogue can dequeue a fresh row between census and
+ * kill). Profile-scoped by `datname` → never touches another profile. Needs BOTH `pg_read_all_stats`
+ * (to SEE foreign backends) and `pg_signal_backend` (to terminate); lacking either is reported, never
+ * silently treated as "no rogues".
+ */
+async function evictQueuePollers(profile: string, pgPort: number): Promise<EvictResult> {
+  const idle: EvictResult = { converged: false, rounds: 0, terminated: 0, unavailable: true, cannotEvict: false };
+  const client = new pg.Client(`postgresql://revisium:password@localhost:${pgPort}/postgres`);
+  try {
+    await client.connect();
+    const cap = await client.query(
+      `SELECT (current_setting('is_superuser') = 'on' OR pg_has_role(current_user, 'pg_read_all_stats', 'MEMBER')) AS can_see,
+              (current_setting('is_superuser') = 'on' OR pg_has_role(current_user, 'pg_signal_backend', 'MEMBER')) AS can_signal`,
+    );
+    if (cap.rows[0]?.['can_see'] !== true) return idle;
+    if (cap.rows[0]?.['can_signal'] !== true) {
+      return { converged: false, rounds: 0, terminated: 0, unavailable: false, cannotEvict: true };
+    }
+    const owner = dbosExecutorId(profile);
+    const dbosDb = resolveDbosDbName();
+    const census = async (): Promise<number[]> => {
+      const res = await client.query(
+        `SELECT pid, application_name AS app FROM pg_stat_activity WHERE datname = $1 AND application_name LIKE 'dbos_transact_%'`,
+        [dbosDb],
+      );
+      return classifyQueuePollerRogues(
+        res.rows.map((r) => ({ pid: Number(r['pid']), applicationName: String(r['app']) })),
+        owner,
+      ).map((r) => r.pid);
+    };
+    const terminate = async (pid: number): Promise<void> => {
+      await client.query('SELECT pg_terminate_backend($1)', [pid]);
+    };
+    const outcome = await evictByTermination(census, terminate);
+    return { ...outcome, unavailable: false, cannotEvict: false };
+  } catch {
+    return idle; // census/terminate threw → not converged, never "clean"
+  } finally {
+    await client.end().catch(() => undefined);
+  }
+}
+
+/**
+ * Durable stop: SIGTERM→SIGKILL the rogue revo daemon/mcp PROCESS (its DBOS pool would otherwise
+ * reconnect after `evictQueuePollers`). Protects the tracked daemon tree of EVERY profile — so a reap
+ * on one profile can never kill a sibling profile's live daemon. pid+start-time identity: re-check the
+ * start time before SIGKILL so a recycled pid (the rogue already exited) is never wrongly killed.
+ */
+async function reapRogueProcesses(): Promise<number> {
+  const protectedPids = new Set(allTrackedHostPids());
+  const candidates: RevoProc[] = [];
+  for (const { pid, command } of listProcesses()) {
+    if (pid === process.pid) continue; // never reap the running CLI itself
+    const kind = classifyRevoProcess(command);
+    // Only reap a `__daemon` (always a full DBOS host → an untracked one is a genuine rogue). A modern
+    // `revo mcp` is a THIN bridge holding no DBOS connection — reaping it is pure collateral (drops a
+    // live MCP client), so it is left alone; its polling, if any legacy host, is handled by the
+    // connection eviction. (Reviewer-flagged: don't disrupt healthy bridges.)
+    if (kind === 'daemon') candidates.push({ pid, command, startTime: processStartTime(pid), kind });
+  }
+  const targets = selectReapTargets(candidates, protectedPids, parentPid);
+  if (targets.length === 0) return 0;
+
+  for (const t of targets) killTree(t.pid, 'SIGTERM');
+  if (!(await waitForExit(targets[targets.length - 1].pid, 8_000))) {
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+  for (const t of targets) {
+    // SIGKILL only if STILL the same process (start-time unchanged) — defeats pid reuse.
+    if (isAlive(t.pid) && processStartTime(t.pid) === t.startTime) killTree(t.pid, 'SIGKILL');
+  }
+  return targets.length;
+}
+
 /** `revo doctor` — diagnose the stack as a pure client: process/port/profile/stale-file health. */
-async function doctorStack(options: ProfileOptions): Promise<void> {
+async function doctorStack(options: ProfileOptions & { fix?: boolean }): Promise<void> {
   applyProfileEnv(options);
   const { profile, dataDir } = getConfig();
 
@@ -288,12 +387,28 @@ async function doctorStack(options: ProfileOptions): Promise<void> {
 
   console.log(`Profile: ${profile}`);
   console.log(`Data dir: ${dataDir}`);
-  if (report.ok) {
-    console.log('OK — stack is healthy.');
-    return;
+  if (report.ok) console.log('OK — stack is healthy.');
+  else {
+    for (const issue of report.issues) console.log(`✗ ${issue}`);
+    process.exitCode = 1;
   }
-  for (const issue of report.issues) console.log(`✗ ${issue}`);
-  process.exitCode = 1;
+
+  // `--fix`: actively evict the rogues `doctor` reports — terminate their queue connections, then
+  // reap the untracked process (durable, cross-profile-safe). slice 140 Phase 2.
+  if (options.fix) {
+    console.log('— fix: evicting rogue queue pollers —');
+    if (standalone && standaloneAlive) {
+      const e = await evictQueuePollers(profile, standalone.pgPort);
+      if (e.unavailable) console.log('  connection eviction unavailable (DB unreachable / missing pg_read_all_stats)');
+      else if (e.cannotEvict) console.log('  cannot terminate: role lacks pg_signal_backend');
+      else
+        console.log(
+          `  terminated ${e.terminated} rogue connection(s) — ${e.converged ? 'converged' : 'NOT converged (reconnecting; process reap follows)'}`,
+        );
+    }
+    const reaped = await reapRogueProcesses();
+    console.log(`  reaped ${reaped} untracked revo process${reaped === 1 ? '' : 'es'}`);
+  }
 }
 
 type LogsOptions = ProfileOptions & { lines?: string; follow?: boolean };
@@ -381,7 +496,8 @@ export function registerLifecycle(program: Command): void {
     .command('stop')
     .description('Stop the Revo stack (host daemon first, then standalone)')
     .option('--profile <name>', 'Runtime profile (default|dev)')
-    .action((options: ProfileOptions) => stopStack(options));
+    .option('--all', 'Also evict rogue queue pollers + reap untracked revo processes machine-wide')
+    .action((options: ProfileOptions & { all?: boolean }) => stopStack(options));
 
   program
     .command('status')
@@ -399,7 +515,8 @@ export function registerLifecycle(program: Command): void {
     .command('doctor')
     .description('Diagnose the Revo stack (process/port/profile health)')
     .option('--profile <name>', 'Runtime profile (default|dev)')
-    .action((options: ProfileOptions) => doctorStack(options));
+    .option('--fix', 'Evict rogue queue pollers (terminate connections + reap untracked processes)')
+    .action((options: ProfileOptions & { fix?: boolean }) => doctorStack(options));
 
   program
     .command('logs [target]')

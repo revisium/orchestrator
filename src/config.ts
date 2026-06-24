@@ -90,6 +90,16 @@ export type ProfileConfig = {
 };
 
 /**
+ * Band-default data dir for a SPECIFIC profile (config-file base + the profile's suffix). Deliberately
+ * ignores `REVO_DATA_DIR` — that env var overrides only the ACTIVE profile, so for enumerating SIBLING
+ * profiles' tracked daemons (the cross-profile-safe reap, slice 140 Phase 2) we must use band defaults.
+ * Returns the band-default dir for every profile; a custom REVO_DATA_DIR layout is not enumerable here.
+ */
+export function profileDataDir(profile: ProfileName): string {
+  return expandHome(`${loadConfig().dataDir}${PROFILES[profile].suffix}`);
+}
+
+/**
  * Layer profile + env into the data dir and ports: the profile sets the band, then an explicit
  * REVO_* env var overrides that single knob. Pure (no fs) so the precedence is unit-testable.
  */

@@ -11,7 +11,7 @@
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getConfig, isAlive } from '../config.js';
+import { getConfig, isAlive, profileDataDir, PROFILES, type ProfileName } from '../config.js';
 
 export type HostRuntimeState = {
   pid: number;
@@ -52,13 +52,32 @@ export function hostRuntimeFile(): string {
 }
 
 export function readHostRuntime(): HostRuntimeState | null {
-  const file = hostRuntimeFile();
+  return readHostRuntimeAt(hostRuntimeFile());
+}
+
+/** Read+parse a host.json at an ARBITRARY path (a sibling profile's). Null when absent/corrupt. */
+export function readHostRuntimeAt(file: string): HostRuntimeState | null {
   if (!existsSync(file)) return null;
   try {
     return JSON.parse(readFileSync(file, 'utf8')) as HostRuntimeState;
   } catch {
     return null;
   }
+}
+
+/**
+ * Live tracked daemon pids across ALL profiles (slice 140 Phase 2). The rogue reaper must protect
+ * EVERY profile's daemon tree, not just the active one — else `revo stop --all --profile default`
+ * would SIGKILL a live `dev` daemon (and its bridges), aborting that profile's in-flight DBOS work.
+ * Band-default dirs only (a custom REVO_DATA_DIR layout isn't enumerable; documented in profileDataDir).
+ */
+export function allTrackedHostPids(): number[] {
+  const pids: number[] = [];
+  for (const profile of Object.keys(PROFILES) as ProfileName[]) {
+    const runtime = readHostRuntimeAt(join(profileDataDir(profile), 'host.json'));
+    if (runtime && isAlive(runtime.pid)) pids.push(runtime.pid);
+  }
+  return pids;
 }
 
 export function writeHostRuntime(state: HostRuntimeState): void {
