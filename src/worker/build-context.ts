@@ -4,6 +4,7 @@ import type { JsonFilterDto } from '@revisium/client';
 import type { ControlPlaneDataAccess } from '../control-plane/data-access.js';
 import type { Step } from '../control-plane/steps.js';
 import { toStr } from '../control-plane/steps.js';
+import { isWorktreeDir, worktreePathFor } from '../control-plane/resolve-cwd.js';
 import type { Role } from '../control-plane/definitions.js';
 
 // ADR digest not yet included — deferred to a later plan once structure is established.
@@ -145,15 +146,30 @@ export async function buildContext(
   step: Step,
   role: Role,
   runContext?: AgentRunContext,
+  dataDir?: string,
 ): Promise<string> {
   const scopeRulesSummary = role.scopeRules ? JSON.stringify(role.scopeRules) : '{}';
 
   const task = await da.getRow('tasks', step.taskId);
   const taskTitle = task ? toStr(task.data.title) : '(unknown task)';
   const taskScope = task ? toStr(task.data.scope) : '';
-  const taskRepo = task ? toStr(task.data.repo_ref) : '';
+  const repoRef = task ? toStr(task.data.repo_ref) : '';
+  // A LIVE run edits in an isolated git worktree (plan 0017) — and its cwd is already that worktree
+  // (resolveRunCwd). Point the agent's repo CONTEXT at the worktree too, so prompt and cwd agree and the
+  // agent's writes land where the worktree-based integrator reads them, not in the original repo path
+  // (slice 143). Only when a worktree actually exists on disk (live run); non-live runs and unit tests
+  // (dataDir omitted) keep repo_ref unchanged.
+  let taskRepo = repoRef;
+  if (dataDir && taskRepo) {
+    const worktree = worktreePathFor(dataDir, step.runId);
+    if (isWorktreeDir(worktree)) taskRepo = worktree;
+  }
   const publicParams = isRecord(runContext?.params) ? runContext.params : {};
-  const planContext = await materializePlanContext(publicParams.planPath, taskRepo);
+  // planPath authorization stays anchored to the ORIGINAL repo_ref, NOT the rewritten worktree path: the
+  // worktree rewrite is a display/working-tree concern, and reusing it as the plan-context sandbox would
+  // widen the boundary to <dataDir>/worktrees/** — letting a live run read SIBLING worktrees via a
+  // `planPath: ../other-run/…` traversal (security; CodeRabbit on slice 143).
+  const planContext = await materializePlanContext(publicParams.planPath, repoRef);
 
   // WORKAROUND: JsonFilterDto.equals is typed as { [key: string]: unknown } but accepts scalar
   // strings at runtime; mirrors the cast pattern in claimNextStep/recoverInFlight.
