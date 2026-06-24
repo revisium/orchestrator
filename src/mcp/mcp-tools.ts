@@ -33,7 +33,8 @@ const prReadinessInputSchema = {
 
 // Shared by the bounded long-poll watch tools (wait_for_any_gate / watch_runs).
 const watchInputSchema = {
-  runIds: z.array(z.string().min(1)).max(50).optional().describe('Runs to watch; omit to watch all active runs'),
+  // min(1): an explicit empty array would otherwise be treated like omission (watch-all) — surprising.
+  runIds: z.array(z.string().min(1)).min(1).max(50).optional().describe('Runs to watch; omit to watch all active runs'),
   timeoutMs: z.number().int().nonnegative().max(45000).optional().describe('Server hold (clamped ≤45s)'),
   cursor: z.string().optional().describe('Resume cursor from a prior call; suppresses already-delivered transitions'),
 };
@@ -184,7 +185,7 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
     'watch_runs',
     {
       description:
-        'Like wait_for_any_gate, but also surfaces terminal (completed/failed) and blocked transitions — block until any watched run hits the next actionable state. Returns {transitions, cursor, timedOut}; re-call with the cursor to continue. Omit runIds to watch all active runs (capped).',
+        'Like wait_for_any_gate, but also surfaces terminal (completed/failed) and blocked transitions — block until any watched run hits the next actionable state. Returns {transitions, cursor, timedOut}; re-call with the cursor to continue. Omit runIds to watch all currently-active runs (capped); for guaranteed terminal-transition delivery pass explicit runIds (a run that terminates between polls drops out of the active set).',
       inputSchema: watchInputSchema,
       annotations: { readOnlyHint: true },
     },

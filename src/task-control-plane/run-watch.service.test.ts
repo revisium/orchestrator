@@ -264,31 +264,57 @@ test('a not-found run is a failed transition for watchRuns, ignored by waitForAn
 
 // ── Coverage hardening (adversarial-review findings) ──────────────────────────────────────────────
 
-test('[fix] watch_runs omit-runIds delivers a terminal transition that lands BETWEEN polls', async () => {
-  // The omit path builds its set from active runs, so a run that completes between calls has already
-  // dropped out — the cursor must re-include it so its terminal transition is still delivered once.
-  let status = 'running';
+test('watch_runs with EXPLICIT runIds delivers a between-poll terminal exactly once (the guaranteed path)', async () => {
+  // Explicit runIds are always swept regardless of status, so a run that terminates between polls is
+  // still delivered. (Omit mode is best-effort — a terminated run drops out of the active set.)
   let state: RunState = running('r1');
   const api: RunStateSource = {
     async resolveRunState() {
       return state;
     },
     async listRuns() {
-      return [{ runId: 'r1', status }];
+      return [{ runId: 'r1', status: state.runStatus }];
     },
   };
   const svc = new RunWatchService(api);
 
-  const first = await svc.watchRuns({ timeoutMs: 0 }); // omit runIds; r1 running → cursor tracks it
+  const first = await svc.watchRuns({ runIds: ['r1'], timeoutMs: 0 });
   assert.equal(first.transitions.length, 0);
 
-  status = 'completed';
-  state = completed('r1'); // r1 terminates between polls — no longer in the active set
-  const second = await svc.watchRuns({ timeoutMs: 0, cursor: first.cursor });
-  assert.equal(second.transitions[0]?.state, 'completed', 'between-poll terminal still delivered in omit mode');
+  state = completed('r1'); // r1 terminates between polls
+  const second = await svc.watchRuns({ runIds: ['r1'], timeoutMs: 0, cursor: first.cursor });
+  assert.equal(second.transitions[0]?.state, 'completed', 'explicit runIds deliver the terminal transition');
 
-  const third = await svc.watchRuns({ timeoutMs: 0, cursor: second.cursor });
+  const third = await svc.watchRuns({ runIds: ['r1'], timeoutMs: 0, cursor: second.cursor });
   assert.equal(third.transitions.length, 0, 'and then suppressed (delivered once)');
+});
+
+test('[fix D] one tool must not advance the cursor past a transition it did not deliver', async () => {
+  // wait_for_any_gate (gate-only) observing a completed run must NOT record marker 'c' — else a later
+  // watch_runs call with that cursor would wrongly suppress the (never-delivered) completion.
+  const api = fakeApi({ states: { r1: completed('r1') }, runs: [{ runId: 'r1', status: 'completed' }] });
+  const svc = new RunWatchService(api);
+
+  const gateCall = await svc.waitForAnyGate({ runIds: ['r1'], timeoutMs: 0 });
+  assert.equal(gateCall.transitions.length, 0, 'completed is not a gate → nothing delivered');
+
+  const watchCall = await svc.watchRuns({ runIds: ['r1'], timeoutMs: 0, cursor: gateCall.cursor });
+  assert.equal(watchCall.transitions[0]?.state, 'completed', 'watch_runs still delivers it — not suppressed by the gate cursor');
+});
+
+test('[fix C] a forged/oversized cursor is sanitized to valid string markers and capped', async () => {
+  const api = fakeApi({ states: { r1: gate('r1', 'i1') } });
+  const svc = new RunWatchService(api);
+  // Non-string markers must be dropped (not crash, not falsely suppress); a huge map must not be retained whole.
+  const huge: Record<string, unknown> = { r1: 12345 }; // wrong type for r1 → must be ignored → gate re-delivered
+  for (let i = 0; i < 5_000; i++) huge[`junk-${i}`] = 'x';
+  const forged = Buffer.from(JSON.stringify({ v: 1, m: huge }), 'utf8').toString('base64url');
+
+  const result = await svc.waitForAnyGate({ runIds: ['r1'], timeoutMs: 0, cursor: forged });
+  assert.equal(result.transitions[0]?.inbox?.id, 'i1', 'non-string r1 marker ignored → gate delivered');
+  // The returned cursor is built from this sweep only — bounded, not the 5k forged entries.
+  const decoded = JSON.parse(Buffer.from(result.cursor, 'base64url').toString('utf8')) as { m: Record<string, string> };
+  assert.ok(Object.keys(decoded.m).length <= 50, 'returned cursor is bounded to the watched set');
 });
 
 test('[leak race] a subscription resolving AFTER the hold settled is still detached', async () => {

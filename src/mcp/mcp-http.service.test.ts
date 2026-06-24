@@ -21,9 +21,14 @@ test('McpHttpService: a client disconnect mid-long-poll aborts the in-flight too
   const aborted = new Promise<void>((resolve) => {
     resolveAborted = resolve;
   });
+  let signalReached: () => void = () => {};
+  const handlerReached = new Promise<void>((resolve) => {
+    signalReached = resolve;
+  });
 
   // The facade's long-poll resolves ONLY when its AbortSignal fires — so the test can only pass if the
-  // transport close actually propagates an abort to the handler.
+  // transport close actually propagates an abort to the handler. It signals `handlerReached` once the
+  // abort listener is attached, so the test disconnects on that fact, not a fixed sleep (no race).
   const facade = {
     async waitForAnyGate(input: { signal?: AbortSignal }) {
       return new Promise((resolve) => {
@@ -36,6 +41,7 @@ test('McpHttpService: a client disconnect mid-long-poll aborts the in-flight too
           },
           { once: true },
         );
+        signalReached();
       });
     },
   } as unknown as McpFacadeService;
@@ -49,7 +55,7 @@ test('McpHttpService: a client disconnect mid-long-poll aborts the in-flight too
     const call = client
       .callTool({ name: 'wait_for_any_gate', arguments: { runIds: ['r1'], timeoutMs: 30_000 } })
       .catch(() => undefined); // closing the connection rejects/aborts the client call — result irrelevant
-    await tick(150); // ensure the request reached the held handler before we disconnect
+    await handlerReached; // the handler attached its abort listener — safe to disconnect (no race)
     await client.close(); // drop the connection → server res.on('close') fires while the handler is held
 
     await Promise.race([aborted, tick(2_000)]);

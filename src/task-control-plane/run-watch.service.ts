@@ -70,21 +70,8 @@ const WATCH_STATES: ReadonlySet<RunState['state']> = new Set([
   'blocked',
 ]);
 const TERMINAL_RUN_STATUS: ReadonlySet<string> = new Set(['completed', 'failed', 'cancelled']);
-/**
- * Cursor marker for a `running` run: not deliverable (running is never actionable), but recorded so the
- * cursor remembers we were *tracking* this run. The omit-runIds path needs that memory to deliver a
- * run's terminal transition that lands BETWEEN polls — by then the run has left the active set, so only
- * the cursor can tell us it was ours to report. Must differ from every actionable marker below.
- */
-const RUNNING_MARKER = '~';
-
-/** The marker a terminal run carries, derived from its run-row status (mirror of markerFor's terminal arms). */
-function terminalMarkerForStatus(status: string): string | undefined {
-  if (status === 'completed') return 'c';
-  if (status === 'failed') return 'f';
-  if (status === 'cancelled') return 'b:cancelled'; // resolveRunState maps cancelled → state 'blocked'
-  return undefined;
-}
+/** Defensive cap on caller-supplied cursor size (a legitimate cursor only carries the watched runs, ≤ MAX_RUN_IDS). */
+const MAX_CURSOR_ENTRIES = 200;
 
 /** The topics this watch composes off APP_PUB_SUB — exported so a test can assert sync with constants.js. */
 export const WATCH_TOPICS = [INBOX_ITEM_ADDED_TOPIC, RUN_UPDATED_TOPIC] as const;
@@ -96,12 +83,12 @@ export function clampServerHold(timeoutMs?: number): number {
 }
 
 /**
- * The cursor marker for a run's current level. A *changed* marker (vs the caller's cursor) is a new
+ * The cursor marker for an *actionable* run level. A *changed* marker (vs the caller's cursor) is a new
  * transition worth delivering: a gate is keyed by its inbox id (deterministic per gateKey, so a
- * *different* gate yields a different id), a terminal/blocked run by its status, and a still-`running`
- * run by the non-deliverable RUNNING_MARKER (recorded only so the cursor remembers we tracked it).
+ * *different* gate yields a different id), a terminal/blocked run by its status. `running` is not
+ * actionable and is never recorded — `null`.
  */
-function markerFor(state: RunState): string {
+function markerFor(state: RunState): string | null {
   switch (state.state) {
     case 'pending_gate':
     case 'question':
@@ -113,7 +100,7 @@ function markerFor(state: RunState): string {
     case 'blocked':
       return `b:${state.runStatus}`;
     case 'running':
-      return RUNNING_MARKER;
+      return null;
   }
 }
 
@@ -126,10 +113,17 @@ function decodeCursor(cursor?: string): Record<string, string> {
   try {
     const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as {
       v?: number;
-      m?: Record<string, string>;
+      m?: Record<string, unknown>;
     };
-    if (parsed && parsed.v === 1 && parsed.m && typeof parsed.m === 'object') return parsed.m;
-    return {};
+    if (!parsed || parsed.v !== 1 || !parsed.m || typeof parsed.m !== 'object') return {};
+    // Keep only well-formed string markers, capped — a forged/oversized cursor can't force unbounded work.
+    const out: Record<string, string> = {};
+    for (const [runId, marker] of Object.entries(parsed.m)) {
+      if (typeof marker !== 'string') continue;
+      out[runId] = marker;
+      if (Object.keys(out).length >= MAX_CURSOR_ENTRIES) break;
+    }
+    return out;
   } catch {
     return {};
   }
@@ -153,7 +147,7 @@ export class RunWatchService {
 
   private async watch(input: WatchInput, actionable: ReadonlySet<RunState['state']>): Promise<WatchResult> {
     const prev = decodeCursor(input.cursor);
-    const runIds = await this.resolveRunIds(input.runIds, prev);
+    const runIds = await this.resolveRunIds(input.runIds);
     const serverHold = clampServerHold(input.timeoutMs);
 
     // 1. Initial sweep first — deliver anything already actionable (the common "already gated" case
@@ -161,7 +155,7 @@ export class RunWatchService {
     //    BEFORE the subscription resolves is not lost: the cursor re-call's next sweep observes it.
     const sweep = await this.sweep(runIds);
     const initial = collectNew(sweep, prev, actionable);
-    const cursor0 = mergeCursor(prev, sweep);
+    const cursor0 = mergeCursor(sweep, actionable);
     if (initial.length > 0) {
       return { transitions: initial, cursor: encodeCursor(cursor0), timedOut: false };
     }
@@ -221,7 +215,11 @@ export class RunWatchService {
         }
         if (settled) return;
         const found = collectNew(states, prev, actionable);
-        if (found.length > 0) settle({ transitions: found, cursor: encodeCursor(mergeCursor(cursor0, states)), timedOut: false });
+        // Merge the re-swept (dirty) runs' markers over this call's initial cursor so the other watched
+        // runs keep theirs; still this-call-only (no cross-call carry-forward → bounded).
+        if (found.length > 0) {
+          settle({ transitions: found, cursor: encodeCursor({ ...cursor0, ...mergeCursor(states, actionable) }), timedOut: false });
+        }
       };
 
       // Coalesce a burst of wakeups into one re-sweep per tick (each sweep is ~4 control-plane reads/run).
@@ -263,7 +261,7 @@ export class RunWatchService {
     });
   }
 
-  private async resolveRunIds(provided: string[] | undefined, prev: Record<string, string>): Promise<string[]> {
+  private async resolveRunIds(provided: string[] | undefined): Promise<string[]> {
     if (provided && provided.length > 0) {
       if (provided.length > MAX_RUN_IDS) {
         throw new Error(
@@ -272,20 +270,14 @@ export class RunWatchService {
       }
       return [...new Set(provided)];
     }
-    // Omitted → watch every active (non-terminal) run, capped (active first; a gate on any uncapped run
-    // still surfaces on the operator's next re-call).
+    // Omitted → watch every active (non-terminal) run, capped. A run that terminates between polls drops
+    // out of this set, so omit-mode is best-effort for terminal transitions — pass explicit runIds for
+    // guaranteed terminal delivery (those are always swept regardless of status).
     const runs = await this.api.listRuns({});
-    const active = runs.filter((run) => !TERMINAL_RUN_STATUS.has(run.status)).map((run) => run.runId);
-    // Plus any run the caller's cursor was already tracking that has since gone terminal but whose
-    // terminal marker they have NOT yet seen — so a run that completed/failed BETWEEN polls is still
-    // delivered once (watch_runs' contract) even though it has already dropped out of the active set.
-    const undeliveredTerminal = runs
-      .filter((run) => {
-        const terminalMarker = terminalMarkerForStatus(run.status);
-        return terminalMarker !== undefined && run.runId in prev && prev[run.runId] !== terminalMarker;
-      })
-      .map((run) => run.runId);
-    return [...new Set([...active, ...undeliveredTerminal])].slice(0, MAX_RUN_IDS);
+    return runs
+      .filter((run) => !TERMINAL_RUN_STATUS.has(run.status))
+      .map((run) => run.runId)
+      .slice(0, MAX_RUN_IDS);
   }
 
   private sweep(runIds: string[]): Promise<RunState[]> {
@@ -324,10 +316,19 @@ function collectNew(
   return out;
 }
 
-function mergeCursor(prev: Record<string, string>, states: RunState[]): Record<string, string> {
-  const next = { ...prev };
+/**
+ * Build the next cursor from THIS sweep only — no carry-forward of prior keys, so it never grows beyond
+ * the watched set (bounds it at ≤ MAX_RUN_IDS). Records a marker only for states actionable in the
+ * CURRENT mode: a tool must not advance the cursor past a transition it did not deliver (else a later
+ * call in the other mode — e.g. watch_runs after wait_for_any_gate saw a `completed` run — would
+ * wrongly suppress it). `running` and other non-actionable states carry no marker.
+ */
+function mergeCursor(states: RunState[], actionable: ReadonlySet<RunState['state']>): Record<string, string> {
+  const next: Record<string, string> = {};
   for (const state of states) {
-    next[state.runId] = markerFor(state);
+    if (!actionable.has(state.state)) continue;
+    const marker = markerFor(state);
+    if (marker !== null) next[state.runId] = marker;
   }
   return next;
 }
