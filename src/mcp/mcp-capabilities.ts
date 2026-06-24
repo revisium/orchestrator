@@ -20,6 +20,8 @@ export const MCP_TOOL_NAMES = [
   'read_agent_output_events',
   'get_run_digest',
   'wait_for_run',
+  'wait_for_any_gate',
+  'watch_runs',
   'list_inbox',
   'get_inbox_item',
   'get_pending_decisions',
