@@ -167,6 +167,9 @@ local MCP-capable agent, not by a browser:
 }
 ```
 
+For per-CLI registration commands — Claude Code and Codex, global install and dev checkout —
+see the **[Local Development](../README.md#local-development)** section of the README.
+
 The MCP server has no auth because it is local stdio only. It exposes product
 tools for task development control: health, repository diagnostics, run
 create/start/resume/cancel, run digests, inbox gate approval/rejection,
