@@ -32,15 +32,16 @@ export function dbosExecutorId(profile: string): string {
 }
 
 /**
- * The `DBOS__VMID` / `DBOS__APPVERSION` env pin for a profile's daemon. An explicit value already in
- * `env` wins (so a custom layout / test can still override), otherwise the pinned defaults apply.
+ * The `DBOS__VMID` / `DBOS__APPVERSION` env pin for a profile's daemon. An explicitly-SET value in
+ * `env` wins (so a custom layout / test can override) — including an explicit empty string, hence `??`
+ * not `||`; only an absent (undefined) var falls back to the pinned defaults.
  */
 export function dbosEnvPin(
   profile: string,
   env: NodeJS.ProcessEnv = process.env,
 ): { DBOS__VMID: string; DBOS__APPVERSION: string } {
   return {
-    DBOS__VMID: env['DBOS__VMID'] || dbosExecutorId(profile),
-    DBOS__APPVERSION: env['DBOS__APPVERSION'] || DBOS_WORKFLOW_VERSION,
+    DBOS__VMID: env['DBOS__VMID'] ?? dbosExecutorId(profile),
+    DBOS__APPVERSION: env['DBOS__APPVERSION'] ?? DBOS_WORKFLOW_VERSION,
   };
 }

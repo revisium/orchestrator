@@ -17,6 +17,11 @@ test('dbosEnvPin: an explicit env value wins (custom layout / test override)', (
   assert.deepEqual(pin, { DBOS__VMID: 'custom-vmid', DBOS__APPVERSION: '9.9.9' });
 });
 
+test('dbosEnvPin: an explicit EMPTY string is honored (?? not ||), only undefined falls back', () => {
+  const pin = dbosEnvPin('default', { DBOS__VMID: '', DBOS__APPVERSION: '' });
+  assert.deepEqual(pin, { DBOS__VMID: '', DBOS__APPVERSION: '' });
+});
+
 test('dbosEnvPin: pins per profile (dev band)', () => {
   assert.equal(dbosEnvPin('dev', {}).DBOS__VMID, 'revo-dev');
 });

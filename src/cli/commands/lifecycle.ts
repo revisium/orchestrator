@@ -191,10 +191,14 @@ async function censusQueuePollers(
   const client = new pg.Client(`postgresql://revisium:password@localhost:${pgPort}/postgres`);
   try {
     await client.connect();
-    // Without superuser/pg_read_all_stats, pg_stat_activity hides other backends' application_name →
-    // a silent empty roster. Treat that as "unavailable", never as "no rogues".
-    const su = await client.query(`SELECT current_setting('is_superuser') = 'on' AS super`);
-    if (su.rows[0]?.['super'] !== true) return { rogues: [], unavailable: true };
+    // Without privilege to see OTHER backends, pg_stat_activity hides their application_name → a silent
+    // empty roster. Superuser OR pg_read_all_stats membership both suffice; anything less is reported as
+    // "unavailable", never as "no rogues".
+    const cap = await client.query(
+      `SELECT (current_setting('is_superuser') = 'on'
+               OR pg_has_role(current_user, 'pg_read_all_stats', 'MEMBER')) AS can_see`,
+    );
+    if (cap.rows[0]?.['can_see'] !== true) return { rogues: [], unavailable: true };
     const res = await client.query(
       `SELECT pid, application_name AS app, backend_start AS started
          FROM pg_stat_activity WHERE datname = $1 AND application_name LIKE 'dbos_transact_%'`,
