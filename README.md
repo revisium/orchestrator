@@ -197,6 +197,25 @@ with `listen EPERM` or a misleading `No free port found from <port>`. Re-run the
 daemon, GraphQL, and MCP smoke commands from a normal terminal or an approved
 unsandboxed execution context.
 
+## Upgrading
+
+After installing a new version, run the full ritual — the daemon refreshes itself,
+but the MCP client caches its tool list and only the operator can refresh it:
+
+```sh
+npm i -g @revisium/orchestrator@<version>
+revo restart   # re-seeds the bundled playbook + a fresh read-scope, server-side
+```
+
+Then, in your MCP client (e.g. Claude Code), reconnect to pick up new tools:
+
+```text
+/mcp   # reconnect — the tool list is cached client-side; the daemon cannot push a refresh
+```
+
+Skipping the `/mcp` reconnect leaves new tools (e.g. `wait_for_any_gate`,
+`watch_runs`) invisible to the client even though the upgraded daemon already serves them.
+
 ## License
 
 See [LICENSE](./LICENSE).

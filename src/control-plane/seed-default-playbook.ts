@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { repoRoot } from '../config.js';
 import { PlaybookInstaller, type PlaybookInstallResult } from '../playbook/playbook-installer.js';
+import { resolvePlaybookSource } from '../playbook/source-resolver.js';
 import { createVersionedMeaningAccess } from './versioned-meaning.js';
 
 /** Installed row id of the built-in default playbook (distinct from the e2e fixture playbook). */
@@ -31,11 +32,33 @@ export type SeedDefaultPlaybookResult =
   | { status: 'already-installed' }
   | { status: 'raced' };
 
-/** Minimal install surface — lets the seed be unit-tested without a live daemon. */
+/**
+ * Minimal install surface — lets the seed be unit-tested without a live daemon. `version` is the
+ * INSTALLED row's recorded version (carried on the playbook row, see import-mapper); optional so a
+ * pre-version row (older install) reads as `undefined` and is treated as "older" (re-seed once).
+ */
 export type DefaultPlaybookInstaller = {
-  listPlaybooks(): Promise<Array<{ id: string }>>;
+  listPlaybooks(): Promise<Array<{ id: string; version?: string }>>;
   install(options: { source: string; name: string; commit: boolean }): Promise<PlaybookInstallResult>;
 };
+
+/**
+ * Compare two `x.y.z` semver strings numerically: returns >0 when `a` is newer, <0 when older, 0 when
+ * equal. Missing/non-numeric components read as 0 (so `0.1` == `0.1.0`). We hand-roll this rather than
+ * pull in a `semver` dependency: the default playbook only ever carries simple dotted release versions,
+ * and an unparsable component degrades to "older" via the missing-version path in the caller.
+ */
+function compareSemver(a: string, b: string): number {
+  const parse = (v: string) => v.split('.').map((part) => Number.parseInt(part, 10) || 0);
+  const left = parse(a);
+  const right = parse(b);
+  const length = Math.max(left.length, right.length);
+  for (let i = 0; i < length; i += 1) {
+    const diff = (left[i] ?? 0) - (right[i] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  return 0;
+}
 
 /**
  * True for a benign "already committed / nothing to do" race during a concurrent bootstrap. Matched
@@ -49,21 +72,50 @@ function isBenignInstallRace(err: unknown): boolean {
 }
 
 /**
- * Install the built-in default playbook if it is not already present. Returns a status discriminant
- * so the caller can log appropriately; never throws on a benign duplicate-install race.
+ * Install the built-in default playbook if it is not already present, OR re-install (overwrite) it when
+ * the BUNDLED version is newer than the installed row's version. Returns a status discriminant so the
+ * caller can log appropriately; never throws on a benign duplicate-install race.
+ *
+ * Version-aware re-seed (slice 144): a warm profile that merely already HAS the default playbook used to
+ * skip unconditionally, so `npm i -g` a newer bundle + `revo restart` kept the OLD playbook. Now we read
+ * the bundled version from the source package.json (the same value `resolvePlaybookSource` records on the
+ * installed row) and compare it to the installed row's recorded version:
+ *   - bundle NEWER  → re-seed (the installer upserts by row id, so the install path is the overwrite).
+ *   - equal/older   → skip (idempotent; never downgrade).
+ *   - installed row has NO version (pre-versioning install) → treat as older → re-seed once.
+ * `install()` is the same upsert+commit path used for a fresh install, so re-seed stays idempotent.
  */
 export async function seedDefaultPlaybook(
   installer: DefaultPlaybookInstaller,
   source: string = DEFAULT_PLAYBOOK_SOURCE,
+  log: (message: string) => void = () => {},
 ): Promise<SeedDefaultPlaybookResult> {
+  if (!existsSync(source)) {
+    throw new Error(`default playbook source not found: ${source}`);
+  }
   // `listPlaybooks` is the accurate presence signal: bootstrap seeds role/profile rows but NOT a
   // playbook record, so this is empty until the default playbook is installed.
   const installed = await installer.listPlaybooks();
-  if (installed.some((p) => p.id === DEFAULT_PLAYBOOK_ID)) {
-    return { status: 'already-installed' };
-  }
-  if (!existsSync(source)) {
-    throw new Error(`default playbook source not found: ${source}`);
+  const existing = installed.find((p) => p.id === DEFAULT_PLAYBOOK_ID);
+  if (existing) {
+    // The bundled version lives in the source package.json — resolve it the same way the installer does
+    // so the comparison is against the exact value that lands on the row.
+    const bundledVersion = resolvePlaybookSource(source).version;
+    const installedVersion = existing.version ?? '';
+    // A pre-versioning row (no recorded version) reads as "0.0.0" → strictly older → re-seed once so the
+    // one-time upgrade lands; thereafter the versions match and we skip.
+    const comparison = compareSemver(bundledVersion, installedVersion || '0.0.0');
+    if (comparison <= 0) {
+      log(
+        `Default playbook ${DEFAULT_PLAYBOOK_ID} up to date ` +
+          `(installed ${installedVersion || '(none)'} >= bundled ${bundledVersion}) — skipping seed.`,
+      );
+      return { status: 'already-installed' };
+    }
+    log(
+      `Default playbook ${DEFAULT_PLAYBOOK_ID} bundle is newer ` +
+        `(installed ${installedVersion || '(none)'} -> bundled ${bundledVersion}) — re-seeding.`,
+    );
   }
   try {
     const result = await installer.install({ source, name: DEFAULT_PLAYBOOK_ID, commit: true });
@@ -80,7 +132,7 @@ export async function seedDefaultPlaybook(
  * uses). Reads the installed playbooks list from HEAD via the provided reader.
  */
 export function createDaemonInstaller(
-  listPlaybooks: () => Promise<Array<{ id: string }>>,
+  listPlaybooks: () => Promise<Array<{ id: string; version?: string }>>,
 ): DefaultPlaybookInstaller {
   return {
     listPlaybooks,
