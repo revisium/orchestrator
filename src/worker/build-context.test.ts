@@ -103,6 +103,33 @@ test('buildContext: without a worktree on disk, repo_ref is kept (non-live uncha
   }
 });
 
+// slice 143 security (CodeRabbit): even with the worktree Repo: rewrite active, the planPath sandbox stays
+// anchored to the ORIGINAL repo_ref — a live run must NOT reach a sibling worktree via planPath traversal.
+test('buildContext: planPath cannot escape into a sibling worktree when the Repo: rewrite is active', async () => {
+  const base = mkdtempSync(join(tmpdir(), 'revo-base-'));
+  const repoDir = join(base, 'repo'); // sandbox = dirname(repoDir) = base
+  mkdirSync(repoDir, { recursive: true });
+  const dataDir = mkdtempSync(join(tmpdir(), 'revo-dd-')); // a SEPARATE tree (not under base)
+  try {
+    const worktree = join(dataDir, 'worktrees', STEP.runId);
+    mkdirSync(worktree, { recursive: true });
+    writeFileSync(join(worktree, '.git'), 'gitdir: x\n'); // live → Repo: rewrite is active
+    const sibling = join(dataDir, 'worktrees', 'other-run');
+    mkdirSync(sibling, { recursive: true });
+    writeFileSync(join(sibling, 'secret.md'), 'sibling secret'); // would be readable if sandbox were the worktree
+
+    const da = makeDA({ task: { title: 'T', scope: 's', repo_ref: repoDir } });
+    await assert.rejects(
+      () => buildContext(da, STEP, ROLE, { params: { planPath: join(sibling, 'secret.md') } } as never, dataDir),
+      /outside task workspace/,
+      'planPath into a sibling worktree is rejected (sandbox = repo_ref, not the worktrees dir)',
+    );
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
 test('buildContext: includes prior failed attempt lessons', async () => {
   const da = makeDA({
     attempts: [
