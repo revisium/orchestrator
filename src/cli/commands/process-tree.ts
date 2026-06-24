@@ -12,6 +12,26 @@ import { existsSync } from 'node:fs';
 // the binary). null if ps is unavailable, in which case ancestry checks degrade to "not within".
 const PS_PATH = ['/bin/ps', '/usr/bin/ps'].find((p) => existsSync(p)) ?? null;
 
+/** All processes as `{pid, command}` via `ps -ax` (full command line). Empty if ps is unavailable. */
+export function listProcesses(): Array<{ pid: number; command: string }> {
+  if (PS_PATH === null) return [];
+  try {
+    const out = execFileSync(PS_PATH, ['-axww', '-o', 'pid=,command='], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      maxBuffer: 8 * 1024 * 1024,
+    });
+    const procs: Array<{ pid: number; command: string }> = [];
+    for (const line of out.split('\n')) {
+      const m = line.match(/^\s*(\d+)\s+(.*)$/);
+      if (m) procs.push({ pid: Number(m[1]), command: m[2] });
+    }
+    return procs;
+  } catch {
+    return [];
+  }
+}
+
 /** Parent pid of `pid` via ps, or null (no such process / ps unavailable). Best-effort. */
 export function parentPid(pid: number): number | null {
   if (PS_PATH === null) return null;
@@ -22,6 +42,25 @@ export function parentPid(pid: number): number | null {
     }).trim();
     const ppid = Number(out);
     return Number.isInteger(ppid) && ppid > 0 ? ppid : null;
+  } catch {
+    return null; // process gone / ps error
+  }
+}
+
+/**
+ * Process start time as an opaque stable string (`ps -o lstart=`, portable on macOS + Linux — avoids
+ * brittle `/proc/<pid>/stat` parsing). Returns null if the process is gone / ps unavailable. Paired
+ * with the pid it forms a reuse-proof identity: a recycled pid gets a different start time, so the
+ * rogue reaper re-checks it before SIGKILL and never kills an innocent process that inherited the pid.
+ */
+export function processStartTime(pid: number): string | null {
+  if (PS_PATH === null) return null;
+  try {
+    const out = execFileSync(PS_PATH, ['-o', 'lstart=', '-p', String(pid)], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return out.length > 0 ? out : null;
   } catch {
     return null; // process gone / ps error
   }
