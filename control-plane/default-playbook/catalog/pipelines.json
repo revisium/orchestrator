@@ -109,6 +109,26 @@
                 "goto": "analyst"
               },
               {
+                "default": "planStuckGate"
+              }
+            ]
+          },
+          "planStuckGate": {
+            "id": "planStuckGate",
+            "kind": "humanGate",
+            "reason": "plan-stuck",
+            "outcomes": [
+              "approved"
+            ],
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "approved"
+                },
+                "goto": "developer"
+              },
+              {
                 "default": "blockedEnd"
               }
             ]
@@ -188,6 +208,26 @@
                   ]
                 },
                 "goto": "reworkDeveloper"
+              },
+              {
+                "default": "codeStuckGate"
+              }
+            ]
+          },
+          "codeStuckGate": {
+            "id": "codeStuckGate",
+            "kind": "humanGate",
+            "reason": "code-review-stuck",
+            "outcomes": [
+              "approved"
+            ],
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "approved"
+                },
+                "goto": "integrator"
               },
               {
                 "default": "blockedEnd"
