@@ -416,6 +416,63 @@ test('rule 14: consuming a node with no produces → CONSUMES_PRODUCER_MISSING',
   assertHasDiagnostic(t, 'CONSUMES_PRODUCER_MISSING');
 });
 
+// D3 — humanGate gatedArtifact/verdictFrom ref validation.
+const gateWithArtifact = (artifact: { node: string; as?: string }) =>
+  template('gate-df')
+    .specVersion('1.0')
+    .entry('a')
+    .domain('approved')
+    .add(
+      node.agent('a', 'role:analyst', 'g', { produces: { name: 'plan' } }),
+      node.humanGate('g', 'plan-review', ['approved'], [on(verdictEq('approved'), 'done'), otherwise('done')], {
+        gatedArtifact: artifact,
+      }),
+      node.terminal('done', 'succeeded'),
+    )
+    .build();
+
+test('D3: a gatedArtifact pointing at a producing node is valid (no diagnostic)', () => {
+  assertNoDiagnostic(gateWithArtifact({ node: 'a', as: 'plan' }), 'GATE_REF_UNRESOLVED');
+  assertNoDiagnostic(gateWithArtifact({ node: 'a', as: 'plan' }), 'GATE_ARTIFACT_NO_PRODUCES');
+});
+
+test('D3: gatedArtifact referencing an unknown node → GATE_REF_UNRESOLVED', () => {
+  assertHasDiagnostic(gateWithArtifact({ node: 'ghost' }), 'GATE_REF_UNRESOLVED');
+});
+
+test('D3: gatedArtifact referencing a node with no produces → GATE_ARTIFACT_NO_PRODUCES', () => {
+  const t = template('gate-df')
+    .specVersion('1.0')
+    .entry('a')
+    .domain('approved')
+    .add(
+      node.agent('a', 'role:x', 'g'), // no produces
+      node.humanGate('g', 'plan-review', ['approved'], [on(verdictEq('approved'), 'done'), otherwise('done')], {
+        gatedArtifact: { node: 'a' },
+      }),
+      node.terminal('done', 'succeeded'),
+    )
+    .build();
+  assertHasDiagnostic(t, 'GATE_ARTIFACT_NO_PRODUCES');
+});
+
+test('D3: verdictFrom referencing an unknown node → GATE_REF_UNRESOLVED', () => {
+  const t = template('gate-df')
+    .specVersion('1.0')
+    .entry('a')
+    .domain('approved')
+    .add(
+      node.agent('a', 'role:analyst', 'g', { produces: { name: 'plan' } }),
+      node.humanGate('g', 'plan-review', ['approved'], [on(verdictEq('approved'), 'done'), otherwise('done')], {
+        gatedArtifact: { node: 'a' },
+        verdictFrom: { node: 'ghost' },
+      }),
+      node.terminal('done', 'succeeded'),
+    )
+    .build();
+  assertHasDiagnostic(t, 'GATE_REF_UNRESOLVED');
+});
+
 const dfNotDominated = (optional: boolean) =>
   template('df')
     .specVersion('1.0')

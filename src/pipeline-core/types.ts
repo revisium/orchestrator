@@ -136,6 +136,21 @@ export type AgentNode = NodeEnvelope & { kind: 'agent'; roleRef: string } & Effe
 /** `script` — run a built-in system SCRIPT (integrator, pollers) → `invokeScript`. */
 export type ScriptNode = NodeEnvelope & { kind: 'script'; scriptRef: string } & EffectNodeFields;
 
+/**
+ * `humanGate` data refs (slice 141 D3). Informational — they enrich the gate's inbox row with the
+ * artifact being gated and the upstream verdict so an approver decides without digging the agent log.
+ * Routing is unchanged (the gate still routes purely on `gateVerdict`). Generic (node ids, no role ids).
+ */
+export type GateArtifactRef = {
+  node: string; //                                       producing node id whose output is the gated artifact
+  as?: string; //                                        display label in the gate row (default: the producer's output name)
+  iteration?: 'latest' | 'all' | number; //             default 'latest'
+};
+export type GateVerdictRef = {
+  node: string; //                                       node whose output is the reviewer verdict (absent ⇒ the routing verdict)
+  iteration?: 'latest' | 'all' | number; //             default 'latest'
+};
+
 /** `humanGate` — suspend until an external verdict → `awaitGate`. */
 export type HumanGateNode = NodeEnvelope & {
   kind: 'humanGate';
@@ -144,6 +159,8 @@ export type HumanGateNode = NodeEnvelope & {
   branches: Branch[];
   timeout?: GateTimeout; //                              §6 — absent ⇒ wait indefinitely
   incrementCounters?: string[];
+  gatedArtifact?: GateArtifactRef; //                    0016/D3 — artifact surfaced inline on the gate inbox row
+  verdictFrom?: GateVerdictRef; //                       0016/D3 — reviewer verdict surfaced inline (default: routing verdict)
 };
 
 /** `choice` — pure conditional routing, no effect. */
@@ -243,6 +260,8 @@ export type Decision =
       reason: string;
       outcomes: string[];
       timeout?: GateTimeout; //                          OPTIONAL (§6/§10)
+      gatedArtifact?: GateArtifactRef; //                D3 — carried through from the humanGate node
+      verdictFrom?: GateVerdictRef; //                   D3 — carried through from the humanGate node
     }
   | { type: 'fork'; nodeId: string; branches: ParallelBranch[]; joinId: string; mode: JoinMode }
   | { type: 'startTimer'; nodeId: string; duration: string }
@@ -378,6 +397,8 @@ export const DIAGNOSTIC_CODES = [
   'CONSUMES_CROSS_PARALLEL_UNSAFE', //                    producer/consumer in unsafely-related parallel branches
   'CONSUMES_AS_DUP', //                                   two refs on one node share the same `as` key
   'PRODUCES_NAME_DUP', //                                 two nodes share a produces.name (warning — grammar keys by node)
+  'GATE_REF_UNRESOLVED', //                               humanGate gatedArtifact/verdictFrom references an unknown node (D3)
+  'GATE_ARTIFACT_NO_PRODUCES', //                         humanGate gatedArtifact node declares no produces → no artifact (D3)
   // 13 diff classifier
   'DIFF_UNCLASSIFIED',
   'DIFF_NODE_DELETED',

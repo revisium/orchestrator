@@ -432,7 +432,11 @@
               {
                 "default": "blockedEnd"
               }
-            ]
+            ],
+            "gatedArtifact": {
+              "node": "analyst",
+              "as": "plan"
+            }
           },
           "developer": {
             "id": "developer",
@@ -536,7 +540,11 @@
               {
                 "default": "mergedEnd"
               }
-            ]
+            ],
+            "gatedArtifact": {
+              "node": "pollPr",
+              "as": "prFeedback"
+            }
           },
           "mergedEnd": {
             "id": "mergedEnd",
@@ -743,7 +751,11 @@
               {
                 "default": "blockedEnd"
               }
-            ]
+            ],
+            "gatedArtifact": {
+              "node": "triage",
+              "as": "triage"
+            }
           },
           "reviewRework": {
             "id": "reviewRework",
