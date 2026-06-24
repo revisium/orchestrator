@@ -45,6 +45,8 @@ import type { ExecutionProfile, RouteDecision, RouteRoleBinding } from './route-
 import { runnerNeedsLivePreflight, runnerUsesRealIntegrator } from './route-contract.js';
 import type { IntegratorInput, IntegratorOutput, IntegratorBlocked, ConfirmMergeOutput, PrFeedback, RespondThreadsOutput } from '../runners/integrator.js';
 import type { AppendEventInput } from '../run/append-event.js';
+import { redactEventPayload } from '../run/append-event.js';
+import { redactSecrets } from '../control-plane/inbox.js';
 import type { RunOutputRow } from '../run/run-outputs.js';
 import type { Decision as GateDecision } from './await-human.js';
 import type { CompleteRunResult } from '../run/complete-run.js';
@@ -248,6 +250,86 @@ function gateTopicFor(reason: string): 'plan' | 'merge' | 'question' {
   return 'plan';
 }
 
+// D3 — enrich the gate inbox row with the artifact under review + the reviewer verdict, inline, so an
+// approver decides without digging the agent log. `pushInbox` has no size cap (unlike run-outputs'
+// PAYLOAD_MAX), so the artifact is budgeted HERE: over-budget → a head preview + a payload_ref locator,
+// never the full payload. The inbox id is keyed by runId|gateKey only, so a larger context does not
+// change it → pushInbox stays idempotent on replay. The payload is also secret/token redacted at this
+// build site (pushInbox only masks secret-NAMED keys, not token SHAPES in free-text) — see gateArtifactView.
+export const GATE_ARTIFACT_MAX = 16_000;
+export const GATE_PREVIEW_CHARS = 4_000;
+
+export type GateArtifactView = {
+  nodeId: string;
+  name: string;
+  schemaRef: string;
+  payload?: unknown;
+  truncated?: true;
+  preview?: string;
+  payloadRef?: string;
+};
+export type GateSummary = {
+  nodeId: string;
+  outcomes: string[];
+  gatedArtifact?: GateArtifactView;
+  reviewerVerdict?: GateArtifactView | { verdict: string };
+};
+
+/** Latest (or pinned-ordinal) output row for a gate ref, or undefined if the producer has not run. */
+function resolveGateRow(
+  ref: { node: string; iteration?: 'latest' | 'all' | number } | undefined,
+  outputsByNode: Map<string, RunOutputRow[]>,
+): RunOutputRow | undefined {
+  if (!ref) return undefined;
+  const produced = outputsByNode.get(ref.node) ?? [];
+  if (produced.length === 0) return undefined;
+  if (typeof ref.iteration === 'number') return produced.find((o) => o.ordinal === ref.iteration);
+  return produced[produced.length - 1]; // 'latest' (and 'all' → the most recent for an inline view)
+}
+
+/**
+ * Inline artifact view with the 16KB budget. Secrets + token shapes are scrubbed BEFORE inlining or
+ * previewing — mirroring run-outputs.ts (the sibling persist boundary): pushInbox only masks
+ * secret-NAMED keys, so a token shape (`ghp_…`) in a free-text field (e.g. pollPr's prFeedback) would
+ * otherwise persist verbatim. Over-budget → a head preview (of the redacted serialization) + an
+ * `attempt:` locator (the full artifact is recoverable from that attempt's agent log).
+ */
+function gateArtifactView(row: RunOutputRow, as?: string): GateArtifactView {
+  const base = { nodeId: row.nodeId, name: as ?? row.name, schemaRef: row.schemaRef };
+  const safe = redactEventPayload(redactSecrets(row.payload) ?? null);
+  const serialized = JSON.stringify(safe ?? null);
+  // Budget on BYTES (not UTF-16 length) so a multi-byte payload can't slip past the cap.
+  if (Buffer.byteLength(serialized, 'utf8') <= GATE_ARTIFACT_MAX) return { ...base, payload: safe };
+  return {
+    ...base,
+    truncated: true,
+    preview: serialized.slice(0, GATE_PREVIEW_CHARS),
+    payloadRef: `attempt:${row.attemptId ?? ''}`,
+  };
+}
+
+/**
+ * Build the enriched gate inbox summary from the workflow-local outputs (replay-safe — rebuilt
+ * identically, 0016 §6). `verdictFrom` resolves a node's verdict output; when it is NOT specified, the
+ * verdict defaults to the routing verdict that opened the gate (`lastVerdict`). Routing is unaffected —
+ * purely informational.
+ */
+export function buildGateSummary(
+  decision: Extract<Decision, { type: 'awaitGate' }>,
+  outputsByNode: Map<string, RunOutputRow[]>,
+  lastVerdict: string,
+): GateSummary {
+  const summary: GateSummary = { nodeId: decision.nodeId, outcomes: decision.outcomes };
+  const artRow = resolveGateRow(decision.gatedArtifact, outputsByNode);
+  if (artRow) summary.gatedArtifact = gateArtifactView(artRow, decision.gatedArtifact?.as);
+  const verdictRow = resolveGateRow(decision.verdictFrom, outputsByNode);
+  if (verdictRow) summary.reviewerVerdict = gateArtifactView(verdictRow);
+  // Only fall back to the routing verdict when no verdictFrom was REQUESTED — a specified-but-unresolved
+  // verdictFrom must not silently present the routing verdict as if it came from that source.
+  else if (!decision.verdictFrom && lastVerdict) summary.reviewerVerdict = { verdict: lastVerdict };
+  return summary;
+}
+
 /**
  * makeDataDrivenTask — DBOS-free factory for the dataDrivenTask async function (C1).
  *
@@ -301,6 +383,7 @@ export function makeDataDrivenTask(
   }
 
   /** Record a node's produced output to the workflow-local accumulator + Revisium (when `produces`). */
+  // (gate-summary helpers live at module scope below — they are pure over outputsByNode.)
   async function recordOutput(
     runId: string,
     node: Node,
@@ -450,6 +533,9 @@ export function makeDataDrivenTask(
       const eff = await applyDecision(decision, {
         runId, template, bindingByRef, executionProfile, taskId, title, base,
         effectOrdinalByNode, outputsByNode,
+        // The verdict from the PRIOR effect (the reviewer/poller that routed into this node). At an
+        // awaitGate this is the routing verdict that opened the gate → D3's default reviewerVerdict.
+        lastVerdict,
       });
       lastResult = eff.lastResult;
       if (eff.lastVerdict !== undefined) lastVerdict = eff.lastVerdict;
@@ -476,6 +562,7 @@ export function makeDataDrivenTask(
     base: string;
     effectOrdinalByNode: Map<string, number>;
     outputsByNode: Map<string, RunOutputRow[]>;
+    lastVerdict: string; //                               D3 — the prior effect's verdict (gate's default reviewerVerdict)
   };
 
   /**
@@ -554,10 +641,13 @@ export function makeDataDrivenTask(
         // Per-entry gate key (nodeId#ordinal) so a re-entered gate (e.g. a question gate looped in the
         // review phase) gets a DISTINCT inbox row instead of colliding on `runId|topic` (§3.2 audit).
         const ordinal = nextOrdinal(ctx.effectOrdinalByNode, decision.nodeId);
-        const human = await awaitHuman(runId, topic, stepKeyFor(decision.nodeId, ordinal), `${decision.reason} approval`, {
-          nodeId: decision.nodeId,
-          outcomes: decision.outcomes,
-        });
+        const human = await awaitHuman(
+          runId,
+          topic,
+          stepKeyFor(decision.nodeId, ordinal),
+          `${decision.reason} approval`,
+          buildGateSummary(decision, ctx.outputsByNode, ctx.lastVerdict),
+        );
         const verdict = gateVerdict(human, decision.outcomes);
         return { lastResult: verdict ? { verdict } : {}, ...(verdict ? { lastVerdict: verdict } : {}), stepDelta: 0 };
       }

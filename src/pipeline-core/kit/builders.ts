@@ -73,7 +73,13 @@ export const node = {
     reason: string,
     outcomes: string[],
     branches: Branch[],
-    opts: { timeout?: HumanGateNode['timeout']; displayName?: string; incrementCounters?: string[] } = {},
+    opts: {
+      timeout?: HumanGateNode['timeout'];
+      displayName?: string;
+      incrementCounters?: string[];
+      gatedArtifact?: HumanGateNode['gatedArtifact'];
+      verdictFrom?: HumanGateNode['verdictFrom'];
+    } = {},
   ): HumanGateNode {
     return {
       id,
@@ -84,6 +90,8 @@ export const node = {
       ...(opts.timeout ? { timeout: opts.timeout } : {}),
       ...(opts.incrementCounters ? { incrementCounters: opts.incrementCounters } : {}),
       ...(opts.displayName ? { displayName: opts.displayName } : {}),
+      ...(opts.gatedArtifact ? { gatedArtifact: opts.gatedArtifact } : {}),
+      ...(opts.verdictFrom ? { verdictFrom: opts.verdictFrom } : {}),
     };
   },
   choice(id: string, branches: Branch[], opts: { displayName?: string; incrementCounters?: string[] } = {}): ChoiceNode {

@@ -148,6 +148,40 @@ test('B10: a parked gate is visible via pending decisions and risk summary', { s
   }
 });
 
+test('B13: a parked plan gate carries the plan artifact + reviewer verdict inline (D3)', { skip: e2eSkip }, async () => {
+  const target = createTargetRepo();
+  try {
+    const { runId, inboxId } = await givenFeatureRunAtPlanGate(h, target);
+    const item = await h.api.getInboxItem(inboxId);
+    const ctx = item.context as {
+      topic?: string;
+      summary?: {
+        nodeId?: string;
+        gatedArtifact?: { nodeId?: string; name?: string; payload?: unknown; preview?: string };
+        reviewerVerdict?: unknown;
+      };
+    };
+
+    assert.equal(ctx.topic, 'plan');
+    assert.ok(ctx.summary, 'gate carries a summary');
+    assert.equal(ctx.summary.nodeId, 'planGate');
+    // D3: the analyst's plan is inline on the gate row — an approver decides without a get_agent_attempts dig.
+    assert.ok(ctx.summary.gatedArtifact, 'plan artifact is inline on the gate');
+    assert.equal(ctx.summary.gatedArtifact.nodeId, 'analyst');
+    assert.equal(ctx.summary.gatedArtifact.name, 'plan');
+    assert.ok(
+      ctx.summary.gatedArtifact.payload !== undefined || ctx.summary.gatedArtifact.preview !== undefined,
+      'the plan payload (or a head preview when over budget) is present',
+    );
+    // D3: the reviewer verdict is inline (defaulted to the routing verdict that opened the gate).
+    assert.ok(ctx.summary.reviewerVerdict, 'reviewer verdict is inline on the gate');
+
+    await approveUntilTerminal(h.api, runId);
+  } finally {
+    target.cleanup();
+  }
+});
+
 test('B12: cancelling a run parked at a gate marks it cancelled', { skip: e2eSkip }, async () => {
   const target = createTargetRepo();
   try {

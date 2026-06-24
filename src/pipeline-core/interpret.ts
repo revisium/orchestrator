@@ -237,6 +237,8 @@ function emit(
           reason: node.reason,
           outcomes: node.outcomes,
           ...(node.timeout ? { timeout: node.timeout } : {}),
+          ...(node.gatedArtifact ? { gatedArtifact: node.gatedArtifact } : {}),
+          ...(node.verdictFrom ? { verdictFrom: node.verdictFrom } : {}),
         },
       };
     case 'wait':
