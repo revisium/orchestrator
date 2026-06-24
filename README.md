@@ -47,11 +47,45 @@ pnpm run revo -- stop --profile dev
 Any single knob can be overridden explicitly — `REVO_DATA_DIR` / `REVO_PORT` / `REVO_PG_PORT` /
 `REVO_GRAPHQL_PORT` / `REVO_DBOS_DB` — and an explicit env var always wins over the profile band.
 
-Connect an agent over MCP (a thin stdio bridge that forwards to the running daemon):
+Connect an agent over MCP (`revo mcp` is a thin stdio bridge — it does not launch its own DBOS;
+if the daemon isn't already running, the bridge auto-starts it on first use; the profile comes
+from the process environment, not per-call args):
+
+**Claude Code**
 
 ```sh
+# global install
+claude mcp add revo -- revo mcp
+
+# dev checkout
 claude mcp add revo -- pnpm --dir "$PWD" run revo -- mcp
 ```
+
+**Codex CLI** (`codex mcp add` or edit `~/.codex/config.toml` directly)
+
+```sh
+# global install
+codex mcp add revo -- revo mcp
+
+# dev checkout (use an absolute path — $PWD does not expand in TOML args)
+codex mcp add revo-dev -- pnpm --dir /abs/path/to/agent-orchestrator run revo -- mcp
+```
+
+To use a non-`default` profile with Codex, append `--env REVO_PROFILE=dev` (and the other
+dev-band vars; see the JSON block under **Live Run Observability Smoke**) to `codex mcp add`,
+or export the vars in the shell before launching Codex — stdio servers inherit the parent
+environment. Equivalent TOML for the global install form:
+
+```toml
+# ~/.codex/config.toml
+[mcp_servers.revo]
+command = "revo"     # or the absolute path from `which revo` if revo is not on Codex's PATH
+args = ["mcp"]
+```
+
+**Verify the connection** — run `claude mcp list` or `codex mcp list` to confirm the server
+appears, then have the agent call `get_status` for a healthy JSON status reply. `list_pipelines`
+is a good read-only alternative.
 
 Run the local verification gates:
 
