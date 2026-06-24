@@ -1,4 +1,5 @@
 import type { ExecGhFn } from '../../poller/pr-readiness.js';
+import { taskBranchPrefix } from '../../runners/integrator-branch-naming.js';
 
 const PR_URL = 'https://github.com/e2e/repo/pull/1';
 const PR_URL_2 = 'https://github.com/e2e/repo/pull/2';
@@ -239,7 +240,7 @@ export function routedGhEmulator(scenarios: Map<string, GhScenario>, calls: stri
   let lastTaskId: string | undefined;
   return (args: string[]): string => {
     calls.push(args);
-    const branchTaskId = [...scenarios.keys()].find((id) => args.some((a) => a.includes(`feat/${id}-`)));
+    const branchTaskId = [...scenarios.keys()].find((id) => args.some((a) => a.includes(taskBranchPrefix(id))));
     if (branchTaskId !== undefined) lastTaskId = branchTaskId;
     const taskId = branchTaskId ?? lastTaskId;
     const scenario = (taskId !== undefined ? scenarios.get(taskId) : undefined) ?? 'happy';

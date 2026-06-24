@@ -3,7 +3,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { branchName } from './integrator-branch-naming.js';
+import { branchName, taskBranchPrefix } from './integrator-branch-naming.js';
 
 // ─── canonical ────────────────────────────────────────────────────────────────
 
@@ -22,6 +22,22 @@ test('canonical: real-world taskId produces short feat/<shortid>-<slug>', () => 
 test('shortId: extracts the segment after the last underscore', () => {
   const result = branchName('task_20260101T000000000Z_some-slug_abcd1234', 'fix something');
   assert.ok(result.startsWith('feat/abcd1234-'), `expected abcd1234 prefix, got: ${result}`);
+});
+
+// ─── taskBranchPrefix ─────────────────────────────────────────────────────────
+
+test('taskBranchPrefix: returns feat/<shortId>- for a canonical taskId', () => {
+  assert.equal(
+    taskBranchPrefix('task_20260624T075856661Z_docs-readme-how-to-ad_d29196ed'),
+    'feat/d29196ed-',
+  );
+});
+
+test('taskBranchPrefix: every branchName output starts with its taskBranchPrefix', () => {
+  const taskId = 'task_20260624T075856661Z_docs-readme-how-to-ad_d29196ed';
+  const prefix = taskBranchPrefix(taskId);
+  assert.ok(branchName(taskId, 'some title').startsWith(prefix));
+  assert.ok(branchName(taskId, 'another title').startsWith(prefix));
 });
 
 // ─── determinism ─────────────────────────────────────────────────────────────

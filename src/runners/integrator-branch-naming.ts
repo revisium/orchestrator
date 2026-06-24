@@ -34,3 +34,10 @@ export function branchName(taskId: string, title: string): string {
   const slug = slugify(title);
   return slug ? `feat/${id}-${slug}` : `feat/${id}`; // drop empty slug so no trailing '-'
 }
+
+/** The `feat/<shortId>-` prefix shared by every branch `branchName(taskId, *)` can produce.
+ *  Use this in emulators/assertions to scope gh-call lookups to a specific task without knowing
+ *  the title. */
+export function taskBranchPrefix(taskId: string): string {
+  return `feat/${shortId(taskId)}-`;
+}
