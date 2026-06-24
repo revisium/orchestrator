@@ -1109,9 +1109,53 @@ test('pollPr: checks pending until terminal → polls then classifies', async ()
     calls++;
     return calls < 2 ? readiness({ pending: ['build'], list: [{ name: 'build', result: 'IN_PROGRESS' }] }) : readiness({});
   };
-  const r = await pollPr(POLL_INPUT, pollDeps(collect));
+  // reviewGracePolls: 0 isolates the CI-polling assertion from the review-grace re-polls (slice 142).
+  const r = await pollPr(POLL_INPUT, pollDeps(collect, { reviewGracePolls: 0 }));
   assert.ok(!('needsHuman' in r) && r.verdict === 'clean', 'converges once CI is terminal');
   assert.equal(calls, 2, 'polled until checks went terminal');
+});
+
+test('pollPr: CI green flips the draft PR to ready-for-review (slice 142)', async () => {
+  const ghCalls: string[][] = [];
+  const collect = async (): Promise<PollPrReadiness> => readiness({});
+  const deps = pollDeps(collect, { reviewGracePolls: 0 });
+  deps.execGh = (args) => { ghCalls.push(args); return ''; };
+  const r = await pollPr(POLL_INPUT, deps);
+  assert.ok(!('needsHuman' in r) && r.verdict === 'clean');
+  assert.ok(
+    ghCalls.some((a) => a[0] === 'pr' && a[1] === 'ready'),
+    'CI green readies the draft PR so reviewers engage',
+  );
+});
+
+test('pollPr: CI red does NOT ready the PR (no review of broken code) → ci_changes', async () => {
+  const ghCalls: string[][] = [];
+  const collect = async (): Promise<PollPrReadiness> =>
+    readiness({ fail: ['build'], list: [{ name: 'build', result: 'FAILURE' }] });
+  const deps = pollDeps(collect, { reviewGracePolls: 0 });
+  deps.execGh = (args) => { ghCalls.push(args); return ''; };
+  const r = await pollPr(POLL_INPUT, deps);
+  assert.ok(!('needsHuman' in r) && r.verdict === 'ci_changes');
+  assert.ok(!ghCalls.some((a) => a[0] === 'pr' && a[1] === 'ready'), 'a red-CI PR stays draft');
+});
+
+test('pollPr: a review thread surfacing DURING the grace window → review_changes (not premature clean)', async () => {
+  let calls = 0;
+  const thread = { id: 'T1', path: 'a.ts', line: 1, author: 'coderabbit', body: 'fix this', isResolved: false, isOutdated: false };
+  const collect = async (): Promise<PollPrReadiness> => {
+    calls++;
+    // CI terminal+green from the start, but the review thread only lands on the 3rd read (during grace).
+    return calls < 3 ? readiness({}) : readiness({ threads: [thread] });
+  };
+  const r = await pollPr(POLL_INPUT, pollDeps(collect, { reviewGracePolls: 5 }));
+  assert.ok(!('needsHuman' in r) && r.verdict === 'review_changes', 'waits out the grace and catches the late review');
+  assert.ok(!('needsHuman' in r) && r.reviewThreads.length === 1);
+});
+
+test('pollPr: no review thread after the grace → clean (merge gate is the backstop, never blocks)', async () => {
+  const collect = async (): Promise<PollPrReadiness> => readiness({});
+  const r = await pollPr(POLL_INPUT, pollDeps(collect, { reviewGracePolls: 3 }));
+  assert.ok(!('needsHuman' in r) && r.verdict === 'clean', 'absent reviewer falls through to the human merge gate, not a block');
 });
 
 test('pollPr: timeout with checks still pending → needsHuman (block)', async () => {
