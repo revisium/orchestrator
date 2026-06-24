@@ -20,6 +20,7 @@ import {
 } from '../config.js';
 import { killTree, tailLines, waitForExit } from './revisium-helpers.js';
 import { buildDoctorReport } from './doctor-report.js';
+import { isPidWithin } from './process-tree.js';
 import { ensureHost, expectedGraphqlPort, isGraphqlHealthy } from '../../host/ensure-host.js';
 import { runHostDaemon } from '../../host/daemon.js';
 import {
@@ -195,7 +196,14 @@ async function doctorStack(options: ProfileOptions): Promise<void> {
   const unexpectedPortOwners: Array<{ label: string; port: number; pid: number }> = [];
   for (const check of portChecks) {
     const pid = listenerPid(check.port);
-    if (pid !== null && pid !== check.expected) {
+    if (pid === null) continue;
+    // Legitimate = the tracked pid ITSELF or one of its descendants. The standalone tier is a process
+    // tree (launcher → HTTP-binding worker → embedded Postgres), so the actual port owner is usually a
+    // child of the tracked launcher pid, not the launcher itself. Exact equality here mis-flagged the
+    // healthy stack as a rogue daemon (dogfood, alpha.7). Only a listener OUTSIDE the tracked tree —
+    // or any listener when nothing is tracked (expected === null) — is a real orphan/second daemon.
+    const owned = check.expected !== null && isPidWithin(pid, new Set([check.expected]));
+    if (!owned) {
       unexpectedPortOwners.push({ label: check.label, port: check.port, pid });
     }
   }
