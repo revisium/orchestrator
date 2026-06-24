@@ -31,17 +31,22 @@ import {
 } from '../../host/host-runtime.js';
 import type { RuntimeState } from '../config.js';
 
+// Resolve lsof to a FIXED absolute path — never via $PATH (S4036: a writable PATH entry could shadow
+// the binary). null if lsof isn't installed, in which case port-owner detection/reaping degrade to no-op.
+const LSOF_PATH = ['/usr/sbin/lsof', '/usr/bin/lsof', '/bin/lsof'].find((p) => existsSync(p)) ?? null;
+
 /** PID listening on a local TCP port (via lsof), or null. Best-effort — null on any failure. */
 function listenerPid(port: number): number | null {
+  if (LSOF_PATH === null) return null;
   try {
-    const out = execFileSync('lsof', ['-nP', `-tiTCP:${port}`, '-sTCP:LISTEN'], {
+    const out = execFileSync(LSOF_PATH, ['-nP', `-tiTCP:${port}`, '-sTCP:LISTEN'], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
     const pid = Number(out.split(/\r?\n/)[0]);
     return Number.isInteger(pid) && pid > 0 ? pid : null;
   } catch {
-    return null; // lsof missing / no listener
+    return null; // no listener / lsof error
   }
 }
 
