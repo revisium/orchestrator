@@ -73,6 +73,36 @@ test('buildContext: uses fallback when task is missing', async () => {
   assert.ok(ctx.includes('(unknown task)'), 'should fall back to unknown task');
 });
 
+// slice 143 — a LIVE run's agent must be pointed at its isolated worktree, not the original repo path,
+// so its writes land where the worktree-based integrator reads them.
+test('buildContext: a live run (worktree on disk) overrides repo_ref with the worktree path', async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'revo-wt-'));
+  try {
+    const worktree = join(dataDir, 'worktrees', STEP.runId);
+    mkdirSync(worktree, { recursive: true });
+    writeFileSync(join(worktree, '.git'), 'gitdir: /linked/worktree\n'); // a linked worktree's .git is a FILE
+    const da = makeDA({ task: { title: 'T', scope: 's', repo_ref: '/abs/live/revo-sandbox' } });
+
+    const ctx = await buildContext(da, STEP, ROLE, undefined, dataDir);
+
+    assert.ok(ctx.includes(`Repo: ${worktree}`), 'agent repo context points at the worktree');
+    assert.ok(!ctx.includes('Repo: /abs/live/revo-sandbox'), 'NOT the original live repo path');
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('buildContext: without a worktree on disk, repo_ref is kept (non-live unchanged)', async () => {
+  const dataDir = mkdtempSync(join(tmpdir(), 'revo-wt-'));
+  try {
+    const da = makeDA({ task: { title: 'T', scope: 's', repo_ref: '/abs/live/revo-sandbox' } });
+    const ctx = await buildContext(da, STEP, ROLE, undefined, dataDir); // dataDir given, but no worktree dir
+    assert.ok(ctx.includes('Repo: /abs/live/revo-sandbox'), 'non-live run keeps repo_ref');
+  } finally {
+    rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
 test('buildContext: includes prior failed attempt lessons', async () => {
   const da = makeDA({
     attempts: [
