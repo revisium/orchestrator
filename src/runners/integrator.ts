@@ -445,6 +445,9 @@ export type PollPrDeps = IntegratorDeps & {
   maxPolls?: number;
   /** Inter-poll interval in ms (defaults to {@link POLL_PR_INTERVAL_MS}). */
   pollIntervalMs?: number;
+  /** Bounded grace polls, AFTER CI goes green + the PR is readied, to let review threads surface
+   *  before declaring clean (slice 142). 0 disables the wait. Defaults to REVO_POLL_PR_REVIEW_GRACE_POLLS. */
+  reviewGracePolls?: number;
 };
 
 /** The slice of `collectPrReadiness` pollPr reads — CI terminal/pass/fail + unresolved review threads. */
@@ -511,24 +514,49 @@ export async function pollPr(
     };
   }
 
-  const reviewThreads: PrReviewThread[] = readiness.reviewThreads.items.map((t) => ({
+  // `settled` is the CI-terminal readiness (defined past the guard); the review-grace loop may refresh it.
+  let settled: PollPrReadiness = readiness;
+
+  // CI failures come from the CI-terminal snapshot (terminal → won't change under us).
+  const ciFailures: CiFailure[] = settled.checks.list
+    .filter((c) => settled.checks.fail.includes(c.name))
+    .map((c) => ({ name: c.name, conclusion: c.result }));
+
+  // CI green → flip the PR draft→ready so CodeRabbit / human reviewers actually engage. They SKIP
+  // draft PRs, which silently bypassed the entire review loop (the PR was readied only at confirmMerge,
+  // i.e. after the merge gate) — slice 142. Then wait a BOUNDED grace for review threads to surface
+  // before declaring clean, so we don't merge-gate a millisecond before CodeRabbit posts. We never
+  // BLOCK on a review arriving: the human merge gate is the backstop, so an absent / rate-limited
+  // reviewer falls through to it rather than deadlocking the run. CI-red stays draft (don't request
+  // review of broken code) and routes to ci_changes for a fix first.
+  if (ciFailures.length === 0) {
+    try {
+      gh(['pr', 'ready', branch, '--repo', ownerRepo]);
+    } catch {
+      // already ready / nothing to ready — idempotent best-effort
+    }
+    const reviewGracePolls = deps.reviewGracePolls ?? envInt('REVO_POLL_PR_REVIEW_GRACE_POLLS', 4);
+    for (let i = 0; i < reviewGracePolls && settled.reviewThreads.items.length === 0; i++) {
+      await sleep(intervalMs);
+      settled = await collect(ownerRepo, branch, input.base, gh);
+    }
+  }
+
+  const reviewThreads: PrReviewThread[] = settled.reviewThreads.items.map((t) => ({
     threadId: t.id,
     path: t.path,
     line: t.line,
     author: t.author,
     body: t.body,
   }));
-  const ciFailures: CiFailure[] = readiness.checks.list
-    .filter((c) => readiness.checks.fail.includes(c.name))
-    .map((c) => ({ name: c.name, conclusion: c.result }));
 
   // Decision order (plan 0018): review threads first, then CI, else clean.
   const verdict: PrFeedback['verdict'] =
     reviewThreads.length > 0 ? 'review_changes' : ciFailures.length > 0 ? 'ci_changes' : 'clean';
 
   return {
-    prNumber: readiness.pr.number ?? null,
-    headSha: readiness.pr.headSha,
+    prNumber: settled.pr.number ?? null,
+    headSha: settled.pr.headSha,
     verdict,
     ciFailures,
     reviewThreads,
