@@ -22,6 +22,7 @@ import {
   removeHostRuntimeIfMatches,
   isHostRunning,
   hostRuntimeFile,
+  hostCodeVersion,
 } from './host-runtime.js';
 
 after(() => rmSync(TMP, { recursive: true, force: true }));
@@ -53,4 +54,11 @@ test('host-runtime: removeHostRuntimeIfMatches deletes only on a pid+startedAt i
   assert.ok(readHostRuntime(), 'must not delete a runtime that no longer matches');
   removeHostRuntimeIfMatches({ pid: 111, startedAt: 'A' }); // exact match → delete
   assert.equal(readHostRuntime(), null);
+});
+
+test('host-runtime: hostCodeVersion returns this build version (the version-check identity)', () => {
+  const v = hostCodeVersion();
+  assert.equal(typeof v, 'string');
+  assert.ok(v.length > 0, 'a non-empty version (package version, or "unknown" fallback)');
+  assert.equal(hostCodeVersion(), v, 'cached: stable across calls');
 });
