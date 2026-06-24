@@ -25,6 +25,48 @@ test('both tiers down → "not running", not an error condition', () => {
   assert.deepEqual(r.issues, ['Stack is not running. Run `revo start`.']);
 });
 
+test('unexpected process on a profile port → flags an untracked/duplicate daemon (the zoo signal)', () => {
+  const r = buildDoctorReport({
+    host: healthy(100, 19223),
+    standalone: healthy(101, 19222),
+    unexpectedPortOwners: [{ label: 'GraphQL', port: 19223, pid: 777 }],
+  });
+  assert.equal(r.ok, false);
+  assert.ok(r.issues.some((i) => /Unexpected process \(pid 777\).*19223.*duplicate daemon/.test(i)));
+});
+
+test('a rogue process while host.json/runtime.json are absent is still flagged (not "stack not running")', () => {
+  const r = buildDoctorReport({
+    host: absent,
+    standalone: absent,
+    unexpectedPortOwners: [{ label: 'standalone HTTP', port: 19222, pid: 888 }],
+  });
+  assert.equal(r.ok, false);
+  assert.ok(r.issues.some((i) => i.includes('pid 888')), 'reports the rogue process');
+  assert.ok(!r.issues.includes('Stack is not running. Run `revo start`.'), 'not the plain down message');
+});
+
+test('version mismatch → flags a stale daemon and suggests restart', () => {
+  const r = buildDoctorReport({
+    host: healthy(100, 19223),
+    standalone: healthy(101, 19222),
+    versionMismatch: { running: '0.1.0-alpha.6', current: '0.1.0-alpha.7' },
+  });
+  assert.equal(r.ok, false);
+  assert.ok(r.issues.some((i) => /version 0\.1\.0-alpha\.6 but this build is 0\.1\.0-alpha\.7.*revo restart/.test(i)));
+});
+
+test('matching version + no rogue ports → no false issues', () => {
+  const r = buildDoctorReport({
+    host: healthy(100, 19223),
+    standalone: healthy(101, 19222),
+    unexpectedPortOwners: [],
+    versionMismatch: { running: '0.1.0-alpha.7', current: '0.1.0-alpha.7' },
+  });
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.issues, []);
+});
+
 test('both tiers healthy → ok with no issues', () => {
   const r = buildDoctorReport({ host: healthy(100, 19223), standalone: healthy(101, 19222) });
   assert.equal(r.ok, true);
