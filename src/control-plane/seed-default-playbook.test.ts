@@ -174,15 +174,85 @@ test('seedDefaultPlaybook: installs when the default playbook is absent', async 
   assert.equal(installs, 1);
 });
 
-test('seedDefaultPlaybook: skips when the default playbook is already installed', async () => {
+/**
+ * The bundled default-playbook version — the value `resolvePlaybookSource` reads from the source
+ * package.json. The version-aware re-seed (slice 144) compares the installed row's version against this,
+ * so the idempotency tests pin the installed version to the bundle to express "up to date".
+ */
+const BUNDLED_DEFAULT_VERSION = JSON.parse(
+  readFileSync(join(DEFAULT_PLAYBOOK_SOURCE, 'package.json'), 'utf8'),
+).version as string;
+
+test('seedDefaultPlaybook: skips when the installed version equals the bundled version', async () => {
+  let installs = 0;
+  const installer: DefaultPlaybookInstaller = {
+    async listPlaybooks() { return [{ id: DEFAULT_PLAYBOOK_ID, version: BUNDLED_DEFAULT_VERSION }]; },
+    async install() { installs += 1; return STUB_RESULT; },
+  };
+  const outcome = await seedDefaultPlaybook(installer, DEFAULT_PLAYBOOK_SOURCE);
+  assert.equal(outcome.status, 'already-installed');
+  assert.equal(installs, 0, 'must not re-install when versions match');
+});
+
+test('seedDefaultPlaybook: skips when the installed version is NEWER than the bundle (never downgrade)', async () => {
+  let installs = 0;
+  const installer: DefaultPlaybookInstaller = {
+    async listPlaybooks() { return [{ id: DEFAULT_PLAYBOOK_ID, version: '99.0.0' }]; },
+    async install() { installs += 1; return STUB_RESULT; },
+  };
+  const outcome = await seedDefaultPlaybook(installer, DEFAULT_PLAYBOOK_SOURCE);
+  assert.equal(outcome.status, 'already-installed');
+  assert.equal(installs, 0, 'must not downgrade to an older bundle');
+});
+
+test('seedDefaultPlaybook: re-seeds when the bundle is NEWER than the installed version', async () => {
+  // 0.0.1 is below any plausible bundled release version, so the bundle always wins the semver compare.
+  let installs = 0;
+  const installer: DefaultPlaybookInstaller = {
+    async listPlaybooks() { return [{ id: DEFAULT_PLAYBOOK_ID, version: '0.0.1' }]; },
+    async install() { installs += 1; return STUB_RESULT; },
+  };
+  const outcome = await seedDefaultPlaybook(installer, DEFAULT_PLAYBOOK_SOURCE);
+  assert.equal(outcome.status, 'installed', 'a newer bundle overwrites the installed playbook');
+  assert.equal(installs, 1);
+});
+
+test('seedDefaultPlaybook: re-seeds once when the installed row has NO recorded version', async () => {
+  // Backward-compat: a pre-versioning install reads as "older" so the one-time upgrade lands.
   let installs = 0;
   const installer: DefaultPlaybookInstaller = {
     async listPlaybooks() { return [{ id: DEFAULT_PLAYBOOK_ID }]; },
     async install() { installs += 1; return STUB_RESULT; },
   };
   const outcome = await seedDefaultPlaybook(installer, DEFAULT_PLAYBOOK_SOURCE);
-  assert.equal(outcome.status, 'already-installed');
-  assert.equal(installs, 0, 'must not re-install an existing playbook');
+  assert.equal(outcome.status, 'installed', 'a versionless installed row is treated as older → re-seed');
+  assert.equal(installs, 1);
+});
+
+test('seedDefaultPlaybook: logs the up-to-date decision when skipping', async () => {
+  const messages: string[] = [];
+  const installer: DefaultPlaybookInstaller = {
+    async listPlaybooks() { return [{ id: DEFAULT_PLAYBOOK_ID, version: BUNDLED_DEFAULT_VERSION }]; },
+    async install() { return STUB_RESULT; },
+  };
+  await seedDefaultPlaybook(installer, DEFAULT_PLAYBOOK_SOURCE, (m) => messages.push(m));
+  assert.ok(
+    messages.some((m) => /up to date/i.test(m)),
+    'the skip decision is logged for the operator',
+  );
+});
+
+test('seedDefaultPlaybook: logs the re-seed decision when the bundle is newer', async () => {
+  const messages: string[] = [];
+  const installer: DefaultPlaybookInstaller = {
+    async listPlaybooks() { return [{ id: DEFAULT_PLAYBOOK_ID, version: '0.0.1' }]; },
+    async install() { return STUB_RESULT; },
+  };
+  await seedDefaultPlaybook(installer, DEFAULT_PLAYBOOK_SOURCE, (m) => messages.push(m));
+  assert.ok(
+    messages.some((m) => /re-seed/i.test(m)),
+    'the re-seed decision is logged for the operator',
+  );
 });
 
 test('seedDefaultPlaybook: tolerates a benign concurrent-commit race', async () => {
@@ -235,10 +305,12 @@ test('createDaemonInstaller: forwards listPlaybooks and exposes an install funct
   assert.deepEqual(await installer.listPlaybooks(), present, 'listPlaybooks delegates to the injected reader');
 });
 
-test('createDaemonInstaller: seed skips install when the reader reports the default present', async () => {
+test('createDaemonInstaller: seed skips install when the reader reports an up-to-date default present', async () => {
   // Drives seedDefaultPlaybook through the daemon adapter's listPlaybooks without touching a daemon:
-  // the presence reader short-circuits before install() (which WOULD need the live draft scope).
-  const installer = createDaemonInstaller(async () => [{ id: DEFAULT_PLAYBOOK_ID }]);
+  // an up-to-date version short-circuits before install() (which WOULD need the live draft scope).
+  const installer = createDaemonInstaller(async () => [
+    { id: DEFAULT_PLAYBOOK_ID, version: BUNDLED_DEFAULT_VERSION },
+  ]);
   const outcome = await seedDefaultPlaybook(installer, DEFAULT_PLAYBOOK_SOURCE);
   assert.equal(outcome.status, 'already-installed');
 });
