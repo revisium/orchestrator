@@ -81,11 +81,19 @@ test('bootstrapControlPlane: an already-bootstrapped control-plane is a no-op (n
   assert.deepEqual(calls, { createProject: 0, createEndpoint: 0, createTable: 0, updateTable: 0, createRow: 0, commit: 0 });
 });
 
-test('listInstalledPlaybooks: maps the head playbooks-table rows to ids', async () => {
+test('listInstalledPlaybooks: maps the head playbooks-table rows to id + recorded version', async () => {
   const client = {
     revision: async () => ({
-      getRows: async () => ({ edges: [{ node: { id: 'revisium-default' } }, { node: { id: 'feature-x' } }] }),
+      getRows: async () => ({
+        edges: [
+          { node: { id: 'revisium-default', data: { version: '0.1.1' } } },
+          { node: { id: 'feature-x' } }, // no data → version undefined (slice 144 B1 reads it as "older")
+        ],
+      }),
     }),
   } as unknown as RevisiumClient;
-  assert.deepEqual(await listInstalledPlaybooks(0, client), [{ id: 'revisium-default' }, { id: 'feature-x' }]);
+  assert.deepEqual(await listInstalledPlaybooks(0, client), [
+    { id: 'revisium-default', version: '0.1.1' },
+    { id: 'feature-x', version: undefined },
+  ]);
 });

@@ -28,6 +28,10 @@ export type ControlPlaneTransport = {
   createRow(table: string, rowId: string, data: object): Promise<TransportRow>;
   updateRow(table: string, rowId: string, data: object): Promise<TransportRow>;
   patchRow(table: string, rowId: string, patches: PatchOperation[]): Promise<TransportRow>;
+  /** Drop the cached read-scope so the next call re-resolves the current revision (slice 144 B2 — a
+   *  committed install_playbook must be visible to HEAD reads in the same daemon lifecycle, no restart).
+   *  Optional so existing transport doubles/mocks need not provide it; callers guard with `canInvalidate`. */
+  invalidate?(): void;
 };
 
 type ScopeContext = { revisionId: string; client: Client };
@@ -278,5 +282,5 @@ export function createClientTransport(mode: RevisionMode): ControlPlaneTransport
     return toTransportRow(extractMutationRow({ data: resultData }));
   }
 
-  return { mode, assertReady, listRows, getRow, createRow, updateRow, patchRow };
+  return { mode, assertReady, listRows, getRow, createRow, updateRow, patchRow, invalidate: () => resolveScope.invalidate() };
 }
