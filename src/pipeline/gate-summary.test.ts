@@ -52,6 +52,27 @@ test('verdictFrom defaults to the routing verdict (lastVerdict) when unspecified
   assert.deepEqual(summary.reviewerVerdict, { verdict: 'changes_requested' });
 });
 
+test('a SPECIFIED but unresolved verdictFrom does NOT fall back to the routing verdict (no misattribution)', () => {
+  const out = outputs(row('analyst', { plan: 'p' }));
+  const summary = buildGateSummary(
+    gate({ gatedArtifact: { node: 'analyst', as: 'plan' }, verdictFrom: { node: 'ghost' } }),
+    out,
+    'approved',
+  );
+  assert.equal(summary.reviewerVerdict, undefined, 'requested-but-missing verdictFrom must not show the routing verdict');
+});
+
+test('the artifact budget is measured in BYTES — a multi-byte payload under the UTF-16 limit still truncates', () => {
+  // 6000 × '한' (3 bytes UTF-8 each) = ~18KB bytes but only ~6KB UTF-16 code units → a length-based
+  // check would inline it; the byte-based check must truncate.
+  const out = outputs(row('analyst', { s: '한'.repeat(6_000) }, 1));
+  const summary = buildGateSummary(gate({ gatedArtifact: { node: 'analyst', as: 'plan' } }), out, 'approved');
+
+  assert.equal(summary.gatedArtifact?.truncated, true, 'over the byte budget → truncated');
+  assert.equal(summary.gatedArtifact?.payload, undefined);
+  assert.equal(summary.gatedArtifact?.payloadRef, 'attempt:analyst#1');
+});
+
 test('a missing producer omits the artifact (best-effort) and never throws', () => {
   const summary = buildGateSummary(gate({ gatedArtifact: { node: 'analyst', as: 'plan' } }), new Map(), 'approved');
   assert.equal(summary.gatedArtifact, undefined);

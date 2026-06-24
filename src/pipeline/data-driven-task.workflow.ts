@@ -298,7 +298,8 @@ function gateArtifactView(row: RunOutputRow, as?: string): GateArtifactView {
   const base = { nodeId: row.nodeId, name: as ?? row.name, schemaRef: row.schemaRef };
   const safe = redactEventPayload(redactSecrets(row.payload) ?? null);
   const serialized = JSON.stringify(safe ?? null);
-  if (serialized.length <= GATE_ARTIFACT_MAX) return { ...base, payload: safe };
+  // Budget on BYTES (not UTF-16 length) so a multi-byte payload can't slip past the cap.
+  if (Buffer.byteLength(serialized, 'utf8') <= GATE_ARTIFACT_MAX) return { ...base, payload: safe };
   return {
     ...base,
     truncated: true,
@@ -309,8 +310,9 @@ function gateArtifactView(row: RunOutputRow, as?: string): GateArtifactView {
 
 /**
  * Build the enriched gate inbox summary from the workflow-local outputs (replay-safe — rebuilt
- * identically, 0016 §6). `verdictFrom` resolves a node's verdict output; absent, it defaults to the
- * routing verdict that opened the gate (`lastVerdict`). Routing is unaffected — purely informational.
+ * identically, 0016 §6). `verdictFrom` resolves a node's verdict output; when it is NOT specified, the
+ * verdict defaults to the routing verdict that opened the gate (`lastVerdict`). Routing is unaffected —
+ * purely informational.
  */
 export function buildGateSummary(
   decision: Extract<Decision, { type: 'awaitGate' }>,
@@ -322,7 +324,9 @@ export function buildGateSummary(
   if (artRow) summary.gatedArtifact = gateArtifactView(artRow, decision.gatedArtifact?.as);
   const verdictRow = resolveGateRow(decision.verdictFrom, outputsByNode);
   if (verdictRow) summary.reviewerVerdict = gateArtifactView(verdictRow);
-  else if (lastVerdict) summary.reviewerVerdict = { verdict: lastVerdict };
+  // Only fall back to the routing verdict when no verdictFrom was REQUESTED — a specified-but-unresolved
+  // verdictFrom must not silently present the routing verdict as if it came from that source.
+  else if (!decision.verdictFrom && lastVerdict) summary.reviewerVerdict = { verdict: lastVerdict };
   return summary;
 }
 
