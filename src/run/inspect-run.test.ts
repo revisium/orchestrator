@@ -2,7 +2,36 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { ControlPlaneDataAccess, ControlPlaneRow, ListRowsOptions, PatchOperation } from '../control-plane/index.js';
 import type { RuntimeTable } from '../control-plane/tables.js';
-import { listRuns, showRun, listRunEvents, formatRunList, formatRunDetail, formatEventList } from './inspect-run.js';
+import { listRuns, showRun, listRunEvents, formatRunList, formatRunDetail, formatEventList, compactEventPayload } from './inspect-run.js';
+
+test('compactEventPayload: run_created strips the graph (route_decision + execution_profile) + truncates description', () => {
+  const big = 'x'.repeat(500);
+  const out = compactEventPayload('run_created', {
+    title: 'My run',
+    playbook_id: 'pb',
+    pipeline_id: 'feature-development',
+    description: big,
+    route_decision: { executionPolicy: { template_json: { nodes: { a: 1, b: 2 } } } },
+    execution_profile: { id: 'default' },
+  }) as Record<string, unknown>;
+  assert.equal(out['route_decision'], undefined, 'graph stripped');
+  assert.equal(out['execution_profile'], undefined, 'execution_profile stripped');
+  assert.equal(out['title'], 'My run', 'human-facing fields kept');
+  assert.equal(out['pipeline_id'], 'feature-development');
+  assert.ok(typeof out['description'] === 'string' && (out['description'] as string).length <= 281, 'description truncated');
+  assert.ok(!JSON.stringify(out).includes('template_json'), 'no graph substring survives');
+});
+
+test('compactEventPayload: non-run_created events pass through verbatim', () => {
+  const payload = { reason: 'preflight', lesson: 'stale base', route_decision: { keepme: true } };
+  assert.deepEqual(compactEventPayload('run_blocked', payload), payload, 'other types untouched');
+});
+
+test('compactEventPayload: tolerates null / short description', () => {
+  assert.equal(compactEventPayload('run_created', null), null);
+  const out = compactEventPayload('run_created', { description: 'short', title: 't' }) as Record<string, unknown>;
+  assert.equal(out['description'], 'short', 'short description not truncated');
+});
 
 function makeRow(rowId: string, data: Record<string, unknown>): ControlPlaneRow {
   return { rowId, data, createdAt: data.created_at as string | undefined };

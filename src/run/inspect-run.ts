@@ -96,15 +96,36 @@ function toTaskSummary(row: ControlPlaneRow): TaskSummary {
   };
 }
 
+const EVENT_DESCRIPTION_MAX = 280;
+
+/**
+ * Compact a `run_created` event payload for the event/digest read surfaces (slice 141 D1). That payload
+ * embeds the ENTIRE pipeline graph (`route_decision.executionPolicy.template_json`) + `execution_profile`
+ * + the full run description, so a single `get_run_events` page that includes it was ~57KB — bloat an
+ * operator polls constantly. The graph is a RUN property, retrievable from the run's route (the
+ * create/start return, deliberately untouched) — the audit event only needs the human-facing summary.
+ * Every other event type passes through verbatim.
+ */
+export function compactEventPayload(type: string, payload: unknown): unknown {
+  if (type !== 'run_created' || payload === null || typeof payload !== 'object') return payload ?? null;
+  const { route_decision: _rd, execution_profile: _ep, description, ...rest } = payload as Record<string, unknown>;
+  const desc =
+    typeof description === 'string' && description.length > EVENT_DESCRIPTION_MAX
+      ? `${description.slice(0, EVENT_DESCRIPTION_MAX)}…`
+      : description;
+  return description === undefined ? rest : { ...rest, description: desc };
+}
+
 function toEventSummary(row: ControlPlaneRow): EventSummary {
+  const type = str(row.data.type);
   return {
     eventId: row.rowId,
-    type: str(row.data.type),
+    type,
     actor: str(row.data.actor),
     createdAt: str(row.data.created_at ?? row.createdAt),
     taskId: str(row.data.task_id),
     stepId: str(row.data.step_id),
-    payload: row.data.payload ?? null,
+    payload: compactEventPayload(type, row.data.payload ?? null),
   };
 }
 
