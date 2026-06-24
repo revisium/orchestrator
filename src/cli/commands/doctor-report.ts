@@ -24,17 +24,43 @@ export type TierObservation = {
 export type DoctorObservation = {
   host: TierObservation;
   standalone: TierObservation;
+  /**
+   * Processes listening on the profile's ports whose pid does NOT match the tracked daemon/standalone
+   * — an untracked or duplicate daemon (the "daemon zoo" signal that lets stale daemons silently serve
+   * runs). slice 139.
+   */
+  unexpectedPortOwners?: Array<{ label: string; port: number; pid: number }>;
+  /** The running daemon's code version differs from this build/installation (stale daemon). slice 139. */
+  versionMismatch?: { running: string; current: string };
 };
 
 export type DoctorReport = { ok: boolean; issues: string[] };
 
 export function buildDoctorReport(o: DoctorObservation): DoctorReport {
-  // Nothing recorded on either tier → the stack is simply down, not broken.
-  if (!o.host.present && !o.standalone.present) {
-    return { ok: false, issues: ['Stack is not running. Run `revo start`.'] };
+  const issues: string[] = [];
+
+  // Daemon-zoo signal: a process not tracked by host.json/runtime.json holds a profile port. The
+  // advisory-lock singleton (slice 139) stops new duplicates, but pre-existing/orphan ones must be seen.
+  for (const owner of o.unexpectedPortOwners ?? []) {
+    issues.push(
+      `Unexpected process (pid ${owner.pid}) on the ${owner.label} port ${owner.port} — an untracked or ` +
+        'duplicate daemon. Run `revo stop` to reap the profile, then `revo start`.',
+    );
   }
 
-  const issues: string[] = [];
+  // Stale-code daemon: the live daemon is a different build than this CLI/installation.
+  if (o.versionMismatch && o.versionMismatch.running !== o.versionMismatch.current) {
+    issues.push(
+      `Running daemon is version ${o.versionMismatch.running} but this build is ${o.versionMismatch.current} — ` +
+        'run `revo restart` to replace the stale daemon.',
+    );
+  }
+
+  // Nothing recorded on either tier → the stack is simply down (unless a rogue process was flagged above).
+  if (!o.host.present && !o.standalone.present) {
+    if (issues.length === 0) return { ok: false, issues: ['Stack is not running. Run `revo start`.'] };
+    return { ok: false, issues };
+  }
 
   // Host tier — the single DBOS owner and the GraphQL/MCP front door.
   if (o.host.present && !o.host.alive) {

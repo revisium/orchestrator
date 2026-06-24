@@ -12,6 +12,7 @@ import { spawn } from 'node:child_process';
 import { closeSync, openSync } from 'node:fs';
 import { getConfig, isAlive, resolveDefaultGraphqlPort } from '../config.js';
 import {
+  hostCodeVersion,
   isHostRunning,
   readHostRuntime,
   removeHostRuntime,
@@ -98,6 +99,15 @@ export async function ensureHost(options: EnsureHostOptions = {}): Promise<Ensur
 
   if (existing && isHostRunning()) {
     if (await isGraphqlHealthy(existing.graphqlPort)) {
+      // Version-check (slice 139): surface a daemon running a DIFFERENT build than this install so it
+      // can't silently serve stale behavior. We warn (not auto-kill) to avoid disrupting in-flight runs;
+      // `revo restart` (or `doctor`) replaces it. A 0.0.0 dev checkout doesn't change version → no warn.
+      if (existing.version !== undefined && existing.version !== hostCodeVersion()) {
+        console.warn(
+          `[host] attached to a daemon running version ${existing.version}, but this build is ` +
+            `${hostCodeVersion()} — run \`revo restart\` to replace the stale daemon.`,
+        );
+      }
       return { runtime: existing, alreadyRunning: true };
     }
     // Alive but not ready — likely mid-boot/bootstrap. Wait; never spawn a duplicate (port collision).
@@ -110,10 +120,10 @@ export async function ensureHost(options: EnsureHostOptions = {}): Promise<Ensur
   }
 
   // No live daemon — clear a stale host.json (dead pid), then spawn a fresh detached one.
-  // Known limitation (matches ensureRevisium's deferred concurrent-cold-start): this check-then-spawn
-  // is not atomic, so two ensureHost() callers racing with no live daemon could both spawn `__daemon`.
-  // The second daemon's startGraphqlHost fails fast (the GraphQL port is already bound) and exits, so
-  // it cannot become a second DBOS owner; full cross-process spawn locking is deferred.
+  // The check-then-spawn is not atomic, but the daemon's advisory-lock singleton (slice 139,
+  // queue-ownership.ts) makes a concurrent cold-start safe: if two ensureHost() callers both spawn
+  // `__daemon`, only one wins the per-profile lock and lives; the loser exits before DBOS/queue, and
+  // every waiter observes the winner's host.json via waitForReady.
   if (existing) removeHostRuntime();
   spawnDaemon();
   const ready = await waitForReady(timeoutMs);

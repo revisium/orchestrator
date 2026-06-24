@@ -10,6 +10,7 @@
  */
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { getConfig, isAlive } from '../config.js';
 
 export type HostRuntimeState = {
@@ -19,7 +20,29 @@ export type HostRuntimeState = {
   mcpPort: number;
   startedAt: string;
   profile: string;
+  /** Build version this daemon runs (slice 139). Absent in host.json written before 139. */
+  version?: string;
 };
+
+let cachedCodeVersion: string | undefined;
+
+/**
+ * This build's package version (e.g. `0.1.0-alpha.7`). Recorded in host.json so `ensureHost`/`doctor`
+ * can detect a stale daemon running a DIFFERENT build than the current install (slice 139). A `0.0.0`
+ * dev checkout does not change across rebuilds, so dev relies on `revo restart`; released builds differ.
+ */
+export function hostCodeVersion(): string {
+  if (cachedCodeVersion === undefined) {
+    try {
+      const pkgPath = fileURLToPath(new URL('../../package.json', import.meta.url));
+      const pkg = JSON.parse(readFileSync(pkgPath, 'utf8')) as { version?: unknown };
+      cachedCodeVersion = typeof pkg.version === 'string' ? pkg.version : 'unknown';
+    } catch {
+      cachedCodeVersion = 'unknown';
+    }
+  }
+  return cachedCodeVersion;
+}
 
 /** Identity used for compare-and-delete (mirrors the standalone runtime guard — F19/F21). */
 export type HostRuntimeSnapshot = Pick<HostRuntimeState, 'pid' | 'startedAt'>;
