@@ -100,6 +100,10 @@ export async function seedDefaultPlaybook(
   if (existing) {
     // The bundled version lives in the source package.json — resolve it the same way the installer does
     // so the comparison is against the exact value that lands on the row.
+    // RELEASE DISCIPLINE: this re-seed only fires when the bundled version is NEWER, so any change to the
+    // playbook CONTENT (catalog/pipelines.json, catalog/roles.json, prompts/) MUST bump
+    // control-plane/default-playbook/package.json — otherwise an upgraded bundle with new content keeps the
+    // SAME version and silently skips re-seeding (this is exactly the D3 dogfood gap; see slice 144).
     const bundledVersion = resolvePlaybookSource(source).version;
     const installedVersion = existing.version ?? '';
     // A pre-versioning row (no recorded version) reads as "0.0.0" → strictly older → re-seed once so the
