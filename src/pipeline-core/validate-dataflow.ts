@@ -1,4 +1,4 @@
-import type { ConsumesRef, Node, Template } from './types.js';
+import type { ConsumesRef, HumanGateNode, Node, Template } from './types.js';
 import { DiagSink } from './validate-sink.js';
 import {
   branchSubgraph,
@@ -27,6 +27,37 @@ export function ruleDataflow(template: Template, ids: Set<string>, d: DiagSink):
   flagDuplicateProduces(template, d);
   for (const node of Object.values(template.nodes)) {
     if (node.kind === 'agent' || node.kind === 'script') checkConsumer(node, ctx, d);
+    else if (node.kind === 'humanGate') checkGateRefs(node, ctx, d);
+  }
+}
+
+/**
+ * D3 — a humanGate's informational `gatedArtifact`/`verdictFrom` refs must point at real nodes (catch
+ * typos at seed/validate time); a gatedArtifact node must declare `produces` (else it yields nothing).
+ * Resolution at runtime is best-effort (a missing artifact just omits it), so dominance is NOT required —
+ * unlike a consumer's required input. Routing is unaffected (the gate still routes on its verdict).
+ */
+function checkGateRefs(node: HumanGateNode, ctx: DataflowCtx, d: DiagSink): void {
+  const { gatedArtifact, verdictFrom } = node;
+  if (gatedArtifact) {
+    const producer = ctx.nodes[gatedArtifact.node];
+    if (!producer) {
+      d.error('GATE_REF_UNRESOLVED', `gate "${node.id}" gatedArtifact references unknown node "${gatedArtifact.node}"`, {
+        nodeId: node.id,
+        path: 'gatedArtifact',
+      });
+    } else if (!isEffectProducer(producer)) {
+      d.error('GATE_ARTIFACT_NO_PRODUCES', `gate "${node.id}" gatedArtifact node "${gatedArtifact.node}" declares no produces`, {
+        nodeId: node.id,
+        path: 'gatedArtifact',
+      });
+    }
+  }
+  if (verdictFrom && !ctx.nodes[verdictFrom.node]) {
+    d.error('GATE_REF_UNRESOLVED', `gate "${node.id}" verdictFrom references unknown node "${verdictFrom.node}"`, {
+      nodeId: node.id,
+      path: 'verdictFrom',
+    });
   }
 }
 

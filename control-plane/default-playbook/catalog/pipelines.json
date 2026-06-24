@@ -131,7 +131,11 @@
               {
                 "default": "blockedEnd"
               }
-            ]
+            ],
+            "gatedArtifact": {
+              "node": "analyst",
+              "as": "plan"
+            }
           },
           "planGate": {
             "id": "planGate",
@@ -151,7 +155,11 @@
               {
                 "default": "blockedEnd"
               }
-            ]
+            ],
+            "gatedArtifact": {
+              "node": "analyst",
+              "as": "plan"
+            }
           },
           "developer": {
             "id": "developer",
@@ -232,7 +240,11 @@
               {
                 "default": "blockedEnd"
               }
-            ]
+            ],
+            "gatedArtifact": {
+              "node": "analyst",
+              "as": "plan"
+            }
           },
           "reworkDeveloper": {
             "id": "reworkDeveloper",
@@ -281,7 +293,11 @@
               {
                 "default": "blockedEnd"
               }
-            ]
+            ],
+            "gatedArtifact": {
+              "node": "pollPr",
+              "as": "prFeedback"
+            }
           },
           "confirmMerge": {
             "id": "confirmMerge",
@@ -488,7 +504,11 @@
               {
                 "default": "blockedEnd"
               }
-            ]
+            ],
+            "gatedArtifact": {
+              "node": "triage",
+              "as": "triage"
+            }
           },
           "reviewRework": {
             "id": "reviewRework",
