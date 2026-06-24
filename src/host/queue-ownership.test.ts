@@ -36,6 +36,9 @@ test('acquireQueueOwnership: winner holds the lock; release unlocks + closes', a
   const tryLock = calls.queries.find((q) => q.sql.includes('pg_try_advisory_lock'));
   assert.ok(tryLock, 'tries the advisory lock');
   assert.deepEqual(tryLock?.params, ['revo:dev-tasks:default'], 'keyed on the profile lock name');
+  // slice 140: a FULL 64-bit key (md5 → bit(64) → bigint), NOT 32-bit hashtext (collision-prone).
+  assert.match(tryLock?.sql ?? '', /md5\(\$1\)/, 'derives a 64-bit key via md5, not hashtext');
+  assert.doesNotMatch(tryLock?.sql ?? '', /hashtext/, 'no longer uses the 32-bit hashtext key');
 
   await own.release();
   assert.ok(calls.queries.some((q) => q.sql.includes('pg_advisory_unlock')), 'release unlocks');

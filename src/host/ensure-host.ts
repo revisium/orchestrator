@@ -18,6 +18,7 @@ import {
   removeHostRuntime,
   type HostRuntimeState,
 } from './host-runtime.js';
+import { dbosEnvPin } from './dbos-identity.js';
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 /** Budget to let an alive-but-not-yet-healthy daemon finish booting before giving up. */
@@ -82,8 +83,11 @@ export function daemonSpawnArgv(entry: string = process.argv[1]): [string, strin
 function spawnDaemon(): void {
   const out = openSync(getConfig().hostLogFile, 'a');
   const [cmd, args] = daemonSpawnArgv();
-  // env inheritance carries the resolved profile (REVO_PROFILE / REVO_* knobs) to the daemon.
-  const child = spawn(cmd, args, { detached: true, stdio: ['ignore', out, out], env: process.env });
+  // env inheritance carries the resolved profile (REVO_PROFILE / REVO_* knobs) to the daemon, PLUS the
+  // pinned DBOS identity (DBOS__VMID/DBOS__APPVERSION). dbos-sdk reads those at IMPORT time, so they
+  // must be in the child's env from the start — set here, never mutated after launch (slice 140).
+  const env = { ...process.env, ...dbosEnvPin(getConfig().profile, process.env) };
+  const child = spawn(cmd, args, { detached: true, stdio: ['ignore', out, out], env });
   closeSync(out);
   if (!child.pid) throw new Error('Failed to spawn Revo host daemon: spawn returned no pid');
   child.unref(); // detached — the daemon outlives this CLI process

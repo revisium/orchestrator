@@ -32,6 +32,17 @@ export type DoctorObservation = {
   unexpectedPortOwners?: Array<{ label: string; port: number; pid: number }>;
   /** The running daemon's code version differs from this build/installation (stale daemon). slice 139. */
   versionMismatch?: { running: string; current: string };
+  /**
+   * Foreign DBOS connections on the profile's `dbos` database whose executor id is not this profile's
+   * pinned owner — a legacy/duplicate daemon polling `dev-tasks` that the advisory lock cannot stop and
+   * the port-based reap cannot see (it has no inbound listener). slice 140.
+   */
+  queuePollerRogues?: Array<{ pid: number; executorId: string; applicationName: string }>;
+  /**
+   * The rogue-poller census could not run (DB unreachable, or the DB role lacks privilege to see other
+   * backends) — so single-ownership could NOT be verified. Reported as a warning, never as "clean".
+   */
+  rogueCensusUnavailable?: boolean;
 };
 
 export type DoctorReport = { ok: boolean; issues: string[] };
@@ -53,6 +64,27 @@ export function buildDoctorReport(o: DoctorObservation): DoctorReport {
     issues.push(
       `Running daemon is version ${o.versionMismatch.running} but this build is ${o.versionMismatch.current} — ` +
         'run `revo restart` to replace the stale daemon.',
+    );
+  }
+
+  // Rogue queue pollers: a legacy/duplicate daemon connected to the dbos DB under a foreign executor id.
+  // The advisory lock can't coordinate it and port-based stop can't see it; reap the stale process.
+  const rogues = o.queuePollerRogues ?? [];
+  if (rogues.length > 0) {
+    const byExecutor = new Map<string, number[]>();
+    for (const r of rogues) byExecutor.set(r.executorId, [...(byExecutor.get(r.executorId) ?? []), r.pid]);
+    for (const [executorId, pids] of byExecutor) {
+      issues.push(
+        `DBOS queue database has ${pids.length} connection(s) from a foreign executor "${executorId}" ` +
+          `(backend pid${pids.length === 1 ? '' : 's'} ${pids.join(', ')}) — a stale/duplicate daemon polling ` +
+          'dev-tasks. The advisory lock cannot evict an outbound poller; reap the stale revo process ' +
+          '(`pkill -f "revo mcp"` / `pkill -f "revo __daemon"`), then `revo restart`.',
+      );
+    }
+  } else if (o.rogueCensusUnavailable) {
+    issues.push(
+      'Could not census the DBOS queue database for duplicate pollers (DB unreachable or insufficient ' +
+        'privilege) — single-ownership could not be verified.',
     );
   }
 
