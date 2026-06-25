@@ -168,10 +168,17 @@ export function mapPlaybookRows(options: MapPlaybookRowsOptions): PlaybookImport
   const now = options.now ?? new Date().toISOString();
   const playbookId = options.nameOverride ?? options.manifest.id;
   const version = options.versionOverride ?? options.source.version;
+  // Map role rows first so each role's source_hash (compiled prompt hash) is available to fold into
+  // the content fingerprint. Prompt bodies are not in RoleCatalogRecord (only the path is), so a
+  // prompt-only edit would otherwise leave catalog_hash unchanged and silently skip re-seed.
+  // playbook_role_id + source_hash are both name/version/now-independent, so the hash computed here
+  // equals the one recomputed by the seed's bundledCatalogHash helper.
+  const roleRows = options.catalogs.roles.map((role) => mapRole(options.root, playbookId, role, now));
   const catalogHash = hash({
     manifest: options.manifest,
     roles: options.catalogs.roles,
     pipelines: options.catalogs.pipelines,
+    prompts: roleRows.map((r) => ({ role: r.data.playbook_role_id, hash: r.data.source_hash })),
   });
   const playbook: VersionedRow = {
     table: 'playbooks',
@@ -194,7 +201,7 @@ export function mapPlaybookRows(options: MapPlaybookRowsOptions): PlaybookImport
   return {
     playbookId,
     playbook,
-    roles: options.catalogs.roles.map((role) => mapRole(options.root, playbookId, role, now)),
+    roles: roleRows,
     pipelines: options.catalogs.pipelines.map((pipeline) => mapPipeline(playbookId, pipeline, now)),
     catalogHash,
   };

@@ -217,6 +217,34 @@ test('mapPlaybookRows: runner_id, not rights, selects the runtime runner', () =>
   assert.equal(rows.roles[0]?.data.runner_id, 'revo-integrator');
 });
 
+test('mapPlaybookRows: mutating a role prompt changes catalogHash (prompt hashes are folded in)', () => {
+  const root = mkdtempSync(join(tmpdir(), 'revo-playbook-prompt-hash-'));
+  mkdirSync(join(root, 'roles', 'watcher'), { recursive: true });
+  writeFileSync(join(root, 'roles', 'watcher', 'ROLE.md'), '# Watcher v1\n');
+  const manifest: PlaybookManifest = {
+    id: 'pb', name: 'PB', schemaVersion: 2, packageName: '@x/pb',
+    catalogs: { roles: 'catalog/roles.json', pipelines: 'catalog/pipelines.json' },
+    supportedRuntimes: ['revo'],
+  };
+  const catalogs: PlaybookCatalogs = {
+    roles: [{
+      id: 'watcher', path: 'roles/watcher/ROLE.md', surface: 'repo', rights: 'read-only',
+      allowedTools: ['Read'], defaultModelLevel: 'cheap', runnerId: 'claude-code', wrappers: {},
+    }],
+    pipelines: [],
+  };
+  const source = { type: 'local' as const, input: '.', root, source: `local:${root}`, packageName: '@x/pb', version: '1.0.0' };
+
+  const hash1 = mapPlaybookRows({ root, source, manifest, catalogs, now: '2026-01-01T00:00:00.000Z' }).catalogHash;
+  assert.equal(hash1.length, 64);
+
+  writeFileSync(join(root, 'roles', 'watcher', 'ROLE.md'), '# Watcher v2 — updated prompt body\n');
+
+  const hash2 = mapPlaybookRows({ root, source, manifest, catalogs, now: '2026-01-01T00:00:00.000Z' }).catalogHash;
+  assert.equal(hash2.length, 64);
+  assert.notEqual(hash1, hash2, 'a prompt body change must be reflected in catalogHash');
+});
+
 test('mapPlaybookRows: rejects production stub-agent role bindings', () => {
   const root = mkdtempSync(join(tmpdir(), 'revo-playbook-map-'));
   mkdirSync(join(root, 'roles', 'developer'), { recursive: true });
