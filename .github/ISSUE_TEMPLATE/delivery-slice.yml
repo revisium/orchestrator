@@ -1,0 +1,108 @@
+name: Delivery Slice
+description: Plan a scoped implementation PR for agent-orchestrator.
+title: "Slice: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for a scoped implementation PR. Keep one slice small enough to verify and review independently.
+        Write in clear professional English for a future human reader, not only for an agent.
+  - type: textarea
+    id: reader-context
+    attributes:
+      label: Reader Context
+      description: One short paragraph explaining why this slice exists and how it fits its parent issue, ADR, or previous PR.
+      placeholder: This slice turns the default playbook safety rules into executable policy checks so future runtime changes cannot silently weaken the feature-development pipeline.
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What capability gap, workflow failure, or technical debt does this slice address?
+      placeholder: Default playbook validation only checks graph grammar, not operational safety.
+    validations:
+      required: true
+  - type: textarea
+    id: goal
+    attributes:
+      label: Goal
+      description: What should be true when this issue is closed?
+      placeholder: Bundled default playbook is checked by a policy verifier and unsafe pipeline regressions fail tests.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      value: |
+        In scope:
+        -
+
+        Out of scope:
+        -
+    validations:
+      required: true
+  - type: dropdown
+    id: route
+    attributes:
+      label: Expected Route
+      description: Which delivery route should the orchestrator consider first?
+      options:
+        - local-change
+        - feature-development
+        - planning-only
+        - architecture-adr
+        - implementation-from-approved-plan
+        - method-development
+        - undecided
+    validations:
+      required: true
+  - type: textarea
+    id: artifacts
+    attributes:
+      label: Inputs / Artifacts
+      description: Link issues, ADRs, plans, Revo runs, PRs, docs, or commits this slice must respect.
+      placeholder: |
+        - Related issue:
+        - ADR/design:
+        - Revo run:
+        - Prior PR:
+  - type: textarea
+    id: implementation-notes
+    attributes:
+      label: Implementation Notes
+      description: Known files, seams, constraints, or stop conditions.
+      placeholder: |
+        Inspect first:
+        - src/...
+
+        Stop and escalate if:
+        -
+  - type: checkboxes
+    id: acceptance
+    attributes:
+      label: Acceptance Criteria
+      options:
+        - label: Scope is implemented without unrelated refactoring.
+        - label: New or updated tests cover the changed behavior.
+        - label: Default playbook and installed-playbook behavior remain valid when touched.
+        - label: AGENTS.md, VERIFICATION.md, or equivalent repo guidance is updated if the workflow contract changes.
+        - label: PR links this issue and records verification evidence.
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification Plan
+      placeholder: |
+        Required:
+        - pnpm run typecheck
+        - pnpm run lint:ci
+        - pnpm run test
+        - git diff --check
+
+        Conditional:
+        - pnpm run verify
+        - pnpm run test:e2e
+        - Revo MCP readiness/PR checks

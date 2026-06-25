@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Start from repo guidance
+    url: https://github.com/revisium/agent-orchestrator/blob/master/AGENTS.md
+    about: Read local agent guidance before filing broad implementation work.
+  - name: Architecture docs
+    url: https://github.com/revisium/agent-orchestrator/tree/master/docs
+    about: Use durable docs and ADRs for long-lived design decisions.
