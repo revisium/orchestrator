@@ -1417,3 +1417,48 @@ test('agent observability: getAgentActivity falls back to completed artifact att
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('agent observability: runner from meta.json surfaces via listAgentAttempts', async () => {
+  const root = tempRoot();
+  try {
+    writeAttempt(root, {
+      meta: {
+        stepId: 'step-1',
+        role: 'developer',
+        runner: 'claude-code',
+        startedAt: '2026-06-01T00:00:00.000Z',
+        status: 'finished',
+        code: 0,
+      },
+    });
+    const service = new AgentObservabilityService({ artifactRoot: root });
+
+    const attempts = await service.listAgentAttempts('run-1');
+    assert.equal(attempts.length, 1);
+    assert.equal(attempts[0]?.runner, 'claude-code', 'runner from meta.json should surface');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('agent observability: missing runner in meta falls back to "unknown"', async () => {
+  const root = tempRoot();
+  try {
+    writeAttempt(root, {
+      meta: {
+        stepId: 'step-1',
+        role: 'developer',
+        startedAt: '2026-06-01T00:00:00.000Z',
+        status: 'finished',
+        code: 0,
+      },
+    });
+    const service = new AgentObservabilityService({ artifactRoot: root });
+
+    const attempts = await service.listAgentAttempts('run-1');
+    assert.equal(attempts.length, 1);
+    assert.equal(attempts[0]?.runner, 'unknown', 'absent runner should fall back to unknown');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -49,7 +49,7 @@ export class RunService {
     return showRun(this.da, id);
   }
 
-  listRunEvents(id: string, filter?: { type?: string; limit?: number }): Promise<EventSummary[]> {
+  listRunEvents(id: string, filter?: { type?: string; limit?: number; expand?: ('graph')[] }): Promise<EventSummary[]> {
     return listRunEvents(this.da, id, filter);
   }
 

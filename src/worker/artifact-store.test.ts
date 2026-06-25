@@ -18,6 +18,7 @@ test('artifact store: writes redacted stdout/stderr files, metadata, events, and
       attemptId: 'attempt-1',
       stepId: 'step-1',
       role: 'developer',
+      runner: 'claude-code',
       command: 'claude',
       args: ['-p'],
       cwd: '/workspace/repo',
@@ -67,6 +68,7 @@ test('artifact store: rejects unsafe path segments', () => {
           attemptId: 'attempt-1',
           stepId: 'step-1',
           role: 'developer',
+          runner: 'claude-code',
           command: 'claude',
           args: [],
           cwd: '/workspace/repo',
@@ -74,6 +76,35 @@ test('artifact store: rejects unsafe path segments', () => {
         }),
       /invalid runId/,
     );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('artifact store: runner is written to meta.json on running and finished states', () => {
+  const root = tempRoot();
+  try {
+    const store = createArtifactStore(root);
+    const writer = store.startProcess({
+      runId: 'run-r',
+      attemptId: 'attempt-r',
+      stepId: 'step-r',
+      role: 'developer',
+      runner: 'codex',
+      command: 'codex',
+      args: [],
+      cwd: '/workspace/repo',
+      timeoutMs: 60000,
+    });
+
+    const runningMeta = JSON.parse(readFileSync(writer.ref.metaPath, 'utf8')) as Record<string, unknown>;
+    assert.equal(runningMeta.runner, 'codex', 'runner should be present in running meta.json');
+    assert.equal(runningMeta.status, 'running');
+
+    writer.finish({ code: 0 });
+    const finishedMeta = JSON.parse(readFileSync(writer.ref.metaPath, 'utf8')) as Record<string, unknown>;
+    assert.equal(finishedMeta.runner, 'codex', 'runner should be present in finished meta.json');
+    assert.equal(finishedMeta.status, 'finished');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
