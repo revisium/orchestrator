@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { run, defaultFetchSonar, type PollInput, type ExecGhFn, type FetchSonarFn, type SonarResult } from './pr-readiness.js';
-import { collectPrReadiness } from './pr-readiness-core.js';
+import { collectPrReadiness, fetchRequiredCheckNames } from './pr-readiness-core.js';
 import { BASE_STEP } from '../worker/test-fixtures.js';
 
 // ─── fixtures ────────────────────────────────────────────────
@@ -932,4 +932,40 @@ test('MCP readiness: CodeRabbit success plus provider-limit comment is waiting/p
   assert.equal(readiness.providerState.codeRabbit?.state, 'waiting');
   assert.equal(readiness.feedback.providerWait[0]?.provider, 'CodeRabbit');
   assert.match(readiness.evidence.join('\n'), /CodeRabbit provider\/rate limit/);
+});
+
+// ─── fetchRequiredCheckNames (PR #135 fix: required-only ci_changes) ──────────
+
+/** A statusCheckRollup.contexts GraphQL payload — `name` for CheckRun, `context` for StatusContext.
+ *  Matches reviewThreadsResponse: gh `api graphql` returns the `repository` object at the top level. */
+function requiredChecksResponse(nodes: unknown[]) {
+  return { repository: { pullRequest: { statusCheckRollup: { contexts: { nodes } } } } };
+}
+
+test('fetchRequiredCheckNames: returns only isRequired contexts, mapping CheckRun.name + StatusContext.context', () => {
+  const execGh: ExecGhFn = (args) => {
+    assert.ok(args.includes('graphql'), 'uses the gh GraphQL api');
+    assert.ok(args.some((a) => a.includes('isRequired(pullRequestNumber:$number)')), 'asks isRequired with the PR number arg');
+    return JSON.stringify(requiredChecksResponse([
+      { __typename: 'CheckRun', name: 'Verify', isRequired: true },
+      { __typename: 'CheckRun', name: 'SonarCloud', isRequired: false },
+      { __typename: 'StatusContext', context: 'Required checks', isRequired: true },
+      { __typename: 'StatusContext', context: 'CodeRabbit', isRequired: false },
+    ]));
+  };
+  const required = fetchRequiredCheckNames('owner/repo', 42, execGh);
+  assert.deepEqual([...required].sort(), ['Required checks', 'Verify']);
+});
+
+test('fetchRequiredCheckNames: empty/missing rollup → empty set (caller applies fail-safe)', () => {
+  const execGh: ExecGhFn = () => JSON.stringify(requiredChecksResponse([]));
+  assert.equal(fetchRequiredCheckNames('owner/repo', 42, execGh).size, 0);
+
+  const nullRollup: ExecGhFn = () => JSON.stringify({ repository: { pullRequest: { statusCheckRollup: null } } });
+  assert.equal(fetchRequiredCheckNames('owner/repo', 42, nullRollup).size, 0);
+});
+
+test('fetchRequiredCheckNames: non-JSON gh output throws (so pollPr can fail-safe to all-failures)', () => {
+  const execGh: ExecGhFn = () => 'Error: authentication required';
+  assert.throws(() => fetchRequiredCheckNames('owner/repo', 42, execGh), /non-JSON/);
 });
