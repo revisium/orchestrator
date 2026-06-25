@@ -125,7 +125,7 @@ export class McpFacadeService {
     return this.api.getRun(input);
   }
 
-  getRunEvents(input: { runId: string; type?: string; limit?: number }) {
+  getRunEvents(input: { runId: string; type?: string; limit?: number; expand?: ('graph')[] }) {
     return this.api.getRunEvents(input);
   }
 

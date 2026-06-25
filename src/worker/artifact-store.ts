@@ -30,6 +30,7 @@ export type ProcessArtifactStart = {
   attemptId: string;
   stepId: string;
   role: string;
+  runner: string;
   command: string;
   args: string[];
   cwd: string;
@@ -100,6 +101,7 @@ export function createArtifactStore(rootDir: string, opts: { tailBytes?: number 
         attemptId,
         stepId: input.stepId,
         role: input.role,
+        runner: input.runner,
         command: input.command,
         args: input.args,
         cwd: input.cwd,
@@ -136,6 +138,7 @@ export function createArtifactStore(rootDir: string, opts: { tailBytes?: number 
             attemptId,
             stepId: input.stepId,
             role: input.role,
+            runner: input.runner,
             command: input.command,
             args: input.args,
             cwd: input.cwd,

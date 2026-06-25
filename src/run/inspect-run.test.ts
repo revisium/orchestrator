@@ -574,3 +574,39 @@ test('toEventSummary uses ?? so empty-string created_at is not overridden by cre
   const events = await listRunEvents(da, 'run-a');
   assert.equal(events[0]?.createdAt, '');
 });
+
+// ─────────────────────── expand: graph ───────────────────────
+
+const FULL_PAYLOAD = {
+  title: 'My run',
+  playbook_id: 'pb',
+  route_decision: { executionPolicy: { template_json: { nodes: { a: 1 } } } },
+  execution_profile: { id: 'default' },
+  description: 'a short desc',
+};
+
+const RUN_CREATED_EVENT = makeRow('event-rc', { run_id: 'run-a', type: 'run_created', actor: 'cli', created_at: T1, payload: FULL_PAYLOAD });
+
+test('listRunEvents default (no expand) strips run_created graph payload', async () => {
+  const da = createFakeDataAccess({ events: [RUN_CREATED_EVENT] });
+
+  const events = await listRunEvents(da, 'run-a');
+
+  const payload = events[0]?.payload as Record<string, unknown>;
+  assert.equal(payload['route_decision'], undefined, 'route_decision stripped by default');
+  assert.equal(payload['execution_profile'], undefined, 'execution_profile stripped by default');
+  assert.equal(payload['title'], 'My run', 'title kept');
+});
+
+test('listRunEvents with expand:["graph"] returns raw run_created payload including template_json', async () => {
+  const da = createFakeDataAccess({ events: [RUN_CREATED_EVENT] });
+
+  const events = await listRunEvents(da, 'run-a', { expand: ['graph'] });
+
+  const payload = events[0]?.payload as Record<string, unknown>;
+  assert.ok(payload['route_decision'] !== undefined, 'route_decision present when graph expanded');
+  const rd = payload['route_decision'] as Record<string, unknown>;
+  const ep = rd['executionPolicy'] as Record<string, unknown>;
+  assert.ok(ep['template_json'] !== undefined, 'template_json present when graph expanded');
+  assert.equal(payload['title'], 'My run', 'title still present');
+});

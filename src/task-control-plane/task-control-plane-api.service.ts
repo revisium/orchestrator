@@ -82,6 +82,7 @@ export type RunState = {
   workflowStatus: string;
   inbox?: InboxItem;
   latestBlockingEvent?: unknown;
+  blockedReason?: string;
 };
 
 type GitResult = {
@@ -195,6 +196,11 @@ function eventSummary(event: EventSummary): string {
   if (typeof reason === 'string' && reason) return reason;
   if (typeof output === 'string' && output) return output.slice(0, 180);
   return event.type;
+}
+
+function blockedReasonFromEvent(event: EventSummary): string | undefined {
+  const reason = payloadRecord(event)?.reason;
+  return typeof reason === 'string' && reason ? reason : undefined;
 }
 
 function stepKeyBase(stepKey: string): string {
@@ -596,8 +602,8 @@ export class TaskControlPlaneApiService {
     };
   }
 
-  getRunEvents(input: { runId: string; type?: string; limit?: number }) {
-    return this.runs.listRunEvents(input.runId, { type: input.type, limit: input.limit });
+  getRunEvents(input: { runId: string; type?: string; limit?: number; expand?: ('graph')[] }) {
+    return this.runs.listRunEvents(input.runId, { type: input.type, limit: input.limit, expand: input.expand });
   }
 
   async getRunProgress(runId: string): Promise<RunProgress> {
@@ -755,12 +761,15 @@ export class TaskControlPlaneApiService {
       this.runs.listRunAttempts(runId, { limit: 100 }),
       this.inbox.listInbox({ runId, status: 'pending', limit: 50 }),
     ]);
+    const latestBlockingEvent = [...events].reverse().find((e) => e.type === 'pipeline_blocked');
+    const blockedReason = latestBlockingEvent ? blockedReasonFromEvent(latestBlockingEvent) : undefined;
     return {
       run: detail.run,
       tasks: detail.tasks,
       pendingInbox: inbox,
       latestEvents: events.slice(-10),
       usage: summarizeAttempts(attempts),
+      ...(blockedReason !== undefined ? { blockedReason } : {}),
     };
   }
 
@@ -819,18 +828,27 @@ export class TaskControlPlaneApiService {
     if (detail.run.status === 'cancelled') {
       return { runId, state: 'blocked', nextAction: 'run was cancelled; create or resume a different run', runStatus: detail.run.status, workflowStatus: workflow?.status ?? '' };
     }
+    const blockingEvent = [...events].reverse().find((event) => event.type === 'pipeline_blocked');
+    const blockedReason = blockingEvent ? blockedReasonFromEvent(blockingEvent) : undefined;
     if (detail.run.status === 'paused') {
-      return { runId, state: 'blocked', nextAction: 'inspect blocking event and decide whether to create a follow-up run', runStatus: detail.run.status, workflowStatus: workflow?.status ?? '' };
-    }
-    const blocked = [...events].reverse().find((event) => event.type === 'pipeline_blocked');
-    if (blocked) {
       return {
         runId,
         state: 'blocked',
         nextAction: 'inspect blocking event and decide whether to create a follow-up run',
         runStatus: detail.run.status,
         workflowStatus: workflow?.status ?? '',
-        latestBlockingEvent: blocked,
+        ...(blockedReason !== undefined ? { blockedReason } : {}),
+      };
+    }
+    if (blockingEvent) {
+      return {
+        runId,
+        state: 'blocked',
+        nextAction: 'inspect blocking event and decide whether to create a follow-up run',
+        runStatus: detail.run.status,
+        workflowStatus: workflow?.status ?? '',
+        latestBlockingEvent: blockingEvent,
+        ...(blockedReason !== undefined ? { blockedReason } : {}),
       };
     }
     if (workflow?.status === 'ERROR') {
