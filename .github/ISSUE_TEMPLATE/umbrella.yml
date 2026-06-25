@@ -1,6 +1,8 @@
 name: Umbrella / Milestone
 description: Track a multi-PR initiative without replacing specific bugs or slices.
 title: "Umbrella: "
+labels:
+  - enhancement
 body:
   - type: markdown
     attributes:
