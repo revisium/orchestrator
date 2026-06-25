@@ -16,7 +16,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { execFileSync } from 'node:child_process';
 import type { ExecGhFn } from '../poller/pr-readiness.js';
-import { collectPrReadiness, type ReviewThread } from '../poller/pr-readiness-core.js';
+import { collectPrReadiness, fetchRequiredCheckNames, type ReviewThread } from '../poller/pr-readiness-core.js';
 import { RunService } from '../revisium/run.service.js';
 import { resolveGhAccount, resolvePinnedGh } from './gh-identity.js';
 import type { ExecFn, IntegratorBlocked } from './integrator-types.js';
@@ -483,6 +483,9 @@ export type PollPrDeps = IntegratorDeps & {
   /** Bounded grace polls, AFTER CI goes green + the PR is readied, to let review threads surface
    *  before declaring clean (slice 142). 0 disables the wait. Defaults to REVO_POLL_PR_REVIEW_GRACE_POLLS. */
   reviewGracePolls?: number;
+  /** Resolve the SET of branch-protection-REQUIRED check names for the PR (defaults to the live
+   *  `fetchRequiredCheckNames`). Injectable so unit tests drive required-ness without real gh. */
+  requiredChecks?: (repo: string, prNumber: number, execGh: ExecGhFn) => Set<string>;
 };
 
 /** The slice of `collectPrReadiness` pollPr reads — CI terminal/pass/fail + unresolved review threads. */
@@ -521,6 +524,7 @@ export async function pollPr(
   const { execGit: git, execGh: gh, resolveRunCwd } = deps;
   const collect = deps.collect ?? defaultCollect;
   const sleep = deps.sleep ?? defaultSleep;
+  const requiredChecks = deps.requiredChecks ?? fetchRequiredCheckNames;
   // Read env at CALL time (not module load) so the e2e harness can shrink the poll budget regardless
   // of import order; prod default stays 20 × 30s.
   const maxPolls = deps.maxPolls ?? envInt('REVO_POLL_PR_MAX_POLLS', 20);
@@ -585,9 +589,26 @@ export async function pollPr(
     body: t.body,
   }));
 
-  // Decision order (plan 0018): review threads first, then CI, else clean.
+  // Only REQUIRED-check failures drive the `ci_changes` verdict (PR #135 fix): on this repo only
+  // "Verify"/"E2E"/"Required checks" gate the merge — Sonar/CodeRabbit are advisory, and a failing
+  // advisory check used to wrongly trigger a pointless ciRework loop. `gh pr view` does not carry
+  // isRequired, so we ask GitHub directly. ciFailures keeps the FULL failing list for downstream
+  // context; the verdict keys off the required-only subset.
+  // FAIL-SAFE: if the required set can't be determined (gh error or empty), fall back to counting
+  // ALL failures (current behavior) — never silently treat an unknown required-set as clean.
+  let ciVerdictFailures = ciFailures;
+  if (ciFailures.length > 0 && settled.pr.number !== null) {
+    try {
+      const required = requiredChecks(ownerRepo, settled.pr.number, gh);
+      if (required.size > 0) ciVerdictFailures = ciFailures.filter((f) => required.has(f.name));
+    } catch {
+      // gh failed → keep the full failing list (fail-safe: unknown required-set ≠ clean).
+    }
+  }
+
+  // Decision order (plan 0018): review threads first, then CI (required-only), else clean.
   const verdict: PrFeedback['verdict'] =
-    reviewThreads.length > 0 ? 'review_changes' : ciFailures.length > 0 ? 'ci_changes' : 'clean';
+    reviewThreads.length > 0 ? 'review_changes' : ciVerdictFailures.length > 0 ? 'ci_changes' : 'clean';
 
   return {
     prNumber: settled.pr.number ?? null,

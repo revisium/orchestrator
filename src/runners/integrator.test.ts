@@ -1177,13 +1177,49 @@ test('pollPr: unresolved review threads win over CI failures → review_changes'
 test('pollPr: CI failures with no review threads → ci_changes', async () => {
   const collect = async (): Promise<PollPrReadiness> =>
     readiness({ fail: ['build', 'lint'], list: [{ name: 'build', result: 'FAILURE' }, { name: 'lint', result: 'FAILURE' }] });
-  const r = await pollPr(POLL_INPUT, pollDeps(collect));
+  // Both 'build' and 'lint' are required → ci_changes, with both carried as ciFailures.
+  const r = await pollPr(POLL_INPUT, pollDeps(collect, { requiredChecks: () => new Set(['build', 'lint']) }));
   assert.ok(!('needsHuman' in r));
   if (!('needsHuman' in r)) {
     assert.equal(r.verdict, 'ci_changes');
     assert.deepEqual(r.ciFailures.map((c) => c.name), ['build', 'lint']);
     assert.equal(r.reviewThreads.length, 0);
   }
+});
+
+test('pollPr: a failing NON-required (advisory) check → clean, NOT ci_changes (PR #135 fix)', async () => {
+  const collect = async (): Promise<PollPrReadiness> =>
+    readiness({ fail: ['SonarCloud'], list: [{ name: 'Verify', result: 'SUCCESS' }, { name: 'SonarCloud', result: 'FAILURE' }] });
+  // Only "Verify" is required; the failing "SonarCloud" is advisory → must NOT trigger a ciRework loop.
+  const r = await pollPr(POLL_INPUT, pollDeps(collect, { requiredChecks: () => new Set(['Verify', 'E2E', 'Required checks']) }));
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) {
+    assert.equal(r.verdict, 'clean', 'an advisory check failing does not gate the merge');
+    assert.deepEqual(r.ciFailures.map((c) => c.name), ['SonarCloud'], 'ciFailures keeps the full failing list for downstream context');
+  }
+});
+
+test('pollPr: a failing REQUIRED check → ci_changes', async () => {
+  const collect = async (): Promise<PollPrReadiness> =>
+    readiness({ fail: ['Verify', 'SonarCloud'], list: [{ name: 'Verify', result: 'FAILURE' }, { name: 'SonarCloud', result: 'FAILURE' }] });
+  const r = await pollPr(POLL_INPUT, pollDeps(collect, { requiredChecks: () => new Set(['Verify', 'E2E', 'Required checks']) }));
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) {
+    assert.equal(r.verdict, 'ci_changes', 'a required check failing gates the merge');
+    assert.deepEqual(r.ciFailures.map((c) => c.name), ['Verify', 'SonarCloud'], 'both failures carried; only "Verify" drives the verdict');
+  }
+});
+
+test('pollPr: unknown/empty required-set → fail-safe, counts ALL failures (current behavior)', async () => {
+  const collect = async (): Promise<PollPrReadiness> =>
+    readiness({ fail: ['SonarCloud'], list: [{ name: 'Verify', result: 'SUCCESS' }, { name: 'SonarCloud', result: 'FAILURE' }] });
+  // Empty required-set (can't determine required-ness) → fall back to counting all failures.
+  const empty = await pollPr(POLL_INPUT, pollDeps(collect, { requiredChecks: () => new Set<string>() }));
+  assert.ok(!('needsHuman' in empty) && empty.verdict === 'ci_changes', 'empty required-set falls back to all-failures (never silently clean)');
+
+  // gh error path → same fail-safe.
+  const errored = await pollPr(POLL_INPUT, pollDeps(collect, { requiredChecks: () => { throw new Error('gh graphql failed'); } }));
+  assert.ok(!('needsHuman' in errored) && errored.verdict === 'ci_changes', 'a gh error falls back to all-failures');
 });
 
 test('pollPr: all green, no threads → clean', async () => {
