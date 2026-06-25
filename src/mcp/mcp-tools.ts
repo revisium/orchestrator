@@ -239,6 +239,7 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
         runId: runIdSchema,
         type: z.string().optional(),
         limit: limitSchema,
+        expand: z.array(z.enum(['graph'])).optional().describe('Pass ["graph"] to include the full run_created graph payload instead of the compact summary.'),
       },
       annotations: { readOnlyHint: true },
     },

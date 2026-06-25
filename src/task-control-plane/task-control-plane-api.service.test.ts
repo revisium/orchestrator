@@ -1256,3 +1256,135 @@ test('TaskControlPlaneApiService.resolveInboxItem: plan gate does not call compl
   assert.equal(result.signaled, true);
   assert.equal(completeRunCalled, false, 'plan gates must not trigger completeRun');
 });
+
+// ─────────────────────── blockedReason ───────────────────────
+
+test('resolveRunState: surfaces blockedReason from pipeline_blocked event reason', async () => {
+  const api = makeApi({
+    runService: {
+      async showRun() {
+        return {
+          run: { runId: 'run-1', title: 'R', status: 'running', priority: 0, createdAt: '', description: '', scope: '', repos: [] },
+          tasks: [],
+        };
+      },
+      async listRunEvents() {
+        return [
+          { eventId: 'e1', type: 'pipeline_blocked', actor: 'engine', createdAt: '', taskId: '', stepId: '', payload: { reason: 'plan gate rejected', nodeId: 'reviewer' } },
+        ];
+      },
+    },
+    inboxService: {
+      async listInbox() { return []; },
+    },
+    dbosService: {
+      async getWorkflowStatus() { return null; },
+    },
+  });
+
+  const state = await api.resolveRunState('run-1');
+
+  assert.equal(state.state, 'blocked');
+  assert.equal(state.blockedReason, 'plan gate rejected');
+});
+
+test('resolveRunState: blockedReason is undefined when no pipeline_blocked event', async () => {
+  const api = makeApi({
+    runService: {
+      async showRun() {
+        return {
+          run: { runId: 'run-1', title: 'R', status: 'running', priority: 0, createdAt: '', description: '', scope: '', repos: [] },
+          tasks: [],
+        };
+      },
+      async listRunEvents() { return []; },
+    },
+    inboxService: {
+      async listInbox() { return []; },
+    },
+    dbosService: {
+      async getWorkflowStatus() { return null; },
+    },
+  });
+
+  const state = await api.resolveRunState('run-1');
+
+  assert.equal(state.blockedReason, undefined);
+});
+
+test('resolveRunState: paused run surfaces blockedReason when pipeline_blocked event exists', async () => {
+  const api = makeApi({
+    runService: {
+      async showRun() {
+        return {
+          run: { runId: 'run-1', title: 'R', status: 'paused', priority: 0, createdAt: '', description: '', scope: '', repos: [] },
+          tasks: [],
+        };
+      },
+      async listRunEvents() {
+        return [
+          { eventId: 'e1', type: 'pipeline_blocked', actor: 'engine', createdAt: '', taskId: '', stepId: '', payload: { reason: 'reviewer blocked' } },
+        ];
+      },
+    },
+    inboxService: {
+      async listInbox() { return []; },
+    },
+    dbosService: {
+      async getWorkflowStatus() { return null; },
+    },
+  });
+
+  const state = await api.resolveRunState('run-1');
+
+  assert.equal(state.state, 'blocked');
+  assert.equal(state.blockedReason, 'reviewer blocked');
+});
+
+test('getRunDigest: includes blockedReason when pipeline_blocked event exists', async () => {
+  const api = makeApi({
+    runService: {
+      async showRun() {
+        return {
+          run: { runId: 'run-1', title: 'R', status: 'paused', priority: 0, createdAt: '', description: '', scope: '', repos: [] },
+          tasks: [],
+        };
+      },
+      async listRunEvents() {
+        return [
+          { eventId: 'e1', type: 'pipeline_blocked', actor: 'engine', createdAt: '', taskId: '', stepId: '', payload: { reason: 'no budget' } },
+        ];
+      },
+      async listRunAttempts() { return []; },
+    },
+    inboxService: {
+      async listInbox() { return []; },
+    },
+  });
+
+  const digest = await api.getRunDigest('run-1');
+
+  assert.equal(digest.blockedReason, 'no budget');
+});
+
+test('getRunDigest: blockedReason absent when no pipeline_blocked event', async () => {
+  const api = makeApi({
+    runService: {
+      async showRun() {
+        return {
+          run: { runId: 'run-1', title: 'R', status: 'running', priority: 0, createdAt: '', description: '', scope: '', repos: [] },
+          tasks: [],
+        };
+      },
+      async listRunEvents() { return []; },
+      async listRunAttempts() { return []; },
+    },
+    inboxService: {
+      async listInbox() { return []; },
+    },
+  });
+
+  const digest = await api.getRunDigest('run-1');
+
+  assert.equal(digest.blockedReason, undefined);
+});

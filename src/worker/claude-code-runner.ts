@@ -160,6 +160,7 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
         attemptId,
         stepId: step.id,
         role: role.name,
+        runner: role.runner,
         command,
         args,
         cwd,

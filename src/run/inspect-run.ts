@@ -116,8 +116,9 @@ export function compactEventPayload(type: string, payload: unknown): unknown {
   return description === undefined ? rest : { ...rest, description: desc };
 }
 
-function toEventSummary(row: ControlPlaneRow): EventSummary {
+function toEventSummary(row: ControlPlaneRow, expandGraph = false): EventSummary {
   const type = str(row.data.type);
+  const payload = expandGraph && type === 'run_created' ? (row.data.payload ?? null) : compactEventPayload(type, row.data.payload ?? null);
   return {
     eventId: row.rowId,
     type,
@@ -125,7 +126,7 @@ function toEventSummary(row: ControlPlaneRow): EventSummary {
     createdAt: str(row.data.created_at ?? row.createdAt),
     taskId: str(row.data.task_id),
     stepId: str(row.data.step_id),
-    payload: compactEventPayload(type, row.data.payload ?? null),
+    payload,
   };
 }
 
@@ -197,15 +198,16 @@ export async function showRun(da: ControlPlaneDataAccess, runId: string): Promis
 export async function listRunEvents(
   da: ControlPlaneDataAccess,
   runId: string,
-  filter?: { type?: string; limit?: number },
+  filter?: { type?: string; limit?: number; expand?: ('graph')[] },
 ): Promise<EventSummary[]> {
   await da.assertReady();
+  const expandGraph = filter?.expand?.includes('graph') ?? false;
   const rows = await da.listRows('events', {
     first: GLOBAL_CAP,
     orderBy: [{ field: 'createdAt', direction: 'asc' }],
     where: runIdWhere(runId),
   });
-  let events = rows.map(toEventSummary);
+  let events = rows.map((row) => toEventSummary(row, expandGraph));
   if (filter?.type) events = events.filter((e) => e.type === filter.type);
   if (filter?.limit !== undefined) events = events.slice(0, filter.limit);
   return events;

@@ -109,3 +109,34 @@ test('wait_for_any_gate handler forwards the request abort signal to the facade'
   assert.deepEqual(received?.runIds, ['r1']);
   assert.equal(received?.signal, ac.signal);
 });
+
+test('get_run_events: schema accepts expand:["graph"] and rejects unknown expand values', async () => {
+  const { z } = await import('zod');
+  const { server, tools } = makeServer();
+  registerRevoMcpTools(server as never, {} as McpFacadeService);
+  const tool = tools.find((registered) => registered.name === 'get_run_events');
+  assert.ok(tool, 'get_run_events tool registered');
+  const schema = z.object(tool.config.inputSchema as Record<string, never>);
+  assert.equal(schema.safeParse({ runId: 'r' }).success, true, 'no expand is valid');
+  assert.equal(schema.safeParse({ runId: 'r', expand: ['graph'] }).success, true, 'expand:["graph"] is valid');
+  assert.equal(schema.safeParse({ runId: 'r', expand: ['unknown-value'] }).success, false, 'expand with unknown value is invalid');
+});
+
+test('get_run_events: handler forwards expand to facade', async () => {
+  const { server, tools } = makeServer();
+  let received: unknown;
+  const facade = {
+    async getRunEvents(input: unknown) {
+      received = input;
+      return [];
+    },
+  } as unknown as McpFacadeService;
+  registerRevoMcpTools(server as never, facade);
+  const tool = tools.find((registered) => registered.name === 'get_run_events');
+  assert.ok(tool);
+
+  await tool.handler({ runId: 'run-1', expand: ['graph'] } as never);
+
+  assert.deepEqual((received as Record<string, unknown>)['expand'], ['graph']);
+});
+
