@@ -434,6 +434,48 @@ function fetchReviewThreads(repo: string, prNumber: number, execGh: ExecGhFn): R
   return mapReviewThreads(parseGhJson<unknown>(raw, `review-threads #${prNumber}`));
 }
 
+/** Map the statusCheckRollup contexts GraphQL payload to the SET of check names branch protection
+ *  marks REQUIRED. The check name matches {@link checkName}'s convention so it joins cleanly against
+ *  CI failure names: CheckRun → `name`, StatusContext → `context`. */
+function mapRequiredCheckNames(raw: unknown): Set<string> {
+  const root = asRecord(raw);
+  const repository = asRecord(root?.['repository']);
+  const pullRequest = asRecord(repository?.['pullRequest']);
+  const rollup = asRecord(pullRequest?.['statusCheckRollup']);
+  const contexts = asRecord(rollup?.['contexts']);
+  const nodes = Array.isArray(contexts?.['nodes']) ? contexts.nodes : [];
+  const required = new Set<string>();
+  for (const node of nodes) {
+    const ctx = asRecord(node);
+    if (!ctx || ctx['isRequired'] !== true) continue;
+    // CheckRun carries `name`; StatusContext carries `context` — mirror checkName().
+    const checkName = asStr(ctx['name']) || asStr(ctx['context']);
+    if (checkName) required.add(checkName);
+  }
+  return required;
+}
+
+/**
+ * fetchRequiredCheckNames — the SET of check names branch protection marks REQUIRED for this PR.
+ *
+ * `gh pr view --json statusCheckRollup` (fetchPrView) does NOT carry isRequired, so this issues a
+ * dedicated GraphQL read mirroring {@link fetchReviewThreads}. `isRequired` lives on
+ * StatusCheckRollupContext and needs the `pullRequestNumber:` arg. Used by pollPr to limit the
+ * `ci_changes` verdict to required-check failures (advisory checks — Sonar/CodeRabbit — must not
+ * trigger a rework loop). Throws on a gh error so callers can apply the fail-safe fallback.
+ */
+export function fetchRequiredCheckNames(repo: string, prNumber: number, execGh: ExecGhFn): Set<string> {
+  const { owner, name } = splitRepo(repo);
+  const raw = execGh([
+    'api', 'graphql',
+    '-f', 'query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){statusCheckRollup{contexts(first:100){nodes{__typename ... on CheckRun{name isRequired(pullRequestNumber:$number)} ... on StatusContext{context isRequired(pullRequestNumber:$number)}}}}}}}',
+    '-f', `owner=${owner}`,
+    '-f', `name=${name}`,
+    '-F', `number=${prNumber}`,
+  ]);
+  return mapRequiredCheckNames(parseGhJson<unknown>(raw, `required-checks #${prNumber}`));
+}
+
 function collectReviewThreads(input: PrReadinessInput, prNumber: number, execGh: ExecGhFn): PrReadinessResult['reviewThreads'] {
   const threads = input.includeReviewThreads === false ? [] : fetchReviewThreads(input.repo, prNumber, execGh);
   const unresolved = threads.filter((thread) => !thread.isResolved && !thread.isOutdated);
