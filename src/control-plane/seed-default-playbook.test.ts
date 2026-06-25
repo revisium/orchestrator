@@ -28,6 +28,7 @@ import { validateTemplate } from '../pipeline-core/index.js';
 import {
   seedDefaultPlaybook,
   createDaemonInstaller,
+  bundledCatalogHash,
   DEFAULT_PLAYBOOK_ID,
   DEFAULT_PLAYBOOK_SOURCE,
   type DefaultPlaybookInstaller,
@@ -293,6 +294,52 @@ test('seedDefaultPlaybook: throws a clear error when the source directory is mis
     /default playbook source not found/,
   );
   assert.equal(installs, 0, 'must not attempt an install when the source is absent');
+});
+
+// ---------------------------------------------------------------------------
+// 4b. Hash-based re-seed decision (B1 content-fingerprint path).
+// ---------------------------------------------------------------------------
+
+test('seedDefaultPlaybook: re-seeds when catalogHash is stale (exact version match is not enough)', async () => {
+  // This is the core B1 bug: same version, different content → must re-seed.
+  let installs = 0;
+  const installer: DefaultPlaybookInstaller = {
+    async listPlaybooks() {
+      return [{ id: DEFAULT_PLAYBOOK_ID, version: BUNDLED_DEFAULT_VERSION, catalogHash: 'stale-hash' }];
+    },
+    async install() { installs += 1; return STUB_RESULT; },
+  };
+  const outcome = await seedDefaultPlaybook(installer, DEFAULT_PLAYBOOK_SOURCE);
+  assert.equal(outcome.status, 'installed', 'stale hash must trigger re-seed even when version equals bundle');
+  assert.equal(installs, 1);
+});
+
+test('seedDefaultPlaybook: skips when catalogHash matches (older version but identical content)', async () => {
+  // Identical content → skip, even if the installed version is older than the bundle.
+  let installs = 0;
+  const currentHash = bundledCatalogHash(DEFAULT_PLAYBOOK_SOURCE);
+  const installer: DefaultPlaybookInstaller = {
+    async listPlaybooks() {
+      return [{ id: DEFAULT_PLAYBOOK_ID, version: '0.0.1', catalogHash: currentHash }];
+    },
+    async install() { installs += 1; return STUB_RESULT; },
+  };
+  const outcome = await seedDefaultPlaybook(installer, DEFAULT_PLAYBOOK_SOURCE);
+  assert.equal(outcome.status, 'already-installed', 'matching hash must skip re-seed regardless of version');
+  assert.equal(installs, 0, 'must not call install when content is identical');
+});
+
+test('seedDefaultPlaybook: falls back to version compare when catalogHash is absent (legacy row)', async () => {
+  // A row without catalogHash exercises the version-compare path, not the hash path.
+  let installs = 0;
+  const installer: DefaultPlaybookInstaller = {
+    // version '0.0.1' is older than any bundle version → version fallback triggers re-seed
+    async listPlaybooks() { return [{ id: DEFAULT_PLAYBOOK_ID, version: '0.0.1' }]; },
+    async install() { installs += 1; return STUB_RESULT; },
+  };
+  const outcome = await seedDefaultPlaybook(installer, DEFAULT_PLAYBOOK_SOURCE);
+  assert.equal(outcome.status, 'installed', 'legacy row with old version should re-seed via version compare');
+  assert.equal(installs, 1);
 });
 
 // ---------------------------------------------------------------------------
