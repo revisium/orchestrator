@@ -1,0 +1,68 @@
+name: Umbrella / Milestone
+description: Track a multi-PR initiative without replacing specific bugs or slices.
+title: "Umbrella: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for a larger initiative that links concrete bugs, delivery slices, ADR/design work, and PRs.
+        Do not use an umbrella issue as the only implementation specification.
+        Write in clear professional English for a future human reader, not only for an agent.
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired Outcome
+      description: What operational or product state should this initiative reach?
+      placeholder: Revo feature-development runs can safely plan, implement, update PRs, handle provider feedback, and reach merge gates without stale state.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Boundary
+      value: |
+        In scope:
+        -
+
+        Out of scope:
+        -
+    validations:
+      required: true
+  - type: textarea
+    id: child-issues
+    attributes:
+      label: Child Issues
+      description: Link bugs, slices, ADR/design work, and follow-ups.
+      value: |
+        Bugs:
+        - [ ]
+
+        Delivery slices:
+        - [ ]
+
+        ADR/design:
+        - [ ]
+
+        Follow-ups:
+        - [ ]
+  - type: textarea
+    id: reader-map
+    attributes:
+      label: Reader Map
+      description: Explain how a reader should navigate the parent issue and child issues.
+      placeholder: Start with the desired outcome, then read blocker bugs first, delivery slices second, and ADR/design issues only when implementation needs decision context.
+  - type: textarea
+    id: success
+    attributes:
+      label: Success Criteria
+      placeholder: |
+        - All linked blocker bugs are closed.
+        - Default playbook policy tests pass.
+        - A real or fixture-backed feature-development flow exercises the fixed path.
+        - Docs and repo guidance reflect the final workflow.
+  - type: textarea
+    id: risks
+    attributes:
+      label: Risks / Open Questions
+      placeholder: |
+        -

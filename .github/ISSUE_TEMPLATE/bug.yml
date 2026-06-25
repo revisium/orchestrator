@@ -1,0 +1,93 @@
+name: Bug
+description: Report a reproducible Revo or agent-orchestrator defect.
+title: "Bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for runtime, Revo pipeline, CLI, MCP, GraphQL, runner, PR loop, CI, or default-playbook defects.
+        Keep implementation ideas separate from the observed failure.
+        Write in clear professional English for a future human reader, not only for an agent.
+  - type: textarea
+    id: reader-context
+    attributes:
+      label: Reader Context
+      description: One short paragraph that lets a reader understand the bug without chat history.
+      placeholder: The feature-development pipeline is expected to carry a developer-produced PR branch/head through reviewer, integrator, watcher, and merge gate. This bug breaks that continuity.
+    validations:
+      required: true
+  - type: textarea
+    id: symptom
+    attributes:
+      label: Symptom
+      description: What happened?
+      placeholder: Revo opened a merge gate from stale PR readiness...
+    validations:
+      required: true
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: What workflow or delivery path is blocked or unsafe?
+      placeholder: Feature-development runs can merge or block based on stale provider state.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction / Evidence
+      description: Include run ids, PR links, commits, branches, logs, screenshots, or exact commands.
+      placeholder: |
+        - Revo run:
+        - PR:
+        - Head SHA:
+        - Relevant log/event:
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What should happen instead?
+      placeholder: Merge gate should revalidate readiness for the exact current head SHA before opening.
+    validations:
+      required: true
+  - type: textarea
+    id: suspected-cause
+    attributes:
+      label: Suspected Cause
+      description: Optional current hypothesis. Leave blank if unknown.
+      placeholder: Integrator may be reading shared checkout state instead of the produced developer branch/head artifact.
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: What is in and out for the fix?
+      value: |
+        In scope:
+        -
+
+        Out of scope:
+        -
+  - type: checkboxes
+    id: acceptance
+    attributes:
+      label: Acceptance Criteria
+      options:
+        - label: Regression test added or an existing test updated to fail before the fix.
+        - label: Runtime behavior fixed at the real boundary, not only in a mock.
+        - label: Default playbook policy or docs updated when the bug exposes a pipeline rule.
+        - label: Local verification command(s) recorded in the PR.
+        - label: Residual risks and skipped checks are explicit.
+  - type: textarea
+    id: verification
+    attributes:
+      label: Suggested Verification
+      description: List exact commands or Revo/MCP checks if known.
+      placeholder: |
+        - pnpm run typecheck
+        - pnpm run lint:ci
+        - pnpm run test
+        - git diff --check
