@@ -13,6 +13,7 @@ import {
   type TransportEnvelope,
 } from './result-envelope.js';
 import { boundedPreview, buildAttemptResult, buildUsageCosts, runnerError, tail } from './runner-common.js';
+import { isWorktreeDir } from '../control-plane/resolve-cwd.js';
 
 // The ONE place Claude Code CLI specifics live. The runner hides the protocol entirely: the loop sees
 // only the RunAgent interface. Process spawning goes through an injected ProcessExecutor (the
@@ -132,12 +133,21 @@ function buildArgs(modelId: string, allowedTools: string[], permissionMode: stri
   return args;
 }
 
-// Prompt order (design decision 6): context → attemptId line → structured-result note. Appending the
-// output instruction here keeps the result contract transport-owned, not buried in role prompts.
-function buildPrompt(context: string, attemptId: string): string {
+// Prompt order (design decision 6): context → [worktree note] → attemptId line → structured-result note.
+// Appending the output instruction here keeps the result contract transport-owned, not buried in role prompts.
+function buildPrompt(context: string, attemptId: string, worktreePath?: string): string {
   const idempotencyLine =
     `Attempt-Id: ${attemptId} — idempotency key. Reference it on any external effect you create.`;
-  return [context, idempotencyLine, STRUCTURED_RESULT_NOTE].join('\n');
+  const parts = [context];
+  if (worktreePath) {
+    parts.push(
+      `Working tree: you are running inside a git worktree at ${worktreePath} ` +
+      `(your current working directory, also exported as $REVO_WORKTREE_PATH). ` +
+      `Write ALL file changes here; ignore any other repo path.`,
+    );
+  }
+  parts.push(idempotencyLine, STRUCTURED_RESULT_NOTE);
+  return parts.join('\n');
 }
 
 export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
@@ -154,6 +164,10 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
     let processArtifact: ReturnType<ArtifactStore['startProcess']> | undefined;
     try {
       const cwd = await deps.resolveCwd(step);
+      // Belt-and-suspenders: detect if we are running inside a git worktree (linked worktree's .git is a
+      // FILE, not a dir) and export REVO_WORKTREE_PATH + a prompt note so agents that read env rather
+      // than the Repo: context line still write to the correct tree (slice 143 follow-up).
+      const liveWorktree = isWorktreeDir(cwd);
       const args = buildArgs(profile.modelId, role.allowedTools, permissionMode, profile.params);
       processArtifact = deps.artifactStore?.startProcess({
         runId: step.runId,
@@ -189,7 +203,8 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
         args,
         cwd,
         timeoutMs,
-        input: buildPrompt(context, attemptId),
+        input: buildPrompt(context, attemptId, liveWorktree ? cwd : undefined),
+        env: liveWorktree ? { REVO_WORKTREE_PATH: cwd } : undefined,
         onSpawn: (pid) => reporter?.spawned(pid),
         onStdoutChunk: (chunk) => {
           processArtifact?.appendStdout(chunk);

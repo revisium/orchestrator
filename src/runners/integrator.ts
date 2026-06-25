@@ -328,11 +328,23 @@ export async function integrate(
     // No staged diff — check if branch is ahead of origin/<base>
     const ahead = countAhead(git, cwd, branch, input.base);
     if (ahead === 0) {
-      // Nothing to integrate — no commit, not ahead
-      return {
-        needsHuman: true,
-        lesson: 'nothing to integrate — no staged changes and branch is not ahead of origin/' + input.base,
-      };
+      // Probe the BASE checkout for uncommitted changes: if it is dirty the developer wrote OUTSIDE
+      // the run's worktree (the slice-143 / #130 symptom). Only changes the diagnostic lesson; no
+      // destructive action, so a rare mis-attribution is still a useful signal.
+      let lesson = 'nothing to integrate — no staged changes and branch is not ahead of origin/' + input.base;
+      try {
+        const baseCwd = await deps.resolveTaskCwd(input.taskId);
+        const basePorcelain = git(['status', '--porcelain'], baseCwd).trim();
+        if (basePorcelain !== '') {
+          lesson =
+            `developer produced changes but the run's worktree is empty — they appear to have been ` +
+            `written OUTSIDE the worktree (the base checkout ${baseCwd} is dirty); see slice 143. ` +
+            `Re-run; the agent must write under its cwd / $REVO_WORKTREE_PATH.`;
+        }
+      } catch {
+        // git error on the base — keep the generic lesson
+      }
+      return { needsHuman: true, lesson };
     }
     // Ahead but no staged diff → commit happened on a prior attempt; fall through to push
   }
