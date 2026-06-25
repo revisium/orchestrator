@@ -55,6 +55,8 @@ type Recorder = {
   gates: string[];
   completed: Array<{ verdict?: string }>;
   blocked: Array<{ reason?: string }>;
+  /** Lessons carried on emitted `pipeline_blocked` events (the human-readable WHY). */
+  blockedLessons: string[];
   failed: string[];
   integrateCalls: number;
   confirmMergeCalls: number;
@@ -96,6 +98,7 @@ function buildAdapter(opts: {
     gates: [],
     completed: [],
     blocked: [],
+    blockedLessons: [],
     failed: [],
     integrateCalls: 0,
     confirmMergeCalls: 0,
@@ -135,7 +138,13 @@ function buildAdapter(opts: {
   };
 
   const deps: DataDrivenTaskDeps = {
-    appendEvent: async (e) => { rec.events.push(`${e.type}:${e.stepKey}`); },
+    appendEvent: async (e) => {
+      rec.events.push(`${e.type}:${e.stepKey}`);
+      if (e.type === 'pipeline_blocked' && e.payload && typeof e.payload === 'object') {
+        const lesson = (e.payload as { lesson?: unknown }).lesson;
+        if (typeof lesson === 'string') rec.blockedLessons.push(lesson);
+      }
+    },
     appendRunOutput: async (o) => { rec.outputs.push({ nodeId: o.nodeId, ordinal: o.ordinal, name: o.name, payload: o.payload }); },
     setProgress: async (_runId, cursor) => { rec.progress.push(cursor); },
     awaitHuman: async (_runId, topic, _gateKey, _title, _summary): Promise<GateDecision> => {
@@ -347,14 +356,54 @@ test('DD4d: pollPr review_changes → triage(question) → questionGate(approve)
   assert.equal(rec.integrateCalls, 1, 'wontfix needs no re-push (integrator ran only for the initial PR)');
 });
 
-test('DD5: an effect that needsHuman → resultSchema/abort precedence → failed terminal (onFailure=abort)', async () => {
+test('DD5: a DELIBERATE agent needsHuman → blocked terminal + pipeline_blocked lesson, NOT a ResultInvalid abort', async () => {
+  // A self-reported needsHuman (the result-envelope contract) is a recoverable human-block, not a wiring
+  // fault. It must surface as `blocked` with the agent's lesson — never abort the run (regression guard:
+  // the old engine turned this into revo.ResultInvalid → onFailure:'abort' → a silently failed run).
   const { run, rec } = buildAdapter({
-    needsHumanNodes: new Set(['developer']), // developer parks → revo.ResultInvalid; node onFailure=abort
+    needsHumanNodes: new Set(['developer']), // developer self-reports needsHuman with lesson 'parked'
   });
   const result = await run();
-  assert.equal(result.status, 'failed', 'an aborting effect failure terminates the run failed');
-  assert.equal(rec.failed.length, 1);
+  assert.equal(result.status, 'blocked', 'a needsHuman agent BLOCKS the run (does NOT fail/abort)');
+  assert.equal(rec.blocked.length, 1, 'blockRun called for the blocked terminal');
+  assert.equal(rec.failed.length, 0, 'failRun NOT called — needsHuman is a block, not a failure');
   assert.equal(rec.completed.length, 0);
+  const block = rec.blocked[0];
+  assert.equal(block?.reason, 'agent-needs-human', 'the block reason distinguishes a deliberate agent block');
+  assert.ok(
+    rec.events.includes('pipeline_blocked:pipeline'),
+    'the blocking lesson is surfaced as pipeline_blocked (visible to the human)',
+  );
+  // The agent's own lesson rides the pipeline_blocked payload (asserted via the recorded lesson below).
+  assert.ok(rec.blockedLessons.some((l) => l.includes('parked')), 'the agent lesson is carried on the block');
+});
+
+test('DD5-transient: a TRANSIENT runner_failed (crash/timeout/429) → blocked with a transient reason, NOT abort', async () => {
+  // runStep (pipeline.service.ts) wraps a runner-process crash as a SYNTHETIC blocking attempt:
+  // output={ verdict:'BLOCKER', error:'runner_failed', reason }, needsHuman:true. This is fully
+  // recoverable; turning it into an abort permanently killed real runs (dogfooding, 4x). It must block
+  // (visible, lesson-bearing) with a DISTINCT reason so the human sees it is transient, not a decision.
+  const { run, rec } = buildAdapter({
+    results: {
+      developer: {
+        output: { verdict: 'BLOCKER', error: 'runner_failed', role: 'developer', stepKey: 'developer', reason: 'runner process exited 1 (timeout)' },
+        verdict: 'BLOCKER',
+        nextSteps: [],
+        costs: [],
+        needsHuman: true,
+        lesson: 'runner process exited 1 (timeout)',
+      },
+    },
+  });
+  const result = await run();
+  assert.equal(result.status, 'blocked', 'a transient runner failure BLOCKS the run (does NOT abort)');
+  assert.equal(rec.blocked.length, 1);
+  assert.equal(rec.failed.length, 0, 'failRun NOT called — a transient failure is recoverable, not fatal');
+  assert.equal(rec.blocked[0]?.reason, 'runner-transient-failure:timeout', 'the block reason marks it transient + names the kind');
+  assert.ok(
+    rec.blockedLessons.some((l) => l.includes('runner-transient-failure') && l.includes('timeout')),
+    'the transient lesson names the recoverable runner reason',
+  );
 });
 
 test('DD5b: markdown output with no top-level verdict is not scanned and fails as revo.ResultInvalid', async () => {
