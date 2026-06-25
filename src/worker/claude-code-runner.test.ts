@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createClaudeCodeRunner } from './claude-code-runner.js';
@@ -928,3 +928,34 @@ test('claude-code runner: defaults command to "claude"', async () => {
 // NOTE: per-STEP worktree lifecycle was removed in plan 0017 — the runner no longer owns worktree
 // create/release. Per-RUN worktree isolation is owned by the workflow adapter (see
 // data-driven-task.workflow.ts) and covered by git-worktree-manager.test.ts + the concurrency e2e.
+
+// ─── slice-143 follow-up: REVO_WORKTREE_PATH env + worktree note ──────────────
+
+test('claude-code runner (slice-143): REVO_WORKTREE_PATH set and prompt includes worktree note for a linked worktree', async () => {
+  // A linked worktree's .git is a FILE (gitdir: pointer), not a directory.
+  const root = mkdtempSync(join(tmpdir(), 'revo-wt-'));
+  try {
+    writeFileSync(join(root, '.git'), 'gitdir: /some/other/repo/.git/worktrees/x\n');
+    const captured: ExecRequest[] = [];
+    const runner = createClaudeCodeRunner({
+      executor: fakeExecutor(ok(structuredTransport()), captured),
+      resolveCwd: async () => root,
+      timeoutMs: 5_000,
+    });
+    await runner({ role: makeRole('developer'), profile: PROFILE, context: 'ctx', attemptId: ATTEMPT_ID, step: BASE_STEP });
+    const req = captured[0];
+    assert.equal(req?.env?.REVO_WORKTREE_PATH, root, 'REVO_WORKTREE_PATH must equal the worktree cwd');
+    assert.ok(req?.input?.includes('REVO_WORKTREE_PATH'), 'prompt must mention $REVO_WORKTREE_PATH');
+    assert.ok(req?.input?.includes(root), 'prompt must include the worktree path');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('claude-code runner (slice-143): no REVO_WORKTREE_PATH and no worktree note for a non-worktree cwd', async () => {
+  // /workspace/repo does not exist on disk, so isWorktreeDir returns false.
+  const captured: ExecRequest[] = [];
+  await run(fakeExecutor(ok(structuredTransport()), captured));
+  assert.equal(captured[0]?.env, undefined, 'env must be undefined for a non-worktree cwd');
+  assert.ok(!captured[0]?.input?.includes('REVO_WORKTREE_PATH'), 'prompt must NOT include REVO_WORKTREE_PATH for non-worktree cwd');
+});

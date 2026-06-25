@@ -1,29 +1,19 @@
-import { existsSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AttemptResult, RunAgent } from '../../worker/runner.js';
-import { getConfig } from '../../config.js';
-import { worktreePathFor, worktreeMarkerFor, isWorktreeDir } from '../../control-plane/resolve-cwd.js';
 
 /**
- * Worktree-aware developer write dir (plan 0017): when the run has an isolated worktree, the fake
- * developer must write THERE (the integrator commits from the worktree), not the registered base
- * checkout — otherwise the integrator sees no diff. Falls back to the registered path for non-live
- * (stub) scenarios that have no worktree.
+ * Anti-masking write dir: parse the `Repo:` path from the agent context string, which build-context
+ * sets to the run's isolated worktree for live runs (slice 143). Writing to the GIVEN path (not a
+ * locally recomputed worktree path) means a regression in build-context's worktree rewrite surfaces
+ * immediately — the developer writes to the base checkout, the worktree stays empty, and the integrator
+ * blocks with the slice-143 lesson.
  */
-export function resolveWriteDir(runId: string, registered: string | undefined): string | undefined {
+export function resolveWriteDir(registered: string | undefined, context: string): string | undefined {
   if (!registered) return undefined;
-  const dataDir = getConfig().dataDir;
-  const wt = worktreePathFor(dataDir, runId);
-  if (isWorktreeDir(wt)) return wt;
-  // Mirror resolveRunCwd's fail-loud: a live marker with no worktree means isolation broke — refuse to
-  // dirty the shared base checkout (which would mask the failure) rather than silently falling back.
-  if (existsSync(worktreeMarkerFor(dataDir, runId))) {
-    throw new Error(
-      `fake developer: live run ${runId} expects an isolated worktree at ${wt} but it is missing — ` +
-        `refusing to write into the shared base checkout`,
-    );
-  }
-  return registered;
+  const match = /^Repo: (.+)$/m.exec(context);
+  if (!match) return undefined;
+  return match[1].trim();
 }
 
 /** One recorded agent invocation — lets tests assert who ran with which runner (scoped by runId). */
@@ -63,13 +53,13 @@ function defaultVerdictFor(role: string): string {
 
 function runBehavior(
   behavior: RoleBehavior,
-  ctx: { logicalRole: string; runner: string; attemptId: string; runId: string; level: string },
+  ctx: { logicalRole: string; runner: string; attemptId: string; runId: string; level: string; context: string },
   sink: AgentSink,
 ): AttemptResult {
   if (behavior.kind === 'throw') {
     throw new Error(behavior.message ?? `scripted failure from ${ctx.logicalRole}`);
   }
-  const writeRepo = ctx.logicalRole === 'developer' ? resolveWriteDir(ctx.runId, sink.developerWrites.get(ctx.runId)) : undefined;
+  const writeRepo = ctx.logicalRole === 'developer' ? resolveWriteDir(sink.developerWrites.get(ctx.runId), ctx.context) : undefined;
   if (writeRepo && behavior.kind !== 'needsHuman') {
     writeFileSync(join(writeRepo, `developer-${ctx.attemptId}.txt`), `change from ${ctx.attemptId}\n`);
   }
@@ -114,6 +104,7 @@ export function scriptedAgent(spec: AgentSpec, sink: AgentSink): RunAgent {
       attemptId,
       runId: step.runId,
       level: profile.level,
+      context,
     }, sink);
   };
 }
@@ -138,6 +129,7 @@ export function routedScriptedAgent(specs: Map<string, AgentSpec>, sink: AgentSi
       attemptId,
       runId: step.runId,
       level: profile.level,
+      context,
     }, sink);
   };
 }
@@ -157,7 +149,7 @@ export function deterministicAgent(
   return async ({ role, profile, attemptId, step, context }): Promise<AttemptResult> => {
     const logicalRole = role.playbookRoleId ?? role.name;
     agentCalls.push({ role: logicalRole, runner: role.runner, attemptId, runId: step.runId, context });
-    const writeRepo = logicalRole === 'developer' ? resolveWriteDir(step.runId, developerWrites.get(step.runId)) : undefined;
+    const writeRepo = logicalRole === 'developer' ? resolveWriteDir(developerWrites.get(step.runId), context) : undefined;
     if (writeRepo) {
       writeFileSync(join(writeRepo, `developer-${attemptId}.txt`), `change from ${attemptId}\n`);
     }

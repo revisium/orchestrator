@@ -507,6 +507,7 @@ test('B4 replay: branch exists + index clean + NOT ahead → { needsHuman: nothi
       if (args[0] === 'add') return '';
       if (args[0] === 'diff' && args.includes('--cached') && args.includes('--quiet')) return ''; // no staged diff
       if (args[0] === 'rev-list' && args.includes('--count')) return '0\n'; // NOT ahead
+      if (args[0] === 'status' && args[1] === '--porcelain') return ''; // base clean → generic lesson
       if (args[0] === 'push') { pushCalled = true; return ''; }
       throw new Error(`unexpected git: ${args.join(' ')}`);
     },
@@ -519,6 +520,66 @@ test('B4 replay: branch exists + index clean + NOT ahead → { needsHuman: nothi
   assert.ok('needsHuman' in result, 'nothing to integrate must return needsHuman');
   assert.ok(result.lesson.includes('nothing to integrate'), `lesson: ${result.lesson}`);
   assert.equal(pushCalled, false, 'push must NOT be called when nothing to integrate');
+});
+
+// ─── slice-143: clearer integrator block when worktree is empty but base is dirty ──
+
+test('slice-143: worktree empty but base checkout is dirty → slice-143 lesson, push NOT called', async () => {
+  let pushCalled = false;
+
+  const deps: IntegratorDeps = {
+    execGit: (args, cwd) => {
+      if (args[0] === 'remote' && args[2] === 'origin') return 'git@github.com:o/r.git\n';
+      if (args[0] === 'fetch') return '';
+      if (args[0] === 'rev-parse' && args[1] === '--verify') return 'abc123\n'; // branch exists
+      if (args[0] === 'switch') return '';
+      if (args[0] === 'add') return '';
+      if (args[0] === 'diff' && args.includes('--cached') && args.includes('--quiet')) return ''; // no staged diff
+      if (args[0] === 'rev-list' && args.includes('--count')) return '0\n'; // NOT ahead
+      if (args[0] === 'status' && args[1] === '--porcelain') {
+        // base checkout is dirty; the worktree (different cwd) is clean
+        return cwd === '/base' ? 'M src/foo.ts\n' : '';
+      }
+      if (args[0] === 'push') { pushCalled = true; return ''; }
+      throw new Error(`unexpected git: ${args.join(' ')}`);
+    },
+    execGh: neverGh,
+    resolveTaskCwd: makeResolveTaskCwd('/base'),
+    resolveRunCwd: makeResolveRunCwd('/wt'),
+  };
+
+  const result = await integrate(BASE_INPUT, deps);
+  assert.ok('needsHuman' in result, 'must return needsHuman');
+  assert.ok(
+    result.lesson.toLowerCase().includes('worktree') &&
+      (result.lesson.toLowerCase().includes('outside') || result.lesson.includes('OUTSIDE')),
+    `lesson must mention worktree and outside: ${result.lesson}`,
+  );
+  assert.ok(result.lesson.includes('slice 143'), `lesson must mention slice 143: ${result.lesson}`);
+  assert.equal(pushCalled, false, 'push must NOT be called');
+});
+
+test('slice-143: worktree empty AND base checkout clean → generic "nothing to integrate" lesson', async () => {
+  const deps: IntegratorDeps = {
+    execGit: (args, _cwd) => {
+      if (args[0] === 'remote' && args[2] === 'origin') return 'git@github.com:o/r.git\n';
+      if (args[0] === 'fetch') return '';
+      if (args[0] === 'rev-parse' && args[1] === '--verify') return 'abc123\n';
+      if (args[0] === 'switch') return '';
+      if (args[0] === 'add') return '';
+      if (args[0] === 'diff' && args.includes('--cached') && args.includes('--quiet')) return ''; // no staged diff
+      if (args[0] === 'rev-list' && args.includes('--count')) return '0\n'; // NOT ahead
+      if (args[0] === 'status' && args[1] === '--porcelain') return ''; // base clean → generic lesson
+      throw new Error(`unexpected git: ${args.join(' ')}`);
+    },
+    execGh: neverGh,
+    resolveTaskCwd: makeResolveTaskCwd('/base'),
+    resolveRunCwd: makeResolveRunCwd('/wt'),
+  };
+
+  const result = await integrate(BASE_INPUT, deps);
+  assert.ok('needsHuman' in result, 'must return needsHuman');
+  assert.ok(result.lesson.includes('nothing to integrate'), `lesson: ${result.lesson}`);
 });
 
 test('B4 replay: existing PR found on replay → same url, no duplicate create', async () => {
@@ -716,6 +777,7 @@ test('m4: countAhead swallows unknown-revision error (branch not yet known) → 
       if (args[0] === 'rev-list' && args.includes('--count')) {
         throw new Error('fatal: ambiguous argument \'origin/master..feat/t\': unknown revision');
       }
+      if (args[0] === 'status' && args[1] === '--porcelain') return ''; // base clean → generic lesson
       if (args[0] === 'push') { pushCalled = true; return ''; }
       throw new Error(`unexpected git: ${args.join(' ')}`);
     },
