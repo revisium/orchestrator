@@ -1,9 +1,10 @@
 import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { getConfig } from '../config.js';
 import { worktreePathFor } from '../control-plane/resolve-cwd.js';
+import { branchName } from '../runners/integrator.js';
 import type { RunAgent, AttemptResult } from '../worker/runner.js';
 import {
   RUN_REAL_E2E,
@@ -27,6 +28,7 @@ import {
   assertNoRawTokenInEvents,
   assertGhNotCalled,
   assertEventsPresent,
+  git,
 } from './kit/index.js';
 
 // Group D — integrator / git / gh failure modes, exercised through the REAL integrator + real git on
@@ -47,9 +49,9 @@ const triageDecisions = new Map<string, TriageDecision[]>(); // a sequence so th
  */
 function prReviewAgent(sink: AgentSink): RunAgent {
   const triageCounts = new Map<string, number>();
-  return async ({ role, profile, attemptId, step }): Promise<AttemptResult> => {
+  return async ({ role, profile, attemptId, step, context }): Promise<AttemptResult> => {
     const logicalRole = role.playbookRoleId ?? role.name;
-    sink.agentCalls.push({ role: logicalRole, runner: role.runner, attemptId, runId: step.runId, context: '' });
+    sink.agentCalls.push({ role: logicalRole, runner: role.runner, attemptId, runId: step.runId, context });
     const cost = [{ modelProfile: profile.level, currency: 'USD', inputTokens: 10, outputTokens: 5, costAmount: 0.001 }];
     if (logicalRole === 'triager') {
       const seq = triageDecisions.get(step.runId) ?? ['fix'];
@@ -64,9 +66,9 @@ function prReviewAgent(sink: AgentSink): RunAgent {
       return { output, verdict: decision, nextSteps: [], costs: cost };
     }
     // developer writes a change file so the real integrator has a diff to commit/re-push. Plan 0017:
-    // write into the run's ISOLATED worktree (resolveWriteDir), NOT the registered base checkout — the
-    // integrator commits from the worktree, so a base-checkout write would leave it with no diff.
-    const writeRepo = logicalRole === 'developer' ? resolveWriteDir(step.runId, sink.developerWrites.get(step.runId)) : undefined;
+    // write into the run's ISOLATED worktree (resolveWriteDir parses Repo: from context, which build-context
+    // sets to the worktree for live runs — slice 143), NOT the registered base checkout.
+    const writeRepo = logicalRole === 'developer' ? resolveWriteDir(sink.developerWrites.get(step.runId), context) : undefined;
     if (writeRepo) writeFileSync(join(writeRepo, `developer-${attemptId}.txt`), `change from ${attemptId}\n`);
     return { output: { role: logicalRole }, verdict: logicalRole === 'watcher' ? 'clean' : 'approved', nextSteps: [], costs: cost };
   };
@@ -405,6 +407,36 @@ test('D33: review-comment → triage(question) → questionGate(approve) → tri
     const terminal = await approveUntilTerminal(h.api, run.runId);
     assert.equal(terminal.state, 'completed', 'a question is answered at the gate, then the thread is resolved and merged');
     await assertEventsPresent(h.api, run.runId, ['pr_polled', 'threads_responded', 'merge_confirmed', 'run_completed']);
+  } finally {
+    target.cleanup();
+  }
+});
+
+// ── Anti-masking regression: developer writes to the GIVEN worktree (slice-143 / #130) ────────────
+// D22: asserts that resolveWriteDir parses the Repo: path from context (the worktree for live runs)
+// rather than recomputing it from runId. If build-context ever stops pointing Repo: at the worktree,
+// the developer writes to the base checkout → worktree empty → integrate blocks with the slice-143
+// lesson → these assertions fail and catch the regression.
+
+test('D22: developer writes to the GIVEN worktree (Repo: from context); branch is ahead of base', { skip: e2eSkip }, async () => {
+  // Use `merge-not-clean` so confirmMerge blocks AFTER integrate — the worktree is KEPT for inspection.
+  const target = createTargetRepo();
+  try {
+    const run = await startFeature(target, { gh: 'merge-not-clean' });
+    await approveUntilTerminal(h.api, run.runId); // approve plan + merge gate; confirmMerge then blocks
+    await assertBlocked(h.api, run.runId);
+
+    const wtPath = worktreePathFor(getConfig().dataDir, run.runId);
+
+    // Assert 1: the developer's change file landed INSIDE the worktree (not the base checkout).
+    const files = readdirSync(wtPath);
+    const devFile = files.find((f) => /^developer-.*\.txt$/.test(f));
+    assert.ok(devFile, `developer-*.txt must exist inside the worktree at ${wtPath} — got: ${files.join(', ')}`);
+
+    // Assert 2: the worktree branch is ahead of base, proving the integrator committed from there.
+    const branch = branchName(run.taskId, 'E2E integrator-failure feature run');
+    const aheadStr = git(wtPath, ['rev-list', '--count', `origin/master..${branch}`]).trim();
+    assert.ok(Number(aheadStr) > 0, `worktree branch must be ahead of origin/master (got ${aheadStr})`);
   } finally {
     target.cleanup();
   }
