@@ -91,20 +91,25 @@ export async function bootstrapControlPlane(
  * Installed playbooks read from a FRESH client at HEAD — the presence signal for the default-playbook
  * seed when it runs before the daemon's service layer exists. A fresh client resolves the current head
  * each call, so it reflects bootstrap/earlier commits made in the same boot (unlike a cached scope).
+ * Carries both `version` and `catalogHash` so the seed can use the content fingerprint (B1) and fall
+ * back to version compare for legacy rows that predate the hash signal.
  */
 export async function listInstalledPlaybooks(
   httpPort: number,
   client: RevisiumClient = new RevisiumClient({ baseUrl: baseUrl(httpPort) }),
-): Promise<Array<{ id: string; version?: string }>> {
+): Promise<Array<{ id: string; version?: string; catalogHash?: string }>> {
   const { org, project, branch } = getConfig();
   const head = await client.revision({ org, project, branch, revision: 'head' });
   const rows = await head.getRows('playbooks', { first: 1000 });
-  // Carry the row's recorded `version` (a data column, see import-mapper) so the version-aware seed
-  // (slice 144 B1) can compare it to the bundled version — WITHOUT it, every restart reads the installed
-  // version as undefined → "older" → re-seeds on every boot.
   return (rows.edges ?? []).flatMap((edge) => {
     if (!edge.node) return [];
-    const version = (edge.node.data as Record<string, unknown> | undefined)?.version;
-    return [{ id: edge.node.id, version: typeof version === 'string' && version ? version : undefined }];
+    const data = edge.node.data as Record<string, unknown> | undefined;
+    const version = data?.version;
+    const catalogHash = data?.catalog_hash;
+    return [{
+      id: edge.node.id,
+      version: typeof version === 'string' && version ? version : undefined,
+      catalogHash: typeof catalogHash === 'string' && catalogHash ? catalogHash : undefined,
+    }];
   });
 }

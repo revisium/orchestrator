@@ -16,6 +16,9 @@ import { existsSync } from 'node:fs';
 import { repoRoot } from '../config.js';
 import { PlaybookInstaller, type PlaybookInstallResult } from '../playbook/playbook-installer.js';
 import { resolvePlaybookSource } from '../playbook/source-resolver.js';
+import { readPlaybookManifest } from '../playbook/manifest.js';
+import { loadPlaybookCatalogs } from '../playbook/catalog-loader.js';
+import { mapPlaybookRows } from '../playbook/import-mapper.js';
 import { createVersionedMeaningAccess } from './versioned-meaning.js';
 
 /** Installed row id of the built-in default playbook (distinct from the e2e fixture playbook). */
@@ -33,12 +36,12 @@ export type SeedDefaultPlaybookResult =
   | { status: 'raced' };
 
 /**
- * Minimal install surface — lets the seed be unit-tested without a live daemon. `version` is the
- * INSTALLED row's recorded version (carried on the playbook row, see import-mapper); optional so a
- * pre-version row (older install) reads as `undefined` and is treated as "older" (re-seed once).
+ * Minimal install surface — lets the seed be unit-tested without a live daemon. `version` and
+ * `catalogHash` are INSTALLED row data (see import-mapper); both optional so legacy rows (pre-B1
+ * installs) fall through to the version-compare fallback path without a schema migration.
  */
 export type DefaultPlaybookInstaller = {
-  listPlaybooks(): Promise<Array<{ id: string; version?: string }>>;
+  listPlaybooks(): Promise<Array<{ id: string; version?: string; catalogHash?: string }>>;
   install(options: { source: string; name: string; commit: boolean }): Promise<PlaybookInstallResult>;
 };
 
@@ -72,18 +75,32 @@ function isBenignInstallRace(err: unknown): boolean {
 }
 
 /**
- * Install the built-in default playbook if it is not already present, OR re-install (overwrite) it when
- * the BUNDLED version is newer than the installed row's version. Returns a status discriminant so the
- * caller can log appropriately; never throws on a benign duplicate-install race.
+ * Recompute the content fingerprint for the bundled default playbook at `source`. Exported so tests
+ * can compute the expected hash without a live daemon and pin the "identical content → skip" case.
+ * Uses the exact same path as the installer (mapPlaybookRows with nameOverride) so the two hashes
+ * are always in sync.
+ */
+export function bundledCatalogHash(source: string): string {
+  const resolved = resolvePlaybookSource(source);
+  const manifest = readPlaybookManifest(resolved.root);
+  const catalogs = loadPlaybookCatalogs(resolved.root, manifest);
+  return mapPlaybookRows({ root: resolved.root, source: resolved, manifest, catalogs, nameOverride: DEFAULT_PLAYBOOK_ID }).catalogHash;
+}
+
+/**
+ * Install the built-in default playbook if it is not already present, OR re-install (overwrite) it
+ * when the bundled content has changed. Returns a status discriminant so the caller can log
+ * appropriately; never throws on a benign duplicate-install race.
  *
- * Version-aware re-seed (slice 144): a warm profile that merely already HAS the default playbook used to
- * skip unconditionally, so `npm i -g` a newer bundle + `revo restart` kept the OLD playbook. Now we read
- * the bundled version from the source package.json (the same value `resolvePlaybookSource` records on the
- * installed row) and compare it to the installed row's recorded version:
- *   - bundle NEWER  → re-seed (the installer upserts by row id, so the install path is the overwrite).
- *   - equal/older   → skip (idempotent; never downgrade).
- *   - installed row has NO version (pre-versioning install) → treat as older → re-seed once.
- * `install()` is the same upsert+commit path used for a fresh install, so re-seed stays idempotent.
+ * Decision priority (B1 content-hash re-seed):
+ *   1. catalogHash present on installed row → compare to bundledCatalogHash(source):
+ *      - match   → skip (content unchanged, any version).
+ *      - differ  → re-seed (the installer upserts by row id).
+ *   2. no catalogHash (legacy row predating B1) → fall back to version compare:
+ *      - bundle NEWER  → re-seed.
+ *      - equal/older   → skip (never downgrade).
+ *      - no version    → treat as "0.0.0" → re-seed once so the one-time upgrade lands.
+ * `install()` is the same upsert+commit path used for a fresh install, so re-seed is idempotent.
  */
 export async function seedDefaultPlaybook(
   installer: DefaultPlaybookInstaller,
@@ -98,28 +115,33 @@ export async function seedDefaultPlaybook(
   const installed = await installer.listPlaybooks();
   const existing = installed.find((p) => p.id === DEFAULT_PLAYBOOK_ID);
   if (existing) {
-    // The bundled version lives in the source package.json — resolve it the same way the installer does
-    // so the comparison is against the exact value that lands on the row.
-    // RELEASE DISCIPLINE: this re-seed only fires when the bundled version is NEWER, so any change to the
-    // playbook CONTENT (catalog/pipelines.json, catalog/roles.json, prompts/) MUST bump
-    // control-plane/default-playbook/package.json — otherwise an upgraded bundle with new content keeps the
-    // SAME version and silently skips re-seeding (this is exactly the D3 dogfood gap; see slice 144).
-    const bundledVersion = resolvePlaybookSource(source).version;
-    const installedVersion = existing.version ?? '';
-    // A pre-versioning row (no recorded version) reads as "0.0.0" → strictly older → re-seed once so the
-    // one-time upgrade lands; thereafter the versions match and we skip.
-    const comparison = compareSemver(bundledVersion, installedVersion || '0.0.0');
-    if (comparison <= 0) {
+    if (existing.catalogHash) {
+      // Content-hash path (B1): detects any change — catalog records, pipelines, or prompt bodies —
+      // without requiring a manual version bump.
+      const currentHash = bundledCatalogHash(source);
+      if (currentHash === existing.catalogHash) {
+        log(`Default playbook ${DEFAULT_PLAYBOOK_ID} content unchanged (hash match) — skipping seed.`);
+        return { status: 'already-installed' };
+      }
+      log(`Default playbook ${DEFAULT_PLAYBOOK_ID} content changed (hash mismatch) — re-seeding.`);
+    } else {
+      // Legacy fallback: row predates the B1 content-hash signal; compare by version so pre-B1
+      // installs still get re-seeded when the bundle version advances.
+      const bundledVersion = resolvePlaybookSource(source).version;
+      const installedVersion = existing.version ?? '';
+      const comparison = compareSemver(bundledVersion, installedVersion || '0.0.0');
+      if (comparison <= 0) {
+        log(
+          `Default playbook ${DEFAULT_PLAYBOOK_ID} up to date ` +
+            `(installed ${installedVersion || '(none)'} >= bundled ${bundledVersion}) — skipping seed.`,
+        );
+        return { status: 'already-installed' };
+      }
       log(
-        `Default playbook ${DEFAULT_PLAYBOOK_ID} up to date ` +
-          `(installed ${installedVersion || '(none)'} >= bundled ${bundledVersion}) — skipping seed.`,
+        `Default playbook ${DEFAULT_PLAYBOOK_ID} bundle is newer ` +
+          `(installed ${installedVersion || '(none)'} -> bundled ${bundledVersion}) — re-seeding.`,
       );
-      return { status: 'already-installed' };
     }
-    log(
-      `Default playbook ${DEFAULT_PLAYBOOK_ID} bundle is newer ` +
-        `(installed ${installedVersion || '(none)'} -> bundled ${bundledVersion}) — re-seeding.`,
-    );
   }
   try {
     const result = await installer.install({ source, name: DEFAULT_PLAYBOOK_ID, commit: true });
@@ -136,7 +158,7 @@ export async function seedDefaultPlaybook(
  * uses). Reads the installed playbooks list from HEAD via the provided reader.
  */
 export function createDaemonInstaller(
-  listPlaybooks: () => Promise<Array<{ id: string; version?: string }>>,
+  listPlaybooks: () => Promise<Array<{ id: string; version?: string; catalogHash?: string }>>,
 ): DefaultPlaybookInstaller {
   return {
     listPlaybooks,
