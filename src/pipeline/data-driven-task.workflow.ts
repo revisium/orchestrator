@@ -133,6 +133,18 @@ function transientRunnerFailureReason(result: AttemptResult): string | undefined
   return typeof output.reason === 'string' ? output.reason : '';
 }
 
+/**
+ * Classify a transient runner failure into a SHORT, machine-readable kind so a consumer can tell
+ * timeout / rate-limit / crash apart from `pipeline_blocked.payload.reason` alone (the full detail
+ * stays in the lesson). Checked timeout-first so a "exited 1 (timeout)" message reads as a timeout.
+ */
+function transientKind(reason: string): string {
+  if (/exceeded\s*\d+\s*ms|timed?\s*out|\btimeout\b/i.test(reason)) return 'timeout';
+  if (/\b429\b|rate.?limit|session limit|quota|overage/i.test(reason)) return 'rate_limit';
+  if (/exit(ed)?\b|signal|crash|killed|ENOENT|spawn/i.test(reason)) return 'crash';
+  return 'unknown';
+}
+
 /** Extract the DOMAIN verdict from the only supported source: top-level AttemptResult.verdict. */
 function domainVerdictOf(result: AttemptResult): string | undefined {
   if (typeof result.verdict === 'string' && result.verdict.trim().length > 0) {
@@ -559,8 +571,7 @@ export function makeDataDrivenTask(
       // (which would fail the run). blockWithLesson emits the single `pipeline_blocked` (token-redacted
       // at the persist boundary) + marks the run-row blocked — the same guard the preflight block uses.
       if (eff.terminal) {
-        await blockWithLesson(runId, taskId, eff.terminal.reason, eff.terminal.lesson, stepCount);
-        return { runId, status: eff.terminal.status, verdict: 'blocked', steps: stepCount };
+        return await blockWithLesson(runId, taskId, eff.terminal.reason, eff.terminal.lesson, stepCount);
       }
       lastResult = eff.lastResult;
       if (eff.lastVerdict !== undefined) lastVerdict = eff.lastVerdict;
@@ -585,7 +596,7 @@ export function makeDataDrivenTask(
    * visible, lesson-bearing `blocked` terminal, exactly as the engine-level preflight guard does
    * (blockWithLesson). The block is recovery-bearing, not a silent ResultInvalid abort.
    */
-  type DecisionEffect = { lastResult: LastResult | undefined; lastVerdict?: string; failureReason?: string; stepDelta: number; terminal?: { status: TerminalStatus; reason: string; lesson: string } };
+  type DecisionEffect = { lastResult: LastResult | undefined; lastVerdict?: string; failureReason?: string; stepDelta: number; terminal?: { status: 'blocked'; reason: string; lesson: string } };
   type EffectCtx = {
     runId: string;
     template: Template;
@@ -757,7 +768,8 @@ export function makeDataDrivenTask(
       const transientReason = transientRunnerFailureReason(result);
       if (transientReason !== undefined) {
         const safe = String(redactEventPayload(transientReason));
-        return { blocked: true, reason: 'runner-transient-failure', lesson: `runner-transient-failure: ${safe || 'runner failed'}` };
+        const kind = transientKind(transientReason);
+        return { blocked: true, reason: `runner-transient-failure:${kind}`, lesson: `runner-transient-failure (${kind}): ${safe || 'runner failed'}` };
       }
       const safeLesson = String(redactEventPayload(result.lesson ?? `agent ${node.id} reported needsHuman`));
       return { blocked: true, reason: 'agent-needs-human', lesson: safeLesson };

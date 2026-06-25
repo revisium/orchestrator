@@ -399,7 +399,7 @@ test('DD5-transient: a TRANSIENT runner_failed (crash/timeout/429) → blocked w
   assert.equal(result.status, 'blocked', 'a transient runner failure BLOCKS the run (does NOT abort)');
   assert.equal(rec.blocked.length, 1);
   assert.equal(rec.failed.length, 0, 'failRun NOT called — a transient failure is recoverable, not fatal');
-  assert.equal(rec.blocked[0]?.reason, 'runner-transient-failure', 'the block reason marks it transient');
+  assert.equal(rec.blocked[0]?.reason, 'runner-transient-failure:timeout', 'the block reason marks it transient + names the kind');
   assert.ok(
     rec.blockedLessons.some((l) => l.includes('runner-transient-failure') && l.includes('timeout')),
     'the transient lesson names the recoverable runner reason',
