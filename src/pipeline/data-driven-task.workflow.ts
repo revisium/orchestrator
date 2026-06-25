@@ -117,6 +117,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+/**
+ * Discriminate a TRANSIENT runner failure from a DELIBERATE agent `needsHuman` (both arrive as
+ * AttemptResult.needsHuman, but route to DIFFERENT pipeline_blocked lessons — see invokeRole).
+ *
+ * runStep (pipeline.service.ts §7) converts a runner-process crash / non-zero exit / 429 / timeout into
+ * a SYNTHETIC blocking attempt whose `output` is `{ verdict:'BLOCKER', error:'runner_failed', reason }`.
+ * That `error:'runner_failed'` marker is set ONLY on that transient path; a deliberate agent's `output`
+ * is its own free-form result and never carries it. Returns the recoverable `reason` (possibly empty)
+ * when transient, or `undefined` for a deliberate human-block.
+ */
+function transientRunnerFailureReason(result: AttemptResult): string | undefined {
+  const output = result.output;
+  if (!isRecord(output) || output.error !== 'runner_failed') return undefined;
+  return typeof output.reason === 'string' ? output.reason : '';
+}
+
 /** Extract the DOMAIN verdict from the only supported source: top-level AttemptResult.verdict. */
 function domainVerdictOf(result: AttemptResult): string | undefined {
   if (typeof result.verdict === 'string' && result.verdict.trim().length > 0) {
@@ -537,10 +553,18 @@ export function makeDataDrivenTask(
         // awaitGate this is the routing verdict that opened the gate → D3's default reviewerVerdict.
         lastVerdict,
       });
+      stepCount += eff.stepDelta;
+      // Engine-level short-circuit (agent needsHuman, classified by invokeRole): block the run at a
+      // visible, lesson-bearing terminal WITHOUT routing through the core's onFailure:'abort' machinery
+      // (which would fail the run). blockWithLesson emits the single `pipeline_blocked` (token-redacted
+      // at the persist boundary) + marks the run-row blocked — the same guard the preflight block uses.
+      if (eff.terminal) {
+        await blockWithLesson(runId, taskId, eff.terminal.reason, eff.terminal.lesson, stepCount);
+        return { runId, status: eff.terminal.status, verdict: 'blocked', steps: stepCount };
+      }
       lastResult = eff.lastResult;
       if (eff.lastVerdict !== undefined) lastVerdict = eff.lastVerdict;
       lastFailureReason = eff.failureReason ?? '';
-      stepCount += eff.stepDelta;
     }
 
     throw new InterpretError(
@@ -550,8 +574,18 @@ export function makeDataDrivenTask(
 
   // ── Decision dispatch ────────────────────────────────────────────────────────
 
-  /** What executing one non-terminal Decision yields back to the loop. */
-  type DecisionEffect = { lastResult: LastResult | undefined; lastVerdict?: string; failureReason?: string; stepDelta: number };
+  /**
+   * What executing one non-terminal Decision yields back to the loop.
+   *
+   * `terminal` is an ENGINE-LEVEL short-circuit (set ONLY by the agent `needsHuman` branch — see
+   * invokeRole): it terminates the run at the given terminal status WITHOUT routing the effect through
+   * the core's failure machinery. A `needsHuman` agent must NOT be turned into a `failed`/`errorCode`
+   * outcome, because the agent nodes carry `onFailure:'abort'` and (by design) no `catch` arm for a
+   * human-block — so routing it as a failure would ABORT the whole run. Instead we surface it as a
+   * visible, lesson-bearing `blocked` terminal, exactly as the engine-level preflight guard does
+   * (blockWithLesson). The block is recovery-bearing, not a silent ResultInvalid abort.
+   */
+  type DecisionEffect = { lastResult: LastResult | undefined; lastVerdict?: string; failureReason?: string; stepDelta: number; terminal?: { status: TerminalStatus; reason: string; lesson: string } };
   type EffectCtx = {
     runId: string;
     template: Template;
@@ -592,6 +626,12 @@ export function makeDataDrivenTask(
           return { lastResult: { outcome: 'failed', errorCode: REVO_INPUT_MISSING }, lastVerdict: 'failed', stepDelta: 1 };
         }
         const result = await invokeRole(runId, decision, node, ctx, resolved.inputs, stepKey);
+        if ('blocked' in result) {
+          // needsHuman (deliberate agent block OR transient runner failure): short-circuit to a visible
+          // `blocked` terminal carrying the per-kind lesson (runGraph emits the pipeline_blocked + blocks
+          // the run-row via blockWithLesson). NOT a failed/aborted run — the block is recoverable.
+          return { lastResult: undefined, terminal: { status: 'blocked', reason: result.reason, lesson: result.lesson }, stepDelta: 1 };
+        }
         if (result.failed) {
           await appendEvent({
             runId, taskId, stepId: '', stepKey, type: 'step_failed',
@@ -685,7 +725,11 @@ export function makeDataDrivenTask(
     ctx: EffectCtx,
     inputs: Record<string, unknown>,
     stepKey: string,
-  ): Promise<{ failed: true; errorCode: typeof REVO_RESULT_INVALID; reason: string } | { failed: false; verdict?: string; output: unknown }> {
+  ): Promise<
+    | { failed: true; errorCode: typeof REVO_RESULT_INVALID; reason: string }
+    | { blocked: true; reason: string; lesson: string }
+    | { failed: false; verdict?: string; output: unknown }
+  > {
     const binding = ctx.bindingByRef.get(decision.roleRef);
     if (!binding) {
       // A VALID template's caps resolve at run start; an unresolved roleRef is a fatal config gap.
@@ -697,10 +741,26 @@ export function makeDataDrivenTask(
     const stepInput =
       Object.keys(inputs).length > 0 ? { nodeId: decision.nodeId, inputs } : { nodeId: decision.nodeId };
     const result = await runStepFn(runId, binding.rowId, stepKey, stepInput, binding.resolvedRunnerId, ctx.executionProfile);
-    // runStep converts a runner-process crash into a blocking attempt (needsHuman + verdict BLOCKER);
-    // that is a domain failure of the node → route via §6 precedence as a result-invalid/failed effect.
+    // A `needsHuman` result is NOT a wiring fault — it is a recoverable human-block. Route it to a
+    // visible `blocked` terminal (like a blocked SCRIPT), never a ResultInvalid abort (which permanently
+    // kills the run). TWO distinct things produce needsHuman; both block, but the human must see WHICH:
+    //  - DELIBERATE: the agent self-reported `needsHuman:true` (the result-envelope contract). It carries
+    //    the agent's own `output` + `lesson` — a genuine "I need a human decision".
+    //  - TRANSIENT: runStep (pipeline.service.ts) wraps a runner-process crash / non-zero exit / 429 /
+    //    600s timeout as a SYNTHETIC blocking attempt — `output:{ verdict:'BLOCKER', error:'runner_failed',
+    //    reason }`, needsHuman:true. This is fully recoverable; turning it into an abort killed real runs.
+    // The reliable discriminator is that SYNTHETIC marker (`output.error === 'runner_failed'`), set ONLY
+    // on the transient path — a deliberate agent's output is its own free-form result, never that shape.
     if (result.needsHuman) {
-      return { failed: true, errorCode: REVO_RESULT_INVALID, reason: `${REVO_RESULT_INVALID}: node ${node.id} returned needsHuman instead of a valid result` };
+      // Redact token shapes at THIS build site (a lesson is free text — pushInbox/appendEvent only mask
+      // secret-NAMED keys), mirroring gateArtifactView; the persist boundary redacts again, belt-and-suspenders.
+      const transientReason = transientRunnerFailureReason(result);
+      if (transientReason !== undefined) {
+        const safe = String(redactEventPayload(transientReason));
+        return { blocked: true, reason: 'runner-transient-failure', lesson: `runner-transient-failure: ${safe || 'runner failed'}` };
+      }
+      const safeLesson = String(redactEventPayload(result.lesson ?? `agent ${node.id} reported needsHuman`));
+      return { blocked: true, reason: 'agent-needs-human', lesson: safeLesson };
     }
     if (!resultSatisfiesSchema(node, result)) {
       return { failed: true, errorCode: REVO_RESULT_INVALID, reason: `${REVO_RESULT_INVALID}: node ${node.id} result did not satisfy resultSchema ${String('resultSchema' in node ? node.resultSchema : '')}` };
