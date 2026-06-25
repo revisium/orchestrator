@@ -1,0 +1,80 @@
+name: Decision / Spec
+description: Request ADR, technical design, method, or policy work before implementation.
+title: "Decision: "
+labels:
+  - documentation
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this when the next step is analysis, architecture, ADR, technical design, or playbook policy clarification.
+        Implementation should be a separate delivery slice unless the decision is trivial.
+        Write in clear professional English for a future human reader, not only for an agent.
+  - type: textarea
+    id: reader-context
+    attributes:
+      label: Reader Context
+      description: One short paragraph explaining the background, current state, and why this decision matters.
+      placeholder: Revo can already surface gated artifacts, but the pipeline policy does not yet define where stale readiness should reroute after a rejected merge gate.
+    validations:
+      required: true
+  - type: dropdown
+    id: artifact-type
+    attributes:
+      label: Artifact Type
+      options:
+        - ADR candidate
+        - Architecture plan
+        - Technical design
+        - Playbook policy
+        - Method guidance
+        - Research / discovery
+        - Undecided
+    validations:
+      required: true
+  - type: textarea
+    id: question
+    attributes:
+      label: Question / Decision Needed
+      description: What needs to be decided or specified?
+      placeholder: Should stale merge-gate rejection reroute to pollPr, triage, or a dedicated refresh node?
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context / Evidence
+      description: Link related runs, PRs, issues, docs, files, or provider feedback.
+      placeholder: |
+        - Revo run:
+        - PR:
+        - Related issue:
+        - Existing docs:
+    validations:
+      required: true
+  - type: textarea
+    id: options
+    attributes:
+      label: Options Considered
+      placeholder: |
+        1.
+        2.
+        3.
+  - type: textarea
+    id: criteria
+    attributes:
+      label: Decision Criteria
+      placeholder: |
+        - Durable execution safety
+        - Human-gate clarity
+        - Replay/idempotency
+        - Testability
+        - Compatibility with existing playbooks
+  - type: textarea
+    id: output
+    attributes:
+      label: Expected Output
+      value: |
+        - [ ] Recommendation or decision recorded.
+        - [ ] ADR/design/policy doc updated if needed.
+        - [ ] Follow-up delivery slice issue created or linked if implementation is required.
