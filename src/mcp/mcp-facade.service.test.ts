@@ -25,14 +25,22 @@ test('McpFacadeService.getCapabilities exposes the MCP transport surface', () =>
   assert.ok(capabilities.tools.includes('get_agent_log'));
   assert.ok(capabilities.tools.includes('tail_agent_log'));
   assert.ok(capabilities.tools.includes('read_agent_output_events'));
+  assert.ok(capabilities.tools.includes('observe_run'));
   assert.ok(capabilities.tools.includes('wait_for_any_gate'));
   assert.ok(capabilities.tools.includes('watch_runs'));
+  assert.deepEqual(capabilities.observation.compatibilityTools, ['wait_for_run', 'wait_for_any_gate', 'watch_runs']);
+  assert.equal(capabilities.observation.preferredOrder[0]?.startsWith('observe_run with cursor'), true);
+  assert.ok(capabilities.observation.preferredOrder.some((item) => item.includes('avoid get_run(includeEvents:true)')));
 });
 
-test('McpFacadeService delegates the watch primitives to the injected RunWatchService', async () => {
+test('McpFacadeService delegates observe and watch primitives to the injected RunWatchService', async () => {
   const api = {} as TaskControlPlaneApiService;
   const calls: Array<{ method: string; input: unknown }> = [];
   const runWatch = {
+    async observeRun(input: unknown) {
+      calls.push({ method: 'observeRun', input });
+      return { runId: 'r1', cursor: 'oc1', state: 'running', timedOut: true, nextAction: 'wait' };
+    },
     async waitForAnyGate(input: unknown) {
       calls.push({ method: 'waitForAnyGate', input });
       return { transitions: [{ runId: 'r1', state: 'pending_gate', nextAction: 'approve' }], cursor: 'c1', timedOut: false };
@@ -44,11 +52,14 @@ test('McpFacadeService delegates the watch primitives to the injected RunWatchSe
   } as unknown as RunWatchService;
   const facade = new McpFacadeService(api, runWatch);
 
+  const observeResult = await facade.observeRun({ runId: 'r1', timeoutMs: 1000 });
   const gateResult = await facade.waitForAnyGate({ runIds: ['r1'], timeoutMs: 1000 });
   const watchResult = await facade.watchRuns({ cursor: 'c1' });
 
-  assert.deepEqual(calls[0], { method: 'waitForAnyGate', input: { runIds: ['r1'], timeoutMs: 1000 } });
-  assert.deepEqual(calls[1], { method: 'watchRuns', input: { cursor: 'c1' } });
+  assert.deepEqual(calls[0], { method: 'observeRun', input: { runId: 'r1', timeoutMs: 1000 } });
+  assert.deepEqual(calls[1], { method: 'waitForAnyGate', input: { runIds: ['r1'], timeoutMs: 1000 } });
+  assert.deepEqual(calls[2], { method: 'watchRuns', input: { cursor: 'c1' } });
+  assert.equal(observeResult.nextAction, 'wait');
   assert.equal(gateResult.transitions[0]?.runId, 'r1');
   assert.equal(watchResult.timedOut, true);
 });
@@ -65,8 +76,10 @@ test('McpFacadeService lazily builds a poll-fallback watch when none is injected
   } as unknown as TaskControlPlaneApiService;
   const facade = new McpFacadeService(api);
 
+  const observed = await facade.observeRun({ runId: 'r1', timeoutMs: 0 });
   const result = await facade.waitForAnyGate({ runIds: ['r1'], timeoutMs: 0 });
 
+  assert.equal(observed.transition?.runId, 'r1');
   assert.equal(result.transitions[0]?.runId, 'r1');
   assert.equal(result.transitions[0]?.inbox?.id, 'ix');
 });

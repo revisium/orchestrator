@@ -1,5 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { MAX_WATCH_CURSOR_CHARS } from '../task-control-plane/run-watch.service.js';
 import type { McpFacadeService } from './mcp-facade.service.js';
 
 function json(value: unknown) {
@@ -21,6 +22,8 @@ const agentStreamSchema = z.enum(['stdout', 'stderr', 'events', 'combined']);
 const agentLogByteSchema = z.number().int().positive().max(1048576).optional();
 const agentLogOffsetSchema = z.number().int().nonnegative().max(1048576).optional();
 const paramsSchema = z.record(z.string(), z.unknown()).optional();
+const watchCursorSchema = z.string().max(MAX_WATCH_CURSOR_CHARS);
+const observeRunModeSchema = z.enum(['actionable', 'heartbeat', 'diagnostic']);
 const prReadinessInputSchema = {
   repo: z.string().min(1).describe('GitHub repository in owner/name form, for example revisium/agent-orchestrator'),
   prNumber: z.number().int().positive().optional(),
@@ -36,7 +39,14 @@ const watchInputSchema = {
   // min(1): an explicit empty array would otherwise be treated like omission (watch-all) — surprising.
   runIds: z.array(z.string().min(1)).min(1).max(50).optional().describe('Runs to watch; omit to watch all active runs'),
   timeoutMs: z.number().int().nonnegative().max(45000).optional().describe('Server hold (clamped ≤45s)'),
-  cursor: z.string().optional().describe('Resume cursor from a prior call; suppresses already-delivered transitions'),
+  cursor: watchCursorSchema.optional().describe('Resume cursor from a prior call; suppresses already-delivered transitions'),
+};
+const observeRunInputSchema = {
+  runId: runIdSchema,
+  cursor: watchCursorSchema.optional().describe('Resume cursor from a prior observe_run call'),
+  mode: observeRunModeSchema.optional().describe('Observation mode: actionable by default, heartbeat for liveness, diagnostic for bounded hints'),
+  timeoutMs: z.number().int().nonnegative().max(45000).optional().describe('Server hold (clamped ≤45s)'),
+  heartbeatEveryMs: z.number().int().positive().max(45000).optional().describe('Heartbeat cadence for mode:"heartbeat" (clamped ≤45s)'),
 };
 
 function assertValidAgentLogRange(input: { offsetBytes?: number; limitBytes?: number; tailBytes?: number }): void {
@@ -155,9 +165,21 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
   );
 
   server.registerTool(
+    'observe_run',
+    {
+      description:
+        'Canonical low-context run observation. Use with the returned cursor for normal polling; returns compact state, transition, heartbeat/activity counters, and the next bounded action without raw logs or full events.',
+      inputSchema: observeRunInputSchema,
+      annotations: { readOnlyHint: true },
+    },
+    async (input, extra) => json(await facade.observeRun({ ...input, signal: extra?.signal })),
+  );
+
+  server.registerTool(
     'wait_for_run',
     {
-      description: 'Resolve current run state and next action: pending_gate, question, running, blocked, failed, completed.',
+      description:
+        'Compatibility/diagnostic tool: resolve current run state and next action. Prefer observe_run with cursor for normal observation loops.',
       // Cap matches the MCP inner-hop SDK timeout budget (~60s): a longer busy-poll dies at the transport,
       // not the daemon. To wait across runs, prefer wait_for_any_gate / watch_runs.
       inputSchema: {
@@ -174,7 +196,7 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
     'wait_for_any_gate',
     {
       description:
-        'Bounded long-poll: block until ANY watched run hits an approval/question gate, returning the gate (with its inbox row) and a resume cursor. Returns immediately if one is already gated; otherwise holds the request open (≤45s) and returns {timedOut:true, cursor} so you can re-call with the cursor for gap-free, idempotent polling. Omit runIds to watch all active runs (capped).',
+        'Compatibility/diagnostic bounded long-poll: block until ANY watched run hits an approval/question gate, returning the gate (with its inbox row) and a resume cursor. Prefer observe_run for normal observation loops. Omit runIds to watch all active runs (capped).',
       inputSchema: watchInputSchema,
       annotations: { readOnlyHint: true },
     },
@@ -185,7 +207,7 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
     'watch_runs',
     {
       description:
-        'Like wait_for_any_gate, but also surfaces terminal (completed/failed) and blocked transitions — block until any watched run hits the next actionable state. Returns {transitions, cursor, timedOut}; re-call with the cursor to continue. Omit runIds to watch all currently-active runs (capped); for guaranteed terminal-transition delivery pass explicit runIds (a run that terminates between polls drops out of the active set).',
+        'Compatibility/diagnostic bounded long-poll: surfaces gate, terminal, failed, and blocked transitions. Prefer observe_run for normal observation loops. Returns {transitions, cursor, timedOut}; re-call with the cursor to continue.',
       inputSchema: watchInputSchema,
       annotations: { readOnlyHint: true },
     },
@@ -220,7 +242,8 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
   server.registerTool(
     'get_run',
     {
-      description: 'Show a run with tasks and steps; can include events and attempt log.',
+      description:
+        'Diagnostic tool: show a run with tasks and steps; can include bounded events and attempt summaries. Avoid includeEvents in polling loops; prefer observe_run and get_run_digest.',
       inputSchema: {
         runId: runIdSchema,
         includeEvents: z.boolean().optional(),
