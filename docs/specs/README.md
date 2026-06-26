@@ -11,7 +11,7 @@ archive of superseded plans.
 
 | Spec | Contract |
 | --- | --- |
-| [graphql-admin-api-v1.spec.md](./graphql-admin-api-v1.spec.md) | Local GraphQL admin API: current v1 SDL surface, transport rules, verification, and graph-shape migration target |
+| [graphql-admin-api-v1.spec.md](./graphql-admin-api-v1.spec.md) | Local GraphQL admin API: transport rules, graph-shaped contract, compatibility, and verification |
 | [pipeline-state-machine-v1.spec.md](./pipeline-state-machine-v1.spec.md) | Data-driven pipeline template grammar, reducer contract, validation, versioning, and diff classification |
 | [run-dataflow-v1.spec.md](./run-dataflow-v1.spec.md) | Step output production/consumption, prompt hydration, runtime output storage, and validation |
 | [human-gates-v1.spec.md](./human-gates-v1.spec.md) | Inbox-backed human gates, gate resolution, question gates, watch tools, and PR review-feedback gates |
@@ -19,7 +19,7 @@ archive of superseded plans.
 ## Authoring rules
 
 - Keep ADRs short. Put exact contracts here.
-- Separate current behavior from target migration behavior when the code has not landed yet.
-- Cite authoritative source files for current behavior.
+- Separate compatibility policy from the target public contract.
+- Cite authoritative source files for implemented behavior.
 - Include validation and compatibility rules, not just happy-path examples.
 - Add a changelog entry when the contract changes.
