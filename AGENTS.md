@@ -1,48 +1,51 @@
-# AGENTS.md — agent-orchestrator
+# AGENTS.md - agent-orchestrator
 
-Repo-local context for coding agents (Claude Code, etc.). `CLAUDE.md` is a symlink to this file.
+Repo-local context for coding agents. `CLAUDE.md` is a symlink to this file.
 
 ## Method vs. context
 
-Reusable **method** (prompts, skills, practices) lives in the `../agents` checkout of
-`revisium/agent-playbook` —
-"project repos contain context; `agents` contains method." This repo keeps **project context + code**.
-Project-local operational skills live in [`.agents/skills/`](./.agents/skills/).
+Reusable method lives in the sibling `../agents` checkout. This repository keeps product context, source code,
+ADRs, and specs. Do not copy canonical roles or pipelines into this repo's docs.
 
 ## What this is
 
-A **NestJS host** that runs dev tasks via short-lived AI agents (roles are *data*, not code). Durable execution is
-handled by **DBOS** (a durable-workflow engine on Postgres) — not a hand-rolled loop. **Revisium is the source of
-truth for *meaning*** (roles, policy, inbox, events, domain); **DBOS is the source of truth for *progress***.
-Read [`docs/architecture-overview.md`](./docs/architecture-overview.md) and
-[`docs/adr/0001-execution-engine-and-host.md`](./docs/adr/0001-execution-engine-and-host.md) first — they hold the
-invariants you must not break.
+`agent-orchestrator` is the Revo host: a NestJS application that runs short-lived AI-agent steps through DBOS and
+stores product meaning in Revisium.
 
-> The pre-pivot "thin dumb loop" (`src/worker/loop.ts`) has been **removed**. The step-lifecycle verbs in
-> `src/control-plane/steps.ts` (`claimNextStep`/`startAttempt`/`writeResult`/`failStep`/`recoverInFlight`/
-> `createSteps`) still exist but are **dead** — superseded by DBOS; do not extend or wire them. The rest of
-> `src/worker/` (`build-context`, `runner`, runners, `git-worktree-manager`, …) is **live** and reused as-is.
-> See the roadmap.
+- **DBOS owns progress:** durable workflow cursor, retries, waits, and resume.
+- **Revisium owns meaning:** playbooks, roles, pipeline templates, inbox rows, events, costs, and projections.
+- **MCP is the agent front door:** local stdio bridge over product tools.
+- **GraphQL is the UI/script front door:** local NestJS/Yoga endpoint over the same feature services.
+- **CLI is lifecycle-first:** start, stop, status, restart, doctor, logs, and the MCP bridge.
+
+Read [docs/architecture-overview.md](./docs/architecture-overview.md) and the specs in
+[docs/specs/](./docs/specs/) before changing runtime contracts.
 
 ## Local facts
 
-- **Stack:** TypeScript / Node **`>=24.11.1 <25`**. Host: **NestJS 11** (house stack). Engine:
-  **DBOS** (`@dbos-inc/dbos-sdk`).
-- **Control plane:** local standalone Revisium via the `revo` CLI. Preferred port `19222` (pg `15440`); the
-  **resolved** port lives in `~/.revisium-orchestrator/runtime.json` — never hardcode it. Coordinates:
-  `admin/control-plane/master`.
-- **One Postgres:** Revisium standalone owns the embedded Postgres; DBOS connects as a `pg` client to a separate
-  `dbos` database on the same server (no second Postgres). MVP = two processes (standalone daemon + host).
-- **Run:** `./bin/revo.js revisium start` → `./bin/revo.js bootstrap --commit`
-  (see [`docs/getting-started.md`](./docs/getting-started.md)).
-- **Source-of-truth boundary:** Revisium holds meaning (versioned: ADRs/roles/policy; draft: inbox/events/cost);
-  DBOS holds progress (never in Revisium). See [`docs/control-plane-schema.md`](./docs/control-plane-schema.md).
+- Node: `>=24.11.1 <25`.
+- Stack: TypeScript, NestJS 11, DBOS, local Revisium standalone, GraphQL Yoga, local stdio MCP.
+- Default profile ports: Revisium HTTP `19222`, embedded Postgres `15440`, GraphQL `19223`.
+- Dev profile ports: Revisium HTTP `19622`, embedded Postgres `15840`, GraphQL `19623`.
+- The resolved runtime state lives under the selected Revo data directory. Do not hardcode resolved ports in code.
+- Source-of-truth schema reference: [docs/control-plane-schema.md](./docs/control-plane-schema.md).
 
-## Map
+## Docs map
 
-- Docs index + roadmap: [`docs/README.md`](./docs/README.md) · [`docs/roadmap.md`](./docs/roadmap.md)
-- Architecture & invariants: [`docs/architecture-overview.md`](./docs/architecture-overview.md)
-- Decision record (engine + host): [`docs/adr/0001-execution-engine-and-host.md`](./docs/adr/0001-execution-engine-and-host.md)
-- Build slices (work-orders): [`docs/plans/`](./docs/plans/)
-- Local skills: [`.agents/skills/run-revisium`](./.agents/skills/run-revisium/SKILL.md) ·
-  [`.agents/skills/bootstrap-control-plane`](./.agents/skills/bootstrap-control-plane/SKILL.md)
+- [docs/README.md](./docs/README.md) - docs index and ownership policy.
+- [docs/architecture-overview.md](./docs/architecture-overview.md) - invariants and runtime shape.
+- [docs/adr/](./docs/adr/) - high-level decision records.
+- [docs/specs/](./docs/specs/) - exact durable contracts.
+- [docs/getting-started.md](./docs/getting-started.md) - local operator flow.
+
+There is no canonical docs archive of obsolete work orders. Work orders belong in GitHub Issues or Revo runs; use
+git history for old task text.
+
+## Editing rules
+
+- Inspect current source before changing docs that describe runtime behavior.
+- Keep ADRs concise; move exact schemas, APIs, validation rules, and examples to specs.
+- Do not describe GraphQL graph-shape migration as landed until `src/api/graphql-api/schema.graphql` changes.
+- Do not edit source code for a docs cleanup unless a generated docs link truly requires it; stop and report
+  first.
+- `revo-plans` is read-only source material for this cleanup.

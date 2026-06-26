@@ -1,119 +1,122 @@
 # Control-plane schema
 
-> **Partially superseded by the DBOS pivot ([ADR-0001](./adr/0001-execution-engine-and-host.md),
-> [ADR-0002](./adr/0002-data-driven-pipeline-state-machine.md)) — target state, not yet fully implemented.**
-> **Today** `steps` and `attempts` rows still exist in Revisium (`src/control-plane/tables.ts`, `steps.ts`), but
-> the data-driven engine does **not** use them for progress: DBOS owns progress (the `pipeline-core` graph
-> cursor), and the step-lifecycle verbs that once advanced `steps` are now **dead** (`claimNextStep`/… — see the
-> roadmap cleanup item). As of audit §3.1 the runtime writes **no** `steps` rows (`create-run` creates none;
-> `inbox`/terminal-status no longer park or patch them) and surfaces none (`inspect`/digest no longer read them) —
-> the `steps` table stays defined in the schema but is unused by the runtime. **The target:** execution progress
-> lives only in DBOS's own Postgres, and `steps`/`attempts`
-> (with their lease/recover/backoff fields) are retired in a cleanup. What stays in Revisium either way:
-> `playbooks`, `roles`, `pipelines`, `model_profiles`, `routing_policy` (versioned), and `tasks`, `task_runs`,
-> `events`, `inbox`, `cost_ledger` (runtime, draft). Read the `steps`/`attempts` sections below as describing the
-> current-but-to-be-retired tables.
+The control plane is one Revisium project used by Revo for meaning and runtime projections. The authoritative
+schema source is `src/control-plane/bootstrap.config.json`; this document is the human-readable ownership map.
 
-> **Status: verified.** The source of truth for the schema is `control-plane/bootstrap.config.json`; this doc is
-> the human-readable reference.
-> **Depends on:** [architecture-overview.md](./architecture-overview.md) (the versioning boundary) ·
-> `control-plane/bootstrap.config.json` (authoritative schema).
-> **Realized by:** [plans/0001-nest-host-and-dbos-bootstrap.md](./plans/0001-nest-host-and-dbos-bootstrap.md).
-
-The control plane is one Revisium project (`admin/control-plane/master`) — the "exchange bus." Twelve tables.
-
-## Versioned vs. runtime (the boundary, per table)
+## Ownership classes
 
 | Table | Class | Revision behavior |
 | --- | --- | --- |
-| `playbooks` | **Versioned** | edited via commit; route/import reads committed `head` |
-| `roles` | **Versioned** | edited via commit; loop reads committed `head` |
-| `pipelines` | **Versioned** | edited via commit; future route/workflow reads committed `head` |
-| `model_profiles` | **Versioned** | edited via commit; loop reads `head` |
-| `routing_policy` | **Versioned** | edited via commit; loop reads `head` |
-| `task_runs` | Runtime | draft writes, never committed |
-| `tasks` | Runtime | draft writes, never committed |
-| `steps` | **Retired** (runtime) | not written/read by the runtime (audit §3.1); table stays defined, unused |
-| `attempts` | Runtime | draft writes, never committed |
-| `events` | Runtime (append-only) | draft writes, never committed |
-| `inbox` | Runtime | draft writes, never committed |
-| `cost_ledger` | Runtime (append-only) | draft writes, never committed |
+| `playbooks` | Versioned meaning | committed; route/import reads `head` |
+| `roles` | Versioned meaning | committed; execution reads `head` |
+| `pipelines` | Versioned meaning | committed; run start reads and pins template meaning |
+| `model_profiles` | Versioned meaning | committed; execution reads `head` |
+| `routing_policy` | Versioned meaning | committed; route policy reads `head` |
+| `task_runs` | Runtime projection | draft writes, never committed |
+| `tasks` | Runtime projection | draft writes, never committed |
+| `steps` | Retired compatibility table | defined but not part of the live engine contract |
+| `attempts` | Runtime provenance | draft writes, never committed |
+| `events` | Runtime journal | draft append, never committed |
+| `inbox` | Runtime human queue | draft writes, never committed |
+| `cost_ledger` | Runtime accounting | draft append, never committed |
 
-Table **schema** creation is committed once (structural). Runtime **rows** are never committed — see
-[repo-layer-contract.md](./repo-layer-contract.md).
+DBOS owns authoritative progress outside Revisium. Revisium runtime tables are projections, audit data, and human
+interaction records.
 
-Identity: each row's identity is the Revisium **rowId**. An explicit `id` field is kept for readability but rowId
-is canonical.
+## Schema rules
 
-Schema compatibility notes from the verified bootstrap:
+- Row identity is the Revisium row id. Explicit `id` fields are readability mirrors.
+- Runtime rows are draft-only.
+- Versioned meaning edits require a commit.
+- Free-form JSON is stored in serialized string fields where the Revisium schema layer requires it.
+- Product services should use data-access APIs, not raw table reads from transport adapters.
 
-- Object schemas include `required` arrays because the current Revisium schema store expects them.
-- String arrays are Revisium arrays with `items: { type: "string", default: "" }`; the array itself has no
-  `default`.
-- Free-form JSON fields are serialized into `string` fields. `additionalProperties: true` is not accepted by the
-  current Revisium schema meta-schema.
+## Tables
 
-## Tables (fields from brief §5)
+### `task_runs`
 
-### `task_runs` — a run (may span several repos)
-`id, project_id, title, description, status, repos[], scope, priority, playbook_id, pipeline_id, params,
-route_decision, execution_profile, created_by, created_at, updated_at`
-Status: `pending → planning → ready → running → (completed | failed | awaiting_approval | paused | cancelled)`
-`params`, `route_decision`, and `execution_profile` store serialized JSON.
+Fields: `id, project_id, title, description, status, repos[], scope, priority, playbook_id, pipeline_id, params,
+route_decision, execution_profile, created_by, created_at, updated_at`.
 
-### `tasks` — a logical task inside a run
-`id, run_id, repo_ref, role_hint, title, status, depends_on[], scope, priority, created_at, updated_at`
+Serialized JSON fields: `params`, `route_decision`, `execution_profile`.
 
-### `steps` — RETIRED from the runtime path (audit §3.1)
-> The runtime no longer writes or reads `steps` rows (the data-driven engine owns progress in DBOS, not a step
-> queue). The schema below is retained for reference; the table stays defined but is unused by the runtime.
-`id, task_id, run_id, role, kind, status, input, output, model_profile, run_after, attempt_count, max_attempts,
-priority, lease_owner, lease_expires_at, dead_reason, created_at, updated_at`
-Status: `pending → ready → claimed → running → (succeeded | failed→ready | dead | awaiting_approval | skipped)`
-`lease_owner` / `lease_expires_at` exist from day one even though the MVP reaper is unused.
-`input` and `output` store serialized JSON.
+### `tasks`
 
-### `attempts` — one execution attempt of a step
-`id (generated BEFORE the run), step_id, run_id, worker_id, attempt_no, status, idempotency_key, model_profile,
-input_tokens, output_tokens, lesson, error, started_at, finished_at`
-`lesson` = compressed takeaway of a failed attempt ("tried X, failed at Y") — feeds restart context, not raw logs.
+Fields: `id, run_id, repo_ref, role_hint, title, status, depends_on[], scope, priority, created_at, updated_at`.
 
-### `events` — append-only journal
-`id (monotonic), run_id, task_id, step_id, type, payload, actor, created_at` · INSERT only; redact secrets.
-`payload` stores serialized JSON.
+### `steps`
 
-### `inbox` — single human queue
-`id, kind (approval|question|alert), run_id, task_id, step_id, project_id, title, context, options[],
-status (pending|resolved), answer, resolved_by, created_at, resolved_at` · Global, never split per project.
-`context` and `answer` store serialized JSON.
+Compatibility table retained in schema for existing installations. The live data-driven engine does not use it as
+the source of progress.
 
-### `roles` — role definitions (VERSIONED)
-`id, name (architect|developer|reviewer|integrator|ci-poller|pr-watcher), system_prompt, model_level (cheap|standard|deep),
-effort, runner_id, runner (deprecated alias), allowed_tools[], scope_rules, playbook_id, playbook_role_id,
-source_path, source_hash, surface, rights, updated_at`
-`scope_rules` stores serialized JSON.
-`runner_id` is imported from playbook schema v2. `rights` maps access/tool policy only.
-Executable runtime roles keep their existing bare row ids. Imported playbook role snapshots use Revisium-safe,
-playbook-scoped row ids, for example `<playbook-id>-<role-id>`, so installing a playbook does not replace the
-current MVP execution prompts or tool permissions.
+### `attempts`
 
-### `playbooks` — installed playbook metadata (VERSIONED)
-`id, name, package_name, source, version, schema_version, manifest_path, roles_catalog_path,
-pipelines_catalog_path, catalog_hash, installed_at, updated_at`
+Per-attempt provenance for logs, verdict assertions, costs, and UI/MCP summaries.
 
-### `pipelines` — imported pipeline definitions (VERSIONED)
-`id, playbook_id, pipeline_id, path, triggers[], required_roles[], alternative_roles_json, optional_roles[],
-route_gates[], platform_invocation, execution_policy_json, updated_at`
-`alternative_roles_json` and `execution_policy_json` store serialized JSON.
+Fields: `id, step_id, run_id, worker_id, attempt_no, status, idempotency_key, model_profile, input_tokens,
+output_tokens, lesson, error, started_at, finished_at`.
 
-### `model_profiles` — level → real model (VERSIONED)
-`id, level (cheap|standard|deep), provider, model_id, params, cost_per_input, cost_per_output, updated_at` ·
-Routing is by named level, never a raw model string.
-`params` stores serialized JSON.
+### `events`
 
-### `routing_policy` — level/approval rules (VERSIONED)
-`id, rule, model_level, requires_human (bool), updated_at`
-`rule` stores serialized JSON.
+Append-only runtime journal.
 
-### `cost_ledger` — cost accounting (append-only)
-`id, run_id, step_id, attempt_id, model_profile, input_tokens, output_tokens, cost_amount, currency, recorded_at`
+Fields: `id, run_id, task_id, step_id, type, payload, actor, created_at`.
+
+`payload` is serialized JSON and must be secret-redacted before write.
+
+### `inbox`
+
+Single human decision queue.
+
+Fields: `id, kind, run_id, task_id, step_id, project_id, title, context, options[], status, answer, resolved_by,
+created_at, resolved_at`.
+
+`kind` values are `approval`, `question`, or `alert`. `status` values are `pending` or `resolved`.
+
+### `roles`
+
+Versioned role definitions.
+
+Fields: `id, name, system_prompt, model_level, effort, runner_id, runner, allowed_tools[], scope_rules,
+playbook_id, playbook_role_id, source_path, source_hash, surface, rights, updated_at`.
+
+`scope_rules` is serialized JSON. `runner` is a compatibility alias; `runner_id` is the preferred imported
+playbook field.
+
+### `playbooks`
+
+Installed playbook metadata.
+
+Fields: `id, name, package_name, source, version, schema_version, manifest_path, roles_catalog_path,
+pipelines_catalog_path, catalog_hash, installed_at, updated_at`.
+
+### `pipelines`
+
+Imported pipeline definitions.
+
+Fields: `id, playbook_id, pipeline_id, path, triggers[], required_roles[], alternative_roles_json,
+optional_roles[], route_gates[], platform_invocation, execution_policy_json, updated_at`.
+
+`execution_policy_json` carries the data-driven pipeline template. Exact grammar lives in
+[specs/pipeline-state-machine-v1.spec.md](./specs/pipeline-state-machine-v1.spec.md).
+
+### `model_profiles`
+
+Versioned model-level mapping.
+
+Fields: `id, level, provider, model_id, params, cost_per_input, cost_per_output, updated_at`.
+
+Route and role data reference levels such as `cheap`, `standard`, and `deep`, not raw provider model ids.
+
+### `routing_policy`
+
+Versioned routing policy.
+
+Fields: `id, rule, model_level, requires_human, updated_at`.
+
+### `cost_ledger`
+
+Append-only accounting rows.
+
+Fields: `id, run_id, step_id, attempt_id, model_profile, input_tokens, output_tokens, cost_amount, currency,
+recorded_at`.

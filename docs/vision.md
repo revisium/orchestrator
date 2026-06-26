@@ -1,7 +1,7 @@
 # Product vision
 
 > What `revo` is for, who it serves, and where it is going. The architectural invariants live in
-> [architecture-overview.md](./architecture-overview.md); the build sequence lives in [roadmap.md](./roadmap.md);
+> [architecture-overview.md](./architecture-overview.md); exact durable contracts live in [specs/](./specs/);
 > the engine decision lives in [adr/0001-execution-engine-and-host.md](./adr/0001-execution-engine-and-host.md).
 > This doc does not restate them — it says why they are worth building.
 
@@ -82,7 +82,8 @@ Today's alpha: tasks start via CLI (`revo run create --pipeline-id local-change 
 
 ## Capability map by stage
 
-**Now** — landed (MVP slices 0001–0008 + post-MVP hardening through plan 0018; see [roadmap.md](./roadmap.md)):
+**Now** — landed local daemon, MCP, GraphQL, data-driven pipelines, human gates, worktree isolation, and PR
+review-feedback:
 
 - pipeline as **data**: a versioned graph template executed by a generic durable engine — architect → developer →
   reviewer → integrator, durable end-to-end (see [adr/0002](./adr/0002-data-driven-pipeline-state-machine.md));
