@@ -1,0 +1,39 @@
+flowchart LR
+  task[Task]
+  analyst[Analyst]
+  planReview[Plan Review]
+  planGate[Plan Gate]
+  developer[Developer]
+  codeReview[Code Review]
+  integrate[Integrate]
+  watch[Watch]
+  pr[Pull Request]
+  mergeGate[Merge Gate]
+  done[Done]
+  rework((Rework Loop))
+  feedback[Feedback Triage]
+
+  task --> analyst --> planReview --> planGate
+  planGate -->|approved| developer
+  planGate -. rejected .-> analyst
+
+  developer --> codeReview --> integrate --> watch --> pr --> mergeGate --> done
+  codeReview -. changes requested .-> rework
+  rework -. retry .-> developer
+
+  watch -. CI or review feedback .-> feedback
+  feedback -. fix required .-> developer
+  feedback -. reply / resolve .-> integrate
+  mergeGate -. rejected .-> feedback
+
+  classDef terminal fill:#fbfbfb,stroke:#7b7a75,color:#27231f
+  classDef agent fill:#f4fbf4,stroke:#4a8a52,color:#27231f
+  classDef script fill:#f4f8ff,stroke:#2e6ec7,color:#27231f
+  classDef gate fill:#fff7ea,stroke:#d38318,color:#27231f
+  classDef loop fill:#fbf7ff,stroke:#6f5aa8,color:#27231f
+
+  class task,pr,done terminal
+  class analyst,planReview,developer,codeReview,feedback agent
+  class integrate,watch script
+  class planGate,mergeGate gate
+  class rework loop

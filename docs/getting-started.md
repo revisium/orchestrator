@@ -72,7 +72,24 @@ mutation Create($data: CreateRunInput!) {
 }
 ```
 
-Read the run workflow:
+Read current run metadata through the graph-shaped root:
+
+```graphql
+query Run($id: ID!) {
+  run(id: $id) {
+    id
+    title
+    status
+    progress {
+      workflowStatus
+      updatedAt
+    }
+  }
+}
+```
+
+The committed SDL still exposes compatibility roots while the GraphQL v1 migration is in progress. For current
+workflow-node details, use the compatibility read:
 
 ```graphql
 query Workflow($id: ID!) {
@@ -96,7 +113,7 @@ query Workflow($id: ID!) {
 }
 ```
 
-Read agent activity:
+Read live agent activity:
 
 ```graphql
 query Activity($runId: ID!) {
@@ -108,8 +125,9 @@ query Activity($runId: ID!) {
 }
 ```
 
-The current SDL is documented in
-[specs/graphql-admin-api-v1.spec.md](./specs/graphql-admin-api-v1.spec.md).
+The target public contract and compatibility-removal rules are documented in
+[specs/graphql-admin-api-v1.spec.md](./specs/graphql-admin-api-v1.spec.md). New UI work should follow that spec
+instead of treating legacy run-scoped roots as the long-term shape.
 
 ## Resolve gates
 

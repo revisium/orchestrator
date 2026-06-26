@@ -8,13 +8,12 @@
 ## One paragraph
 
 **`revo`** (`@revisium/orchestrator`) is a **local orchestrator** that runs software-development tasks via
-**short-lived AI agents under deterministic control**. The pipeline — architect → developer → reviewer →
-integrator — is driven by a durable engine, not by an agent's goodwill: gates, budgets, and iteration caps are
-enforced by code and data, never by prompts. The developer **steers through approvals** — the plan before the
-code, the diff before the merge, the price before the bill — instead of babysitting a terminal. Everything that
-gives agent work meaning lives in **Revisium** as typed, reviewable data: roles, policies, and ADRs are
-versioned (committed); runtime records — events, attempts, cost — are draft data, never committed. Execution
-progress lives in DBOS, not Revisium.
+**short-lived AI agents under deterministic control**. A playbook defines a state machine of agent steps, script
+steps, human gates, branches, and loops. Gates, budgets, and iteration caps are enforced by code and data, never
+by prompts. The developer **steers through approvals** - the plan before the code, the diff before the merge, the
+price before the bill - instead of babysitting a terminal. Everything that gives agent work meaning lives in
+**Revisium** as typed, reviewable data: roles, policies, and ADRs are versioned (committed); runtime records -
+events, attempts, cost - are draft data, never committed. Execution progress lives in DBOS, not Revisium.
 
 ## The pains
 
@@ -77,8 +76,9 @@ Every surface is a thin client over the same state. This is the engine/session s
 [architecture-overview.md](./architecture-overview.md): the autonomous engine and the interactive human are
 indistinguishable by their effect — both just change state.
 
-Today's alpha: tasks start via CLI (`revo run create --pipeline-id local-change --start --wait`) and gates resolve via
-`revo inbox resolve`.
+Today's alpha: the daemon starts through lifecycle CLI commands, agents work through `revo mcp`, and UI/scripts
+use the local GraphQL endpoint. Runs and gates are product operations exposed through MCP and GraphQL, not separate
+free-form terminal sessions.
 
 ## Capability map by stage
 
@@ -91,7 +91,7 @@ review-feedback:
 - live Claude Code runner;
 - budgets and iteration caps as data;
 - per-attempt provenance (model, params, tokens, cost, verdict);
-- playbook install/import — `revo playbook install` reading `@revisium/agent-playbook` catalogs;
+- default playbook seed and playbook import through product tools reading `@revisium/agent-playbook` catalogs;
 - MCP server — the orchestrator as tools inside the developer's agent;
 - PR review-feedback loop — observe CI/reviews, triage PR comments by type (CI failure → developer; review comment
   → analyst, then fix + reply + resolve the thread; genuinely ambiguous → a human question gate) → merge gate.
@@ -143,11 +143,13 @@ Extending the list in [architecture-overview.md](./architecture-overview.md), no
   playbook, distributed as the npm package `@revisium/agent-playbook` (the engine imports its catalogs).
   Per-run playbook provenance recording (`playbook: <name>@<version>`) is planned, not landed.
 - **Role** — a named agent definition (prompt, model level, scope, runner) — data in Revisium, not code.
-- **Pipeline** — the ordered steps a run executes (architect → developer → reviewer → integrator), including
-  gates and review loops.
+- **Agent step** — a pipeline node that invokes a role through a runner.
+- **Script step** — a deterministic pipeline node that performs automation outside an agent prompt.
+- **Pipeline** — a state-machine template with agent steps, script steps, human gates, branches, loops, waits,
+  joins, and terminal nodes.
 - **Run** — one task moving through a pipeline, durable from creation to merge.
-- **Gate** — a mandatory human decision point; the workflow parks until the human resolves it. MVP has two:
-  plan and merge.
+- **Gate** — a mandatory human decision point; the workflow parks until the human resolves it. Common gates include
+  plan approval, merge approval, and clarifying questions.
 - **Inbox** — the single queue of pending human decisions and agent questions; resolving an item resumes the
   parked workflow.
 - **Attempt** — one execution of one step by one agent process; the unit of provenance and cost accounting.
