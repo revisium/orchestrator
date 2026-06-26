@@ -45,7 +45,8 @@ git history for old task text.
 
 - Inspect current source before changing docs that describe runtime behavior.
 - Keep ADRs concise; move exact schemas, APIs, validation rules, and examples to specs.
-- Do not describe GraphQL graph-shape migration as landed until `src/api/graphql-api/schema.graphql` changes.
+- Do not describe GraphQL graph-shape migration as landed until the full v1 contract is implemented and
+  legacy flat/run-scoped roots are removed from `src/api/graphql-api/schema.graphql`.
 - Do not edit source code for a docs cleanup unless a generated docs link truly requires it; stop and report
   first.
 - `revo-plans` is read-only source material for this cleanup.

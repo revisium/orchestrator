@@ -66,7 +66,7 @@ type Query {
 
 The public query root must not expose run-scoped facet operations. These legacy root names are reserved for
 removal or rejection in the public contract: `runWorkflow`, `runDigest`, `runProgress`, `runEvents`,
-`runAgentActivity`, `runAgentAttempts`, `runAgentLog`, `pendingDecisions`, and `gateRisk`.
+`runAttempts`, `runAgentActivity`, `runAgentAttempts`, `runAgentLog`, `pendingDecisions`, and `gateRisk`.
 
 ## Run Graph
 
@@ -288,4 +288,6 @@ where needed.
 
 ## Changelog
 
+- 2026-06-26: Erratum: explicitly added `runAttempts` to the legacy run-scoped root reserved/removal list,
+  backfilling a previous omission without changing the accepted graph-shaped target contract.
 - 2026-06-26: Reframed the spec as the accepted graph-shaped target contract.
