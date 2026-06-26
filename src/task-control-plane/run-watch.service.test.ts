@@ -5,13 +5,18 @@ import { INBOX_ITEM_ADDED_TOPIC, RUN_UPDATED_TOPIC } from '../api/graphql-api/gr
 import {
   RunWatchService,
   WATCH_TOPICS,
+  MAX_WATCH_CURSOR_CHARS,
   MAX_SERVER_HOLD_MS,
   DEFAULT_SERVER_HOLD_MS,
+  DEFAULT_HEARTBEAT_EVERY_MS,
+  MAX_HEARTBEAT_EVERY_MS,
   clampServerHold,
+  clampHeartbeatEvery,
   type RunStateSource,
   type WatchPubSub,
 } from './run-watch.service.js';
 import type { RunState } from './task-control-plane-api.service.js';
+import type { AgentRunActivity } from '../observability/types.js';
 
 const tick = (ms = 12) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -22,7 +27,35 @@ function gate(runId: string, inboxId = 'i1'): RunState {
     nextAction: 'resolve approval with approve_gate or reject_gate',
     runStatus: 'running',
     workflowStatus: 'PENDING',
-    inbox: { id: inboxId } as unknown as RunState['inbox'],
+    inbox: inbox({ id: inboxId, kind: 'approval', title: 'Plan approval' }),
+  };
+}
+function inbox(input: { id: string; kind: 'approval' | 'question'; title: string }): RunState['inbox'] {
+  return {
+    id: input.id,
+    kind: input.kind,
+    runId: 'r1',
+    taskId: 't1',
+    stepId: 's1',
+    projectId: 'p1',
+    title: input.title,
+    context: { omitted: true },
+    options: input.kind === 'approval' ? ['approve', 'reject'] : [],
+    status: 'pending',
+    answer: null,
+    resolvedBy: '',
+    createdAt: '2026-06-26T10:00:00.000Z',
+    resolvedAt: '',
+  };
+}
+function question(runId: string, inboxId = 'q1'): RunState {
+  return {
+    runId,
+    state: 'question',
+    nextAction: 'answer question with answer_question',
+    runStatus: 'running',
+    workflowStatus: 'PENDING',
+    inbox: inbox({ id: inboxId, kind: 'question', title: 'Need an answer' }),
   };
 }
 const running = (runId: string): RunState => ({
@@ -39,11 +72,65 @@ const completed = (runId: string): RunState => ({
   runStatus: 'completed',
   workflowStatus: 'SUCCESS',
 });
+const failed = (runId: string): RunState => ({
+  runId,
+  state: 'failed',
+  nextAction: 'inspect get_run_events/get_run_log',
+  runStatus: 'failed',
+  workflowStatus: 'ERROR',
+});
+const blocked = (runId: string): RunState => ({
+  runId,
+  state: 'blocked',
+  nextAction: 'inspect blocking event',
+  runStatus: 'paused',
+  workflowStatus: 'PENDING',
+  blockedReason: 'needs human',
+  latestBlockingEvent: {
+    eventId: 'event-1',
+    type: 'pipeline_blocked',
+    createdAt: '2026-06-26T10:00:00.000Z',
+    payload: { raw: 'x'.repeat(10_000), secret: 'do not expose' },
+  },
+});
+const retrying = (runId: string): RunState => ({
+  runId,
+  state: 'retrying',
+  nextAction: 'retry is scheduled',
+  runStatus: 'running',
+  workflowStatus: 'RETRYING',
+});
+
+function activity(status: AgentRunActivity['aggregateStatus'] = 'running'): AgentRunActivity {
+  return {
+    runId: 'r1',
+    aggregateStatus: status,
+    latestActivityAt: '2026-06-26T10:00:03.000Z',
+    latestOutputAt: '2026-06-26T10:00:02.000Z',
+    attempts: [{
+      runId: 'r1',
+      attemptId: 'attempt-1',
+      stepId: 'developer',
+      role: 'developer',
+      runner: 'codex',
+      status,
+      startedAt: '2026-06-26T10:00:00.000Z',
+      lastEventAt: '2026-06-26T10:00:03.000Z',
+      lastOutputAt: '2026-06-26T10:00:02.000Z',
+      stdoutBytes: 12,
+      stderrBytes: status === 'failed' ? 7 : 0,
+      eventCount: 3,
+      artifactRef: 'r1/attempt-1',
+      error: 'raw failure detail must not be exposed',
+    }],
+  };
+}
 
 /** Fake api: a run maps to a fixed RunState, a sequence consumed one-per-resolve, or absent → ROW_NOT_FOUND. */
 function fakeApi(opts: {
   states?: Record<string, RunState | RunState[]>;
   runs?: Array<{ runId: string; status: string }>;
+  activity?: AgentRunActivity | null;
 }): RunStateSource & { calls: string[] } {
   const calls: string[] = [];
   const idx: Record<string, number> = {};
@@ -62,6 +149,9 @@ function fakeApi(opts: {
     },
     async listRuns() {
       return opts.runs ?? [];
+    },
+    async getAgentActivity() {
+      return opts.activity ?? null;
     },
   };
 }
@@ -94,6 +184,14 @@ test('clampServerHold: default, clamp to max, reject negative/NaN', () => {
   assert.equal(clampServerHold(-5), DEFAULT_SERVER_HOLD_MS);
   assert.equal(clampServerHold(Number.NaN), DEFAULT_SERVER_HOLD_MS);
   assert.equal(clampServerHold(0), 0);
+});
+
+test('clampHeartbeatEvery: default, clamp to max, reject nonpositive/NaN', () => {
+  assert.equal(clampHeartbeatEvery(undefined), DEFAULT_HEARTBEAT_EVERY_MS);
+  assert.equal(clampHeartbeatEvery(120_000), MAX_HEARTBEAT_EVERY_MS);
+  assert.equal(clampHeartbeatEvery(2_000), 2_000);
+  assert.equal(clampHeartbeatEvery(0), DEFAULT_HEARTBEAT_EVERY_MS);
+  assert.equal(clampHeartbeatEvery(Number.NaN), DEFAULT_HEARTBEAT_EVERY_MS);
 });
 
 test('WATCH_TOPICS composes exactly the inbox-added + run-updated topics', () => {
@@ -302,17 +400,18 @@ test('[fix D] one tool must not advance the cursor past a transition it did not 
   assert.equal(watchCall.transitions[0]?.state, 'completed', 'watch_runs still delivers it — not suppressed by the gate cursor');
 });
 
-test('[fix C] a forged/oversized cursor is sanitized to valid string markers and capped', async () => {
+test('[fix C] an oversized forged cursor is ignored before decode work and the returned cursor is capped', async () => {
   const api = fakeApi({ states: { r1: gate('r1', 'i1') } });
   const svc = new RunWatchService(api);
-  // Non-string markers must be dropped (not crash, not falsely suppress); a huge map must not be retained whole.
+  // Oversized cursors must not be decoded/parsed; ignoring them is equivalent to a fresh observation.
   const huge: Record<string, unknown> = { r1: 12345 }; // wrong type for r1 → must be ignored → gate re-delivered
   for (let i = 0; i < 5_000; i++) huge[`junk-${i}`] = 'x';
   const forged = Buffer.from(JSON.stringify({ v: 1, m: huge }), 'utf8').toString('base64url');
+  assert.equal(forged.length > MAX_WATCH_CURSOR_CHARS, true, 'test cursor exceeds the service guard');
 
   const result = await svc.waitForAnyGate({ runIds: ['r1'], timeoutMs: 0, cursor: forged });
-  assert.equal(result.transitions[0]?.inbox?.id, 'i1', 'non-string r1 marker ignored → gate delivered');
-  // The returned cursor is built from this sweep only — bounded, not the 5k forged entries.
+  assert.equal(result.transitions[0]?.inbox?.id, 'i1', 'oversized cursor ignored → gate delivered');
+  // The returned cursor is built from this sweep only — bounded, not the forged entries.
   const decoded = JSON.parse(Buffer.from(result.cursor, 'base64url').toString('utf8')) as { m: Record<string, string> };
   assert.ok(Object.keys(decoded.m).length <= 50, 'returned cursor is bounded to the watched set');
 });
@@ -446,4 +545,92 @@ test('[cursor lineage] gate then completion both delivered under one advancing c
   state = completed('r1');
   const b = await svc.watchRuns({ runIds: ['r1'], timeoutMs: 0, cursor: a.cursor });
   assert.equal(b.transitions[0]?.state, 'completed', 'the terminal transition follows the gate under one cursor');
+});
+
+test('observeRun reports a compact gate transition once under its cursor', async () => {
+  const svc = new RunWatchService(fakeApi({ states: { r1: gate('r1', 'gate-1') }, activity: activity() }));
+
+  const first = await svc.observeRun({ runId: 'r1', timeoutMs: 0 });
+  const second = await svc.observeRun({ runId: 'r1', timeoutMs: 0, cursor: first.cursor });
+
+  assert.equal(first.state, 'pending_gate');
+  assert.equal(first.transition?.state, 'pending_gate');
+  assert.equal(first.transition?.nextAction, 'ask_human');
+  assert.deepEqual(first.transition?.inbox, {
+    id: 'gate-1',
+    kind: 'approval',
+    title: 'Plan approval',
+    status: 'pending',
+    stepId: 's1',
+    optionCount: 2,
+  });
+  assert.equal(JSON.stringify(first).includes('context'), false, 'observe_run does not inline full inbox context');
+  assert.equal(first.activeAttempt?.attemptId, 'attempt-1');
+  assert.equal(second.transition, undefined, 'same gate marker is not re-delivered');
+  assert.equal(second.state, 'pending_gate');
+  assert.equal(second.nextAction, 'ask_human');
+});
+
+test('observeRun maps actionable states to canonical next actions', async () => {
+  const cases: Array<{
+    name: string;
+    state: RunState;
+    activity?: AgentRunActivity;
+    nextAction: string;
+    transitionState: RunState['state'];
+  }> = [
+    { name: 'question', state: question('r1'), nextAction: 'ask_human', transitionState: 'question' },
+    { name: 'blocked', state: blocked('r1'), nextAction: 'inspect_digest', transitionState: 'blocked' },
+    { name: 'failed', state: failed('r1'), activity: activity('failed'), nextAction: 'inspect_log', transitionState: 'failed' },
+    { name: 'completed', state: completed('r1'), nextAction: 'done', transitionState: 'completed' },
+    { name: 'retrying', state: retrying('r1'), nextAction: 'wait', transitionState: 'retrying' },
+  ];
+
+  for (const item of cases) {
+    const svc = new RunWatchService(fakeApi({ states: { r1: item.state }, activity: item.activity ?? null }));
+    const result = await svc.observeRun({ runId: 'r1', timeoutMs: 0 });
+
+    assert.equal(result.transition?.state, item.transitionState, item.name);
+    assert.equal(result.nextAction, item.nextAction, item.name);
+    assert.equal(result.transition?.nextAction, item.nextAction, item.name);
+  }
+});
+
+test('observeRun heartbeat mode returns on heartbeat cadence with the canonical activity signal', async () => {
+  const svc = new RunWatchService(
+    fakeApi({ states: { r1: running('r1') }, activity: activity() }),
+    undefined,
+    () => Date.parse('2026-06-26T10:00:04.000Z'),
+  );
+  const startedAt = Date.now();
+
+  const result = await svc.observeRun({
+    runId: 'r1',
+    mode: 'heartbeat',
+    timeoutMs: 1_000,
+    heartbeatEveryMs: 25,
+  });
+
+  assert.equal(result.state, 'running');
+  assert.equal(result.timedOut, true);
+  assert.equal(result.transition, undefined);
+  assert.equal(result.nextAction, 'wait');
+  assert.equal(result.heartbeat?.observedAt, '2026-06-26T10:00:04.000Z');
+  assert.equal(result.heartbeat?.activity?.latestActivityAt, '2026-06-26T10:00:03.000Z');
+  assert.ok(Date.now() - startedAt < 500, 'heartbeat cadence, not timeoutMs, bounds the hold');
+});
+
+test('observeRun diagnostic mode stays bounded and omits raw event payloads', async () => {
+  const svc = new RunWatchService(fakeApi({ states: { r1: blocked('r1') }, activity: activity() }));
+
+  const result = await svc.observeRun({ runId: 'r1', mode: 'diagnostic', timeoutMs: 0 });
+  const serialized = JSON.stringify(result);
+
+  assert.equal(result.state, 'blocked');
+  assert.equal(result.nextAction, 'inspect_digest');
+  assert.equal(result.diagnostic?.latestBlockingEvent?.type, 'pipeline_blocked');
+  assert.equal(result.diagnostic?.suggestedTools.includes('get_run_digest'), true);
+  assert.equal(serialized.includes('do not expose'), false);
+  assert.equal(serialized.includes('"payload"'), false);
+  assert.ok(Buffer.byteLength(serialized, 'utf8') < 4_096, 'diagnostic observe response remains compact');
 });

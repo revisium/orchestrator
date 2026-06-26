@@ -76,7 +76,7 @@ export type RunProgress = {
  */
 export type RunState = {
   runId: string;
-  state: 'pending_gate' | 'question' | 'running' | 'blocked' | 'failed' | 'completed';
+  state: 'pending_gate' | 'question' | 'running' | 'blocked' | 'failed' | 'completed' | 'retrying';
   nextAction: string;
   runStatus: string;
   workflowStatus: string;
