@@ -27,13 +27,13 @@ There is no internal archive of obsolete plans. Git history is the archive.
 | --- | --- |
 | [ADR-0001](./adr/0001-execution-engine-and-host.md) | DBOS durable engine and NestJS host |
 | [ADR-0002](./adr/0002-data-driven-pipeline-state-machine.md) | Pipeline-as-data engine |
-| [ADR-0003](./adr/0003-graphql-graph-shape.md) | GraphQL admin API graph-shape migration target |
+| [ADR-0003](./adr/0003-graphql-graph-shape.md) | GraphQL admin API graph-shaped contract |
 
 ## Specs
 
 | Spec | Contract |
 | --- | --- |
-| [GraphQL admin API v1](./specs/graphql-admin-api-v1.spec.md) | Current SDL, transport, verification, and graph-shape target |
+| [GraphQL admin API v1](./specs/graphql-admin-api-v1.spec.md) | Local GraphQL admin API transport, graph contract, compatibility, and verification |
 | [Pipeline state machine v1](./specs/pipeline-state-machine-v1.spec.md) | Template grammar, reducer, validation, versioning |
 | [Run dataflow v1](./specs/run-dataflow-v1.spec.md) | Step outputs, prompt hydration, output storage, validation |
 | [Human gates v1](./specs/human-gates-v1.spec.md) | Inbox-backed gates, questions, watch tools, PR review feedback loop |
