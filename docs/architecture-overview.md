@@ -10,6 +10,44 @@ progress: workflow state, retries, waits, and resume. Revisium owns meaning: pla
 templates, inbox rows, events, costs, and projections. MCP is the agent front door, GraphQL is the UI/script front
 door, and the CLI manages the daemon lifecycle.
 
+```mermaid
+flowchart LR
+  task[Task]
+  playbook[Playbook]
+  machine[State machine]
+  outcome[Outcome]
+
+  task --> playbook --> machine --> outcome
+
+  subgraph nodes[State machine nodes]
+    agent[Agent step] --> script[Script step] --> gate[Human gate] --> branch{Branch}
+    branch --> loop((Loop))
+    loop -. retry .-> agent
+    loop -. reroute .-> script
+  end
+
+  machine -. expands into .-> nodes
+  outcome --> pr[Pull request]
+  outcome --> evidence[Evidence]
+  outcome --> decisions[Decisions]
+  outcome --> history[Run history]
+```
+
+Source: [assets/revo-concept.mmd](./assets/revo-concept.mmd).
+
+## Core model
+
+The product model is playbook-driven execution:
+
+1. A caller creates a task run.
+2. Revo selects a playbook and pipeline template.
+3. The template becomes a state machine made of agent steps, script steps, human gates, branches, loops, waits,
+   joins, and terminals.
+4. The durable adapter executes one decision at a time and records evidence.
+5. Human decisions resolve inbox rows and move the state machine forward.
+
+Different playbooks can define different flows without changing the engine.
+
 ## Layers
 
 ```text
@@ -23,6 +61,9 @@ door, and the CLI manages the daemon lifecycle.
         |
 [ Execution ]           short-lived Claude/Codex/script/integrator processes in target repos
 ```
+
+The runtime stack is an implementation of the model above: front doors accept commands, the host resolves meaning,
+the engine persists progress, Revisium stores product state, and runners perform external work.
 
 ## Invariants
 
@@ -69,6 +110,45 @@ workflow primitive is code.
 7. Gate decisions resolve inbox rows and resume the parked workflow.
 
 Exact contracts live in [specs/](./specs/).
+
+## Default Pipeline Example
+
+The built-in default playbook is one concrete flow, not a hardcoded engine path. The source template lives in
+`control-plane/default-playbook/catalog/pipelines.json`.
+
+```mermaid
+flowchart LR
+  task[Task]
+  analyst[Analyst]
+  planReview[Plan Review]
+  planGate[Plan Gate]
+  developer[Developer]
+  codeReview[Code Review]
+  integrate[Integrate]
+  watch[Watch]
+  pr[Pull Request]
+  mergeGate[Merge Gate]
+  done[Done]
+  rework((Rework Loop))
+  feedback[Feedback Triage]
+
+  task --> analyst --> planReview --> planGate
+  planGate -->|approved| developer
+  planGate -. rejected .-> analyst
+
+  developer --> codeReview --> integrate --> watch --> pr --> mergeGate --> done
+  codeReview -. changes requested .-> rework
+  rework -. retry .-> developer
+
+  watch -. CI or review feedback .-> feedback
+  feedback -. fix required .-> developer
+  feedback -. reply / resolve .-> integrate
+  mergeGate -. rejected .-> feedback
+```
+
+This example uses agent steps for analysis, development, review, and feedback triage; script steps for integration
+and watch behavior; human gates for plan and merge decisions; and loops for requested changes or external feedback.
+Source: [assets/default-pipeline-example.mmd](./assets/default-pipeline-example.mmd).
 
 ## Anti-goals
 

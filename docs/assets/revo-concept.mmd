@@ -1,0 +1,41 @@
+flowchart LR
+  task[Task]
+  playbook[Playbook]
+  sm[State machine]
+  outputs[Outcome\nPull request\nEvidence\nDecisions\nRun history]
+
+  task --> playbook
+  playbook --> sm
+  sm --> outputs
+
+  subgraph machine[State machine nodes]
+    agent[Agent step]
+    script[Script step]
+    gate[Human gate]
+    branch{Branch}
+    loop((Loop))
+
+    agent --> script --> gate
+    gate --> branch
+    branch --> loop
+    loop -. retry .-> agent
+    loop -. reroute .-> script
+  end
+
+  sm -. expanded view .-> machine
+
+  classDef task fill:#fbfbfb,stroke:#7b7a75,color:#27231f
+  classDef playbook fill:#f4f8ff,stroke:#2e6ec7,color:#27231f
+  classDef agent fill:#f4fbf4,stroke:#4a8a52,color:#27231f
+  classDef script fill:#f4f8ff,stroke:#2e6ec7,color:#27231f
+  classDef gate fill:#fff7ea,stroke:#d38318,color:#27231f
+  classDef branch fill:#fbf7ff,stroke:#6f5aa8,color:#27231f
+  classDef output fill:#fffdfa,stroke:#ded7c8,color:#27231f
+
+  class task task
+  class playbook playbook
+  class agent agent
+  class script script
+  class gate gate
+  class branch,loop branch
+  class outputs output
