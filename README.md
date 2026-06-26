@@ -78,12 +78,12 @@ to ship.
 | **MCP** | The local agent-facing tool bridge exposed by `revo mcp`. |
 | **GraphQL API** | The local API surface for UI and script integrations. |
 
-## Production Install
+## Alpha Install
 
-The installed package uses the `default` profile. Use it for evaluation on a local machine:
+The `@alpha` package is a prerelease for evaluating Revo locally. It uses the `default` profile:
 
 ```sh
-npm install -g @revisium/orchestrator
+npm install -g @revisium/orchestrator@alpha
 revo start
 revo status
 revo doctor
