@@ -54,13 +54,13 @@ function mapAttempt(attempt: AgentActivitySnapshot): CanonicalActivityAttemptSig
   return {
     attemptId: attempt.attemptId,
     stepId: attempt.stepId,
-    ...(attempt.stepKey !== undefined ? { stepKey: attempt.stepKey } : {}),
+    ...(attempt.stepKey === undefined ? {} : { stepKey: attempt.stepKey }),
     role: attempt.role,
     runner: attempt.runner,
     status: attempt.status,
     startedAt: attempt.startedAt,
     lastEventAt: attempt.lastEventAt,
-    ...(attempt.lastOutputAt !== undefined ? { lastOutputAt: attempt.lastOutputAt } : {}),
+    ...(attempt.lastOutputAt === undefined ? {} : { lastOutputAt: attempt.lastOutputAt }),
     stdoutBytes: attempt.stdoutBytes,
     stderrBytes: attempt.stderrBytes,
     eventCount: attempt.eventCount,
@@ -87,7 +87,7 @@ export function deriveCanonicalActivitySignal(
   return {
     aggregateStatus: activity.aggregateStatus,
     latestActivityAt: activity.latestActivityAt,
-    ...(activity.latestOutputAt !== undefined ? { latestOutputAt: activity.latestOutputAt } : {}),
+    ...(activity.latestOutputAt === undefined ? {} : { latestOutputAt: activity.latestOutputAt }),
     ...totals,
     ...(attempt ? { attempt: mapAttempt(attempt) } : {}),
   };
