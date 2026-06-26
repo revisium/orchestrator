@@ -31,17 +31,17 @@ The `dev` profile uses:
 Register the source checkout with an MCP-capable agent:
 
 ```sh
-codex mcp add revo-dev -- pnpm --dir /abs/path/to/agent-orchestrator run revo -- mcp
+codex mcp add --env REVO_PROFILE=dev revo-dev -- pnpm --dir "$PWD" run revo -- mcp
 ```
 
 For Claude Code:
 
 ```sh
-claude mcp add revo-dev -- pnpm --dir "$PWD" run revo -- mcp
+claude mcp add -e REVO_PROFILE=dev revo-dev -- pnpm --dir "$PWD" run revo -- mcp
 ```
 
-If using the dev profile, make sure the MCP client process inherits `REVO_PROFILE=dev` or the explicit port/data
-environment variables.
+If your MCP client does not preserve the registration command environment, configure `REVO_PROFILE=dev` in the
+client's server environment or pass the explicit `REVO_*` port/data variables there.
 
 Verify from the agent by calling:
 
@@ -49,8 +49,8 @@ Verify from the agent by calling:
 - `list_pipelines`
 - `get_project`
 
-Core MCP verbs include run creation/start/cancel, watch tools, inbox gate resolution, repository diagnostics,
-playbook/role/pipeline discovery, and PR readiness.
+Core MCP verbs include run creation/start/cancel, watch tools, inbox gate resolution, repository diagnostics, and PR
+readiness.
 
 ## Use GraphQL
 

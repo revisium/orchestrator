@@ -1,7 +1,7 @@
 # Control-plane schema
 
 The control plane is one Revisium project used by Revo for meaning and runtime projections. The authoritative
-schema source is `src/control-plane/bootstrap.config.json`; this document is the human-readable ownership map.
+schema source is `control-plane/bootstrap.config.json`; this document is the human-readable ownership map.
 
 ## Ownership classes
 
@@ -18,6 +18,7 @@ schema source is `src/control-plane/bootstrap.config.json`; this document is the
 | `attempts` | Runtime provenance | draft writes, never committed |
 | `events` | Runtime journal | draft append, never committed |
 | `inbox` | Runtime human queue | draft writes, never committed |
+| `run_outputs` | Runtime dataflow artifacts | draft append, never committed |
 | `cost_ledger` | Runtime accounting | draft append, never committed |
 
 DBOS owns authoritative progress outside Revisium. Revisium runtime tables are projections, audit data, and human
@@ -49,6 +50,11 @@ Fields: `id, run_id, repo_ref, role_hint, title, status, depends_on[], scope, pr
 Compatibility table retained in schema for existing installations. The live data-driven engine does not use it as
 the source of progress.
 
+Fields: `id, task_id, run_id, role, kind, status, input, output, model_profile, run_after, attempt_count,
+max_attempts, priority, depends_on[], lease_owner, lease_expires_at, dead_reason, created_at, updated_at`.
+
+Serialized JSON fields: `input`, `output`.
+
 ### `attempts`
 
 Per-attempt provenance for logs, verdict assertions, costs, and UI/MCP summaries.
@@ -72,6 +78,8 @@ Fields: `id, kind, run_id, task_id, step_id, project_id, title, context, options
 created_at, resolved_at`.
 
 `kind` values are `approval`, `question`, or `alert`. `status` values are `pending` or `resolved`.
+
+Serialized JSON fields: `context`, `answer`.
 
 ### `roles`
 
@@ -99,6 +107,15 @@ optional_roles[], route_gates[], platform_invocation, execution_policy_json, upd
 
 `execution_policy_json` carries the data-driven pipeline template. Exact grammar lives in
 [specs/pipeline-state-machine-v1.spec.md](./specs/pipeline-state-machine-v1.spec.md).
+
+### `run_outputs`
+
+Append-only runtime dataflow artifacts produced by pipeline nodes.
+
+Fields: `id, run_id, node_id, ordinal, name, schema_ref, payload, payload_ref, attempt_id, produced_at`.
+
+`payload` is serialized JSON, secret-redacted, and size-capped at the adapter boundary. `payload_ref` is set instead
+of `payload` when content exceeds the inline cap.
 
 ### `model_profiles`
 

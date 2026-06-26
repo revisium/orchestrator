@@ -150,8 +150,8 @@ type LastResult = {
 
 ## Validation
 
-`validateTemplate(template)` returns all diagnostics and stops no later rules after the first error. Diagnostic
-codes are stable public contract. Rule groups:
+`validateTemplate(template)` returns all diagnostics from the full validation pass. Diagnostic codes are stable
+public contract. Rule groups:
 
 1. Single entry.
 2. References resolve.
