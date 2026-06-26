@@ -1,43 +1,32 @@
-# Runner contract (runAgent)
+# Runner contract
 
-> **In force after the DBOS pivot ([ADR-0001](./adr/0001-execution-engine-and-host.md)).** The `runAgent`
-> abstraction is reused unchanged; only the *caller* changes — a DBOS workflow **step** invokes `runAgent`
-> instead of the dumb loop. `attemptId`/idempotency now come from DBOS (workflow + step identity), not a
-> hand-generated key. Wired in [plans/0003-dbos-pipeline-workflow.md](./plans/0003-dbos-pipeline-workflow.md) and
-> [plans/0005-real-runners-and-integrator.md](./plans/0005-real-runners-and-integrator.md).
+Runners execute one agent or script step and return a recorded result to the DBOS adapter. They do not own routing
+or durable progress.
 
-> **Status: DRAFT.** The Claude Code headless branch is the MVP; Codex is a later branch of the same function.
-> **Depends on:** [repo-layer-contract.md](./repo-layer-contract.md) (the loop calls `runAgent`; `attemptId`
-> generated before the run) · [control-plane-schema.md](./control-plane-schema.md) (`roles.runner`,
-> `allowed_tools`, `model_profiles`) · [context-budget.md](./context-budget.md) (the context input).
-> **Realized by:** brief §4 / §9, built as a slice after the data-access layer (Plan TBD).
+## Boundary
 
-All runner specifics hide behind **one** function. The loop is runner-agnostic.
+- The pipeline core emits `invokeRole` or `invokeScript`.
+- The DBOS adapter resolves the capability handle to a runner/script.
+- The runner executes in the target repo/worktree and exits.
+- The adapter records attempts, events, costs, outputs, and routing signals.
 
-```ts
-runAgent(role: Role, profile: ModelProfile, context: string, attemptId: string, step: Step)
-  : Promise<AttemptResult>   // { output, artifacts, nextSteps, costs, needsHuman?, lesson? }
-```
+## Rules
 
-## Behavior
+- Agents are short-lived. Do not keep live sessions as durable state.
+- Runner-specific CLI flags and protocol details stay inside runner implementations.
+- External effects must be idempotent by run/step/attempt identity where replay can repeat the call.
+- Runners must respect role scope, allowed tools, and permission mode.
+- Code and diffs live in git, not Revisium payloads.
+- Failure output should include a concise lesson or reason for later context.
+- Developer roles must not change architecture or ADR decisions unless the selected pipeline explicitly routes
+  that work through the right role/gate.
 
-- **Dispatch by `role.runner`:** `claude-code` (MVP) → headless `claude -p "<context>" --model <profile.model_id> …`
-  in the target repo; `codex` → non-interactive Codex (later, second branch of this same function).
-- **Isolation:** run in a fresh clone / container, with only the tools in `role.allowed_tools` enabled.
-- **Idempotency on external effects:** `attemptId` / `idempotency_key` is generated **before** the run (see
-  [repo-layer-contract.md](./repo-layer-contract.md)). External actions (create PR / commit) must be
-  "create only if this key hasn't been used" — a worker can die mid-step; never double-create.
-- **Timeout:** kill a runner that exceeds N minutes and return the step to `ready`/inbox — otherwise one hung
-  step freezes the single sequential worker.
-- **`needsHuman`:** a runner may signal a blocker/approval instead of a result; the loop then `pushInbox`s and the
-  branch parks (it does not write `nextSteps`).
-- **`lesson`:** on failure, return the compressed takeaway for the next attempt's context.
+## Output
 
-## Hard rules
+Runner output is split:
 
-- **Do NOT depend on undocumented CLI flags.** CLI capability/versions drift; all CLI-specific code lives only
-  inside `runAgent`. Capability negotiation stays here, never leaks to the loop.
-- **Verify by hand before coding:** `claude -p "…" --model <…>` must run without a dialog and return a result a
-  script can capture. That round-trip is the foundation of the loop.
-- The developer agent must not change architecture/ADRs on its own initiative — that constraint lives in the
-  role's `system_prompt`, enforced by scope, not by the runner.
+- routing signal: core outcome, domain verdict, error code;
+- provenance: attempt status, tokens, cost, logs, artifact refs;
+- content: optional produced output stored through run dataflow.
+
+The exact dataflow contract lives in [specs/run-dataflow-v1.spec.md](./specs/run-dataflow-v1.spec.md).
