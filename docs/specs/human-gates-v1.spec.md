@@ -74,7 +74,8 @@ MCP tools:
 - `list_inbox`, `get_inbox_item`, `get_pending_decisions`
 - `approve_gate`, `reject_gate`, `answer_question`, `resolve_inbox_item`
 - `summarize_gate_risk`
-- `wait_for_run`, `wait_for_any_gate`, `watch_runs`
+- `observe_run`
+- `wait_for_run`, `wait_for_any_gate`, `watch_runs` (compatibility/diagnostic)
 
 GraphQL mutations:
 
@@ -88,8 +89,107 @@ GraphQL subscriptions:
 - `inboxItemAdded`
 - `inboxItemResolved`
 
-`wait_for_any_gate` and `watch_runs` are bounded long-poll tools. They return a cursor so callers can resume
-polling without re-delivering already-seen transitions.
+`observe_run` is the canonical normal observation surface. `wait_for_run`, `wait_for_any_gate`, and `watch_runs`
+remain registered for existing clients and diagnostic scripts, but new polling loops should use `observe_run`.
+
+## Run Observation Contract
+
+`observe_run` provides low-context run observation for MCP clients. It is a bounded long-poll call over product
+services, not a raw DBOS/Revisium table read.
+
+Input:
+
+```ts
+type ObserveRunInput = {
+  runId: string;
+  cursor?: string;
+  mode?: 'actionable' | 'heartbeat' | 'diagnostic';
+  timeoutMs?: number;
+  heartbeatEveryMs?: number;
+};
+```
+
+Result:
+
+```ts
+type ObserveRunResult = {
+  runId: string;
+  cursor: string;
+  state: 'running' | 'pending_gate' | 'question' | 'blocked' | 'failed' | 'completed' | 'retrying';
+  timedOut: boolean;
+  transition?: {
+    runId: string;
+    state: ObserveRunResult['state'];
+    nextAction: ObserveRunResult['nextAction'];
+    inbox?: { id: string; kind: string; title: string; status: string; stepId?: string; optionCount: number };
+    blockedReason?: string;
+  };
+  activeAttempt?: {
+    attemptId: string;
+    stepId: string;
+    stepKey?: string;
+    role: string;
+    runner: string;
+    status: AgentActivityStatus;
+    startedAt: string;
+    lastEventAt: string;
+    lastOutputAt?: string;
+    stdoutBytes: number;
+    stderrBytes: number;
+    eventCount: number;
+  };
+  heartbeat?: {
+    observedAt: string;
+    activity?: {
+      aggregateStatus: string;
+      latestActivityAt: string;
+      latestOutputAt?: string;
+      stdoutBytes: number;
+      stderrBytes: number;
+      eventCount: number;
+    };
+  };
+  diagnostic?: {
+    runStatus: string;
+    workflowStatus: string;
+    blockedReason?: string;
+    latestBlockingEvent?: {
+      eventId?: string;
+      type?: string;
+      createdAt?: string;
+    };
+    activity?: {
+      aggregateStatus: string;
+      latestActivityAt: string;
+      latestOutputAt?: string;
+      stdoutBytes: number;
+      stderrBytes: number;
+      eventCount: number;
+    };
+    suggestedTools: string[];
+  };
+  nextAction: 'wait' | 'ask_human' | 'inspect_digest' | 'inspect_log' | 'done';
+};
+```
+
+Rules:
+
+- `cursor` suppresses already-delivered transitions. Re-calling with the returned cursor must not re-deliver the
+  same gate, blocked, failed, completed, or retrying transition.
+- MCP schemas cap cursor length; over-cap service-side cursors are ignored before base64 decode or JSON parse.
+- `mode: 'actionable'` is the default. It waits up to the bounded server hold for a gate, question, blocked,
+  failed, completed, or future retry transition.
+- `mode: 'heartbeat'` returns a heartbeat at `heartbeatEveryMs` cadence when no transition appears first.
+- `mode: 'diagnostic'` may include bounded hints such as run/workflow status, a compact blocking-event header,
+  activity counters, and suggested tools. It must not include raw log text or full event payloads.
+- The canonical activity signal is derived from existing agent observability fields: `latestActivityAt`,
+  `latestOutputAt`, `lastEventAt`, `lastOutputAt`, stdout/stderr byte counters, and event counters. It is a signal
+  only; v1 does not implement idle-timeout policy.
+- Normal observation must not require `get_run(includeEvents: true)`, full logs, raw log text, full event history,
+  or unbounded payloads.
+- `nextAction: 'ask_human'` means resolve the inbox item through gate/question tools. `inspect_digest` means call
+  `get_run_digest`. `inspect_log` means use bounded `get_agent_log` reads with offsets or `tailBytes`.
+- `retrying` is reserved in the contract for retry transitions. v1 does not define or implement retry policy.
 
 ## Gate Kinds
 
@@ -135,5 +235,7 @@ Contracts:
 
 ## Changelog
 
+- 2026-06-26: Added canonical `observe_run` low-context observation contract and documented older watch tools as
+  compatibility/diagnostic surfaces.
 - 2026-06-26: Initial spec extracted from current inbox/gate implementation, former inbox doc, and former
   plan 0018.

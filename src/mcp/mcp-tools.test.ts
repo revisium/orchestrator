@@ -1,11 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { MAX_WATCH_CURSOR_CHARS } from '../task-control-plane/run-watch.service.js';
 import { registerRevoMcpTools } from './mcp-tools.js';
 import type { McpFacadeService } from './mcp-facade.service.js';
 
 type RegisteredTool = {
   name: string;
-  config: { inputSchema?: Record<string, unknown> };
+  config: { description?: string; inputSchema?: Record<string, unknown> };
   handler: (input: never) => Promise<unknown> | unknown;
 };
 
@@ -38,6 +39,46 @@ test('registerRevoMcpTools registers agent observability tools', () => {
   assert.ok(names.includes('tail_agent_log'));
   assert.ok(names.includes('read_agent_output_events'));
   assert.equal(Boolean(tools.find((tool) => tool.name === 'get_agent_log')?.config.inputSchema?.stream), true);
+});
+
+test('observe_run is registered as the canonical low-context observation tool', async () => {
+  const { z } = await import('zod');
+  const { server, tools } = makeServer();
+
+  registerRevoMcpTools(server as never, {} as McpFacadeService);
+
+  const tool = tools.find((registered) => registered.name === 'observe_run');
+  assert.ok(tool);
+  const schema = z.object(tool.config.inputSchema as Record<string, never>);
+  assert.equal(schema.safeParse({ runId: 'r1' }).success, true);
+  assert.equal(schema.safeParse({ runId: 'r1', mode: 'heartbeat', heartbeatEveryMs: 45_000 }).success, true);
+  assert.equal(schema.safeParse({ runId: 'r1', mode: 'other' }).success, false);
+  assert.equal(schema.safeParse({ runId: 'r1', timeoutMs: 45_001 }).success, false);
+  assert.equal(schema.safeParse({ runId: 'r1', cursor: 'x'.repeat(MAX_WATCH_CURSOR_CHARS) }).success, true);
+  assert.equal(schema.safeParse({ runId: 'r1', cursor: 'x'.repeat(MAX_WATCH_CURSOR_CHARS + 1) }).success, false);
+  assert.equal(tool.config.description?.includes('without raw logs or full events'), true);
+});
+
+test('observe_run handler forwards the request abort signal to the facade', async () => {
+  const { server, tools } = makeServer();
+  let received: { runId?: string; signal?: AbortSignal } | undefined;
+  const facade = {
+    async observeRun(input: { runId?: string; signal?: AbortSignal }) {
+      received = input;
+      return { runId: 'r1', cursor: 'c', state: 'running', timedOut: true, nextAction: 'wait' };
+    },
+  } as unknown as McpFacadeService;
+  registerRevoMcpTools(server as never, facade);
+  const tool = tools.find((registered) => registered.name === 'observe_run');
+  assert.ok(tool);
+
+  const ac = new AbortController();
+  const invoke = tool.handler as unknown as (input: unknown, extra: unknown) => Promise<unknown>;
+  const result = await invoke({ runId: 'r1' }, { signal: ac.signal });
+
+  assert.deepEqual(parseToolText(result), { runId: 'r1', cursor: 'c', state: 'running', timedOut: true, nextAction: 'wait' });
+  assert.deepEqual(received?.runId, 'r1');
+  assert.equal(received?.signal, ac.signal);
 });
 
 test('get_agent_log MCP tool validates conflicting bounded read inputs before facade delegation', async () => {
@@ -77,6 +118,7 @@ test('wait_for_any_gate and watch_runs are registered with a hold cap ≤45s', a
   const names = tools.map((tool) => tool.name);
   assert.ok(names.includes('wait_for_any_gate'));
   assert.ok(names.includes('watch_runs'));
+  assert.ok(names.includes('observe_run'));
 
   // The cap is the binding fix: a wait above the inner-hop budget dies at the transport. Includes
   // wait_for_run, whose 120000 cap was lowered to 45000 in the same slice.
@@ -86,7 +128,16 @@ test('wait_for_any_gate and watch_runs are registered with a hold cap ≤45s', a
     const schema = z.object(tool.config.inputSchema as Record<string, never>);
     assert.equal(schema.safeParse({ runId: 'r', runIds: ['r'], timeoutMs: 45_001 }).success, false, `${name} rejects >45s`);
     assert.equal(schema.safeParse({ runId: 'r', runIds: ['r'], timeoutMs: 45_000 }).success, true, `${name} accepts 45s`);
+    if (name !== 'wait_for_run') {
+      assert.equal(schema.safeParse({ runIds: ['r'], cursor: 'x'.repeat(MAX_WATCH_CURSOR_CHARS) }).success, true, `${name} accepts max cursor`);
+      assert.equal(schema.safeParse({ runIds: ['r'], cursor: 'x'.repeat(MAX_WATCH_CURSOR_CHARS + 1) }).success, false, `${name} rejects oversized cursor`);
+    }
   }
+  const observeRun = tools.find((registered) => registered.name === 'observe_run');
+  assert.ok(observeRun);
+  const schema = z.object(observeRun.config.inputSchema as Record<string, never>);
+  assert.equal(schema.safeParse({ runId: 'r', timeoutMs: 45_001 }).success, false, 'observe_run rejects >45s');
+  assert.equal(schema.safeParse({ runId: 'r', timeoutMs: 45_000 }).success, true, 'observe_run accepts 45s');
 });
 
 test('wait_for_any_gate handler forwards the request abort signal to the facade', async () => {
@@ -139,4 +190,3 @@ test('get_run_events: handler forwards expand to facade', async () => {
 
   assert.deepEqual((received as Record<string, unknown>)['expand'], ['graph']);
 });
-

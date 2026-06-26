@@ -7,7 +7,13 @@ import {
 import { ControlPlaneError } from '../control-plane/errors.js';
 import { AgentObservabilityError } from '../observability/types.js';
 import { CreateRunWorkflowError } from '../run/create-run.js';
-import { RunWatchService, type WatchInput, type WatchResult } from '../task-control-plane/run-watch.service.js';
+import {
+  RunWatchService,
+  type ObserveRunInput,
+  type ObserveRunResult,
+  type WatchInput,
+  type WatchResult,
+} from '../task-control-plane/run-watch.service.js';
 import { MCP_TOOL_NAMES } from './mcp-capabilities.js';
 
 export type { RepositoryContext, RepositoryValidation };
@@ -59,7 +65,19 @@ export class McpFacadeService {
         'Local stdio MCP server; no remote HTTP listener.',
         'Tools expose product operations, not generic Revisium row CRUD.',
         'Runs are driven by installed playbooks, pipeline catalogs, and execution profiles.',
+        'Normal run polling should use observe_run with its cursor; compatibility watch tools remain available for older clients and diagnostics.',
       ],
+      observation: {
+        preferredOrder: [
+          'observe_run with cursor for normal observation',
+          'observe_run mode:"heartbeat" for explicit liveness checks',
+          'get_run_digest when observe_run.nextAction is "inspect_digest"',
+          'get_agent_log with offsetBytes/limitBytes or tailBytes when observe_run.nextAction is "inspect_log" or explicit debugging requires logs',
+          'avoid get_run(includeEvents:true) and raw agent logs in polling loops',
+        ],
+        compatibilityTools: ['wait_for_run', 'wait_for_any_gate', 'watch_runs'],
+        diagnosticTools: ['get_run_digest', 'get_agent_log', 'get_run_events', 'get_agent_activity'],
+      },
     };
   }
 
@@ -166,6 +184,10 @@ export class McpFacadeService {
 
   waitForRun(input: { runId: string; timeoutMs?: number; intervalMs?: number }) {
     return this.api.waitForRun(input);
+  }
+
+  observeRun(input: ObserveRunInput): Promise<ObserveRunResult> {
+    return this.runWatch.observeRun(input);
   }
 
   waitForAnyGate(input: WatchInput): Promise<WatchResult> {

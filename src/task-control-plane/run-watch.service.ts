@@ -14,6 +14,12 @@
  * id, or a status transition). Approving the same gate twice is already guarded downstream.
  */
 import { ControlPlaneError } from '../control-plane/errors.js';
+import {
+  deriveCanonicalActivitySignal,
+  type CanonicalActivityAttemptSignal,
+  type CanonicalActivitySignal,
+} from '../observability/activity-signal.js';
+import type { AgentRunActivity } from '../observability/types.js';
 // Single source of truth for the topic names (a zero-import leaf module, so no import cycle). The
 // ControlPlaneSubscriptionBridge publishes these from the Postgres LISTEN feed, each payload carrying
 // `runId` — the field we filter wakeups on.
@@ -25,8 +31,11 @@ export type RunTransition = {
   runId: string;
   state: RunState['state'];
   nextAction: string;
+  runStatus: string;
+  workflowStatus: string;
   inbox?: RunState['inbox'];
   latestBlockingEvent?: unknown;
+  blockedReason?: string;
 };
 
 export type WatchResult = {
@@ -42,10 +51,79 @@ export type WatchInput = {
   signal?: AbortSignal;
 };
 
+export type ObserveRunMode = 'actionable' | 'heartbeat' | 'diagnostic';
+export type ObserveRunNextAction = 'wait' | 'ask_human' | 'inspect_digest' | 'inspect_log' | 'done';
+
+export type ObserveRunInput = {
+  runId: string;
+  cursor?: string;
+  mode?: ObserveRunMode;
+  timeoutMs?: number;
+  heartbeatEveryMs?: number;
+  signal?: AbortSignal;
+};
+
+export type ObservedInboxSummary = {
+  id: string;
+  kind: string;
+  title: string;
+  status: string;
+  stepId?: string;
+  optionCount: number;
+};
+
+export type ObserveRunTransition = {
+  runId: string;
+  state: RunState['state'];
+  nextAction: ObserveRunNextAction;
+  inbox?: ObservedInboxSummary;
+  blockedReason?: string;
+};
+
+export type ObserveRunActivitySignal = {
+  aggregateStatus: string;
+  latestActivityAt: string;
+  latestOutputAt?: string;
+  stdoutBytes: number;
+  stderrBytes: number;
+  eventCount: number;
+};
+
+export type ObserveRunHeartbeat = {
+  observedAt: string;
+  activity?: ObserveRunActivitySignal;
+};
+
+export type ObserveRunDiagnostic = {
+  runStatus: string;
+  workflowStatus: string;
+  blockedReason?: string;
+  latestBlockingEvent?: {
+    eventId?: string;
+    type?: string;
+    createdAt?: string;
+  };
+  activity?: ObserveRunActivitySignal;
+  suggestedTools: string[];
+};
+
+export type ObserveRunResult = {
+  runId: string;
+  cursor: string;
+  state: RunState['state'];
+  timedOut: boolean;
+  transition?: ObserveRunTransition;
+  activeAttempt?: CanonicalActivityAttemptSignal;
+  heartbeat?: ObserveRunHeartbeat;
+  nextAction: ObserveRunNextAction;
+  diagnostic?: ObserveRunDiagnostic;
+};
+
 /** The minimal read surface RunWatchService needs from TaskControlPlaneApiService (keeps it fakeable). */
 export type RunStateSource = {
   resolveRunState(runId: string): Promise<RunState>;
   listRuns(filter?: { status?: string; limit?: number }): Promise<Array<{ runId: string; status: string }>>;
+  getAgentActivity?(runId: string): Promise<AgentRunActivity | null>;
 };
 
 /** The minimal slice of graphql-subscriptions' PubSub we use (subscribe/unsubscribe, no async-iterator). */
@@ -69,9 +147,20 @@ const WATCH_STATES: ReadonlySet<RunState['state']> = new Set([
   'failed',
   'blocked',
 ]);
+const OBSERVE_TRANSITION_STATES: ReadonlySet<RunState['state']> = new Set([
+  'pending_gate',
+  'question',
+  'completed',
+  'failed',
+  'blocked',
+  'retrying',
+]);
 const TERMINAL_RUN_STATUS: ReadonlySet<string> = new Set(['completed', 'failed', 'cancelled']);
 /** Defensive cap on caller-supplied cursor size (a legitimate cursor only carries the watched runs, ≤ MAX_RUN_IDS). */
 const MAX_CURSOR_ENTRIES = 200;
+export const MAX_WATCH_CURSOR_CHARS = 8_192;
+export const DEFAULT_HEARTBEAT_EVERY_MS = 5_000;
+export const MAX_HEARTBEAT_EVERY_MS = MAX_SERVER_HOLD_MS;
 
 /** The topics this watch composes off APP_PUB_SUB — exported so a test can assert sync with constants.js. */
 export const WATCH_TOPICS = [INBOX_ITEM_ADDED_TOPIC, RUN_UPDATED_TOPIC] as const;
@@ -80,6 +169,12 @@ export function clampServerHold(timeoutMs?: number): number {
   const requested = timeoutMs ?? DEFAULT_SERVER_HOLD_MS;
   if (!Number.isFinite(requested) || requested < 0) return DEFAULT_SERVER_HOLD_MS;
   return Math.min(requested, MAX_SERVER_HOLD_MS);
+}
+
+export function clampHeartbeatEvery(heartbeatEveryMs?: number): number {
+  const requested = heartbeatEveryMs ?? DEFAULT_HEARTBEAT_EVERY_MS;
+  if (!Number.isFinite(requested) || requested <= 0) return DEFAULT_HEARTBEAT_EVERY_MS;
+  return Math.min(requested, MAX_HEARTBEAT_EVERY_MS);
 }
 
 /**
@@ -99,6 +194,8 @@ function markerFor(state: RunState): string | null {
       return 'f';
     case 'blocked':
       return `b:${state.runStatus}`;
+    case 'retrying':
+      return `r:${state.runStatus}:${state.workflowStatus}`;
     case 'running':
       return null;
   }
@@ -110,6 +207,7 @@ function encodeCursor(markers: Record<string, string>): string {
 
 function decodeCursor(cursor?: string): Record<string, string> {
   if (!cursor) return {};
+  if (cursor.length > MAX_WATCH_CURSOR_CHARS) return {};
   try {
     const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as {
       v?: number;
@@ -133,6 +231,7 @@ export class RunWatchService {
   constructor(
     private readonly api: RunStateSource,
     private readonly pubSub?: WatchPubSub,
+    private readonly now: () => number = () => Date.now(),
   ) {}
 
   /** Block until any watched run hits an approval/question gate (or the hold elapses). */
@@ -143,6 +242,41 @@ export class RunWatchService {
   /** Like waitForAnyGate, but also surfaces terminal (completed/failed) and blocked transitions. */
   watchRuns(input: WatchInput): Promise<WatchResult> {
     return this.watch(input, WATCH_STATES);
+  }
+
+  async observeRun(input: ObserveRunInput): Promise<ObserveRunResult> {
+    const mode = input.mode ?? 'actionable';
+    const timeoutMs = mode === 'heartbeat'
+      ? Math.min(clampServerHold(input.timeoutMs), clampHeartbeatEvery(input.heartbeatEveryMs))
+      : clampServerHold(input.timeoutMs);
+    const watched = await this.watch(
+      {
+        runIds: [input.runId],
+        cursor: input.cursor,
+        timeoutMs,
+        signal: input.signal,
+      },
+      OBSERVE_TRANSITION_STATES,
+    );
+    const transition = watched.transitions[0];
+    const state = transition ?? await this.resolveRunState(input.runId);
+    const activity = await this.readActivitySignal(input.runId);
+    const nextAction = observeNextAction(state, activity);
+    const heartbeat = mode === 'heartbeat' || mode === 'diagnostic'
+      ? observeHeartbeat(activity, this.now)
+      : undefined;
+
+    return {
+      runId: input.runId,
+      cursor: watched.cursor,
+      state: state.state,
+      timedOut: watched.timedOut,
+      ...(transition ? { transition: observeTransition(transition, activity) } : {}),
+      ...(activity?.attempt ? { activeAttempt: activity.attempt } : {}),
+      ...(heartbeat ? { heartbeat } : {}),
+      nextAction,
+      ...(mode === 'diagnostic' ? { diagnostic: observeDiagnostic(state, activity) } : {}),
+    };
   }
 
   private async watch(input: WatchInput, actionable: ReadonlySet<RunState['state']>): Promise<WatchResult> {
@@ -281,17 +415,26 @@ export class RunWatchService {
   }
 
   private sweep(runIds: string[]): Promise<RunState[]> {
-    return Promise.all(
-      runIds.map((runId) =>
-        this.api.resolveRunState(runId).catch((error: unknown): RunState => {
-          if (error instanceof ControlPlaneError && error.code === 'ROW_NOT_FOUND') {
-            return { runId, state: 'failed', nextAction: 'run not found', runStatus: 'not_found', workflowStatus: '' };
-          }
-          // A transient read error must not masquerade as a terminal transition; keep waiting.
-          return { runId, state: 'running', nextAction: 'transient read error; will retry', runStatus: 'unknown', workflowStatus: '' };
-        }),
-      ),
-    );
+    return Promise.all(runIds.map((runId) => this.resolveRunState(runId)));
+  }
+
+  private async resolveRunState(runId: string): Promise<RunState> {
+    return this.api.resolveRunState(runId).catch((error: unknown): RunState => {
+      if (error instanceof ControlPlaneError && error.code === 'ROW_NOT_FOUND') {
+        return { runId, state: 'failed', nextAction: 'run not found', runStatus: 'not_found', workflowStatus: '' };
+      }
+      // A transient read error must not masquerade as a terminal transition; keep waiting.
+      return { runId, state: 'running', nextAction: 'transient read error; will retry', runStatus: 'unknown', workflowStatus: '' };
+    });
+  }
+
+  private async readActivitySignal(runId: string): Promise<CanonicalActivitySignal | undefined> {
+    if (!this.api.getAgentActivity) return undefined;
+    try {
+      return deriveCanonicalActivitySignal(await this.api.getAgentActivity(runId));
+    } catch {
+      return undefined;
+    }
   }
 }
 
@@ -309,8 +452,11 @@ function collectNew(
       runId: state.runId,
       state: state.state,
       nextAction: state.nextAction,
+      runStatus: state.runStatus,
+      workflowStatus: state.workflowStatus,
       inbox: state.inbox,
       latestBlockingEvent: state.latestBlockingEvent,
+      blockedReason: state.blockedReason,
     });
   }
   return out;
@@ -331,4 +477,117 @@ function mergeCursor(states: RunState[], actionable: ReadonlySet<RunState['state
     if (marker !== null) next[state.runId] = marker;
   }
   return next;
+}
+
+function compactInbox(inbox: RunState['inbox']): ObservedInboxSummary | undefined {
+  if (!inbox) return undefined;
+  return {
+    id: inbox.id,
+    kind: inbox.kind,
+    title: inbox.title,
+    status: inbox.status,
+    ...(inbox.stepId ? { stepId: inbox.stepId } : {}),
+    optionCount: Array.isArray(inbox.options) ? inbox.options.length : 0,
+  };
+}
+
+function shouldInspectLog(activity: CanonicalActivitySignal | undefined): boolean {
+  const status = activity?.attempt?.status ?? activity?.aggregateStatus;
+  return status === 'failed' || status === 'timed_out' || status === 'permission_blocked';
+}
+
+function observeNextAction(
+  state: Pick<RunState, 'state'>,
+  activity: CanonicalActivitySignal | undefined,
+): ObserveRunNextAction {
+  switch (state.state) {
+    case 'pending_gate':
+    case 'question':
+      return 'ask_human';
+    case 'completed':
+      return 'done';
+    case 'failed':
+      return shouldInspectLog(activity) ? 'inspect_log' : 'inspect_digest';
+    case 'blocked':
+      return 'inspect_digest';
+    case 'retrying':
+    case 'running':
+      return 'wait';
+  }
+}
+
+function observeTransition(
+  state: RunTransition,
+  activity: CanonicalActivitySignal | undefined,
+): ObserveRunTransition {
+  const inbox = compactInbox(state.inbox);
+  return {
+    runId: state.runId,
+    state: state.state,
+    nextAction: observeNextAction(state, activity),
+    ...(inbox ? { inbox } : {}),
+    ...(state.blockedReason ? { blockedReason: state.blockedReason } : {}),
+  };
+}
+
+function observeHeartbeat(
+  activity: CanonicalActivitySignal | undefined,
+  now: () => number,
+): ObserveRunHeartbeat {
+  const compact = compactActivity(activity);
+  return {
+    observedAt: new Date(now()).toISOString(),
+    ...(compact ? { activity: compact } : {}),
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function compactBlockingEvent(event: unknown): ObserveRunDiagnostic['latestBlockingEvent'] | undefined {
+  const record = asRecord(event);
+  if (!record) return undefined;
+  return {
+    ...(typeof record.eventId === 'string' ? { eventId: record.eventId } : {}),
+    ...(typeof record.type === 'string' ? { type: record.type } : {}),
+    ...(typeof record.createdAt === 'string' ? { createdAt: record.createdAt } : {}),
+  };
+}
+
+function compactActivity(activity: CanonicalActivitySignal | undefined): ObserveRunActivitySignal | undefined {
+  if (!activity) return undefined;
+  return {
+    aggregateStatus: activity.aggregateStatus,
+    latestActivityAt: activity.latestActivityAt,
+    ...(activity.latestOutputAt ? { latestOutputAt: activity.latestOutputAt } : {}),
+    stdoutBytes: activity.stdoutBytes,
+    stderrBytes: activity.stderrBytes,
+    eventCount: activity.eventCount,
+  };
+}
+
+function suggestedTools(state: Pick<RunState, 'state'>, activity: CanonicalActivitySignal | undefined): string[] {
+  const nextAction = observeNextAction(state, activity);
+  if (nextAction === 'inspect_log') return ['get_agent_log'];
+  if (nextAction === 'inspect_digest') return ['get_run_digest'];
+  if (nextAction === 'ask_human') return ['get_inbox_item', 'approve_gate', 'reject_gate', 'answer_question'];
+  return [];
+}
+
+function observeDiagnostic(
+  state: Pick<RunState, 'state' | 'runStatus' | 'workflowStatus' | 'blockedReason' | 'latestBlockingEvent'>,
+  activity: CanonicalActivitySignal | undefined,
+): ObserveRunDiagnostic {
+  const latestBlockingEvent = compactBlockingEvent(state.latestBlockingEvent);
+  const compact = compactActivity(activity);
+  return {
+    runStatus: state.runStatus,
+    workflowStatus: state.workflowStatus,
+    ...(state.blockedReason ? { blockedReason: state.blockedReason } : {}),
+    ...(latestBlockingEvent ? { latestBlockingEvent } : {}),
+    ...(compact ? { activity: compact } : {}),
+    suggestedTools: suggestedTools(state, activity),
+  };
 }
