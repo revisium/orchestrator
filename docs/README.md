@@ -1,39 +1,51 @@
 # agent-orchestrator docs
 
-Documentation for the local AI-agent orchestrator built on Revisium. Repo-local context lives in
-[`../AGENTS.md`](../AGENTS.md); reusable method lives in the `../agents` checkout of
-`revisium/agent-playbook`.
+Documentation for the Revo host and local orchestrator.
+
+## Ownership
+
+- **ADRs** record durable decisions at a high level: context, decision, examples, alternatives, consequences, and
+  links to specs.
+- **Specs** carry exact contracts: types, APIs, schemas, state-machine grammar, validation, examples, and
+  changelog.
+- **Guides** explain current operator or contributor workflows.
+- **Work orders** do not live in docs. Track slices, tasks, and delivery plans in GitHub Issues or Revo runs.
+
+There is no internal archive of obsolete plans. Git history is the archive.
 
 ## Read order
 
-1. [architecture-overview.md](./architecture-overview.md) — the invariants; read first.
-2. [adr/0001-execution-engine-and-host.md](./adr/0001-execution-engine-and-host.md) — why DBOS + NestJS (the pivot);
-   then [adr/0002-data-driven-pipeline-state-machine.md](./adr/0002-data-driven-pipeline-state-machine.md) — the pipeline-as-data engine.
-3. [roadmap.md](./roadmap.md) — doc status + the MVP build slices.
-4. [control-plane-schema.md](./control-plane-schema.md) — the tables; versioned vs runtime (post-pivot).
-5. [getting-started.md](./getting-started.md) — run the local Revisium daemon + bootstrap, create + drive a run end-to-end.
+1. [architecture-overview.md](./architecture-overview.md)
+2. [adr/0001-execution-engine-and-host.md](./adr/0001-execution-engine-and-host.md)
+3. [adr/0002-data-driven-pipeline-state-machine.md](./adr/0002-data-driven-pipeline-state-machine.md)
+4. [specs/README.md](./specs/README.md)
+5. [getting-started.md](./getting-started.md)
 
-## Reference docs (durable — "what / why")
+## Decisions
 
-| Doc | Area |
+| ADR | Decision |
 | --- | --- |
-| [vision](./vision.md) | product vision: pains → capabilities, stages, differentiators, glossary |
-| [architecture-overview](./architecture-overview.md) | invariants, layers (host + DBOS + Revisium) |
-| [adr/0001-execution-engine-and-host](./adr/0001-execution-engine-and-host.md) | DBOS + NestJS decision record |
-| [adr/0002-data-driven-pipeline-state-machine](./adr/0002-data-driven-pipeline-state-machine.md) | pipeline-as-data engine decision record |
-| [control-plane-schema](./control-plane-schema.md) | Revisium meaning tables, versioned vs runtime |
-| [repo-layer-contract](./repo-layer-contract.md) | data-access verbs (meaning; progress verbs retired) |
-| [graphql-api](./graphql-api.md) | local-only GraphQL front door, auth hook, metrics, verification contract |
-| [context-budget](./context-budget.md) | buildContext, token economics (§8) |
-| [runner-contract](./runner-contract.md) | runAgent, headless runners (§9) |
-| [inbox-and-gates](./inbox-and-gates.md) | human inbox, plan/merge gates (§11) |
-| [multi-repo-strategies](./multi-repo-strategies.md) | primitives / engine / strategies (§10.1) |
-| [open-questions](./open-questions.md) | unresolved API questions (tracker) |
+| [ADR-0001](./adr/0001-execution-engine-and-host.md) | DBOS durable engine and NestJS host |
+| [ADR-0002](./adr/0002-data-driven-pipeline-state-machine.md) | Pipeline-as-data engine |
+| [ADR-0003](./adr/0003-graphql-graph-shape.md) | GraphQL admin API graph-shape migration target |
 
-## Build slices (work-orders — "how", one-shot)
+## Specs
 
-Numbered, executable plans for an implementing agent → [`plans/`](./plans/) (see [plans/README.md](./plans/README.md)).
+| Spec | Contract |
+| --- | --- |
+| [GraphQL admin API v1](./specs/graphql-admin-api-v1.spec.md) | Current SDL, transport, verification, and graph-shape target |
+| [Pipeline state machine v1](./specs/pipeline-state-machine-v1.spec.md) | Template grammar, reducer, validation, versioning |
+| [Run dataflow v1](./specs/run-dataflow-v1.spec.md) | Step outputs, prompt hydration, output storage, validation |
+| [Human gates v1](./specs/human-gates-v1.spec.md) | Inbox-backed gates, questions, watch tools, PR review feedback loop |
 
-## Status & roadmap
+## Guides and references
 
-Per-doc draft status, dependencies, and the slice/plan roadmap → [roadmap.md](./roadmap.md).
+| Doc | Purpose |
+| --- | --- |
+| [vision](./vision.md) | Product direction and glossary |
+| [architecture overview](./architecture-overview.md) | Runtime layers and invariants |
+| [getting started](./getting-started.md) | Local daemon, MCP, and GraphQL workflow |
+| [control-plane schema](./control-plane-schema.md) | Revisium table ownership and row classes |
+| [repo-layer contract](./repo-layer-contract.md) | Current Revisium data-access boundary |
+| [runner contract](./runner-contract.md) | Runner boundary and external-effect rules |
+| [context budget](./context-budget.md) | Prompt context shape and token discipline |

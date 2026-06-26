@@ -1,43 +1,29 @@
-# Context budget (buildContext)
+# Context budget
 
-> **In force after the DBOS pivot ([ADR-0001](./adr/0001-execution-engine-and-host.md)).** `buildContext` is
-> reused as-is and will be called from a DBOS workflow step. **Target (not yet implemented):** the `lesson` source
-> *will move* from the Revisium `attempts` table — which `src/worker/build-context.ts` still reads today via
-> `da.listRows('attempts', …)` — to DBOS step/attempt history (or a Revisium event), as part of the post-MVP
-> cleanup that retires the legacy step verbs.
+Revo starts short-lived agents. Every step should receive current state, not a chat transcript.
 
-> **Status: DRAFT.** Concept is settled; the implementation lands with the data-access layer.
-> **Depends on:** [architecture-overview.md](./architecture-overview.md) (state-not-history) ·
-> [repo-layer-contract.md](./repo-layer-contract.md) (`buildContext`) ·
-> [control-plane-schema.md](./control-plane-schema.md) (`attempts.lesson`, the ADR digest source).
-> **Realized by:** brief §8, built in a slice after the data-access layer (Plan 0003, TBD).
+## Context layers
 
-Restart cost is set here. We send **state, not history** — there is no dialogue transcript. Four narrow layers,
-all pulled from Revisium:
-
-1. **Who I am** — `role.system_prompt` + scope (what's allowed / forbidden).
-2. **What we're doing** — the task + a **digest of ADR verdicts** (the decisions, not the reasoning that reached
-   them) + which repos are in play.
-3. **What's already done** — artifacts / PRs / touched files + the **`lesson`** from this step's prior `attempts`
-   (compressed takeaways, not raw logs).
-4. **What's right now** — exactly one step (or one comment). The single goal of this run.
+1. **Who I am:** role prompt, scope, allowed tools, runner policy.
+2. **What we are doing:** run title, selected repo(s), relevant decisions, selected pipeline node.
+3. **What is already done:** produced outputs, artifact refs, PR/branch pointers, concise lessons.
+4. **What is right now:** the single task, review comment, gate, or script action for this step.
 
 ## Do not include
 
-Dialogue history · the whole repo (the agent reads it with tools) · other tasks' ADRs · full logs.
+- Full dialogue history.
+- Whole repository dumps.
+- Unrelated ADR rationale.
+- Raw logs when a concise lesson or artifact reference is enough.
+- Code diffs copied into Revisium payloads.
 
-## Why this is the cost lever
+## Dataflow
 
-A short-lived agent re-reads its context every run. Keeping a **live session** is more expensive, not less — the
-growing context is re-sent in full each turn. A cheap restart with a fresh narrow context almost always wins (see
-[architecture-overview.md](./architecture-overview.md), live-vs-loop). Layers **2 and 3** dominate the bill:
+Step outputs used by later steps must be declared with `produces` and `consumes`. The adapter hydrates those
+outputs into a stable inputs section before a runner starts. See
+[specs/run-dataflow-v1.spec.md](./specs/run-dataflow-v1.spec.md).
 
-- **Structure ADRs so verdicts extract separately from rationale.** `buildContext` should pull the decision
-  without the deliberation. Store ADRs so a "decisions" digest is a cheap read.
-- **Compress `lesson` at write time** (`failStep`), not at read time — one or two lines: what was tried, where it
-  failed.
+## Cost discipline
 
-## Tune later, by evidence
-
-Do not over-engineer compression on the MVP — assemble the four layers as-is. Then use `cost_ledger`
-(input/output tokens per step/model) to find where tokens actually burn and compress **there**, pointedly.
+Measure before optimizing. Use attempt and cost projections to find expensive steps, then compress the dominant
+context layer. The usual first targets are oversized prior outputs and raw logs.

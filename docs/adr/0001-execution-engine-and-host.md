@@ -1,88 +1,55 @@
-# ADR-0001 — Execution engine (DBOS) and host framework (NestJS)
+# ADR-0001 - Execution engine and host framework
 
 - **Status:** Accepted
-- **Supersedes:** the "thin dumb-loop over Revisium" runtime (pre-pivot plans `0001–0018`, dropped from the tree)
-- **Context docs:** [architecture-overview.md](../architecture-overview.md) · [roadmap.md](../roadmap.md)
+- **Decision date:** 2026-05
+- **Supersedes:** the earlier hand-rolled loop runtime
+- **Specs:** [pipeline state machine](../specs/pipeline-state-machine-v1.spec.md),
+  [human gates](../specs/human-gates-v1.spec.md)
 
 ## Context
 
-The orchestrator was built as a **thin dumb loop**: a `while(true)` that claims a ready step, runs it, writes the
-result (`src/worker/loop.ts`, `src/control-plane/steps.ts`). To make that survive crashes and concurrency it grew
-the machinery of a durable-execution engine by hand — `lease_owner`/`lease_expires_at`, `attempt_count`/backoff,
-`idempotency_key`, `dead_reason`, `recoverInFlight`. Two open questions blocked correctness:
+The orchestrator needs to run software-development tasks across crashes, retries, human pauses, and concurrent
+front doors. Reimplementing durable workflow semantics with custom leases, recovery, retry, and queue logic would
+make Revisium carry progress concerns it is not meant to own.
 
-- **Q1** — does Revisium support an atomic compare-and-set ("claim only if `ready`")? Needed before >1 worker.
-- **Q3** — does Revisium offer server-side filter/sort/pagination for an efficient claim query?
-
-Both are exactly what a durable-execution engine solves for free. Maintaining a self-built engine on top of a
-store that is not designed as a task queue is the wrong cost.
-
-Separately, the system is no longer "just a loop": it is becoming a **host process** with several front doors —
-CLI now, and likely REST + an MCP server — plus lifecycle management of a Revisium standalone, all over one core,
-with a plugin ambition.
+The product also needs one host process that can expose local CLI lifecycle, MCP tools, GraphQL, runners, and
+future adapters over one set of product services.
 
 ## Decision
 
-**1. Adopt a durable-execution engine; do not hand-roll one. The engine is DBOS.**
+Use **DBOS** as the durable execution engine and **NestJS** as the host framework.
 
-DBOS is a TypeScript **library** (not a separate server) that stores durable workflow state in Postgres:
-checkpointing after each step, automatic recovery on restart, queues with concurrency limits (replacing the claim
-loop and leasing — and Q1/Q3), idempotency by workflow id, durable sleep, and `send`/`recv` for human waits.
+DBOS owns execution progress: workflow checkpoints, queues, retries, sleeps, and waits for human decisions. It is
+an in-process TypeScript library backed by Postgres, so it fits the local-first package model better than a
+separate runtime service.
 
-Alternatives considered:
-- **Restate** — capable, but a separate runtime binary to bundle per platform.
-- **Temporal** — most mature / enterprise-trusted, but a heavy server; wrong fit for "ship inside a local package."
+NestJS owns host composition: dependency injection, lifecycle hooks, and front-door modules for MCP, GraphQL, and
+CLI lifecycle commands. The host talks to Revisium for meaning and projections, and to DBOS for progress.
 
-Deciding criterion: **the product must install as a package on an end device with no extra infrastructure.** DBOS,
-being an in-process library over Postgres, wins for local-first. The engine sits behind a thin host layer
-(invariant #2), so a future enterprise client demanding Temporal is a swap, not a rewrite.
+Revisium remains the source of truth for meaning: roles, playbooks, pipeline definitions, inbox rows, events,
+costs, and domain data. DBOS remains the source of truth for progress.
 
-**2. The host is a NestJS application.**
+The current pipeline engine is data-driven. ADR-0002 records that follow-up decision and amends the original
+short-lived MVP choice to prove DBOS with a coded workflow.
 
-Rationale: multiple front doors (CLI/REST/MCP) over one core is a DI-container case; the plugin ambition maps to
-Nest `DynamicModule`; lifecycle hooks (`OnApplicationBootstrap` / `OnApplicationShutdown`) are the natural home for
-`DBOS.launch()` / `DBOS.shutdown()`; and it is the **house stack** — both `revisium-core` and `ved-backend` are
-NestJS 11. The CLI runs via a Nest standalone application context (no HTTP needed until REST/MCP land).
+## Examples
 
-**3. Source-of-truth split.** Revisium owns *meaning* (roles, policy, inbox, events, domain data); DBOS owns
-*progress* (workflow/step status, queues, resume). The pre-pivot `steps`/`attempts` control-plane tables are
-retired — DBOS owns that runtime.
+- Starting or reattaching a run uses the run id as the durable workflow identity.
+- A human gate writes an inbox row in Revisium and parks the DBOS workflow until the inbox row is resolved.
+- MCP and GraphQL delegate through product API services instead of owning separate runtime behavior.
 
-**4. One Postgres dependency (MVP = two processes).** Revisium standalone owns the single embedded Postgres
-(`embedded-postgres`, a real Postgres binary — confirmed in `@revisium/standalone`). DBOS connects to that same
-server as a plain `pg` client, using a separate `dbos` database (`embedded-postgres` exposes `createDatabase`).
-The host reads the resolved pg port from Revisium's runtime (`runtime.json` / `pgdata/postmaster.pid`), never
-hardcodes it. No second Postgres is bundled.
+## Alternatives
 
-**5. Workflow as code for the MVP.** The pipeline (analyst→developer→reviewer→integrator) is a DBOS workflow
-*function*. This temporarily relaxes the "workflow = data" invariant in favour of proving the engine fast. Making
-the workflow generic (an "execute plan" that reads steps from Revisium data) is a tracked post-MVP goal.
-
-> **[UPDATED 2026-06-19 — delivered; superseded by [ADR-0002](./0002-data-driven-pipeline-state-machine.md)]**
-> The post-MVP goal stated here shipped (plan 0015, PRs #69–#75). The pipeline is now **data** — a versioned graph
-> template executed by a generic durable engine (a pure `pipeline-core` reducer + a thin DBOS effect-adapter) — and
-> it is the **sole** pipeline engine; the hardcoded workflow function and its role→phase classifiers were removed
-> (`19b6abb`). The "workflow = data" invariant is restored. See ADR-0002 for the design and consequences.
+- **Hand-rolled Revisium queue:** rejected because leases, atomic claims, recovery, and retries are durable-engine
+  concerns.
+- **Temporal:** mature but too heavy for a local package-first runtime.
+- **Restate:** capable, but adds a separate runtime binary to install and manage.
+- **Ad hoc scripts without a host:** rejected because multiple front doors need one shared service boundary.
 
 ## Consequences
 
-- **Removed:** Q1 and Q3 (engine concern now); hand-rolled leasing/backoff/recovery; the dumb loop. The
-  `claimNextStep`/`startAttempt`/`writeResult`/`failStep`/`recoverInFlight` verbs become legacy and are dropped in
-  a post-MVP cleanup.
-- **Reused unchanged:** the runner abstraction (`runAgent`, `AttemptResult`), the Claude Code / script / stub
-  runners, `result-envelope`, `build-context`, `process-executor`, and the Revisium data-access verbs for
-  meaning (`loadRole`, `loadModelProfile`, `createRunWorkflow`, inbox verbs).
-- **New seam to validate:** DBOS decorates static workflow methods; NestJS providers are DI instances. The two
-  compose, but the integration must be set up deliberately once (registering instance-bound workflows). Slice
-  0001 proves it with a trivial durable workflow invoked from the CLI.
-- **Deferred, not closed:** embedding Revisium in the host process via an exported `startRevisium()` (one
-  process); a REST adapter. *(Update 2026-06-19: the MCP adapter landed — plans 0011–0013; workflow-as-data
-  landed — plan 0015, see [ADR-0002](./0002-data-driven-pipeline-state-machine.md).)*
-
-## Deferred options (revisit when MVP proves out)
-
-- **Single process:** extract `startRevisium()` from `revisium`'s standalone CLI so the host boots Revisium
-  in-process. Trade-off: simpler packaging vs. shared-fate (one crash takes both down). MVP keeps two processes
-  for isolation.
-- **Engine swap to Temporal/Restate** if an enterprise deployment requires it — contained by the thin engine
-  layer.
+- Durable progress must not be stored in local files or process memory.
+- DBOS internals must stay behind the host engine boundary; product code should not query DBOS tables directly.
+- Revisium runtime rows remain draft data; versioned meaning is committed separately.
+- A future engine swap is possible only if DBOS-specific behavior stays inside the engine adapter.
+- Host lifecycle work belongs in NestJS modules, not scattered CLI command code.
