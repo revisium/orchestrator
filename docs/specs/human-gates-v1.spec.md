@@ -130,7 +130,7 @@ type ObserveRunResult = {
     stepKey?: string;
     role: string;
     runner: string;
-    status: string;
+    status: AgentActivityStatus;
     startedAt: string;
     lastEventAt: string;
     lastOutputAt?: string;
