@@ -1,5 +1,6 @@
 import { Field, InputType, Int } from '@nestjs/graphql';
 import { GraphQLJSON } from 'graphql-scalars';
+import { IssueRefInput } from '../../share/model/issue-ref.model.js';
 
 @InputType()
 export class CreateRunInput {
@@ -26,6 +27,9 @@ export class CreateRunInput {
 
   @Field(() => GraphQLJSON, { nullable: true })
   params?: unknown;
+
+  @Field(() => IssueRefInput, { nullable: true })
+  issueRef?: IssueRefInput;
 
   @Field(() => Boolean, { defaultValue: false })
   start?: boolean;

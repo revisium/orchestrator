@@ -27,16 +27,21 @@ import {
 } from './runs-query.handlers.js';
 
 const createdAt = new Date('2026-06-20T10:00:00.000Z');
+const issueRef = {
+  repo: 'revisium/orchestrator',
+  number: 147,
+  url: 'https://github.com/revisium/orchestrator/issues/147',
+};
 
 test('runs query handlers delegate and shape run data', async () => {
   const api = {
     async listRuns(input: unknown) {
       assert.deepEqual(input, { status: 'running', limit: 51 });
-      return [{ runId: 'run_1', title: 'Build', status: 'paused', priority: 2, createdAt: 'invalid' }];
+      return [{ runId: 'run_1', title: 'Build', status: 'paused', priority: 2, issueRef, createdAt: 'invalid' }];
     },
     async getRun(input: unknown) {
       assert.deepEqual(input, { runId: 'run_1', includeEvents: undefined });
-      return { run: { runId: 'run_1', title: 'Build', status: 'running', priority: 2, createdAt, repos: ['.'] } };
+      return { run: { runId: 'run_1', title: 'Build', status: 'running', priority: 2, issueRef, createdAt, repos: ['.'] } };
     },
     async getRunEvents(input: unknown) {
       assert.deepEqual(input, { runId: 'run_1', type: 'run_created', limit: 51 });
@@ -138,7 +143,7 @@ test('runs query handlers delegate and shape run data', async () => {
     async getRunDigest(runId: string) {
       assert.equal(runId, 'run_1');
       return {
-        run: { runId: 'run_1', title: 'Build', status: 'running', priority: 2, createdAt },
+        run: { runId: 'run_1', title: 'Build', status: 'running', priority: 2, issueRef, createdAt },
         pendingInbox: [],
         latestEvents: [{ eventId: 'event_1', type: 'run_created', actor: 'test', createdAt, taskId: 'task_1', stepId: '' }],
         usage: { inputTokens: 1, outputTokens: 2, costAmount: 0.01 },
@@ -158,7 +163,10 @@ test('runs query handlers delegate and shape run data', async () => {
   assert.equal(runs.edges[0]?.node.id, 'run_1');
   assert.equal(runs.edges[0]?.node.status, 'blocked');
   assert.equal(runs.edges[0]?.node.createdAt.getTime(), 0);
-  assert.equal((await new GetRunHandler(api).execute(new GetRunQuery({ runId: 'run_1' }))).repos[0], '.');
+  assert.deepEqual(runs.edges[0]?.node.issueRef, issueRef);
+  const run = await new GetRunHandler(api).execute(new GetRunQuery({ runId: 'run_1' }));
+  assert.equal(run.repos[0], '.');
+  assert.deepEqual(run.issueRef, issueRef);
   assert.equal((await new GetRunEventsHandler(api).execute(new GetRunEventsQuery({ runId: 'run_1', type: 'run_created' }))).edges[0]?.node.runId, 'run_1');
   const attempts = await new GetRunAttemptsHandler(api).execute(new GetRunAttemptsQuery({ runId: 'run_1' }));
   assert.equal(attempts.edges[0]?.node.id, 'attempt_1');
@@ -178,7 +186,9 @@ test('runs query handlers delegate and shape run data', async () => {
   }));
   assert.equal(log.content, 'hello');
   assert.equal((await new GetRunProgressHandler(api).execute(new GetRunProgressQuery({ runId: 'run_1' }))).workflowStatus, 'PENDING');
-  assert.equal((await new GetRunDigestHandler(api).execute(new GetRunDigestQuery({ runId: 'run_1' }))).latestEvents[0]?.id, 'event_1');
+  const digest = await new GetRunDigestHandler(api).execute(new GetRunDigestQuery({ runId: 'run_1' }));
+  assert.equal(digest.latestEvents[0]?.id, 'event_1');
+  assert.deepEqual(digest.run.issueRef, issueRef);
   assert.equal((await new GetRunWorkflowHandler(api).execute(new GetRunWorkflowQuery({ runId: 'run_1' }))).run.status, 'blocked');
   assert.deepEqual(await new SimulateRouteHandler(api).execute(new SimulateRouteQuery({ title: 'Build', repo: '.' })), { pipelineId: 'default' });
 });

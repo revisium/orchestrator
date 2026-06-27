@@ -33,6 +33,7 @@ export type RunTransition = {
   nextAction: string;
   runStatus: string;
   workflowStatus: string;
+  issueRef?: RunState['issueRef'];
   inbox?: RunState['inbox'];
   latestBlockingEvent?: unknown;
   blockedReason?: string;
@@ -76,6 +77,7 @@ export type ObserveRunTransition = {
   runId: string;
   state: RunState['state'];
   nextAction: ObserveRunNextAction;
+  issueRef?: RunState['issueRef'];
   inbox?: ObservedInboxSummary;
   blockedReason?: string;
 };
@@ -112,6 +114,7 @@ export type ObserveRunResult = {
   cursor: string;
   state: RunState['state'];
   timedOut: boolean;
+  issueRef?: RunState['issueRef'];
   transition?: ObserveRunTransition;
   activeAttempt?: CanonicalActivityAttemptSignal;
   heartbeat?: ObserveRunHeartbeat;
@@ -271,6 +274,7 @@ export class RunWatchService {
       cursor: watched.cursor,
       state: state.state,
       timedOut: watched.timedOut,
+      ...(state.issueRef ? { issueRef: state.issueRef } : {}),
       ...(transition ? { transition: observeTransition(transition, activity) } : {}),
       ...(activity?.attempt ? { activeAttempt: activity.attempt } : {}),
       ...(heartbeat ? { heartbeat } : {}),
@@ -454,6 +458,7 @@ function collectNew(
       nextAction: state.nextAction,
       runStatus: state.runStatus,
       workflowStatus: state.workflowStatus,
+      ...(state.issueRef ? { issueRef: state.issueRef } : {}),
       inbox: state.inbox,
       latestBlockingEvent: state.latestBlockingEvent,
       blockedReason: state.blockedReason,
@@ -525,6 +530,7 @@ function observeTransition(
     runId: state.runId,
     state: state.state,
     nextAction: observeNextAction(state, activity),
+    ...(state.issueRef ? { issueRef: state.issueRef } : {}),
     ...(inbox ? { inbox } : {}),
     ...(state.blockedReason ? { blockedReason: state.blockedReason } : {}),
   };

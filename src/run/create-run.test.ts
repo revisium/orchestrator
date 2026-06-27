@@ -116,6 +116,23 @@ test('writes the exact ready skeleton fields without stringifying JSON-ish value
   });
 });
 
+test('stores canonical issueRef in task_runs params from top-level input', async () => {
+  const { access, rows } = createFakeDataAccess();
+  const issueRef = {
+    repo: 'revisium/orchestrator',
+    number: 147,
+    url: 'https://github.com/revisium/orchestrator/issues/147',
+  };
+
+  await createRunWorkflow(access, { ...baseInput, params: { ticket: 'RV-147' }, issueRef });
+
+  assert.deepEqual(byTable(rows, 'task_runs').data.params, {
+    ticket: 'RV-147',
+    issueRef,
+  });
+  assert.ok(!('issueRef' in byTable(rows, 'tasks').data), 'issueRef is not stored as a task column');
+});
+
 test('defaults optional inputs and accepts plain repo names unchanged', async () => {
   const { access, rows } = createFakeDataAccess();
 

@@ -1,4 +1,5 @@
 import { Field, ID, Int, ObjectType } from '@nestjs/graphql';
+import { IssueRefModel } from '../../share/model/issue-ref.model.js';
 
 @ObjectType()
 export class RunModel {
@@ -22,6 +23,9 @@ export class RunModel {
 
   @Field(() => [String])
   repos!: string[];
+
+  @Field(() => IssueRefModel, { nullable: true })
+  issueRef?: IssueRefModel;
 
   @Field(() => Date)
   createdAt!: Date;

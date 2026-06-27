@@ -32,6 +32,7 @@ type RunLike = {
   description?: string;
   scope?: string;
   repos?: string[];
+  issueRef?: unknown;
   createdAt?: Date | string;
 };
 
@@ -70,6 +71,7 @@ function mapRun(run: RunLike) {
     description: run.description,
     scope: run.scope,
     repos: run.repos ?? [],
+    issueRef: run.issueRef,
     createdAt: date(run.createdAt),
   };
 }
