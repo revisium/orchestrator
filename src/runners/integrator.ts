@@ -43,11 +43,33 @@ export type IntegratorDeps = {
   resolveRunCwd: (runId: string, taskId: string) => Promise<string>;
 };
 
+export type ProducedChangeArtifact = {
+  branch: string;
+  headSha: string;
+  worktreePath?: string;
+  artifactRef?: string;
+  prNumber?: number;
+};
+
+export type CaptureProducedChangeInput = {
+  runId: string;
+  taskId: string;
+  title: string;
+  base: string;
+  nodeId: string;
+  attemptId: string;
+  artifactRef?: string;
+};
+
+export type CaptureProducedChangeDeps = Pick<IntegratorDeps, 'execGit' | 'resolveRunCwd'>;
+
 export type IntegratorInput = {
   runId: string;
   taskId: string;
   title: string;
   base: string;
+  /** Developer-produced git artifact consumed by the integrator when a dataflow producer is present. */
+  change?: ProducedChangeArtifact;
   /** Hydrated `consumes` for a script node that needs upstream data (plan 0018: respondThreads ← triage). */
   triage?: unknown;
 };
@@ -56,19 +78,31 @@ export type IntegratorOutput = {
   prUrl: string;
   branch: string;
   prNumber: number;
+  headSha?: string;
+  status?: 'pushed' | 'noop';
+  message?: string;
 };
 
 // ─── PR find-or-create (M4 — own idempotent list→filter→create, public seam) ──
 
-type PrListEntry = { number: number; url: string; baseRefName: string };
+type PrListEntry = { number: number; url: string; baseRefName: string; headRefOid?: string };
+type PrSummary = { prUrl: string; prNumber: number; headSha?: string };
 
-function findOrCreatePr(
+function parsePrList(raw: string): PrListEntry[] {
+  try {
+    return JSON.parse(raw) as PrListEntry[];
+  } catch {
+    throw new Error(`gh pr list returned non-JSON: ${raw.slice(0, 200)}`);
+  }
+}
+
+function matchingOpenPr(
   ownerRepo: string,
   branch: string,
   base: string,
-  title: string,
   execGh: ExecGhFn,
-): { prUrl: string; prNumber: number } | IntegratorBlocked {
+  jsonFields: string,
+): PrSummary | null | IntegratorBlocked {
   const raw = execGh([
     'pr',
     'list',
@@ -79,22 +113,15 @@ function findOrCreatePr(
     '--state',
     'open',
     '--json',
-    'number,url,baseRefName',
+    jsonFields,
   ]);
 
-  let entries: PrListEntry[];
-  try {
-    entries = JSON.parse(raw) as PrListEntry[];
-  } catch {
-    throw new Error(`gh pr list returned non-JSON: ${raw.slice(0, 200)}`);
-  }
-
-  const matching = entries.filter((p) => p.baseRefName === base);
+  const matching = parsePrList(raw).filter((p) => p.baseRefName === base);
 
   if (matching.length === 1) {
     const pr = matching[0];
     if (!pr) throw new Error('unexpected empty match');
-    return { prUrl: pr.url, prNumber: pr.number };
+    return { prUrl: pr.url, prNumber: pr.number, ...(pr.headRefOid ? { headSha: pr.headRefOid } : {}) };
   }
 
   if (matching.length > 1) {
@@ -105,7 +132,16 @@ function findOrCreatePr(
     };
   }
 
-  // 0 matches — create
+  return null;
+}
+
+function createPr(
+  ownerRepo: string,
+  branch: string,
+  base: string,
+  title: string,
+  execGh: ExecGhFn,
+): PrSummary | IntegratorBlocked {
   const createOut = execGh([
     'pr',
     'create',
@@ -149,6 +185,30 @@ function findOrCreatePr(
     };
   }
   return { prUrl: viewData.url, prNumber: viewData.number };
+}
+
+function findOrCreatePr(
+  ownerRepo: string,
+  branch: string,
+  base: string,
+  title: string,
+  execGh: ExecGhFn,
+): { prUrl: string; prNumber: number } | IntegratorBlocked {
+  const existing = matchingOpenPr(ownerRepo, branch, base, execGh, 'number,url,baseRefName');
+  if (existing && !('needsHuman' in existing)) {
+    return { prUrl: existing.prUrl, prNumber: existing.prNumber };
+  }
+  if (existing) return existing;
+  return createPr(ownerRepo, branch, base, title, execGh);
+}
+
+function findExistingPrWithHead(
+  ownerRepo: string,
+  branch: string,
+  base: string,
+  execGh: ExecGhFn,
+): PrSummary | null | IntegratorBlocked {
+  return matchingOpenPr(ownerRepo, branch, base, execGh, 'number,url,baseRefName,headRefOid');
 }
 
 // ─── Preflight (B5+B7) ────────────────────────────────────────────────────────
@@ -247,6 +307,43 @@ export function stubIntegrate(input: IntegratorInput): IntegratorOutput {
   };
 }
 
+export async function captureProducedChange(
+  input: CaptureProducedChangeInput,
+  deps: CaptureProducedChangeDeps,
+): Promise<ProducedChangeArtifact> {
+  const { execGit: git, resolveRunCwd } = deps;
+  const cwd = await resolveRunCwd(input.runId, input.taskId);
+  const branch = branchName(input.taskId, input.title);
+
+  if (branchExists(git, cwd, branch)) {
+    git(['switch', branch], cwd);
+  } else {
+    git(['switch', '-c', branch], cwd);
+  }
+
+  git(['add', '-A'], cwd);
+  if (stagedDiffPresent(git, cwd)) {
+    git(['commit', '-m', `feat: ${input.title}`], cwd);
+  }
+
+  const headSha = git(['rev-parse', 'HEAD'], cwd).trim();
+  return {
+    branch,
+    headSha,
+    worktreePath: cwd,
+    ...(input.artifactRef ? { artifactRef: input.artifactRef } : {}),
+  };
+}
+
+function stagedDiffPresent(git: ExecFn, cwd: string): boolean {
+  try {
+    git(['diff', '--cached', '--quiet'], cwd);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 // ─── REAL integrator (live only) ─────────────────────────────────────────────
 
 /**
@@ -258,6 +355,8 @@ export async function integrate(
   input: IntegratorInput,
   deps: IntegratorDeps,
 ): Promise<IntegratorOutput | IntegratorBlocked> {
+  if (input.change) return integrateProducedChange(input, deps, input.change);
+
   const { execGit: git, execGh: gh, resolveRunCwd } = deps;
   // Resolve the run's ISOLATED worktree (plan 0017) — it is already checked out on `branch`, so the
   // branchExists→switch path below is a no-op and the dirty-tree `switch -c origin/<base>` (which
@@ -284,15 +383,7 @@ export async function integrate(
   git(['add', '-A'], cwd);
 
   // 5. Commit decision (B4 replay safety)
-  let hasStagedDiff: boolean;
-  try {
-    git(['diff', '--cached', '--quiet'], cwd);
-    hasStagedDiff = false; // exit 0 → nothing staged
-  } catch {
-    hasStagedDiff = true; // exit 1 → staged diff present
-  }
-
-  if (hasStagedDiff) {
+  if (stagedDiffPresent(git, cwd)) {
     // Commit — NO Co-Authored-By, NO summary footer (MEMORY)
     const commitMsg = `feat: ${input.title}`;
     git(['commit', '-m', commitMsg], cwd);
@@ -329,6 +420,66 @@ export async function integrate(
   if ('needsHuman' in prResult) return prResult;
 
   return { prUrl: prResult.prUrl, branch, prNumber: prResult.prNumber };
+}
+
+async function integrateProducedChange(
+  input: IntegratorInput,
+  deps: IntegratorDeps,
+  change: ProducedChangeArtifact,
+): Promise<IntegratorOutput | IntegratorBlocked> {
+  const { execGit: git, execGh: gh } = deps;
+  const cwd = change.worktreePath ?? await deps.resolveRunCwd(input.runId, input.taskId);
+  const branch = change.branch;
+
+  const ownerRepoResult = resolveOwnerRepo(git, cwd);
+  if ('needsHuman' in ownerRepoResult) return ownerRepoResult;
+  const { ownerRepo } = ownerRepoResult;
+
+  git(['fetch', 'origin', input.base], cwd);
+
+  const existing = findExistingPrWithHead(ownerRepo, branch, input.base, gh);
+  if (existing && 'needsHuman' in existing) return existing;
+  if (existing?.headSha === change.headSha) {
+    return {
+      prUrl: existing.prUrl,
+      branch,
+      prNumber: existing.prNumber,
+      headSha: change.headSha,
+      status: 'noop',
+      message: 'nothing to integrate — produced head already pushed and equals PR head',
+    };
+  }
+
+  if (!existing && countAhead(git, cwd, change.headSha, input.base) === 0) {
+    return {
+      needsHuman: true,
+      lesson:
+        `nothing to integrate — produced head ${change.headSha.slice(0, 8)} is not ahead of ` +
+        `origin/${input.base} and no open PR exists`,
+    };
+  }
+
+  git(['push', 'origin', `${change.headSha}:refs/heads/${branch}`], cwd);
+
+  if (existing) {
+    return {
+      prUrl: existing.prUrl,
+      branch,
+      prNumber: existing.prNumber,
+      headSha: change.headSha,
+      status: 'pushed',
+    };
+  }
+
+  const created = createPr(ownerRepo, branch, input.base, input.title, gh);
+  if ('needsHuman' in created) return created;
+  return {
+    prUrl: created.prUrl,
+    branch,
+    prNumber: created.prNumber,
+    headSha: change.headSha,
+    status: 'pushed',
+  };
 }
 
 // ─── confirmMerge (script:confirmMerge) — gate worktree cleanup on a real merge ──
@@ -729,6 +880,11 @@ export class IntegratorService {
   /** Live preflight — clean check + base invariant. Arrow property for safe unbound registration. */
   runPreflight = (taskId: string, base: string): Promise<{ ok: true } | IntegratorBlocked> => {
     return preflightLive(taskId, base, this.deps);
+  };
+
+  /** Capture a change-producing developer step as a git head artifact before reviewer/integrator handoff. */
+  runCaptureProducedChange = (input: CaptureProducedChangeInput): Promise<ProducedChangeArtifact> => {
+    return captureProducedChange(input, this.deps);
   };
 
   /**

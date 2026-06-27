@@ -444,7 +444,10 @@
             "roleRef": "role:developer",
             "next": "codeReview",
             "onFailure": "abort",
-            "resultSchema": "schema:change"
+            "resultSchema": "schema:change",
+            "produces": {
+              "name": "change"
+            }
           },
           "codeReview": {
             "id": "codeReview",
@@ -452,7 +455,19 @@
             "roleRef": "role:reviewer",
             "next": "codeReviewRouter",
             "onFailure": "abort",
-            "resultSchema": "schema:reviewVerdict"
+            "resultSchema": "schema:reviewVerdict",
+            "consumes": [
+              {
+                "node": "developer",
+                "as": "developerChange",
+                "staleOk": true
+              },
+              {
+                "node": "reworkDeveloper",
+                "as": "reworkChange",
+                "optional": true
+              }
+            ]
           },
           "codeReviewRouter": {
             "id": "codeReviewRouter",
@@ -502,7 +517,10 @@
             "resultSchema": "schema:change",
             "incrementCounters": [
               "codeReviewLoop"
-            ]
+            ],
+            "produces": {
+              "name": "change"
+            }
           },
           "integrator": {
             "id": "integrator",
@@ -520,7 +538,25 @@
               }
             ],
             "onFailure": "route",
-            "resultSchema": "schema:integration"
+            "resultSchema": "schema:integration",
+            "consumes": [
+              {
+                "node": "developer",
+                "as": "developerChange",
+                "staleOk": true
+              },
+              {
+                "node": "reworkDeveloper",
+                "as": "reworkChange",
+                "optional": true
+              },
+              {
+                "node": "ciRework",
+                "as": "ciChange",
+                "optional": true,
+                "staleOk": true
+              }
+            ]
           },
           "mergeGate": {
             "id": "mergeGate",
@@ -650,6 +686,9 @@
             "incrementCounters": [
               "ciLoop"
             ],
+            "produces": {
+              "name": "change"
+            },
             "consumes": [
               {
                 "node": "pollPr",
@@ -767,6 +806,9 @@
             "incrementCounters": [
               "reviewLoop"
             ],
+            "produces": {
+              "name": "change"
+            },
             "consumes": [
               {
                 "node": "triage",
@@ -781,6 +823,12 @@
             "next": "respondThreads",
             "onFailure": "route",
             "resultSchema": "schema:integration",
+            "consumes": [
+              {
+                "node": "reviewRework",
+                "as": "reviewChange"
+              }
+            ],
             "catch": [
               {
                 "onError": "revo.ScriptBlocked",
@@ -1805,7 +1853,10 @@
                 "node": "analyst",
                 "as": "plan"
               }
-            ]
+            ],
+            "produces": {
+              "name": "change"
+            }
           },
           "codeReview": {
             "id": "codeReview",
@@ -1813,7 +1864,19 @@
             "roleRef": "role:reviewer",
             "next": "codeReviewRouter",
             "onFailure": "abort",
-            "resultSchema": "schema:reviewVerdict"
+            "resultSchema": "schema:reviewVerdict",
+            "consumes": [
+              {
+                "node": "developer",
+                "as": "developerChange",
+                "staleOk": true
+              },
+              {
+                "node": "reworkDeveloper",
+                "as": "reworkChange",
+                "optional": true
+              }
+            ]
           },
           "codeReviewRouter": {
             "id": "codeReviewRouter",
@@ -1831,8 +1894,11 @@
                   "op": "all",
                   "of": [
                     {
-                      "op": "verdict.eq",
-                      "value": "blocker"
+                      "op": "verdict.in",
+                      "value": [
+                        "blocker",
+                        "changes_requested"
+                      ]
                     },
                     {
                       "op": "counter.lt",
@@ -1857,7 +1923,10 @@
             "resultSchema": "schema:change",
             "incrementCounters": [
               "codeReviewLoop"
-            ]
+            ],
+            "produces": {
+              "name": "change"
+            }
           },
           "integrator": {
             "id": "integrator",
@@ -1871,7 +1940,19 @@
               }
             ],
             "onFailure": "route",
-            "resultSchema": "schema:integration"
+            "resultSchema": "schema:integration",
+            "consumes": [
+              {
+                "node": "developer",
+                "as": "developerChange",
+                "staleOk": true
+              },
+              {
+                "node": "reworkDeveloper",
+                "as": "reworkChange",
+                "optional": true
+              }
+            ]
           },
           "watcherPost": {
             "id": "watcherPost",
