@@ -4,6 +4,14 @@ import type { ProcessArtifactSnapshot } from './artifact-store.js';
 import type { AttemptResult } from './runner.js';
 import { RunAgentError } from './runner.js';
 import { normalizeNextSteps } from './result-envelope.js';
+import {
+  RUNNER_IDLE_TIMEOUT_KIND,
+  RUNNER_WALL_CLOCK_LIMIT_KIND,
+  type ExecResult,
+  type RunnerTimeoutEvidence,
+  type RunnerTimeoutFailureKind,
+  type RunnerTimeoutPolicy,
+} from './process-executor.js';
 
 const ERROR_TAIL = 2_000;
 const OBSERVABILITY_PREVIEW_MAX_CHARS = 1_000;
@@ -81,6 +89,56 @@ export function withProcessArtifact(agentArtifacts: unknown, process: ProcessArt
 
 export function runnerError(message: string, process: ProcessArtifactSnapshot | undefined): RunAgentError {
   return new RunAgentError(message, withProcessArtifact(undefined, process));
+}
+
+export function runnerFailure(
+  message: string,
+  process: ProcessArtifactSnapshot | undefined,
+  metadata: {
+    failureKind?: RunnerTimeoutFailureKind;
+    retryableCandidate?: boolean;
+    timing?: RunnerTimeoutEvidence;
+  } = {},
+): RunAgentError {
+  return new RunAgentError(message, withProcessArtifact(undefined, process), metadata);
+}
+
+function fallbackTimeoutEvidence(
+  result: ExecResult,
+  policy: RunnerTimeoutPolicy,
+  failureKind: RunnerTimeoutFailureKind,
+): RunnerTimeoutEvidence {
+  const fallbackElapsedMs =
+    failureKind === RUNNER_IDLE_TIMEOUT_KIND ? policy.idleTimeoutMs : policy.wallClockLimitMs;
+  return {
+    idleTimeoutMs: policy.idleTimeoutMs,
+    wallClockLimitMs: policy.wallClockLimitMs,
+    elapsedMs: fallbackElapsedMs,
+    idleMs: fallbackElapsedMs,
+    lastActivityAt: new Date(0).toISOString(),
+    inFlightOperationCount: 0,
+    stdoutBytes: Buffer.byteLength(result.stdout, 'utf8'),
+    stderrBytes: Buffer.byteLength(result.stderr, 'utf8'),
+    eventCount: 0,
+  };
+}
+
+export function runnerTimeoutFailure(
+  runnerName: string,
+  result: ExecResult,
+  process: ProcessArtifactSnapshot | undefined,
+  policy: RunnerTimeoutPolicy,
+): RunAgentError {
+  const failureKind = result.timeoutKind ?? RUNNER_WALL_CLOCK_LIMIT_KIND;
+  const timing = result.timeoutEvidence ?? fallbackTimeoutEvidence(result, policy, failureKind);
+  const message =
+    `${runnerName} runner ${failureKind}: elapsed ${timing.elapsedMs}ms, ` +
+    `idle ${timing.idleMs}ms, in-flight operations ${timing.inFlightOperationCount}`;
+  return runnerFailure(message, process, {
+    failureKind,
+    retryableCandidate: true,
+    timing,
+  });
 }
 
 export function buildUsageCosts(step: Step, profile: ModelProfile, usage: UsageSummary): CostRecord[] {

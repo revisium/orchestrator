@@ -52,6 +52,11 @@ import type { Decision as GateDecision } from './await-human.js';
 import type { CompleteRunResult } from '../run/complete-run.js';
 import type { FailRunResult } from '../run/fail-run.js';
 import type { BlockRunResult } from '../run/block-run.js';
+import {
+  RUNNER_IDLE_TIMEOUT_KIND,
+  RUNNER_WALL_CLOCK_LIMIT_KIND,
+  type RunnerTimeoutFailureKind,
+} from '../worker/process-executor.js';
 
 /** Returned by dataDrivenTask when the pipeline reaches a terminal node. */
 export type DataDrivenResult = {
@@ -127,10 +132,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * is its own free-form result and never carries it. Returns the recoverable `reason` (possibly empty)
  * when transient, or `undefined` for a deliberate human-block.
  */
-function transientRunnerFailureReason(result: AttemptResult): string | undefined {
+type TransientRunnerFailure = {
+  reason: string;
+  failureKind?: RunnerTimeoutFailureKind;
+};
+
+function publicTimeoutFailureKind(value: unknown): RunnerTimeoutFailureKind | undefined {
+  return value === RUNNER_IDLE_TIMEOUT_KIND || value === RUNNER_WALL_CLOCK_LIMIT_KIND
+    ? value
+    : undefined;
+}
+
+function transientRunnerFailure(result: AttemptResult): TransientRunnerFailure | undefined {
   const output = result.output;
   if (!isRecord(output) || output.error !== 'runner_failed') return undefined;
-  return typeof output.reason === 'string' ? output.reason : '';
+  return {
+    reason: typeof output.reason === 'string' ? output.reason : '',
+    ...(publicTimeoutFailureKind(output.failureKind)
+      ? { failureKind: publicTimeoutFailureKind(output.failureKind) }
+      : {}),
+  };
 }
 
 /**
@@ -765,11 +786,22 @@ export function makeDataDrivenTask(
     if (result.needsHuman) {
       // Redact token shapes at THIS build site (a lesson is free text — pushInbox/appendEvent only mask
       // secret-NAMED keys), mirroring gateArtifactView; the persist boundary redacts again, belt-and-suspenders.
-      const transientReason = transientRunnerFailureReason(result);
-      if (transientReason !== undefined) {
-        const safe = String(redactEventPayload(transientReason));
-        const kind = transientKind(transientReason);
-        return { blocked: true, reason: `runner-transient-failure:${kind}`, lesson: `runner-transient-failure (${kind}): ${safe || 'runner failed'}` };
+      const transient = transientRunnerFailure(result);
+      if (transient !== undefined) {
+        const safe = String(redactEventPayload(transient.reason));
+        if (transient.failureKind) {
+          return {
+            blocked: true,
+            reason: transient.failureKind,
+            lesson: `${transient.failureKind}: ${safe || 'runner failed'}`,
+          };
+        }
+        const kind = transientKind(transient.reason);
+        return {
+          blocked: true,
+          reason: `runner-transient-failure:${kind}`,
+          lesson: `runner-transient-failure (${kind}): ${safe || 'runner failed'}`,
+        };
       }
       const safeLesson = String(redactEventPayload(result.lesson ?? `agent ${node.id} reported needsHuman`));
       return { blocked: true, reason: 'agent-needs-human', lesson: safeLesson };

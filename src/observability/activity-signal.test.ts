@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { deriveCanonicalActivitySignal } from './activity-signal.js';
+import { createRunnerActivityTracker, deriveCanonicalActivitySignal } from './activity-signal.js';
 import type { AgentRunActivity } from './types.js';
 
 const activity: AgentRunActivity = {
@@ -79,4 +79,48 @@ test('deriveCanonicalActivitySignal preserves empty existing-run activity as a h
 test('deriveCanonicalActivitySignal returns undefined when no activity exists', () => {
   assert.equal(deriveCanonicalActivitySignal(null), undefined);
   assert.equal(deriveCanonicalActivitySignal(undefined), undefined);
+});
+
+test('createRunnerActivityTracker records output, events, and heartbeats as canonical activity', () => {
+  let now = 1_000;
+  const tracker = createRunnerActivityTracker({ now: () => now });
+
+  now = 1_100;
+  tracker.recordOutput('stdout', 3);
+  now = 1_200;
+  tracker.recordOutput('stderr', 4);
+  now = 1_300;
+  tracker.markActivity('event');
+  now = 1_400;
+  tracker.markActivity('heartbeat');
+
+  assert.deepEqual(tracker.snapshot(), {
+    startedAt: 1_000,
+    lastActivityAt: 1_400,
+    inFlightOperationCount: 0,
+    stdoutBytes: 3,
+    stderrBytes: 4,
+    eventCount: 2,
+  });
+});
+
+test('createRunnerActivityTracker keeps operation starts and finishes idempotent', () => {
+  let now = 1_000;
+  const tracker = createRunnerActivityTracker({ now: () => now });
+
+  now = 1_100;
+  tracker.operationStarted('tool-1');
+  tracker.operationStarted('tool-1');
+  assert.equal(tracker.snapshot().inFlightOperationCount, 1);
+
+  now = 1_200;
+  tracker.operationFinished('missing-tool');
+  assert.equal(tracker.snapshot().inFlightOperationCount, 1);
+
+  now = 1_300;
+  tracker.operationFinished('tool-1');
+  tracker.operationFinished('tool-1');
+  const snapshot = tracker.snapshot();
+  assert.equal(snapshot.inFlightOperationCount, 0);
+  assert.equal(snapshot.lastActivityAt, 1_300);
 });

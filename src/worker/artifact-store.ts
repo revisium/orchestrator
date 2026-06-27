@@ -1,6 +1,7 @@
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { redactTokens } from '../runners/gh-identity.js';
+import type { RunnerTimeoutEvidence, RunnerTimeoutFailureKind } from './process-executor.js';
 
 export type ProcessArtifactRef = {
   ref: string;
@@ -21,7 +22,14 @@ export type ProcessArtifactWriter = {
   ref: ProcessArtifactRef;
   appendStdout(chunk: string): void;
   appendStderr(chunk: string): void;
-  finish(info: { code?: number | null; timedOut?: boolean; error?: string; finishedAt?: Date }): ProcessArtifactSnapshot;
+  finish(info: {
+    code?: number | null;
+    timedOut?: boolean;
+    timeoutKind?: RunnerTimeoutFailureKind;
+    timeoutEvidence?: RunnerTimeoutEvidence;
+    error?: string;
+    finishedAt?: Date;
+  }): ProcessArtifactSnapshot;
   snapshot(): ProcessArtifactSnapshot;
 };
 
@@ -35,6 +43,8 @@ export type ProcessArtifactStart = {
   args: string[];
   cwd: string;
   timeoutMs: number;
+  idleTimeoutMs?: number;
+  wallClockLimitMs?: number;
   startedAt?: Date;
 };
 
@@ -65,6 +75,18 @@ function sanitizeText(text: string): string {
 
 function writeJson(path: string, value: unknown): void {
   writeFileSync(path, JSON.stringify(value, null, 2) + '\n', 'utf8');
+}
+
+function timeoutPolicyFields(input: ProcessArtifactStart): {
+  timeoutMs: number;
+  idleTimeoutMs?: number;
+  wallClockLimitMs?: number;
+} {
+  return {
+    timeoutMs: input.timeoutMs,
+    ...(input.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: input.idleTimeoutMs }),
+    ...(input.wallClockLimitMs === undefined ? {} : { wallClockLimitMs: input.wallClockLimitMs }),
+  };
 }
 
 export function createArtifactStore(rootDir: string, opts: { tailBytes?: number } = {}): ArtifactStore {
@@ -105,11 +127,19 @@ export function createArtifactStore(rootDir: string, opts: { tailBytes?: number 
         command: input.command,
         args: input.args,
         cwd: input.cwd,
-        timeoutMs: input.timeoutMs,
+        ...timeoutPolicyFields(input),
         startedAt: startedAt.toISOString(),
         status: 'running',
       });
-      appendFileSync(eventsPath, JSON.stringify({ type: 'process_started', at: startedAt.toISOString() }) + '\n', 'utf8');
+      appendFileSync(
+        eventsPath,
+        JSON.stringify({
+          type: 'process_started',
+          at: startedAt.toISOString(),
+          ...timeoutPolicyFields(input),
+        }) + '\n',
+        'utf8',
+      );
 
       const artifactRef: ProcessArtifactRef = { ref, dirPath: dir, stdoutPath, stderrPath, metaPath, eventsPath };
       const snapshot = (): ProcessArtifactSnapshot => ({ ref, stdoutTail, stderrTail });
@@ -142,12 +172,14 @@ export function createArtifactStore(rootDir: string, opts: { tailBytes?: number 
             command: input.command,
             args: input.args,
             cwd: input.cwd,
-            timeoutMs: input.timeoutMs,
+            ...timeoutPolicyFields(input),
             startedAt: startedAt.toISOString(),
             finishedAt: finishedAt.toISOString(),
             status,
             code: info.code ?? null,
             timedOut: Boolean(info.timedOut),
+            ...(info.timeoutKind === undefined ? {} : { timeoutKind: info.timeoutKind }),
+            ...(info.timeoutEvidence === undefined ? {} : { timeoutEvidence: info.timeoutEvidence }),
             error: safeError,
           });
           appendFileSync(
@@ -158,6 +190,9 @@ export function createArtifactStore(rootDir: string, opts: { tailBytes?: number 
               status,
               code: info.code ?? null,
               timedOut: Boolean(info.timedOut),
+              ...timeoutPolicyFields(input),
+              ...(info.timeoutKind === undefined ? {} : { timeoutKind: info.timeoutKind }),
+              ...(info.timeoutEvidence === undefined ? {} : { timeoutEvidence: info.timeoutEvidence }),
               error: safeError,
             }) + '\n',
             'utf8',
