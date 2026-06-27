@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { getConfig } from '../config.js';
-import { worktreePathFor } from '../control-plane/resolve-cwd.js';
+import { worktreeMarkerFor, worktreePathFor } from '../control-plane/resolve-cwd.js';
 import { branchName } from '../runners/integrator.js';
 import type { RunAgent, AttemptResult } from '../worker/runner.js';
 import {
@@ -22,6 +22,7 @@ import {
   type AgentSink,
   resolveWriteDir,
   waitState,
+  waitForGate,
   approveUntilTerminal,
   assertBlocked,
   assertLessonRedacted,
@@ -110,7 +111,7 @@ async function startFeature(
   return { runId: created.runId, taskId: created.taskId };
 }
 
-// ── Preflight failures (block before the plan gate) ──────────────────────────
+// ── Preflight and startup behavior ───────────────────────────────────────────
 
 test('D3: a dirty target repo blocks at preflight', { skip: e2eSkip }, async () => {
   const target = createTargetRepo({ dirty: true });
@@ -123,12 +124,32 @@ test('D3: a dirty target repo blocks at preflight', { skip: e2eSkip }, async () 
   }
 });
 
-test('D4: a feature branch not based on fresh origin/master blocks at preflight', { skip: e2eSkip }, async () => {
+test('D4: a stale feature caller starts live from fresh origin/master without switching caller', { skip: e2eSkip }, async () => {
   const target = createTargetRepo({ staleBranch: true });
   try {
     const run = await startFeature(target);
-    await waitState(h.api, run.runId);
-    await assertBlocked(h.api, run.runId);
+    await waitForGate(h.api, run.runId, 'plan');
+
+    const wtPath = worktreePathFor(getConfig().dataDir, run.runId);
+    assert.ok(existsSync(wtPath), `live run worktree must exist at ${wtPath}`);
+    assert.ok(existsSync(worktreeMarkerFor(getConfig().dataDir, run.runId)), 'live worktree marker must exist');
+
+    const expectedBranch = branchName(run.taskId, 'E2E integrator-failure feature run');
+    assert.equal(git(wtPath, ['branch', '--show-current']).trim(), expectedBranch);
+    assert.equal(
+      git(wtPath, ['rev-parse', 'HEAD']).trim(),
+      git(wtPath, ['rev-parse', 'origin/master']).trim(),
+      'execution worktree starts at fresh origin/master',
+    );
+    assert.ok(existsSync(join(wtPath, 'moved.txt')), 'execution worktree must include the advanced origin/master commit');
+
+    assert.equal(git(target.worktree, ['branch', '--show-current']).trim(), 'stale-feature');
+    assert.equal(git(target.worktree, ['status', '--porcelain']).trim(), '', 'caller checkout remains clean');
+
+    const terminal = await approveUntilTerminal(h.api, run.runId);
+    assert.equal(terminal.state, 'completed');
+    assert.equal(git(target.worktree, ['branch', '--show-current']).trim(), 'stale-feature');
+    assert.equal(git(target.worktree, ['status', '--porcelain']).trim(), '', 'caller checkout stays clean through completion');
   } finally {
     target.cleanup();
   }

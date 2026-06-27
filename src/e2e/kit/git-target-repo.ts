@@ -81,13 +81,13 @@ export type TargetRepo = {
   cleanup: () => void;
 };
 
-/** Negative integrator states (each makes preflight or integrate return needsHuman). At most one applies. */
+/** Target repository states for live-startup and integrator failure coverage. At most one applies. */
 export type TargetRepoState = {
   /** Leave an uncommitted file so `git status --porcelain` is non-empty (preflight: "not clean"). */
   dirty?: boolean;
-  /** Commit locally without pushing so HEAD != origin/master (preflight: base not on fresh origin). */
+  /** Commit locally without pushing so the caller base branch has local-only commits (preflight: block). */
   baseAhead?: boolean;
-  /** Sit on a feature branch that predates an advanced origin/master (preflight: not based on origin). */
+  /** Sit on a feature branch that predates an advanced origin/master (startup must still cut a fresh worktree). */
   staleBranch?: boolean;
   /** Never push master, so `git fetch origin master` fails (preflight: base branch may not exist). */
   baseMissing?: boolean;
@@ -97,7 +97,7 @@ export type TargetRepoState = {
 
 /**
  * Create a throwaway bare+worktree git repo with one initial commit pushed to `origin/master`.
- * Pass a {@link TargetRepoState} to leave it in a state that fails the integrator's live preflight.
+ * Pass a {@link TargetRepoState} to leave it in a state required by an e2e scenario.
  */
 export function createTargetRepo(state: TargetRepoState = {}): TargetRepo {
   const root = mkdtempSync(join(tmpdir(), 'revo-e2e-target-'));

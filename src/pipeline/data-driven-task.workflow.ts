@@ -498,7 +498,7 @@ export function makeDataDrivenTask(
     const live = route.roleBindings.some((b) => runnerNeedsLivePreflight(b.resolvedRunnerId));
     if (live) {
       // Preflight runs against the BASE checkout (resolveTaskCwd), BEFORE the worktree exists — its
-      // fetch + clean/freshness checks protect the user's base repo. Ordering is load-bearing.
+      // fetch + clean/base-availability checks protect the user's base repo. Ordering is load-bearing.
       const pf = await preflightFn(taskId, base);
       if ('needsHuman' in pf) {
         return await blockWithLesson(runId, taskId, 'preflight', pf.lesson, 0);
