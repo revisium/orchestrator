@@ -6,7 +6,7 @@
  * Exposes:
  *   - integrate(input, deps)     — REAL integrator (live only); git/gh side effects; resumable.
  *   - stubIntegrate(input)       — STUB (script only); ZERO external effects; pure + deterministic.
- *   - preflightLive(taskId, base, deps) — LIVE PREFLIGHT; clean check + base freshness; one-shot.
+ *   - preflightLive(taskId, base, deps) — LIVE PREFLIGHT; clean check + base availability; one-shot.
  *   - IntegratorService          — @Injectable wrapper with bound arrow properties.
  *
  * The pure primitives (resolveExecutable, branchName, parseOwnerRepo) and shared types live in
@@ -154,15 +154,15 @@ function findOrCreatePr(
 // ─── Preflight (B5+B7) ────────────────────────────────────────────────────────
 
 /**
- * preflightLive — clean check + base freshness, evaluated ONCE as a memoized DBOS step.
+ * preflightLive — clean check + base availability, evaluated ONCE as a memoized DBOS step.
  * Only called on live runs; script/stub runs skip this entirely.
  *
  * 1. git fetch origin <base>   (idempotent — the only mutation)
  * 2. git status --porcelain    → non-empty → block (repo not clean)
- * 3. Verify base branch runs are exactly on origin/<base>, while feature branch runs
- *    are based on origin/<base> → mismatch → block
+ * 3. Verify origin/<base> resolves. Non-base caller branches are allowed because the run worktree
+ *    is cut from origin/<base>; the caller checkout is never switched or rebased.
  *
- * Returns { ok: true } when the repo is clean and based on fresh origin/<base>.
+ * Returns { ok: true } when the caller repo is clean and origin/<base> is available.
  * Returns IntegratorBlocked on ANY failure — no throw, so DBOS does NOT retry.
  */
 export async function preflightLive(
@@ -193,9 +193,9 @@ export async function preflightLive(
     };
   }
 
-  // 3. Base freshness:
-  //    - base branch itself must exactly match origin/<base>
-  //    - feature branches are valid when origin/<base> is an ancestor of HEAD
+  // 3. Base availability. The isolated run worktree is created later from origin/<base>, so feature
+  // branches in the caller checkout do not need to be based on the fresh base. The only caller-branch
+  // policy we preserve here is fail-loud protection for local-only commits on the base branch itself.
   let headBranch: string;
   let headSha: string;
   let originSha: string;
@@ -207,17 +207,11 @@ export async function preflightLive(
   } catch (err) {
     return {
       needsHuman: true,
-      lesson: `live preflight: cannot verify base freshness — ${String(err)}`,
+      lesson: `live preflight: cannot resolve origin/${base} after fetch — ${String(err)}`,
     };
   }
 
   if (headBranch === base && headSha !== originSha) {
-    // The clean base branch isn't at origin/<base>. SELF-HEAL instead of dead-ending: a sibling run
-    // merging advances origin/<base>, and the old hard block forced a manual `git pull` + re-run for
-    // every other in-flight run (slice 142 / dogfood). The tree is already clean (step 2), so if the
-    // base is simply BEHIND (HEAD is an ancestor of origin/<base>) we fast-forward it — exactly what
-    // `git pull --ff-only` does, and harmless for worktree-isolated runs (they re-cut from origin anyway).
-    // Only a genuinely DIVERGED base (local commits absent from the remote) still blocks for a human.
     let behind = false;
     try {
       execGit(['merge-base', '--is-ancestor', 'HEAD', `origin/${base}`], cwd);
@@ -229,31 +223,9 @@ export async function preflightLive(
       return {
         needsHuman: true,
         lesson:
-          `target repo base branch ${base} has DIVERGED from origin/${base} ` +
+          `target repo base branch ${base} has local-only or diverged commits relative to origin/${base} ` +
           `(HEAD=${headSha.slice(0, 8)} has local commits absent from origin/${base}@${originSha.slice(0, 8)}); ` +
           `reconcile manually, then retry --live`,
-      };
-    }
-    try {
-      execGit(['merge', '--ff-only', `origin/${base}`], cwd); // clean + ancestor → cannot conflict
-    } catch (err) {
-      return {
-        needsHuman: true,
-        lesson: `live preflight: fast-forward of ${base} to origin/${base} failed — ${String(err)}; pull ${base} manually and retry --live`,
-      };
-    }
-  }
-
-  if (headBranch !== base) {
-    try {
-      execGit(['merge-base', '--is-ancestor', `origin/${base}`, 'HEAD'], cwd);
-    } catch {
-      return {
-        needsHuman: true,
-        lesson:
-          `target repo branch is not based on fresh origin/${base} ` +
-          `(HEAD=${headBranch}@${headSha.slice(0, 8)}, expected origin/${base}@${originSha.slice(0, 8)} as ancestor); ` +
-          `rebase or merge origin/${base}, then retry --live`,
       };
     }
   }
