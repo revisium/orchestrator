@@ -163,11 +163,7 @@ test('preflightLive: clean feature branch not based on origin/base → { ok: tru
 
   const result = await preflightLive('task-001', 'master', deps);
   assert.ok('ok' in result && result.ok === true, 'stale feature branch must be allowed to start live');
-  assert.equal(
-    calls.includes('merge-base --is-ancestor origin/master HEAD'),
-    false,
-    'stale feature branch must not check origin/base ancestry',
-  );
+  assert.equal(calls.some((call) => call.startsWith('merge-base ')), false, 'stale feature branch must not run merge-base');
 });
 
 test('preflightLive: clean base branch BEHIND origin → ok without mutating caller checkout', async () => {
