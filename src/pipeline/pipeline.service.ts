@@ -47,10 +47,12 @@ import { AGENT_OUTPUT_STREAM_KEY, type AgentOutputEvent } from '../observability
 import { makeAwaitHuman } from './await-human.js';
 import {
   makeDataDrivenTask,
+  resolveRunnerTransientRetryPolicy,
   RUN_PROGRESS_EVENT_KEY,
   type DataDrivenResult,
   type DataDrivenTaskDeps,
   type DataDrivenTaskOpts,
+  type RunnerTransientRetryPolicy,
 } from './data-driven-task.workflow.js';
 import {
   dispatchRunnerId,
@@ -72,6 +74,10 @@ const DEV_TASKS_CONCURRENCY = ((): number => {
 
 const RUNNER_FAILURE_REASON_MAX = 2_000;
 
+type StartDataDrivenTaskOpts = Omit<DataDrivenTaskOpts, 'runnerRetryPolicy'> & {
+  runnerRetryPolicy?: RunnerTransientRetryPolicy;
+};
+
 /**
  * Durable mode controlling whether real or stub runners + integrator are used.
  *
@@ -80,6 +86,11 @@ const RUNNER_FAILURE_REASON_MAX = 2_000;
  * resolves runner dispatch from the route's role bindings, so the value is a no-op for selection.
  */
 export type RunnerMode = 'script' | 'live';
+
+export type RunStepPhysicalAttempt = {
+  attemptNo: number;
+  attemptId: string;
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -128,6 +139,28 @@ function runnerFailureReason(err: unknown): string {
   return redactTokens(message).slice(0, RUNNER_FAILURE_REASON_MAX);
 }
 
+function defaultPhysicalAttempt(runId: string, stepKey: string): RunStepPhysicalAttempt {
+  return {
+    attemptNo: iterationOf(stepKey) + 1,
+    attemptId: `attempt_${fnv1a64Hex(`${runId}|${stepKey}`)}`,
+  };
+}
+
+function resolvePhysicalAttempt(
+  runId: string,
+  stepKey: string,
+  physicalAttempt: RunStepPhysicalAttempt | undefined,
+): RunStepPhysicalAttempt {
+  if (!physicalAttempt) return defaultPhysicalAttempt(runId, stepKey);
+  if (!Number.isSafeInteger(physicalAttempt.attemptNo) || physicalAttempt.attemptNo <= 0) {
+    throw new Error(`physicalAttempt.attemptNo must be a positive integer for ${stepKey}`);
+  }
+  if (physicalAttempt.attemptId.trim().length === 0) {
+    throw new Error(`physicalAttempt.attemptId must be non-empty for ${stepKey}`);
+  }
+  return physicalAttempt;
+}
+
 async function flushReporter(reporter: AgentActivityReporter | undefined): Promise<void> {
   if (!reporter) return;
   try {
@@ -155,6 +188,7 @@ type StepAttemptContext = {
   role: string;
   stepKey: string;
   attemptId: string;
+  attemptNo: number;
   step: Step;
   durationMs: number;
 };
@@ -216,7 +250,7 @@ async function appendRunnerFailureAttempt(
       runId: attemptContext.runId,
       stepId: attemptContext.step.id,
       attemptId: attemptContext.attemptId,
-      attemptNo: iterationOf(attemptContext.stepKey) + 1,
+      attemptNo: attemptContext.attemptNo,
       iteration: iterationOf(attemptContext.stepKey),
       status: 'failed',
       modelProfile: attemptContext.step.modelProfile,
@@ -251,11 +285,13 @@ async function handleRunnerFailure(
     stepId: attemptContext.step.id,
     stepKey: attemptContext.stepKey,
     type: 'step_failed',
+    idempotencyKey: attemptContext.attemptId,
     payload: {
       output: failure.output,
       role: attemptContext.role,
       stepKey: attemptContext.stepKey,
       attemptId: attemptContext.attemptId,
+      attemptNo: attemptContext.attemptNo,
     },
   });
   await appendRunnerFailureAttempt(appendAttempt, attemptContext, failure);
@@ -309,7 +345,7 @@ async function appendSuccessfulAttempt(
       runId: attemptContext.runId,
       stepId: attemptContext.step.id,
       attemptId: attemptContext.attemptId,
-      attemptNo: iterationOf(attemptContext.stepKey) + 1,
+      attemptNo: attemptContext.attemptNo,
       iteration: iterationOf(attemptContext.stepKey),
       status: result.needsHuman ? 'awaiting_approval' : 'succeeded',
       modelProfile: attemptContext.step.modelProfile,
@@ -357,6 +393,7 @@ export function makeRunStep(deps: RunStepDeps) {
     stepInput: unknown,
     resolvedRunnerId?: string,
     executionProfile?: ExecutionProfile,
+    physicalAttempt?: RunStepPhysicalAttempt,
   ): Promise<AttemptResult> {
     // 1. Load the canonical role (B1: role is NEVER mutated with #k).
     const loadedRole = await loadRole(role);
@@ -373,7 +410,11 @@ export function makeRunStep(deps: RunStepDeps) {
       profile.level,
     );
 
-    // 4. Build the agent context string.
+    // 4. Resolve the physical attempt before context construction so even pre-launch failures are
+    // scoped to the concrete attempt that invoked runStep.
+    const { attemptId, attemptNo } = resolvePhysicalAttempt(runId, stepKey, physicalAttempt);
+
+    // 5. Build the agent context string.
     let context: string;
     try {
       context = await buildContext(da, step, loadedRole, runContext, getConfig().dataDir);
@@ -385,18 +426,18 @@ export function makeRunStep(deps: RunStepDeps) {
         stepId: step.id,
         stepKey,
         type: 'step_failed',
+        idempotencyKey: attemptId,
         payload: {
           error: err instanceof ContextMissingError ? err.code : 'revo.ContextBuildFailed',
           reason,
           role,
           stepKey,
+          attemptId,
+          attemptNo,
         },
       });
       throw err;
     }
-
-    // 5. Deterministic, bounded attemptId (B2).
-    const attemptId = `attempt_${fnv1a64Hex(`${runId}|${stepKey}`)}`;
 
     // 6. Dispatch through the resolved per-role runner binding. Legacy direct callers may still
     //    pass runnerMode ('script'|'live') without a route; that fallback is intentionally private.
@@ -425,10 +466,10 @@ export function makeRunStep(deps: RunStepDeps) {
       result = await runAgentWithReporterFlush(runAgent, { role: dispatchRole, profile, context, attemptId, step, reporter });
     } catch (err) {
       const durationMs = Math.max(0, clock() - startedAt);
-      return handleRunnerFailure(appendEvent, appendAttempt, { runId, role, stepKey, attemptId, step, durationMs }, err);
+      return handleRunnerFailure(appendEvent, appendAttempt, { runId, role, stepKey, attemptId, attemptNo, step, durationMs }, err);
     }
     const durationMs = Math.max(0, clock() - startedAt);
-    const attemptContext = { runId, role, stepKey, attemptId, step, durationMs };
+    const attemptContext = { runId, role, stepKey, attemptId, attemptNo, step, durationMs };
     const artifactFields = processArtifactFields(result.artifacts);
 
     // 8. Persist event to Revisium draft (idempotent — ROW_CONFLICT = no-op on replay).
@@ -438,7 +479,8 @@ export function makeRunStep(deps: RunStepDeps) {
       stepId: step.id,
       stepKey,
       type: 'step_succeeded',
-      payload: { output: result.output, role, stepKey, attemptId },
+      idempotencyKey: attemptId,
+      payload: { output: result.output, role, stepKey, attemptId, attemptNo },
     });
 
     // 9. Persist cost rows (idempotent by index).
@@ -476,6 +518,7 @@ export class PipelineService {
     stepInput: unknown,
     resolvedRunnerId?: string,
     executionProfile?: ExecutionProfile,
+    physicalAttempt?: RunStepPhysicalAttempt,
   ) => Promise<AttemptResult>;
 
   /**
@@ -581,6 +624,7 @@ export class PipelineService {
       appendEvent: stepDeps.appendEvent,
       appendRunOutput: this.runService.appendRunOutput.bind(this.runService),
       setProgress: (_runId, cursor) => this.dbos.setEvent(RUN_PROGRESS_EVENT_KEY, cursor),
+      sleep: (ms) => this.dbos.sleep(ms),
       awaitHuman,
       completeRun: (
         runId: string,
@@ -619,12 +663,17 @@ export class PipelineService {
    * Idempotent by workflowID=runId: re-starting the same runId returns the existing handle. The pinned,
    * validated template is passed as a DBOS workflow ARGUMENT, so it is durable and replayed verbatim on
    * recovery (the MVP pin — a Revisium-revision pin is a later upgrade per §11/§14 Q4). Route role
-   * bindings are persisted in the DBOS workflow input row and are authoritative for runner dispatch.
+   * bindings and the resolved runner retry policy are also persisted in the DBOS workflow input row and
+   * are authoritative for replay; recovery must not branch on changed process env.
    */
   startDataDrivenTask(
     runId: string,
-    opts: DataDrivenTaskOpts,
+    opts: StartDataDrivenTaskOpts,
   ): Promise<WorkflowHandle<DataDrivenResult>> {
-    return this.dbos.startWorkflowOn(this.dataDrivenTaskFn, runId, DEV_TASKS_QUEUE, runId, opts);
+    const pinnedOpts: DataDrivenTaskOpts = {
+      ...opts,
+      runnerRetryPolicy: opts.runnerRetryPolicy ?? resolveRunnerTransientRetryPolicy(),
+    };
+    return this.dbos.startWorkflowOn(this.dataDrivenTaskFn, runId, DEV_TASKS_QUEUE, runId, pinnedOpts);
   }
 }

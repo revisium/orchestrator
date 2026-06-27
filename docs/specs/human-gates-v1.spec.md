@@ -191,7 +191,9 @@ Rules:
   or unbounded payloads.
 - `nextAction: 'ask_human'` means resolve the inbox item through gate/question tools. `inspect_digest` means call
   `get_run_digest`. `inspect_log` means use bounded `get_agent_log` reads with offsets or `tailBytes`.
-- `retrying` is reserved in the contract for retry transitions. v1 does not define or implement retry policy.
+- Runner retry does not add a new observe_run state in v1. Retry evidence is exposed through the existing event,
+  attempt, digest, diagnostic, and log surfaces (`runner_retry_scheduled`, `runner_retry_exhausted`, per-attempt
+  rows, and per-attempt agent logs). `retrying` remains reserved for a future transition shape.
 
 ## Gate Kinds
 
@@ -237,6 +239,8 @@ Contracts:
 
 ## Changelog
 
+- 2026-06-27: Documented that runner retry evidence uses existing observation surfaces without adding a new
+  observe_run state.
 - 2026-06-26: Added canonical `observe_run` low-context observation contract and documented older watch tools as
   compatibility/diagnostic surfaces.
 - 2026-06-26: Initial spec extracted from current inbox/gate implementation, former inbox doc, and former
