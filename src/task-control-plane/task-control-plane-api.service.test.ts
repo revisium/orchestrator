@@ -789,7 +789,11 @@ test('TaskControlPlaneApiService.startRun reports terminal preflight recovery wi
   assert.equal(record.retryStarted, false);
   assert.equal(record.nextAction, 'resume_run');
   assert.equal(record.workflowID, 'run-1');
+  assert.equal(record.workflowStatus, 'SUCCESS');
   assert.equal(record.blockedEventId, 'event-preflight');
+  assert.equal(record.blockedReason, 'preflight');
+  assert.equal(record.alreadyStarted, true);
+  assert.equal(record.engine, 'data-driven');
   assert.equal((record.route as RouteDecision).pipelineId, 'local-change');
 });
 
@@ -810,6 +814,7 @@ test('TaskControlPlaneApiService.resumeRun creates and reuses a preflight recove
   };
   const childRows = new Map<string, Record<string, unknown>>();
   const events = new Map<string, Array<{
+    runId?: string;
     eventId: string;
     type: string;
     actor: string;
@@ -899,6 +904,7 @@ test('TaskControlPlaneApiService.resumeRun creates and reuses a preflight recove
       async appendEvent(input) {
         const list = events.get(input.runId) ?? [];
         list.push({
+          runId: input.runId,
           eventId: `${input.type}-${list.length + 1}`,
           type: input.type,
           actor: input.actor ?? '',
@@ -953,6 +959,7 @@ test('TaskControlPlaneApiService.resumeRun creates and reuses a preflight recove
   assert.equal(firstRecovery.parentRunId, 'run-parent');
   assert.equal(firstRecovery.recoveryRunId, 'run-recovery');
   assert.equal(firstRecovery.blockedEventId, 'event-preflight');
+  assert.equal(firstRecovery.reason, 'preflight');
   assert.equal(secondRecord.runId, 'run-recovery');
   assert.equal(secondRecovery.recoveryRunId, 'run-recovery');
   assert.equal(createInputs.length, 1, 'second resume must reuse the recovery run');
@@ -960,19 +967,37 @@ test('TaskControlPlaneApiService.resumeRun creates and reuses a preflight recove
 
   const copied = createInputs[0] as Record<string, unknown>;
   assert.equal(copied.title, parentData.title);
+  assert.equal(copied.repo, process.cwd());
   assert.equal(copied.description, parentData.description);
   assert.equal(copied.scope, parentData.scope);
   assert.equal(copied.priority, parentData.priority);
+  assert.equal(copied.role, 'developer');
   assert.equal(copied.playbookId, parentData.playbook_id);
   assert.equal(copied.pipelineId, parentData.pipeline_id);
   assert.deepEqual(copied.routeDecision, parentData.route_decision);
   assert.deepEqual(copied.executionProfile, parentData.execution_profile);
   assert.deepEqual(copied.params, { ticket: 'T-1' }, 'recovery metadata must not be stored in public params');
+  assert.deepEqual((copied.now as Date).toISOString(), '2026-06-27T10:00:00.000Z');
+  assert.equal(typeof copied.idSuffix, 'string');
 
   const parentRecoveryEvent = events.get('run-parent')?.find((event) => event.type === 'run_recovery_created');
   const childRecoveryEvent = events.get('run-recovery')?.find((event) => event.type === 'run_recovery_parent');
   assert.ok(parentRecoveryEvent, 'parent recovery event must be written');
   assert.ok(childRecoveryEvent, 'child recovery parent event must be written');
+  assert.equal(parentRecoveryEvent.runId, 'run-parent');
+  assert.equal(parentRecoveryEvent.taskId, 'task-parent');
+  assert.equal(parentRecoveryEvent.stepId, '');
+  assert.equal(parentRecoveryEvent.actor, 'orchestrator');
+  assert.equal(childRecoveryEvent.runId, 'run-recovery');
+  assert.equal(childRecoveryEvent.taskId, 'task-run-recovery');
+  assert.equal(childRecoveryEvent.stepId, '');
+  assert.equal(childRecoveryEvent.actor, 'orchestrator');
+  assert.deepEqual(parentRecoveryEvent.payload, {
+    parentRunId: 'run-parent',
+    recoveryRunId: 'run-recovery',
+    blockedEventId: 'event-preflight',
+    reason: 'preflight',
+  });
   assert.deepEqual(parentRecoveryEvent.payload, childRecoveryEvent.payload);
 });
 
