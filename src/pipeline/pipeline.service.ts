@@ -140,9 +140,10 @@ function runnerFailureReason(err: unknown): string {
 }
 
 function defaultPhysicalAttempt(runId: string, stepKey: string): RunStepPhysicalAttempt {
+  const attemptKey = `${runId}|${stepKey}`;
   return {
     attemptNo: iterationOf(stepKey) + 1,
-    attemptId: `attempt_${fnv1a64Hex(`${runId}|${stepKey}`)}`,
+    attemptId: `attempt_${fnv1a64Hex(attemptKey)}`,
   };
 }
 
