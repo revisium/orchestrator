@@ -1,4 +1,8 @@
-import type { ProcessExecutor, ExecRequest } from './process-executor.js';
+import {
+  resolveEffectiveRunnerTimeoutPolicy,
+  type ProcessExecutor,
+  type ExecRequest,
+} from './process-executor.js';
 import type { RunAgent } from './runner.js';
 import { RunAgentError } from './runner.js';
 import type { ArtifactStore } from './artifact-store.js';
@@ -12,8 +16,16 @@ import {
   parseTransportEnvelope,
   type TransportEnvelope,
 } from './result-envelope.js';
-import { boundedPreview, buildAttemptResult, buildUsageCosts, runnerError, tail } from './runner-common.js';
+import {
+  boundedPreview,
+  buildAttemptResult,
+  buildUsageCosts,
+  runnerError,
+  runnerTimeoutFailure,
+  tail,
+} from './runner-common.js';
 import { isWorktreeDir } from '../control-plane/resolve-cwd.js';
+import type { RunnerActivityTracker } from '../observability/activity-signal.js';
 
 // The ONE place Claude Code CLI specifics live. The runner hides the protocol entirely: the loop sees
 // only the RunAgent interface. Process spawning goes through an injected ProcessExecutor (the
@@ -22,12 +34,12 @@ import { isWorktreeDir } from '../control-plane/resolve-cwd.js';
 export type ClaudeCodeRunnerDeps = {
   executor: ProcessExecutor;
   resolveCwd: (step: Step) => Promise<string>; // worktree-aware (plan 0017): the run's isolated worktree for live runs
-  timeoutMs?: number; // default 10 min
+  timeoutMs?: number; // configured wall-clock safety cap default
+  idleTimeoutMs?: number;
   command?: string; // default 'claude'
   artifactStore?: ArtifactStore;
 };
 
-const DEFAULT_TIMEOUT_MS = 600_000;
 const DEFAULT_COMMAND = 'claude';
 
 function hasPermissionDenials(value: unknown): boolean {
@@ -108,6 +120,29 @@ function streamEventPreview(evt: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
+function stableStringId(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value : undefined;
+}
+
+function recordClaudeOperationBlocks(evt: Record<string, unknown>, activity: RunnerActivityTracker | undefined): void {
+  const message = evt.message as Record<string, unknown> | undefined;
+  const content = message?.content;
+  if (!Array.isArray(content)) return;
+  for (const raw of content) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const block = raw as Record<string, unknown>;
+    if (block.type === 'tool_use') {
+      const id = stableStringId(block.id);
+      if (id) activity?.operationStarted(id);
+      continue;
+    }
+    if (block.type === 'tool_result') {
+      const id = stableStringId(block.tool_use_id);
+      if (id) activity?.operationFinished(id);
+    }
+  }
+}
+
 // CLI invocation — the only place flags are assembled. EXACT flag set is confirmed by the manual
 // Step-6 smoke before --runner defaults to auto. The permission mode keeps the headless run
 // non-interactive: a tool not in allowedTools is auto-denied (no TTY can prompt in -p mode).
@@ -151,17 +186,25 @@ function buildPrompt(context: string, attemptId: string, worktreePath?: string):
 }
 
 export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
-  const fallbackTimeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const defaultTimeoutPolicy = resolveEffectiveRunnerTimeoutPolicy({
+    idleTimeoutMs: deps.idleTimeoutMs,
+    wallClockLimitMs: deps.timeoutMs,
+  });
   const command = deps.command ?? DEFAULT_COMMAND;
 
   return async ({ role, profile, context, attemptId, step, reporter }) => {
     // attemptId is already minted by startAttempt (loop) — consumed here, never re-minted.
     // cwd is worktree-aware (plan 0017): for a live run, resolveCwd returns the run's isolated worktree
     // (keyed by step.runId); per-run worktree lifecycle is owned by the workflow, NOT the runner.
-    // 0008 #5: per-role data overrides the hardcoded defaults (timeout + permission mode).
-    const timeoutMs = role.timeoutMs ?? fallbackTimeoutMs;
+    // 0008 #5: per-role timeout is a wall-clock cap unless an env override supplies the effective cap.
+    const timeoutPolicy = resolveEffectiveRunnerTimeoutPolicy({
+      idleTimeoutMs: defaultTimeoutPolicy.idleTimeoutMs,
+      wallClockLimitMs: defaultTimeoutPolicy.wallClockLimitMs,
+      roleTimeoutMs: role.timeoutMs,
+    });
     const permissionMode = role.permissionMode ?? 'default';
     let processArtifact: ReturnType<ArtifactStore['startProcess']> | undefined;
+    let processActivity: RunnerActivityTracker | undefined;
     try {
       const cwd = await deps.resolveCwd(step);
       // Belt-and-suspenders: detect if we are running inside a git worktree (linked worktree's .git is a
@@ -178,7 +221,9 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
         command,
         args,
         cwd,
-        timeoutMs,
+        timeoutMs: timeoutPolicy.wallClockLimitMs,
+        idleTimeoutMs: timeoutPolicy.idleTimeoutMs,
+        wallClockLimitMs: timeoutPolicy.wallClockLimitMs,
       });
       reporter?.started();
       // stream-json arrives as JSONL; buffer partial chunks and report ONE observability event per
@@ -195,6 +240,8 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
           return; // a partial or non-JSON line — ignore
         }
         const type = typeof evt.type === 'string' ? evt.type : 'event';
+        processActivity?.markActivity(type === 'heartbeat' ? 'heartbeat' : 'event');
+        recordClaudeOperationBlocks(evt, processActivity);
         if (type === 'result') return;
         reporter?.parsed({ type, preview: streamEventPreview(evt) });
       };
@@ -202,10 +249,14 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
         command,
         args,
         cwd,
-        timeoutMs,
+        timeoutMs: timeoutPolicy.wallClockLimitMs,
+        idleTimeoutMs: timeoutPolicy.idleTimeoutMs,
         input: buildPrompt(context, attemptId, liveWorktree ? cwd : undefined),
         env: liveWorktree ? { REVO_WORKTREE_PATH: cwd } : undefined,
         onSpawn: (pid) => reporter?.spawned(pid),
+        onActivityTracker: (activity) => {
+          processActivity = activity;
+        },
         onStdoutChunk: (chunk) => {
           processArtifact?.appendStdout(chunk);
           stdoutLineBuffer += chunk;
@@ -224,13 +275,19 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
       const result = await deps.executor(req);
       // Flush a trailing partial line (the result line normally ends in \n, so this is usually empty).
       if (stdoutLineBuffer.trim() !== '') reportStreamLine(stdoutLineBuffer);
-      const processSnapshot = processArtifact?.finish({ code: result.code, timedOut: result.timedOut });
+      const processSnapshot = processArtifact?.finish({
+        code: result.code,
+        timedOut: result.timedOut,
+        timeoutKind: result.timeoutKind,
+        timeoutEvidence: result.timeoutEvidence,
+      });
 
       // Timeout / process failure → throw; the loop's catch → failStep returns the step to ready
       // (backoff) or dead at the attempt cap. No loop change needed.
       if (result.timedOut) {
-        reporter?.failed(`claude-code runner exceeded ${timeoutMs}ms`, { timedOut: true, exitCode: result.code });
-        throw runnerError(`claude-code runner exceeded ${timeoutMs}ms`, processSnapshot);
+        const err = runnerTimeoutFailure('claude-code', result, processSnapshot, timeoutPolicy);
+        reporter?.failed(err.message, { timedOut: true, exitCode: result.code });
+        throw err;
       }
       if (result.code !== 0) {
         reporter?.failed(`claude-code runner exited with code ${String(result.code)}`, { exitCode: result.code });

@@ -1,5 +1,30 @@
 import type { AgentActivitySnapshot, AgentActivityStatus, AgentRunActivity } from './types.js';
 
+export type RunnerActivityKind = 'stdout' | 'stderr' | 'event' | 'heartbeat' | 'operation';
+
+export type RunnerActivityTrackerSnapshot = {
+  startedAt: number;
+  lastActivityAt: number;
+  inFlightOperationCount: number;
+  stdoutBytes: number;
+  stderrBytes: number;
+  eventCount: number;
+};
+
+export type RunnerActivityTracker = {
+  markActivity(kind: RunnerActivityKind): void;
+  recordOutput(stream: 'stdout' | 'stderr', bytes: number): void;
+  operationStarted(id: string): void;
+  operationFinished(id: string): void;
+  snapshot(): RunnerActivityTrackerSnapshot;
+};
+
+export type RunnerActivityTrackerOptions = {
+  now?: () => number;
+  startedAt?: number;
+  onChange?: (snapshot: RunnerActivityTrackerSnapshot) => void;
+};
+
 export type CanonicalActivityAttemptSignal = {
   attemptId: string;
   stepId: string;
@@ -64,6 +89,57 @@ function mapAttempt(attempt: AgentActivitySnapshot): CanonicalActivityAttemptSig
     stdoutBytes: attempt.stdoutBytes,
     stderrBytes: attempt.stderrBytes,
     eventCount: attempt.eventCount,
+  };
+}
+
+export function createRunnerActivityTracker(
+  opts: RunnerActivityTrackerOptions = {},
+): RunnerActivityTracker {
+  const now = opts.now ?? (() => Date.now());
+  const startedAt = opts.startedAt ?? now();
+  const inFlightOperationIds = new Set<string>();
+  const snapshot: RunnerActivityTrackerSnapshot = {
+    startedAt,
+    lastActivityAt: startedAt,
+    inFlightOperationCount: 0,
+    stdoutBytes: 0,
+    stderrBytes: 0,
+    eventCount: 0,
+  };
+
+  function changed(): void {
+    snapshot.inFlightOperationCount = inFlightOperationIds.size;
+    opts.onChange?.({ ...snapshot });
+  }
+
+  function markActivity(kind: RunnerActivityKind): void {
+    snapshot.lastActivityAt = now();
+    if (kind === 'event' || kind === 'heartbeat') snapshot.eventCount += 1;
+    changed();
+  }
+
+  return {
+    markActivity,
+
+    recordOutput(stream, bytes): void {
+      if (stream === 'stdout') snapshot.stdoutBytes += bytes;
+      else snapshot.stderrBytes += bytes;
+      markActivity(stream);
+    },
+
+    operationStarted(id): void {
+      if (id.trim().length > 0) inFlightOperationIds.add(id);
+      markActivity('operation');
+    },
+
+    operationFinished(id): void {
+      if (id.trim().length > 0) inFlightOperationIds.delete(id);
+      markActivity('operation');
+    },
+
+    snapshot(): RunnerActivityTrackerSnapshot {
+      return { ...snapshot, inFlightOperationCount: inFlightOperationIds.size };
+    },
   };
 }
 

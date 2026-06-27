@@ -183,8 +183,10 @@ Rules:
 - `mode: 'diagnostic'` may include bounded hints such as run/workflow status, a compact blocking-event header,
   activity counters, and suggested tools. It must not include raw log text or full event payloads.
 - The canonical activity signal is derived from existing agent observability fields: `latestActivityAt`,
-  `latestOutputAt`, `lastEventAt`, `lastOutputAt`, stdout/stderr byte counters, and event counters. It is a signal
-  only; v1 does not implement idle-timeout policy.
+  `latestOutputAt`, `lastEventAt`, `lastOutputAt`, stdout/stderr byte counters, and event counters. The runner
+  idle-timeout policy uses the same activity vocabulary plus generic in-flight operation state at the process
+  executor boundary. `observe_run` keeps its existing result shape and does not expose in-flight-operation fields
+  in v1.
 - Normal observation must not require `get_run(includeEvents: true)`, full logs, raw log text, full event history,
   or unbounded payloads.
 - `nextAction: 'ask_human'` means resolve the inbox item through gate/question tools. `inspect_digest` means call

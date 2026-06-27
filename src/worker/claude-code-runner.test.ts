@@ -1,15 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createClaudeCodeRunner } from './claude-code-runner.js';
-import type { ExecRequest, ExecResult, ProcessExecutor } from './process-executor.js';
+import {
+  RUNNER_WALL_CLOCK_LIMIT_KIND,
+  type ExecRequest,
+  type ExecResult,
+  type ProcessExecutor,
+} from './process-executor.js';
 import { createArtifactStore } from './artifact-store.js';
 import { RunAgentError } from './runner.js';
 import { makeRole, BASE_STEP } from './test-fixtures.js';
 import type { ModelProfile } from '../control-plane/definitions.js';
 import type { AgentActivityReporter } from '../observability/agent-activity-reporter.js';
+import type { RunnerActivityKind, RunnerActivityTracker } from '../observability/activity-signal.js';
 
 // Fake executor: records the ExecRequest and returns a canned ExecResult. No real `claude`, no tokens.
 function fakeExecutor(result: ExecResult, captured: ExecRequest[]): ProcessExecutor {
@@ -30,6 +36,28 @@ const PROFILE: ModelProfile = {
 
 function ok(stdout: string, extra: Partial<ExecResult> = {}): ExecResult {
   return { code: 0, stdout, stderr: '', timedOut: false, ...extra };
+}
+
+function timeoutResult(extra: Partial<ExecResult> = {}): ExecResult {
+  return {
+    code: null,
+    stdout: '',
+    stderr: '',
+    timedOut: true,
+    timeoutKind: RUNNER_WALL_CLOCK_LIMIT_KIND,
+    timeoutEvidence: {
+      idleTimeoutMs: 600_000,
+      wallClockLimitMs: 5_000,
+      elapsedMs: 5_000,
+      idleMs: 5_000,
+      lastActivityAt: new Date(0).toISOString(),
+      inFlightOperationCount: 0,
+      stdoutBytes: 0,
+      stderrBytes: 0,
+      eventCount: 0,
+    },
+    ...extra,
+  };
 }
 
 function transport(resultText: string, extra: Record<string, unknown> = {}): string {
@@ -55,6 +83,26 @@ function structuredTransport(
 }
 
 const ATTEMPT_ID = 'attempt_20260101T000000000Z_abc12345';
+
+async function withTimeoutEnv<T>(
+  env: Partial<Pick<NodeJS.ProcessEnv, 'REVO_RUNNER_IDLE_TIMEOUT_MS' | 'REVO_RUNNER_WALL_CLOCK_LIMIT_MS'>>,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const priorIdle = process.env['REVO_RUNNER_IDLE_TIMEOUT_MS'];
+  const priorWall = process.env['REVO_RUNNER_WALL_CLOCK_LIMIT_MS'];
+  try {
+    for (const [key, value] of Object.entries(env)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    return await fn();
+  } finally {
+    if (priorIdle === undefined) delete process.env['REVO_RUNNER_IDLE_TIMEOUT_MS'];
+    else process.env['REVO_RUNNER_IDLE_TIMEOUT_MS'] = priorIdle;
+    if (priorWall === undefined) delete process.env['REVO_RUNNER_WALL_CLOCK_LIMIT_MS'];
+    else process.env['REVO_RUNNER_WALL_CLOCK_LIMIT_MS'] = priorWall;
+  }
+}
 
 function fakeReporter(events: string[]): AgentActivityReporter {
   return {
@@ -122,6 +170,23 @@ function capturingReporter(events: CapturedReporterEvent[]): AgentActivityReport
       stderrBytes: 0,
       eventCount: 0,
       artifactRef: `${BASE_STEP.runId}/${ATTEMPT_ID}`,
+    }),
+  };
+}
+
+function trackingActivity(calls: string[]): RunnerActivityTracker {
+  return {
+    markActivity: (kind: RunnerActivityKind) => { calls.push(`activity:${kind}`); },
+    recordOutput: (stream, bytes) => { calls.push(`output:${stream}:${bytes}`); },
+    operationStarted: (id) => { calls.push(`start:${id}`); },
+    operationFinished: (id) => { calls.push(`finish:${id}`); },
+    snapshot: () => ({
+      startedAt: 0,
+      lastActivityAt: 0,
+      inFlightOperationCount: 0,
+      stdoutBytes: 0,
+      stderrBytes: 0,
+      eventCount: 0,
     }),
   };
 }
@@ -212,6 +277,68 @@ test('claude-code runner: stream-json — reports a per-turn transcript and extr
   );
 });
 
+test('claude-code runner: stream-json maps stable tool_use/tool_result IDs to generic operations', async () => {
+  const streamLines = [
+    JSON.stringify({
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'tool_use', id: 'toolu_1', name: 'Read' }],
+      },
+    }),
+    JSON.stringify({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'toolu_1' }],
+      },
+    }),
+    JSON.stringify({
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        content: [{ type: 'tool_use', name: 'Edit' }],
+      },
+    }),
+    JSON.stringify({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'missing-tool' }],
+      },
+    }),
+    structuredTransport({ verdict: 'approved', output: 'done' }),
+  ];
+  const fullStdout = streamLines.join('\n') + '\n';
+  const activityCalls: string[] = [];
+  const streamingExecutor: ProcessExecutor = async (req) => {
+    req.onActivityTracker?.(trackingActivity(activityCalls));
+    req.onStdoutChunk?.(fullStdout);
+    return ok(fullStdout);
+  };
+
+  const runner = createClaudeCodeRunner({
+    executor: streamingExecutor,
+    resolveCwd: async () => '/workspace/repo',
+    timeoutMs: 5_000,
+  });
+
+  await runner({
+    role: makeRole('architect'),
+    profile: PROFILE,
+    context: 'ctx',
+    attemptId: ATTEMPT_ID,
+    step: BASE_STEP,
+  });
+
+  assert.deepEqual(
+    activityCalls.filter((call) => call.startsWith('start:') || call.startsWith('finish:')),
+    ['start:toolu_1', 'finish:toolu_1', 'finish:missing-tool'],
+  );
+  assert.equal(activityCalls.filter((call) => call === 'activity:event').length, 5);
+  assert.equal(activityCalls.includes('start:undefined'), false);
+});
+
 test('claude-code runner: no allowed-tools flag when role.allowedTools is empty', async () => {
   const captured: ExecRequest[] = [];
   const stdout = structuredTransport();
@@ -258,7 +385,7 @@ test('claude-code runner (0008 #5): defaults permission mode to "default" when r
   assert.equal(req?.args[idx + 1], 'default');
 });
 
-test('claude-code runner (0008 #5): role.timeoutMs overrides the runner default', async () => {
+test('claude-code runner (0008 #5): role.timeoutMs maps to wall-clock cap only', async () => {
   const captured: ExecRequest[] = [];
   const stdout = structuredTransport();
   const runner = createClaudeCodeRunner({ executor: fakeExecutor(ok(stdout), captured), resolveCwd: async () => '/w', timeoutMs: 5_000 });
@@ -269,7 +396,58 @@ test('claude-code runner (0008 #5): role.timeoutMs overrides the runner default'
     attemptId: ATTEMPT_ID,
     step: BASE_STEP,
   });
-  assert.equal(captured[0]?.timeoutMs, 1_234_567, 'per-role timeout must win over the runner default');
+  assert.equal(captured[0]?.timeoutMs, 1_234_567, 'per-role timeout must set the wall-clock cap');
+  assert.equal(captured[0]?.idleTimeoutMs, 600_000, 'idle timeout remains separate from role.timeoutMs');
+});
+
+test('claude-code runner (0008 #5): absent or zero role.timeoutMs uses the runner wall-clock default', async () => {
+  const captured: ExecRequest[] = [];
+  const stdout = structuredTransport();
+  const runner = createClaudeCodeRunner({ executor: fakeExecutor(ok(stdout), captured), resolveCwd: async () => '/w', timeoutMs: 5_000 });
+  await runner({
+    role: makeRole('architect', { timeoutMs: 0 }),
+    profile: PROFILE,
+    context: 'ctx',
+    attemptId: ATTEMPT_ID,
+    step: BASE_STEP,
+  });
+  assert.equal(captured[0]?.timeoutMs, 5_000);
+  assert.equal(captured[0]?.idleTimeoutMs, 600_000);
+});
+
+test('claude-code runner: env wall-clock override wins over role.timeoutMs in request and artifact metadata', async () => {
+  await withTimeoutEnv({ REVO_RUNNER_WALL_CLOCK_LIMIT_MS: '7000' }, async () => {
+    const root = mkdtempSync(join(tmpdir(), 'revo-runner-env-timeout-'));
+    try {
+      const captured: ExecRequest[] = [];
+      const stdout = structuredTransport();
+      const runner = createClaudeCodeRunner({
+        executor: fakeExecutor(ok(stdout), captured),
+        resolveCwd: async () => '/workspace/repo',
+        timeoutMs: 5_000,
+        artifactStore: createArtifactStore(root),
+      });
+
+      await runner({
+        role: makeRole('architect', { timeoutMs: 1_234 }),
+        profile: PROFILE,
+        context: 'ctx',
+        attemptId: ATTEMPT_ID,
+        step: BASE_STEP,
+      });
+
+      const meta = JSON.parse(
+        readFileSync(join(root, BASE_STEP.runId, ATTEMPT_ID, 'meta.json'), 'utf8'),
+      ) as Record<string, unknown>;
+      assert.equal(captured[0]?.timeoutMs, 7_000);
+      assert.equal(captured[0]?.idleTimeoutMs, 600_000);
+      assert.equal(meta.timeoutMs, 7_000);
+      assert.equal(meta.wallClockLimitMs, 7_000);
+      assert.equal(meta.idleTimeoutMs, 600_000);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 test('claude-code runner (0008 #5): model_profiles.params.maxTurns maps to --max-turns', async () => {
@@ -630,15 +808,15 @@ test('claude-code runner: zero tokens and no USD → empty costs', async () => {
 
 test('claude-code runner: throws on timeout (mentions the timeout)', async () => {
   await assert.rejects(
-    () => run(fakeExecutor({ code: null, stdout: '', stderr: '', timedOut: true }, [])),
-    /exceeded 5000ms/,
+    () => run(fakeExecutor(timeoutResult(), [])),
+    /runner-wall-clock-limit/,
   );
 });
 
 test('claude-code runner: reports timed_out lifecycle on timeout', async () => {
   const events: CapturedReporterEvent[] = [];
   const runner = createClaudeCodeRunner({
-    executor: fakeExecutor({ code: null, stdout: '', stderr: '', timedOut: true }, []),
+    executor: fakeExecutor(timeoutResult(), []),
     resolveCwd: async () => '/workspace/repo',
     timeoutMs: 5_000,
   });
@@ -656,7 +834,12 @@ test('claude-code runner: reports timed_out lifecycle on timeout', async () => {
 
   assert.deepEqual(events, [
     { kind: 'started' },
-    { kind: 'failed', message: 'claude-code runner exceeded 5000ms', exitCode: null, timedOut: true },
+    {
+      kind: 'failed',
+      message: 'claude-code runner runner-wall-clock-limit: elapsed 5000ms, idle 5000ms, in-flight operations 0',
+      exitCode: null,
+      timedOut: true,
+    },
   ]);
 });
 

@@ -86,10 +86,11 @@ Serialized JSON fields: `context`, `answer`.
 Versioned role definitions.
 
 Fields: `id, name, system_prompt, model_level, effort, runner_id, runner, allowed_tools[], scope_rules,
-playbook_id, playbook_role_id, source_path, source_hash, surface, rights, updated_at`.
+timeout_ms, permission_mode, playbook_id, playbook_role_id, source_path, source_hash, surface, rights, updated_at`.
 
 `scope_rules` is serialized JSON. `runner` is a compatibility alias; `runner_id` is the preferred imported
-playbook field.
+playbook field. `timeout_ms` is the role-level runner wall-clock safety cap; `0` or an absent value uses the
+runner default wall-clock cap and does not change the global idle timeout.
 
 ### `playbooks`
 

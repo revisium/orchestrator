@@ -23,6 +23,8 @@ test('artifact store: writes redacted stdout/stderr files, metadata, events, and
       args: ['-p'],
       cwd: '/workspace/repo',
       timeoutMs: 123,
+      idleTimeoutMs: 456,
+      wallClockLimitMs: 789,
       startedAt: new Date('2026-01-01T00:00:00.000Z'),
     });
 
@@ -52,6 +54,14 @@ test('artifact store: writes redacted stdout/stderr files, metadata, events, and
     assert.equal(events.length, 2);
     assert.match(events[0] ?? '', /process_started/);
     assert.match(events[1] ?? '', /process_finished/);
+    const startedEvent = JSON.parse(events[0] ?? '{}') as Record<string, unknown>;
+    const finishedEvent = JSON.parse(events[1] ?? '{}') as Record<string, unknown>;
+    assert.equal(startedEvent.timeoutMs, 123);
+    assert.equal(startedEvent.idleTimeoutMs, 456);
+    assert.equal(startedEvent.wallClockLimitMs, 789);
+    assert.equal(finishedEvent.timeoutMs, 123);
+    assert.equal(finishedEvent.idleTimeoutMs, 456);
+    assert.equal(finishedEvent.wallClockLimitMs, 789);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

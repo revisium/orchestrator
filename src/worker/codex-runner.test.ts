@@ -5,11 +5,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createArtifactStore } from './artifact-store.js';
 import { CODEX_OUTPUT_SCHEMA, createCodexRunner } from './codex-runner.js';
-import type { ExecRequest, ExecResult, ProcessExecutor } from './process-executor.js';
+import {
+  RUNNER_WALL_CLOCK_LIMIT_KIND,
+  type ExecRequest,
+  type ExecResult,
+  type ProcessExecutor,
+} from './process-executor.js';
 import { RunAgentError } from './runner.js';
 import { BASE_STEP, makeRole } from './test-fixtures.js';
 import type { ModelProfile } from '../control-plane/definitions.js';
 import type { AgentActivityReporter } from '../observability/agent-activity-reporter.js';
+import type { RunnerActivityKind, RunnerActivityTracker } from '../observability/activity-signal.js';
 
 const ATTEMPT_ID = 'attempt_20260101T000000000Z_abc12345';
 
@@ -35,6 +41,28 @@ function ok(stdout: string, extra: Partial<ExecResult> = {}): ExecResult {
   return { code: 0, stdout, stderr: '', timedOut: false, ...extra };
 }
 
+function timeoutResult(extra: Partial<ExecResult> = {}): ExecResult {
+  return {
+    code: null,
+    stdout: '',
+    stderr: '',
+    timedOut: true,
+    timeoutKind: RUNNER_WALL_CLOCK_LIMIT_KIND,
+    timeoutEvidence: {
+      idleTimeoutMs: 600_000,
+      wallClockLimitMs: 5_000,
+      elapsedMs: 5_000,
+      idleMs: 5_000,
+      lastActivityAt: new Date(0).toISOString(),
+      inFlightOperationCount: 0,
+      stdoutBytes: 0,
+      stderrBytes: 0,
+      eventCount: 0,
+    },
+    ...extra,
+  };
+}
+
 function finalResult(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     verdict: 'approved',
@@ -49,6 +77,26 @@ function finalResult(overrides: Record<string, unknown> = {}): Record<string, un
 
 function jsonl(...events: Record<string, unknown>[]): string {
   return `${events.map((event) => JSON.stringify(event)).join('\n')}\n`;
+}
+
+async function withTimeoutEnv<T>(
+  env: Partial<Pick<NodeJS.ProcessEnv, 'REVO_RUNNER_IDLE_TIMEOUT_MS' | 'REVO_RUNNER_WALL_CLOCK_LIMIT_MS'>>,
+  fn: () => Promise<T>,
+): Promise<T> {
+  const priorIdle = process.env['REVO_RUNNER_IDLE_TIMEOUT_MS'];
+  const priorWall = process.env['REVO_RUNNER_WALL_CLOCK_LIMIT_MS'];
+  try {
+    for (const [key, value] of Object.entries(env)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+    return await fn();
+  } finally {
+    if (priorIdle === undefined) delete process.env['REVO_RUNNER_IDLE_TIMEOUT_MS'];
+    else process.env['REVO_RUNNER_IDLE_TIMEOUT_MS'] = priorIdle;
+    if (priorWall === undefined) delete process.env['REVO_RUNNER_WALL_CLOCK_LIMIT_MS'];
+    else process.env['REVO_RUNNER_WALL_CLOCK_LIMIT_MS'] = priorWall;
+  }
 }
 
 function fakeExecutor(result: ExecResult, captured: ExecRequest[]): ProcessExecutor {
@@ -88,6 +136,23 @@ function capturingReporter(events: CapturedReporterEvent[]): AgentActivityReport
       stderrBytes: 0,
       eventCount: 0,
       artifactRef: `${BASE_STEP.runId}/${ATTEMPT_ID}`,
+    }),
+  };
+}
+
+function trackingActivity(calls: string[]): RunnerActivityTracker {
+  return {
+    markActivity: (kind: RunnerActivityKind) => { calls.push(`activity:${kind}`); },
+    recordOutput: (stream, bytes) => { calls.push(`output:${stream}:${bytes}`); },
+    operationStarted: (id) => { calls.push(`start:${id}`); },
+    operationFinished: (id) => { calls.push(`finish:${id}`); },
+    snapshot: () => ({
+      startedAt: 0,
+      lastActivityAt: 0,
+      inFlightOperationCount: 0,
+      stdoutBytes: 0,
+      stderrBytes: 0,
+      eventCount: 0,
     }),
   };
 }
@@ -161,6 +226,42 @@ test('codex runner: maps read-only role policy to read-only sandbox', async () =
     const req = captured[0];
     const idx = req?.args.indexOf('--sandbox') ?? -1;
     assert.equal(req?.args[idx + 1], 'read-only');
+  });
+});
+
+test('codex runner: role.timeoutMs maps to wall-clock cap only', async () => {
+  await withTempRoot(async (root) => {
+    const captured: ExecRequest[] = [];
+    await runWith(
+      fakeExecutor(ok(jsonl({ type: 'turn.completed', output: finalResult() })), captured),
+      root,
+      { timeoutMs: 1_234_567 },
+    );
+
+    assert.equal(captured[0]?.timeoutMs, 1_234_567);
+    assert.equal(captured[0]?.idleTimeoutMs, 600_000);
+  });
+});
+
+test('codex runner: env wall-clock override wins over role.timeoutMs in request and artifact metadata', async () => {
+  await withTimeoutEnv({ REVO_RUNNER_WALL_CLOCK_LIMIT_MS: '7000' }, async () => {
+    await withTempRoot(async (root) => {
+      const captured: ExecRequest[] = [];
+      await runWith(
+        fakeExecutor(ok(jsonl({ type: 'turn.completed', output: finalResult() })), captured),
+        root,
+        { timeoutMs: 1_234 },
+      );
+
+      const meta = JSON.parse(
+        readFileSync(join(root, BASE_STEP.runId, ATTEMPT_ID, 'meta.json'), 'utf8'),
+      ) as Record<string, unknown>;
+      assert.equal(captured[0]?.timeoutMs, 7_000);
+      assert.equal(captured[0]?.idleTimeoutMs, 600_000);
+      assert.equal(meta.timeoutMs, 7_000);
+      assert.equal(meta.wallClockLimitMs, 7_000);
+      assert.equal(meta.idleTimeoutMs, 600_000);
+    });
   });
 });
 
@@ -251,6 +352,25 @@ test('codex runner: parses strict structured final result from JSON text in fina
     assert.equal(result.costs[0]?.inputTokens, 100);
     assert.equal(result.costs[0]?.outputTokens, 25);
     assert.equal(result.costs[0]?.costAmount, 0.0004);
+  });
+});
+
+test('codex runner: current JSONL fixtures mark parsed events as activity without unsafe operation state', async () => {
+  await withTempRoot(async (root) => {
+    const stdout = jsonl(
+      { type: 'agent_message', message: 'working' },
+      { type: 'turn.completed', output: finalResult() },
+    );
+    const activityCalls: string[] = [];
+    const streamingExecutor: ProcessExecutor = async (req) => {
+      req.onActivityTracker?.(trackingActivity(activityCalls));
+      req.onStdoutChunk?.(stdout);
+      return ok(stdout);
+    };
+
+    await runWith(streamingExecutor, root);
+
+    assert.deepEqual(activityCalls, ['activity:event', 'activity:event']);
   });
 });
 
@@ -402,17 +522,17 @@ test('codex runner: maps timeout to timed_out and other failures to failed', asy
     await assert.rejects(
       () =>
         runWith(
-          fakeExecutor({ code: null, stdout: '', stderr: '', timedOut: true }, []),
+          fakeExecutor(timeoutResult(), []),
           root,
           {},
           PROFILE,
           capturingReporter(timeoutEvents),
         ),
-      /exceeded 5000ms/,
+      /runner-wall-clock-limit/,
     );
     assert.deepEqual(timeoutEvents.at(-1), {
       kind: 'failed',
-      message: 'codex runner exceeded 5000ms',
+      message: 'codex runner runner-wall-clock-limit: elapsed 5000ms, idle 5000ms, in-flight operations 0',
       exitCode: null,
       timedOut: true,
     });

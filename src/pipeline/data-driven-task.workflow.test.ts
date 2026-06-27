@@ -19,6 +19,7 @@ import type { RouteDecision, RouteRoleBinding } from './route-contract.js';
 import type { Decision as GateDecision } from './await-human.js';
 import type { IntegratorInput, IntegratorOutput, IntegratorBlocked, ConfirmMergeOutput, PrFeedback, RespondThreadsOutput } from '../runners/integrator.js';
 import { template, node, on, otherwise, verdictEq, allOf, counterLt } from '../pipeline-core/kit/index.js';
+import { RUNNER_IDLE_TIMEOUT_KIND, RUNNER_WALL_CLOCK_LIMIT_KIND } from '../worker/process-executor.js';
 
 const RUN_ID = 'run-dd-001';
 
@@ -404,6 +405,50 @@ test('DD5-transient: a TRANSIENT runner_failed (crash/timeout/429) → blocked w
     rec.blockedLessons.some((l) => l.includes('runner-transient-failure') && l.includes('timeout')),
     'the transient lesson names the recoverable runner reason',
   );
+});
+
+test('DD5-structured-timeouts: structured runner failureKind maps to exact public blocked reasons', async () => {
+  for (const failureKind of [RUNNER_IDLE_TIMEOUT_KIND, RUNNER_WALL_CLOCK_LIMIT_KIND]) {
+    const { run, rec } = buildAdapter({
+      results: {
+        developer: {
+          output: {
+            verdict: 'BLOCKER',
+            error: 'runner_failed',
+            role: 'developer',
+            stepKey: 'developer',
+            reason: `${failureKind}: elapsed 650000ms`,
+            failureKind,
+            retryableCandidate: true,
+            timing: {
+              idleTimeoutMs: 600_000,
+              wallClockLimitMs: 3_600_000,
+              elapsedMs: 650_000,
+              idleMs: 600_001,
+              lastActivityAt: '2026-06-26T10:00:00.000Z',
+              inFlightOperationCount: 0,
+              stdoutBytes: 10,
+              stderrBytes: 0,
+              eventCount: 3,
+            },
+          },
+          verdict: 'BLOCKER',
+          nextSteps: [],
+          costs: [],
+          needsHuman: true,
+          lesson: `${failureKind}: elapsed 650000ms`,
+        },
+      },
+    });
+
+    const result = await run();
+    assert.equal(result.status, 'blocked', `${failureKind} blocks recoverably`);
+    assert.equal(rec.blocked[0]?.reason, failureKind);
+    assert.ok(
+      rec.blockedLessons.some((lesson) => lesson.includes(failureKind)),
+      `${failureKind} is visible in the blocked lesson`,
+    );
+  }
 });
 
 test('DD5b: markdown output with no top-level verdict is not scanned and fails as revo.ResultInvalid', async () => {

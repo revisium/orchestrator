@@ -3,8 +3,13 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import type { ModelProfile, Role } from '../control-plane/definitions.js';
 import type { Step } from '../control-plane/steps.js';
 import type { AgentActivityReporter } from '../observability/agent-activity-reporter.js';
+import type { RunnerActivityTracker } from '../observability/activity-signal.js';
 import type { ArtifactStore } from './artifact-store.js';
-import type { ExecRequest, ProcessExecutor } from './process-executor.js';
+import {
+  resolveEffectiveRunnerTimeoutPolicy,
+  type ExecRequest,
+  type ProcessExecutor,
+} from './process-executor.js';
 import type { RunAgent } from './runner.js';
 import { RunAgentError } from './runner.js';
 import {
@@ -13,6 +18,7 @@ import {
   buildAttemptResult,
   buildUsageCosts,
   runnerError,
+  runnerTimeoutFailure,
   tail,
 } from './runner-common.js';
 
@@ -21,6 +27,7 @@ export type CodexRunnerDeps = {
   resolveCwd: (step: Step) => Promise<string>;
   artifactStore: ArtifactStore;
   timeoutMs?: number;
+  idleTimeoutMs?: number;
   command?: string;
 };
 
@@ -42,7 +49,6 @@ type CodexJsonlSummary = {
   outputTokens?: number;
 };
 
-const DEFAULT_TIMEOUT_MS = 600_000;
 const DEFAULT_COMMAND = 'codex';
 
 export const CODEX_OUTPUT_SCHEMA = {
@@ -316,6 +322,14 @@ function reportJsonlEvent(event: Record<string, unknown>, reporter?: AgentActivi
   reporter?.parsed({ type: readString(event.type) ?? 'event', preview: boundedPreview(event) });
 }
 
+function recordCodexJsonlActivity(
+  event: Record<string, unknown>,
+  activity: RunnerActivityTracker | undefined,
+): void {
+  const type = readString(event.type) ?? 'event';
+  activity?.markActivity(type === 'heartbeat' ? 'heartbeat' : 'event');
+}
+
 function applyUsageSummary(summary: CodexJsonlSummary, event: Record<string, unknown>): void {
   const usage = usageFromEvent(event);
   summary.costUsd = usage.costUsd ?? summary.costUsd;
@@ -346,17 +360,25 @@ function summarizeCodexEvents(events: Record<string, unknown>[]): CodexJsonlSumm
   return summary;
 }
 
-function parseCodexJsonl(stdout: string, reporter?: AgentActivityReporter): CodexJsonlSummary {
+function parseCodexJsonl(
+  stdout: string,
+  reporter?: AgentActivityReporter,
+  activity?: RunnerActivityTracker,
+): CodexJsonlSummary {
   const lines = stdout.split(/\r?\n/).filter((line) => line.trim().length > 0);
   const events = lines.map((line, index) => {
     const event = parseJsonlEvent(line, index + 1);
+    recordCodexJsonlActivity(event, activity);
     reportJsonlEvent(event, reporter);
     return event;
   });
   return summarizeCodexEvents(events);
 }
 
-function createStreamingJsonlCollector(reporter?: AgentActivityReporter): {
+function createStreamingJsonlCollector(
+  reporter?: AgentActivityReporter,
+  activity?: () => RunnerActivityTracker | undefined,
+): {
   append(chunk: string): void;
   finish(fallbackStdout: string): CodexJsonlSummary;
 } {
@@ -370,6 +392,7 @@ function createStreamingJsonlCollector(reporter?: AgentActivityReporter): {
     try {
       const event = parseJsonlEvent(line, parsedEvents.length + 1);
       parsedEvents.push(event);
+      recordCodexJsonlActivity(event, activity?.());
       reportJsonlEvent(event, reporter);
     } catch (err) {
       parseError = err instanceof Error ? err : new Error(String(err));
@@ -385,7 +408,7 @@ function createStreamingJsonlCollector(reporter?: AgentActivityReporter): {
       for (const part of parts) parseLine(part);
     },
     finish(fallbackStdout): CodexJsonlSummary {
-      if (received.length === 0) return parseCodexJsonl(fallbackStdout, reporter);
+      if (received.length === 0) return parseCodexJsonl(fallbackStdout, reporter, activity?.());
       parseLine(buffered);
       if (parseError) throw parseError;
       return summarizeCodexEvents(parsedEvents);
@@ -473,14 +496,22 @@ function normalizeCodexResult(structured: unknown): CodexAgentResult {
 }
 
 export function createCodexRunner(deps: CodexRunnerDeps): RunAgent {
-  const fallbackTimeoutMs = deps.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const defaultTimeoutPolicy = resolveEffectiveRunnerTimeoutPolicy({
+    idleTimeoutMs: deps.idleTimeoutMs,
+    wallClockLimitMs: deps.timeoutMs,
+  });
   const command = deps.command ?? DEFAULT_COMMAND;
 
   return async ({ role, profile, context, attemptId, step, reporter }) => {
     let processArtifact: ReturnType<ArtifactStore['startProcess']> | undefined;
+    let processActivity: RunnerActivityTracker | undefined;
     try {
       requireCompatibleProfile(profile);
-      const timeoutMs = role.timeoutMs ?? fallbackTimeoutMs;
+      const timeoutPolicy = resolveEffectiveRunnerTimeoutPolicy({
+        idleTimeoutMs: defaultTimeoutPolicy.idleTimeoutMs,
+        wallClockLimitMs: defaultTimeoutPolicy.wallClockLimitMs,
+        roleTimeoutMs: role.timeoutMs,
+      });
       const cwd = await deps.resolveCwd(step);
       const sandbox = sandboxForRole(role);
       const schemaPath = writeCodexOutputSchema(deps.artifactStore.resolveAttemptDir(step.runId, attemptId));
@@ -494,18 +525,24 @@ export function createCodexRunner(deps: CodexRunnerDeps): RunAgent {
         command,
         args,
         cwd,
-        timeoutMs,
+        timeoutMs: timeoutPolicy.wallClockLimitMs,
+        idleTimeoutMs: timeoutPolicy.idleTimeoutMs,
+        wallClockLimitMs: timeoutPolicy.wallClockLimitMs,
       });
-      const collector = createStreamingJsonlCollector(reporter);
+      const collector = createStreamingJsonlCollector(reporter, () => processActivity);
 
       reporter?.started();
       const req: ExecRequest = {
         command,
         args,
         cwd,
-        timeoutMs,
+        timeoutMs: timeoutPolicy.wallClockLimitMs,
+        idleTimeoutMs: timeoutPolicy.idleTimeoutMs,
         input: buildPrompt(context, attemptId),
         onSpawn: (pid) => reporter?.spawned(pid),
+        onActivityTracker: (activity) => {
+          processActivity = activity;
+        },
         onStdoutChunk: (chunk) => {
           processArtifact?.appendStdout(chunk);
           reporter?.output('stdout', chunk);
@@ -518,11 +555,17 @@ export function createCodexRunner(deps: CodexRunnerDeps): RunAgent {
       };
 
       const result = await deps.executor(req);
-      const processSnapshot = processArtifact.finish({ code: result.code, timedOut: result.timedOut });
+      const processSnapshot = processArtifact.finish({
+        code: result.code,
+        timedOut: result.timedOut,
+        timeoutKind: result.timeoutKind,
+        timeoutEvidence: result.timeoutEvidence,
+      });
 
       if (result.timedOut) {
-        reporter?.failed(`codex runner exceeded ${timeoutMs}ms`, { timedOut: true, exitCode: result.code });
-        throw runnerError(`codex runner exceeded ${timeoutMs}ms`, processSnapshot);
+        const err = runnerTimeoutFailure('codex', result, processSnapshot, timeoutPolicy);
+        reporter?.failed(err.message, { timedOut: true, exitCode: result.code });
+        throw err;
       }
       if (result.code !== 0) {
         const message = `codex runner exited with code ${String(result.code)}: ${tail(result.stderr || result.stdout)}`;
