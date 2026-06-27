@@ -69,6 +69,21 @@ test('appendRunOutput: redacts a github token from the payload', async () => {
   assert.ok(!stored.includes('ghp_0123456789012345678901234567890123'), 'raw token must not be persisted');
 });
 
+test('appendRunOutput: persists the attempt_id for the winning physical attempt', async () => {
+  const a = makeFakeDa();
+  await appendRunOutput(a.da, {
+    runId: 'run1',
+    nodeId: 'developer',
+    ordinal: 1,
+    name: 'change',
+    schemaRef: 'schema:change',
+    payload: { ok: true },
+    attemptId: 'attempt_winner',
+  });
+  assert.equal(a.rows[0].data.attempt_id, 'attempt_winner');
+});
+
+
 test('appendRunOutput: ROW_CONFLICT on replay is a no-op (idempotent)', async () => {
   const a = makeFakeDa({ throwConflict: true });
   await assert.doesNotReject(() =>

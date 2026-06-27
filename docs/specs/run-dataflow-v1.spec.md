@@ -104,6 +104,8 @@ Rules:
 - Runtime/draft scope; rows are never committed as versioned meaning.
 - Append-only; do not update or delete rows.
 - One row per node execution that declares `produces`.
+- For retried runner attempts, `attempt_id` and over-cap `payload_ref` point at the winning physical attempt id,
+  not the logical `stepKey`.
 - Latest output is `max(ordinal)` per `(run_id, node_id)`.
 - Payload is serialized JSON, secret-redacted, and size-capped.
 - Oversized content spills by reference in `payload_ref`.
@@ -128,4 +130,5 @@ guards still catch dynamic skips and stale paths.
 
 ## Changelog
 
+- 2026-06-27: Clarified that produced run outputs for retried runner nodes reference the winning physical attempt.
 - 2026-06-26: Initial spec extracted from former plan 0016 and `pipeline-core` dataflow types.

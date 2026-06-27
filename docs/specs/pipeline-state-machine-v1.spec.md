@@ -94,7 +94,9 @@ Core verdicts route structurally and must not appear in `verdict.*` guards. Doma
 
 ## Failure and Timeout
 
-- Transient retry is a DBOS concern, not a template concern.
+- Transient runner retry is a DBOS adapter concern, not a template concern. Templates do not declare retry policy;
+  the adapter pins the resolved policy in the DBOS workflow input before enqueue and retries only eligible physical
+  runner attempts while keeping the logical node `stepKey` unchanged.
 - `humanGate.timeout` is optional. If absent, the gate can wait indefinitely.
 - A gate timeout routes via `timeout.goto`; it is not matched by a verdict guard.
 - Effect failure precedence:
@@ -185,5 +187,7 @@ v1 reports safe/breaking information but does not migrate live in-flight runs.
 
 ## Changelog
 
+- 2026-06-27: Clarified that transient runner retry is implemented by the DBOS adapter around physical attempts,
+  not by templates or `pipeline-core`.
 - 2026-06-26: Initial spec extracted from the data-driven state-machine ADR, former plan 0015, and
   `src/pipeline-core`.

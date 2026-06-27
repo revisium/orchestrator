@@ -254,6 +254,10 @@ export class DbosService {
     return DBOS.setEvent(key, value);
   }
 
+  sleep(ms: number): Promise<void> {
+    return DBOS.sleep(ms);
+  }
+
   getEvent<T>(workflowID: string, key: string, opts?: { timeoutSeconds?: number }): Promise<T | null> {
     return DBOS.getEvent<T>(workflowID, key, opts);
   }

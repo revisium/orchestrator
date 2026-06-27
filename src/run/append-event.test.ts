@@ -103,6 +103,22 @@ test('appendRunEvent: different type produces different eventId', async () => {
   assert.notEqual(rows1[0]?.rowId, rows2[0]?.rowId);
 });
 
+test('appendRunEvent: idempotencyKey scopes repeated logical step events', async () => {
+  const { da: da1, rows: rows1 } = makeFakeDa();
+  const { da: da2, rows: rows2 } = makeFakeDa();
+  const base = {
+    runId: 'run-1',
+    taskId: 'task-1',
+    stepId: 'step-1',
+    stepKey: 'developer',
+    type: 'step_failed',
+    payload: {},
+  };
+  await appendRunEvent(da1, { ...base, idempotencyKey: 'attempt_1' });
+  await appendRunEvent(da2, { ...base, idempotencyKey: 'attempt_2' });
+  assert.notEqual(rows1[0]?.rowId, rows2[0]?.rowId);
+});
+
 test('appendRunEvent: non-ROW_CONFLICT errors are rethrown', async () => {
   const da: ControlPlaneDataAccess = {
     assertReady: async () => undefined,
@@ -231,6 +247,21 @@ test('appendRunCost: different index produces different costId', async () => {
   };
   await appendRunCost(da1, { ...base, index: 0 });
   await appendRunCost(da2, { ...base, index: 1 });
+  assert.notEqual(rows1[0]?.rowId, rows2[0]?.rowId);
+});
+
+test('appendRunCost: different attemptId produces different costId for the same logical step/index', async () => {
+  const { da: da1, rows: rows1 } = makeFakeDa();
+  const { da: da2, rows: rows2 } = makeFakeDa();
+  const base = {
+    runId: 'run-1',
+    stepId: 'step-1',
+    stepKey: 'developer',
+    cost: { modelProfile: 'standard', inputTokens: 0, outputTokens: 0, costAmount: 0 },
+    index: 0,
+  };
+  await appendRunCost(da1, { ...base, attemptId: 'attempt_1' });
+  await appendRunCost(da2, { ...base, attemptId: 'attempt_2' });
   assert.notEqual(rows1[0]?.rowId, rows2[0]?.rowId);
 });
 
