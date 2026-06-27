@@ -122,7 +122,7 @@ test('preflightLive: dirty repo → needsHuman (not clean)', async () => {
   );
 });
 
-test('preflightLive: clean feature branch based on origin/base → { ok: true }', async () => {
+test('preflightLive: clean feature branch based on origin/base → { ok: true } without ancestry check', async () => {
   const calls: string[] = [];
   const deps: IntegratorDeps = {
     execGit: (args, _cwd) => {
@@ -132,14 +132,6 @@ test('preflightLive: clean feature branch based on origin/base → { ok: true }'
       if (args[0] === 'rev-parse' && args[1] === '--abbrev-ref') return 'feature-branch\n';
       if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'aaa111\n';
       if (args[0] === 'rev-parse' && args[1] === 'origin/master') return 'bbb222\n';
-      if (
-        args[0] === 'merge-base' &&
-        args[1] === '--is-ancestor' &&
-        args[2] === 'origin/master' &&
-        args[3] === 'HEAD'
-      ) {
-        return '';
-      }
       throw new Error(`unexpected: ${args.join(' ')}`);
     },
     execGh: neverGh,
@@ -149,28 +141,19 @@ test('preflightLive: clean feature branch based on origin/base → { ok: true }'
 
   const result = await preflightLive('task-001', 'master', deps);
   assert.ok('ok' in result && result.ok === true, 'fresh feature branch → ok');
-  assert.ok(
-    calls.includes('merge-base --is-ancestor origin/master HEAD'),
-    'feature branch must verify origin/base ancestry',
-  );
+  assert.equal(calls.some((call) => call.startsWith('merge-base ')), false, 'feature branch must not run merge-base');
 });
 
-test('preflightLive: clean feature branch not based on origin/base → needsHuman', async () => {
+test('preflightLive: clean feature branch not based on origin/base → { ok: true } without ancestry check', async () => {
+  const calls: string[] = [];
   const deps: IntegratorDeps = {
     execGit: (args, _cwd) => {
+      calls.push(args.join(' '));
       if (args[0] === 'fetch') return '';
       if (args[0] === 'status' && args[1] === '--porcelain') return '';
       if (args[0] === 'rev-parse' && args[1] === '--abbrev-ref') return 'feature-branch\n';
       if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'aaa111\n';
       if (args[0] === 'rev-parse' && args[1] === 'origin/master') return 'bbb222\n';
-      if (
-        args[0] === 'merge-base' &&
-        args[1] === '--is-ancestor' &&
-        args[2] === 'origin/master' &&
-        args[3] === 'HEAD'
-      ) {
-        throw new Error('not ancestor');
-      }
       throw new Error(`unexpected: ${args.join(' ')}`);
     },
     execGh: neverGh,
@@ -179,11 +162,11 @@ test('preflightLive: clean feature branch not based on origin/base → needsHuma
   };
 
   const result = await preflightLive('task-001', 'master', deps);
-  assert.ok('needsHuman' in result, 'stale feature branch must block');
-  assert.ok(result.lesson.includes('not based on fresh origin/master'), `lesson: ${result.lesson}`);
+  assert.ok('ok' in result && result.ok === true, 'stale feature branch must be allowed to start live');
+  assert.equal(calls.some((call) => call.startsWith('merge-base ')), false, 'stale feature branch must not run merge-base');
 });
 
-test('preflightLive: clean base branch BEHIND origin → self-heals via fast-forward → ok (slice 142)', async () => {
+test('preflightLive: clean base branch BEHIND origin → ok without mutating caller checkout', async () => {
   const calls: string[] = [];
   const deps: IntegratorDeps = {
     execGit: (args, _cwd) => {
@@ -195,7 +178,6 @@ test('preflightLive: clean base branch BEHIND origin → self-heals via fast-for
       if (args[0] === 'rev-parse' && args[1] === 'origin/master') return 'bbb222\n';
       // base behind: HEAD is an ancestor of origin/master → success
       if (args[0] === 'merge-base' && args[1] === '--is-ancestor' && args[2] === 'HEAD' && args[3] === 'origin/master') return '';
-      if (args[0] === 'merge' && args[1] === '--ff-only' && args[2] === 'origin/master') return '';
       throw new Error(`unexpected: ${args.join(' ')}`);
     },
     execGh: neverGh,
@@ -204,13 +186,15 @@ test('preflightLive: clean base branch BEHIND origin → self-heals via fast-for
   };
 
   const result = await preflightLive('task-001', 'master', deps);
-  assert.ok('ok' in result && result.ok === true, 'a base merely behind origin self-heals, not blocks');
-  assert.ok(calls.includes('merge --ff-only origin/master'), 'fast-forwarded the clean base to origin/master');
+  assert.ok('ok' in result && result.ok === true, 'a base merely behind origin can start without self-healing');
+  assert.equal(calls.includes('merge --ff-only origin/master'), false, 'preflight must not fast-forward the caller checkout');
 });
 
-test('preflightLive: clean base branch DIVERGED from origin → needsHuman (no silent reset)', async () => {
+test('preflightLive: clean base branch with local-only/diverged commits → needsHuman (no caller mutation)', async () => {
+  const calls: string[] = [];
   const deps: IntegratorDeps = {
     execGit: (args, _cwd) => {
+      calls.push(args.join(' '));
       if (args[0] === 'fetch') return '';
       if (args[0] === 'status' && args[1] === '--porcelain') return '';
       if (args[0] === 'rev-parse' && args[1] === '--abbrev-ref') return 'master\n';
@@ -226,8 +210,9 @@ test('preflightLive: clean base branch DIVERGED from origin → needsHuman (no s
   };
 
   const result = await preflightLive('task-001', 'master', deps);
-  assert.ok('needsHuman' in result, 'a diverged base must block (never auto-reset away local commits)');
-  assert.ok(result.lesson.includes('DIVERGED'), `lesson: ${result.lesson}`);
+  assert.ok('needsHuman' in result, 'a base with local-only/diverged commits must block');
+  assert.ok(result.lesson.includes('local-only or diverged'), `lesson: ${result.lesson}`);
+  assert.equal(calls.some((call) => call.startsWith('merge ')), false, 'preflight must not mutate the caller checkout');
 });
 
 test('preflightLive: fetch failure → needsHuman (no-base lesson)', async () => {

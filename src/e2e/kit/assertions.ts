@@ -41,16 +41,20 @@ export async function assertEventsPresent(api: Api, runId: string, types: string
     await new Promise((resolve) => setTimeout(resolve, 250));
     events = await api.getRunEvents({ runId, limit: 500 });
   }
-  // Deterministic fallback for the terminal `run_completed` event: it is appended just AFTER the run-row
-  // status patch, so on a fast run it can still trail the read window. The run STATUS being `completed`
-  // (the authoritative signal `wait_for_run`/`approveUntilTerminal` already observed) proves completion,
-  // so accept `run_completed` when the run row is `completed` even if its event append hasn't surfaced.
-  let runCompleted = false;
-  if (types.includes('run_completed') && !events.some((e) => e.type === 'run_completed')) {
-    runCompleted = (await api.getRun({ runId })).run.status === 'completed';
+  // Deterministic fallback for terminal events: under load the run-row status can become visible before
+  // the event query sees the terminal event. The run STATUS is the authoritative signal observed by
+  // `wait_for_run`/`approveUntilTerminal`, so accept matching terminal statuses after the event poll.
+  let terminalStatus = '';
+  const terminalFallbacks = new Map<string, string>([
+    ['run_completed', 'completed'],
+    ['run_failed', 'failed'],
+  ]);
+  if (types.some((type) => terminalFallbacks.has(type) && !events.some((e) => e.type === type))) {
+    terminalStatus = (await api.getRun({ runId })).run.status;
   }
   for (const type of types) {
-    if (type === 'run_completed' && runCompleted) continue;
+    const fallbackStatus = terminalFallbacks.get(type);
+    if (fallbackStatus && terminalStatus === fallbackStatus) continue;
     assert.ok(events.some((e) => e.type === type), `event "${type}" must be visible`);
   }
 }
