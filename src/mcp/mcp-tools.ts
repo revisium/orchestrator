@@ -157,7 +157,7 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
     'resume_run',
     {
       description:
-        'Resume an existing run. If the run is a terminal recoverable preflight block, creates or reuses a follow-up recovery run and starts that child workflow.',
+        'Resume an existing run. If the run is a terminal recoverable preflight block, creates or reuses a follow-up recovery run, returns the child runId, and starts/observes that child workflow.',
       inputSchema: {
         runId: runIdSchema,
       },

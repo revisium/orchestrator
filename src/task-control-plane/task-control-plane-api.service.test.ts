@@ -1385,7 +1385,43 @@ test('TaskControlPlaneApiService.resumeRun rejects recovery when route_decision 
     (error: unknown) =>
       error instanceof ControlPlaneError &&
       error.code === 'VALIDATION_FAILURE' &&
-      error.message.includes('parent route_decision is not a record'),
+      error.message.includes('parent route_decision is invalid'),
+  );
+});
+
+test('TaskControlPlaneApiService.resumeRun rejects recovery when route_decision is an invalid record', async () => {
+  const parentData = pausedRecoveryParentData({
+    title: 'Recover invalid route decision record',
+    route_decision: {},
+  });
+  const api = makeApi({
+    runService: {
+      async getRun() {
+        return { rowId: 'run-parent', data: parentData };
+      },
+      async showRun() {
+        return recoveryRunDetail('run-parent', String(parentData.title));
+      },
+      async listRunEvents() {
+        return [preflightBlockedEvent({ payload: { reason: 'preflight', lesson: 'empty route decision' } })];
+      },
+      async createRun() {
+        assert.fail('recovery with invalid route_decision must not create a child run');
+      },
+    },
+    dbosService: {
+      async getWorkflowStatus() {
+        return recoveryWorkflowStatus();
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => api.resumeRun({ runId: 'run-parent' }),
+    (error: unknown) =>
+      error instanceof ControlPlaneError &&
+      error.code === 'VALIDATION_FAILURE' &&
+      error.message.includes('parent route_decision is invalid'),
   );
 });
 

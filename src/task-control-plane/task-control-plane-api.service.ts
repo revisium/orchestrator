@@ -783,7 +783,13 @@ export class TaskControlPlaneApiService {
     const playbookId = optionalString(parentData.playbook_id);
     const pipelineId = optionalString(parentData.pipeline_id);
     const params = optionalRecord(parentData.params);
-    const routeDecision = requiredRecord(parentData.route_decision, 'route_decision', parentRunId);
+    const routeDecision = parentData.route_decision;
+    if (!isRouteDecision(routeDecision)) {
+      throw new ControlPlaneError(
+        'VALIDATION_FAILURE',
+        `Cannot recover run ${parentRunId}: parent route_decision is invalid`,
+      );
+    }
     const executionProfile = requiredRecord(parentData.execution_profile, 'execution_profile', parentRunId);
     const idSuffix = fnv1a64Hex(`${parentRunId}|${blockedEvent.eventId}`).slice(0, 8);
     return { title, repo, description, scope, priority, role: recoveryRole, playbookId, pipelineId, params, routeDecision, executionProfile, now, idSuffix };
