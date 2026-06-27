@@ -59,6 +59,24 @@ test('observe_run is registered as the canonical low-context observation tool', 
   assert.equal(tool.config.description?.includes('without raw logs or full events'), true);
 });
 
+test('create_run schema accepts issueRef traceability metadata', async () => {
+  const { z } = await import('zod');
+  const { server, tools } = makeServer();
+
+  registerRevoMcpTools(server as never, {} as McpFacadeService);
+
+  const tool = tools.find((registered) => registered.name === 'create_run');
+  assert.ok(tool);
+  const schema = z.object(tool.config.inputSchema as Record<string, never>);
+  const issueRef = {
+    repo: 'revisium/orchestrator',
+    number: 147,
+    url: 'https://github.com/revisium/orchestrator/issues/147',
+  };
+  assert.equal(schema.safeParse({ title: 'Task', repo: '.', start: false, issueRef }).success, true);
+  assert.equal(schema.safeParse({ title: 'Task', repo: '.', start: false, issueRef: { ...issueRef, number: 0 } }).success, false);
+});
+
 test('observe_run handler forwards the request abort signal to the facade', async () => {
   const { server, tools } = makeServer();
   let received: { runId?: string; signal?: AbortSignal } | undefined;

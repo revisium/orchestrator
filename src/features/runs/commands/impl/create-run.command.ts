@@ -7,6 +7,7 @@ export type CreateRunCommandData = {
   playbookId?: string;
   pipelineId?: string;
   params?: unknown;
+  issueRef?: unknown;
   start?: boolean;
 };
 

@@ -86,6 +86,11 @@ test('McpFacadeService lazily builds a poll-fallback watch when none is injected
 
 test('McpFacadeService delegates product operations to TaskControlPlaneApiService', async () => {
   let received: unknown;
+  const issueRef = {
+    repo: 'revisium/orchestrator',
+    number: 147,
+    url: 'https://github.com/revisium/orchestrator/issues/147',
+  };
   const api = {
     async createRun(input: unknown) {
       received = input;
@@ -94,9 +99,9 @@ test('McpFacadeService delegates product operations to TaskControlPlaneApiServic
   } as unknown as TaskControlPlaneApiService;
   const facade = new McpFacadeService(api);
 
-  const result = await facade.createRun({ title: 'Task', repo: '.', start: false });
+  const result = await facade.createRun({ title: 'Task', repo: '.', start: false, issueRef });
 
-  assert.deepEqual(received, { title: 'Task', repo: '.', start: false });
+  assert.deepEqual(received, { title: 'Task', repo: '.', start: false, issueRef });
   assert.deepEqual(result, { runId: 'run-1', started: false });
 });
 
@@ -119,22 +124,30 @@ test('McpFacadeService.createRun exposes workflow row failure cause for MCP debu
 });
 
 test('McpFacadeService delegates PR readiness tools to TaskControlPlaneApiService', async () => {
-  const calls: string[] = [];
+  const issueRef = {
+    repo: 'owner/repo',
+    number: 147,
+    url: 'https://github.com/owner/repo/issues/147',
+  };
+  const calls: Array<{ name: string; input: unknown }> = [];
   const api = {
-    async getPrReadiness() {
-      calls.push('getPrReadiness');
+    async getPrReadiness(input: unknown) {
+      calls.push({ name: 'getPrReadiness', input });
       return { verdict: 'ready' };
     },
-    async listPrFeedback() {
-      calls.push('listPrFeedback');
+    async listPrFeedback(input: unknown) {
+      calls.push({ name: 'listPrFeedback', input });
       return { developerFixes: [] };
     },
   } as unknown as TaskControlPlaneApiService;
   const facade = new McpFacadeService(api);
 
-  assert.deepEqual(await facade.getPrReadiness({ repo: 'owner/repo', prNumber: 1 }), { verdict: 'ready' });
-  assert.deepEqual(await facade.listPrFeedback({ repo: 'owner/repo', prNumber: 1 }), { developerFixes: [] });
-  assert.deepEqual(calls, ['getPrReadiness', 'listPrFeedback']);
+  assert.deepEqual(await facade.getPrReadiness({ repo: 'owner/repo', prNumber: 1, issueRef }), { verdict: 'ready' });
+  assert.deepEqual(await facade.listPrFeedback({ repo: 'owner/repo', prNumber: 1, issueRef }), { developerFixes: [] });
+  assert.deepEqual(calls, [
+    { name: 'getPrReadiness', input: { repo: 'owner/repo', prNumber: 1, issueRef } },
+    { name: 'listPrFeedback', input: { repo: 'owner/repo', prNumber: 1, issueRef } },
+  ]);
 });
 
 test('McpFacadeService delegates agent observability tools to TaskControlPlaneApiService', async () => {

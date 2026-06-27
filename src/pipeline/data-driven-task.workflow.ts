@@ -58,6 +58,7 @@ import { redactEventPayload } from '../run/append-event.js';
 import { redactSecrets } from '../control-plane/inbox.js';
 import { fnv1a64Hex } from '../control-plane/steps.js';
 import type { RunOutputRow } from '../run/run-outputs.js';
+import { normalizeIssueRef, type IssueRef } from '../run/issue-ref.js';
 import type { Decision as GateDecision } from './await-human.js';
 import type { CompleteRunResult } from '../run/complete-run.js';
 import type { FailRunResult } from '../run/fail-run.js';
@@ -298,13 +299,33 @@ function producedChangeArtifact(value: unknown): ProducedChangeArtifact | undefi
   const headSha = candidate.headSha;
   if (typeof branch !== 'string' || branch.trim().length === 0) return undefined;
   if (typeof headSha !== 'string' || headSha.trim().length === 0) return undefined;
+  const issueRef = normalizeArtifactIssueRef(candidate.issueRef);
   return {
     branch,
     headSha,
+    ...(issueRef ? { issueRef } : {}),
     ...(typeof candidate.worktreePath === 'string' && candidate.worktreePath.trim() ? { worktreePath: candidate.worktreePath } : {}),
     ...(typeof candidate.artifactRef === 'string' && candidate.artifactRef.trim() ? { artifactRef: candidate.artifactRef } : {}),
     ...(typeof candidate.prNumber === 'number' && Number.isSafeInteger(candidate.prNumber) ? { prNumber: candidate.prNumber } : {}),
   };
+}
+
+function normalizeArtifactIssueRef(value: unknown): IssueRef | undefined {
+  try {
+    return normalizeIssueRef(value, 'change.issueRef');
+  } catch {
+    return undefined;
+  }
+}
+
+function changeWithRunIssueRef(change: ProducedChangeArtifact, issueRef?: IssueRef): ProducedChangeArtifact {
+  const normalized = { ...change };
+  if (issueRef) {
+    normalized.issueRef = issueRef;
+  } else {
+    delete normalized.issueRef;
+  }
+  return normalized;
 }
 
 function producedChangeFromInputs(inputs: Record<string, unknown>): ProducedChangeArtifact | undefined {
@@ -474,7 +495,7 @@ export type DataDrivenTaskDeps = {
     opts?: { actor?: string; source?: string; reason?: string },
   ) => Promise<BlockRunResult | null>;
   /** Resolve { taskId, title, base } once at workflow start (reused from RunService). */
-  loadRunTaskContext: (runId: string) => Promise<{ taskId: string; title: string; base: string; repoRef: string }>;
+  loadRunTaskContext: (runId: string) => Promise<{ taskId: string; title: string; base: string; repoRef: string; issueRef?: IssueRef }>;
   /** Real integrator — DBOS step (live). */
   integrateFn: (input: IntegratorInput) => Promise<IntegratorOutput | IntegratorBlocked>;
   /** Stub integrator — pure (script). */
@@ -509,7 +530,7 @@ export type DataDrivenTaskDeps = {
    * (succeeded/failed/blocked) — never while parked at a gate (the workflow stays alive across `recv`).
    * Both are no-ops for non-live runs (no worktree is created for stub/script).
    */
-  createWorktreeFn: (runId: string, taskId: string, title: string, base: string) => Promise<{ worktreePath: string }>;
+  createWorktreeFn: (runId: string, taskId: string, title: string, base: string, issueRef?: IssueRef) => Promise<{ worktreePath: string }>;
   releaseWorktreeFn: (runId: string, taskId: string) => Promise<void>;
 };
 
@@ -741,7 +762,7 @@ export function makeDataDrivenTask(
       );
     }
 
-    const { taskId, title, base } = await loadRunTaskContext(runId);
+    const { taskId, title, base, issueRef } = await loadRunTaskContext(runId);
 
     // B5/B7 — live preflight: one memoized DBOS step, evaluated exactly once BEFORE the graph runs.
     // Skipped entirely when every selected binding resolves to a stub/script runner (mirrors the old
@@ -770,9 +791,9 @@ export function makeDataDrivenTask(
     let result: DataDrivenResult | undefined;
     try {
       if (live) {
-        await createWorktreeFn(runId, taskId, title, base);
+        await createWorktreeFn(runId, taskId, title, base, issueRef);
       }
-      result = await runGraph(runId, opts, taskId, title, base, live);
+      result = await runGraph(runId, opts, taskId, title, base, issueRef, live);
       return result;
     } finally {
       if (live && result?.status !== 'blocked') {
@@ -792,6 +813,7 @@ export function makeDataDrivenTask(
     taskId: string,
     title: string,
     base: string,
+    issueRef: IssueRef | undefined,
     live: boolean,
   ): Promise<DataDrivenResult> {
     const { route, template, runnerRetryPolicy } = opts;
@@ -834,7 +856,7 @@ export function makeDataDrivenTask(
       }
 
       const eff = await applyDecision(decision, {
-        runId, template, bindingByRef, executionProfile, taskId, title, base,
+        runId, template, bindingByRef, executionProfile, taskId, title, base, issueRef,
         effectOrdinalByNode, outputsByNode, runnerRetryPolicy,
         live,
         // The verdict from the PRIOR effect (the reviewer/poller that routed into this node). At an
@@ -894,6 +916,7 @@ export function makeDataDrivenTask(
     taskId: string;
     title: string;
     base: string;
+    issueRef?: IssueRef;
     live: boolean;
     effectOrdinalByNode: Map<string, number>;
     outputsByNode: Map<string, RunOutputRow[]>;
@@ -982,7 +1005,7 @@ export function makeDataDrivenTask(
           });
           return { lastResult: { outcome: 'failed', errorCode: REVO_INPUT_MISSING }, lastVerdict: 'failed', stepDelta: 1 };
         }
-        const scriptResult = await invokeScript(runId, decision, { taskId, title, base }, bindingByRef, stepKeyFor(node.id, ordinal), resolved.inputs);
+        const scriptResult = await invokeScript(runId, decision, { taskId, title, base, issueRef: ctx.issueRef }, bindingByRef, stepKeyFor(node.id, ordinal), resolved.inputs);
         // A blocked script (needsHuman) routes via revo.ScriptBlocked → a `blocked` terminal; a thrown
         // script routes via revo.ScriptFailed → a `failed` terminal (§6 catch). The lesson-bearing
         // pipeline_blocked is emitted inside invokeScript for the block path (parity with the old engine).
@@ -1112,6 +1135,7 @@ export function makeDataDrivenTask(
           base: ctx.base,
           nodeId: node.id,
           attemptId: physicalAttempt.attemptId,
+          ...(ctx.issueRef ? { issueRef: ctx.issueRef } : {}),
           ...(artifactRef ? { artifactRef } : {}),
         });
         output = attachProducedChange(output, change);
@@ -1329,7 +1353,7 @@ export function makeDataDrivenTask(
   async function invokeScript(
     runId: string,
     decision: Extract<Decision, { type: 'invokeScript' }>,
-    ctx: { taskId: string; title: string; base: string },
+    ctx: { taskId: string; title: string; base: string; issueRef?: IssueRef },
     bindingByRef: Map<string, RouteRoleBinding>,
     stepKey: string,
     inputs: Record<string, unknown>,
@@ -1342,12 +1366,15 @@ export function makeDataDrivenTask(
     // the live script can reply/resolve the triaged threads without a live Revisium read.
     const change = producedChangeFromInputs(inputs);
     const mergeReadiness = mergeReadinessFromInputs(inputs);
+    const issueRef = ctx.issueRef;
+    const changeForIntegrator = change ? changeWithRunIssueRef(change, issueRef) : undefined;
     const integratorInput: IntegratorInput = {
       runId,
       taskId: ctx.taskId,
       title: ctx.title,
       base: ctx.base,
-      ...(change ? { change } : {}),
+      ...(issueRef ? { issueRef } : {}),
+      ...(changeForIntegrator ? { change: changeForIntegrator } : {}),
       ...(inputs.triage === undefined ? {} : { triage: inputs.triage }),
       ...(mergeReadiness ? { mergeReadiness } : {}),
     };
@@ -1398,9 +1425,21 @@ export function makeDataDrivenTask(
         stepId: '',
         stepKey,
         type: 'merge_confirmed',
-        payload: { prNumber: merged.prNumber, prUrl: merged.prUrl },
+        payload: {
+          prNumber: merged.prNumber,
+          prUrl: merged.prUrl,
+          ...(merged.issueRef ? { issueRef: merged.issueRef } : {}),
+        },
       });
-      return { outcome: 'ok', pointer: { merged: true, prNumber: merged.prNumber, prUrl: merged.prUrl } };
+      return {
+        outcome: 'ok',
+        pointer: {
+          merged: true,
+          prNumber: merged.prNumber,
+          prUrl: merged.prUrl,
+          ...(merged.issueRef ? { issueRef: merged.issueRef } : {}),
+        },
+      };
     }
     if (isPollPr) {
       // pollPr CLASSIFIES the feedback: its verdict (review_changes/ci_changes/clean) routes the prRouter
@@ -1419,6 +1458,7 @@ export function makeDataDrivenTask(
           evidence: feedback.evidence,
           ciFailures: feedback.ciFailures.length,
           reviewThreads: feedback.reviewThreads.length,
+          ...(feedback.issueRef ? { issueRef: feedback.issueRef } : {}),
         },
       });
       return { outcome: 'ok', pointer: feedback, verdict: feedback.verdict };
@@ -1442,9 +1482,26 @@ export function makeDataDrivenTask(
       stepId: '',
       stepKey,
       type: 'integrate_succeeded',
-      payload: { prUrl: integrated.prUrl, branch: integrated.branch, prNumber: integrated.prNumber, headSha: integrated.headSha, status: integrated.status },
+      payload: {
+        prUrl: integrated.prUrl,
+        branch: integrated.branch,
+        prNumber: integrated.prNumber,
+        headSha: integrated.headSha,
+        status: integrated.status,
+        ...(integrated.issueRef ? { issueRef: integrated.issueRef } : {}),
+      },
     });
-    return { outcome: 'ok', pointer: { prUrl: integrated.prUrl, branch: integrated.branch, prNumber: integrated.prNumber, headSha: integrated.headSha, status: integrated.status } };
+    return {
+      outcome: 'ok',
+      pointer: {
+        prUrl: integrated.prUrl,
+        branch: integrated.branch,
+        prNumber: integrated.prNumber,
+        headSha: integrated.headSha,
+        status: integrated.status,
+        ...(integrated.issueRef ? { issueRef: integrated.issueRef } : {}),
+      },
+    };
   }
 
   /** Terminal: finish the run in Revisium per the core's terminal status. */

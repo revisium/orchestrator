@@ -22,6 +22,11 @@ const agentStreamSchema = z.enum(['stdout', 'stderr', 'events', 'combined']);
 const agentLogByteSchema = z.number().int().positive().max(1048576).optional();
 const agentLogOffsetSchema = z.number().int().nonnegative().max(1048576).optional();
 const paramsSchema = z.record(z.string(), z.unknown()).optional();
+const issueRefSchema = z.object({
+  repo: z.string().min(1),
+  number: z.number().int().positive(),
+  url: z.string().min(1),
+}).optional();
 const watchCursorSchema = z.string().max(MAX_WATCH_CURSOR_CHARS);
 const observeRunModeSchema = z.enum(['actionable', 'heartbeat', 'diagnostic']);
 const prReadinessInputSchema = {
@@ -30,6 +35,7 @@ const prReadinessInputSchema = {
   headBranch: z.string().min(1).optional(),
   baseBranch: z.string().min(1).optional().default('master'),
   sonarProject: z.string().min(1).optional(),
+  issueRef: issueRefSchema,
   includeComments: z.boolean().optional().default(true),
   includeReviewThreads: z.boolean().optional().default(true),
 };
@@ -132,6 +138,7 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
         playbookId: z.string().min(1).optional(),
         pipelineId: z.string().min(1).optional(),
         params: paramsSchema,
+        issueRef: issueRefSchema,
         priority: z.number().int().optional(),
         start: z.boolean().optional().describe('Start the workflow immediately after creating the run'),
       },

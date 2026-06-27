@@ -14,6 +14,7 @@ import {
   preflightLive,
   pollPr,
   respondThreads,
+  captureProducedChange,
   resolveExecutable,
   parseOwnerRepo,
   type IntegratorInput,
@@ -400,6 +401,186 @@ test('M4: gh pr list returns 0 → creates PR', async () => {
   if (!('needsHuman' in result)) {
     assert.equal(result.prNumber, 7);
   }
+});
+
+test('issueRef: cross-repo integrate uses qualified non-closing commit and title, and empty PR body', async () => {
+  const issueRef = {
+    repo: 'revisium/orchestrator',
+    number: 147,
+    url: 'https://github.com/revisium/orchestrator/issues/147',
+  };
+  let commitMsg = '';
+  let pushedBranch = '';
+  let prHead = '';
+  let prTitle = '';
+  let prBody: string | undefined;
+
+  const deps: IntegratorDeps = {
+    execGit: (args, _cwd) => {
+      if (args[0] === 'remote' && args[2] === 'origin') return 'git@github.com:o/r.git\n';
+      if (args[0] === 'fetch') return '';
+      if (args[0] === 'rev-parse' && args[1] === '--verify') throw new Error('not found');
+      if (args[0] === 'switch') return '';
+      if (args[0] === 'add') return '';
+      if (args[0] === 'diff' && args.includes('--cached') && args.includes('--quiet')) throw new Error('staged');
+      if (args[0] === 'commit' && args[1] === '-m') {
+        commitMsg = args[2] ?? '';
+        return '';
+      }
+      if (args[0] === 'push') {
+        pushedBranch = args[3] ?? '';
+        return '';
+      }
+      throw new Error(`unexpected git: ${args.join(' ')}`);
+    },
+    execGh: (args) => {
+      if (args[0] === 'pr' && args[1] === 'list') return JSON.stringify([]);
+      if (args[0] === 'pr' && args[1] === 'create') {
+        prHead = args[args.indexOf('--head') + 1] ?? '';
+        prTitle = args[args.indexOf('--title') + 1] ?? '';
+        prBody = args[args.indexOf('--body') + 1];
+        return 'https://github.com/o/r/pull/147\n';
+      }
+      if (args[0] === 'pr' && args[1] === 'view') return JSON.stringify({ url: 'https://github.com/o/r/pull/147', number: 147 });
+      throw new Error(`unexpected gh: ${args.join(' ')}`);
+    },
+    resolveTaskCwd: makeResolveTaskCwd(),
+    resolveRunCwd: makeResolveRunCwd(),
+  };
+
+  const result = await integrate({ ...BASE_INPUT, issueRef }, deps);
+
+  assert.ok(!('needsHuman' in result));
+  if (!('needsHuman' in result)) {
+    assert.equal(result.branch, 'feat/task-001-issue-147-add-feature-x');
+    assert.deepEqual(result.issueRef, issueRef);
+  }
+  assert.equal(pushedBranch, 'feat/task-001-issue-147-add-feature-x');
+  assert.equal(prHead, 'feat/task-001-issue-147-add-feature-x');
+  assert.equal(commitMsg, 'feat: revisium/orchestrator#147 Add feature X');
+  assert.equal(prTitle, 'revisium/orchestrator#147 Add feature X');
+  assert.equal(prBody, '');
+  assert.ok(!/closes|fixes|resolves/i.test(commitMsg));
+});
+
+test('issueRef: same-repo integrate keeps short non-closing commit and title refs', async () => {
+  const issueRef = {
+    repo: 'o/r',
+    number: 147,
+    url: 'https://github.com/o/r/issues/147',
+  };
+  let commitMsg = '';
+  let prTitle = '';
+
+  const deps: IntegratorDeps = {
+    execGit: (args, _cwd) => {
+      if (args[0] === 'remote' && args[2] === 'origin') return 'git@github.com:o/r.git\n';
+      if (args[0] === 'fetch') return '';
+      if (args[0] === 'rev-parse' && args[1] === '--verify') throw new Error('not found');
+      if (args[0] === 'switch') return '';
+      if (args[0] === 'add') return '';
+      if (args[0] === 'diff' && args.includes('--cached') && args.includes('--quiet')) throw new Error('staged');
+      if (args[0] === 'commit' && args[1] === '-m') {
+        commitMsg = args[2] ?? '';
+        return '';
+      }
+      if (args[0] === 'push') return '';
+      throw new Error(`unexpected git: ${args.join(' ')}`);
+    },
+    execGh: (args) => {
+      if (args[0] === 'pr' && args[1] === 'list') return JSON.stringify([]);
+      if (args[0] === 'pr' && args[1] === 'create') {
+        prTitle = args[args.indexOf('--title') + 1] ?? '';
+        return 'https://github.com/o/r/pull/147\n';
+      }
+      if (args[0] === 'pr' && args[1] === 'view') return JSON.stringify({ url: 'https://github.com/o/r/pull/147', number: 147 });
+      throw new Error(`unexpected gh: ${args.join(' ')}`);
+    },
+    resolveTaskCwd: makeResolveTaskCwd(),
+    resolveRunCwd: makeResolveRunCwd(),
+  };
+
+  const result = await integrate({ ...BASE_INPUT, issueRef }, deps);
+
+  assert.ok(!('needsHuman' in result));
+  assert.equal(commitMsg, 'feat: #147 Add feature X');
+  assert.equal(prTitle, '#147 Add feature X');
+  assert.ok(!/closes|fixes|resolves/i.test(commitMsg));
+});
+
+test('issueRef: cross-repo captureProducedChange uses qualified non-closing commit before publication', async () => {
+  const issueRef = {
+    repo: 'revisium/orchestrator',
+    number: 147,
+    url: 'https://github.com/revisium/orchestrator/issues/147',
+  };
+  let commitMsg = '';
+  let createdBranch = '';
+
+  const result = await captureProducedChange(
+    { ...BASE_INPUT, nodeId: 'developer', attemptId: 'attempt-1', issueRef },
+    {
+      resolveRunCwd: makeResolveRunCwd('/produced-worktree'),
+      execGit: (args, cwd) => {
+        assert.equal(cwd, '/produced-worktree');
+        if (args[0] === 'remote' && args[2] === 'origin') return 'git@github.com:o/r.git\n';
+        if (args[0] === 'rev-parse' && args[1] === '--verify') throw new Error('not found');
+        if (args[0] === 'switch' && args[1] === '-c') {
+          createdBranch = args[2] ?? '';
+          return '';
+        }
+        if (args[0] === 'add') return '';
+        if (args[0] === 'diff' && args.includes('--cached') && args.includes('--quiet')) throw new Error('staged');
+        if (args[0] === 'commit' && args[1] === '-m') {
+          commitMsg = args[2] ?? '';
+          return '';
+        }
+        if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'produced-sha\n';
+        throw new Error(`unexpected git: ${args.join(' ')}`);
+      },
+    },
+  );
+
+  assert.equal(createdBranch, 'feat/task-001-issue-147-add-feature-x');
+  assert.equal(result.branch, 'feat/task-001-issue-147-add-feature-x');
+  assert.equal(result.headSha, 'produced-sha');
+  assert.deepEqual(result.issueRef, issueRef);
+  assert.equal(commitMsg, 'feat: revisium/orchestrator#147 Add feature X');
+  assert.ok(!/closes|fixes|resolves/i.test(commitMsg));
+});
+
+test('issueRef: same-repo captureProducedChange keeps short non-closing commit ref', async () => {
+  const issueRef = {
+    repo: 'o/r',
+    number: 147,
+    url: 'https://github.com/o/r/issues/147',
+  };
+  let commitMsg = '';
+
+  const result = await captureProducedChange(
+    { ...BASE_INPUT, nodeId: 'developer', attemptId: 'attempt-1', issueRef },
+    {
+      resolveRunCwd: makeResolveRunCwd('/produced-worktree'),
+      execGit: (args, cwd) => {
+        assert.equal(cwd, '/produced-worktree');
+        if (args[0] === 'remote' && args[2] === 'origin') return 'git@github.com:o/r.git\n';
+        if (args[0] === 'rev-parse' && args[1] === '--verify') throw new Error('not found');
+        if (args[0] === 'switch' && args[1] === '-c') return '';
+        if (args[0] === 'add') return '';
+        if (args[0] === 'diff' && args.includes('--cached') && args.includes('--quiet')) throw new Error('staged');
+        if (args[0] === 'commit' && args[1] === '-m') {
+          commitMsg = args[2] ?? '';
+          return '';
+        }
+        if (args[0] === 'rev-parse' && args[1] === 'HEAD') return 'produced-sha\n';
+        throw new Error(`unexpected git: ${args.join(' ')}`);
+      },
+    },
+  );
+
+  assert.deepEqual(result.issueRef, issueRef);
+  assert.equal(commitMsg, 'feat: #147 Add feature X');
+  assert.ok(!/closes|fixes|resolves/i.test(commitMsg));
 });
 
 test('M4: >1 matching PR → { needsHuman } naming candidates, no duplicate create', async () => {

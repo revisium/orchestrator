@@ -1,5 +1,6 @@
 import { Field, Int, ObjectType } from '@nestjs/graphql';
 import { GraphQLJSON } from 'graphql-scalars';
+import { IssueRefModel } from '../../share/model/issue-ref.model.js';
 
 @ObjectType()
 export class PrInfoModel {
@@ -23,6 +24,9 @@ export class PrInfoModel {
 
   @Field(() => String)
   headSha!: string;
+
+  @Field(() => String)
+  title!: string;
 
   @Field(() => String)
   mergeState!: string;
@@ -228,6 +232,9 @@ export class PrReadinessModel {
 
   @Field(() => PrSonarModel)
   sonar!: PrSonarModel;
+
+  @Field(() => IssueRefModel, { nullable: true })
+  issueRef!: IssueRefModel | null;
 
   @Field(() => [String])
   evidence!: string[];

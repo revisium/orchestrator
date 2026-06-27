@@ -29,6 +29,7 @@ import type {
 } from '../runners/integrator.js';
 import { template, node, on, otherwise, verdictEq, allOf, counterLt } from '../pipeline-core/kit/index.js';
 import { RUNNER_IDLE_TIMEOUT_KIND, RUNNER_WALL_CLOCK_LIMIT_KIND } from '../worker/process-executor.js';
+import type { IssueRef } from '../run/issue-ref.js';
 
 const RUN_ID = 'run-dd-001';
 
@@ -83,6 +84,8 @@ type Recorder = {
   outputs: Array<{ nodeId: string; ordinal: number; name: string; payload: unknown; attemptId?: string }>;
   /** Captured change artifacts (issue #140 handoff contract). */
   capturedChanges: ProducedChangeArtifact[];
+  /** issueRef values passed into worktree creation. */
+  worktreeIssueRefs: Array<IssueRef | undefined>;
   /** Hydrated `inputs` the adapter passed to each step, keyed by stepKey (0016 consumes). */
   inputsByStep: Record<string, unknown>;
   runStepAttempts: Array<{ stepKey: string; attemptNo?: number; attemptId?: string }>;
@@ -114,6 +117,7 @@ function buildAdapter(opts: {
   route?: RouteDecision;
   retryPolicy?: RunnerTransientRetryPolicy;
   onSleep?: (ms: number) => void | Promise<void>;
+  issueRef?: IssueRef;
 }) {
   const rec: Recorder = {
     gates: [],
@@ -133,6 +137,7 @@ function buildAdapter(opts: {
     eventRecords: [],
     outputs: [],
     capturedChanges: [],
+    worktreeIssueRefs: [],
     inputsByStep: {},
     runStepAttempts: [],
     retrySleeps: [],
@@ -197,7 +202,7 @@ function buildAdapter(opts: {
     completeRun: async (_runId, o) => { rec.completed.push({ verdict: o?.verdict }); return null; },
     failRun: async (_runId, reason) => { rec.failed.push(reason); return null; },
     blockRun: async (_runId, o) => { rec.blocked.push({ reason: o?.reason }); return null; },
-    loadRunTaskContext: async () => ({ taskId: 'task-1', title: 'T', base: 'master', repoRef: '' }),
+    loadRunTaskContext: async () => ({ taskId: 'task-1', title: 'T', base: 'master', repoRef: '', issueRef: opts.issueRef }),
     integrateFn: async (input: IntegratorInput): Promise<IntegratorOutput | IntegratorBlocked> => {
       rec.integrateCalls++;
       rec.integratorInputs.push(input);
@@ -214,7 +219,11 @@ function buildAdapter(opts: {
     preflightFn: async () => (opts.preflight ? opts.preflight() : { ok: true }),
     // Per-run worktree lifecycle (plan 0017) — fakes here record create/release ordering via events;
     // the live runner binding means both fire (create after preflight, release in the terminal finally).
-    createWorktreeFn: async () => { rec.events.push('worktree_create:pipeline'); return { worktreePath: '/fake/worktree' }; },
+    createWorktreeFn: async (_runId, _taskId, _title, _base, issueRef) => {
+      rec.events.push('worktree_create:pipeline');
+      rec.worktreeIssueRefs.push(issueRef);
+      return { worktreePath: '/fake/worktree' };
+    },
     releaseWorktreeFn: async () => { rec.events.push('worktree_release:pipeline'); },
     // confirmMerge (plan 0017 follow-up): default fake reports merged; a test can override via opts.confirmMerge.
     confirmMergeFn: async (input: IntegratorInput) => {
@@ -258,6 +267,7 @@ function buildAdapter(opts: {
         branch: `feat/${input.taskId}`,
         headSha: `sha-${input.nodeId}-${input.attemptId}`,
         worktreePath: '/fake/worktree',
+        ...(input.issueRef ? { issueRef: input.issueRef } : {}),
         ...(input.artifactRef ? { artifactRef: input.artifactRef } : {}),
       };
       rec.capturedChanges.push(change);
@@ -535,6 +545,140 @@ test('DD4-issue-140: code-review changes_requested rework hands the latest produ
     (rec.inputsByStep['codeReview#2'] as { reworkChange?: unknown } | undefined)?.reworkChange,
     'the second reviewer pass receives the rework change artifact',
   );
+});
+
+test('issueRef: run context reaches worktree creation, produced change, and integrator input', async () => {
+  const issueRef: IssueRef = {
+    repo: 'revisium/orchestrator',
+    number: 147,
+    url: 'https://github.com/revisium/orchestrator/issues/147',
+  };
+  const { run, rec } = buildAdapter({
+    template: featureDevelopmentPrReview(),
+    verdicts: { codeReview: 'approved' },
+    gate: () => ({ decision: 'approve' }),
+    issueRef,
+  });
+
+  const result = await run();
+
+  assert.equal(result.status, 'succeeded');
+  assert.deepEqual(rec.worktreeIssueRefs, [issueRef]);
+  assert.deepEqual(rec.capturedChanges[0]?.issueRef, issueRef);
+  assert.deepEqual(rec.integratorInputs[0]?.issueRef, issueRef);
+  assert.deepEqual(rec.integratorInputs[0]?.change?.issueRef, issueRef);
+});
+
+test('issueRef: run context overrides mismatched produced change issueRef before integrator handoff', async () => {
+  const runIssueRef: IssueRef = {
+    repo: 'revisium/orchestrator',
+    number: 147,
+    url: 'https://github.com/revisium/orchestrator/issues/147',
+  };
+  const staleIssueRef: IssueRef = {
+    repo: 'revisium/orchestrator',
+    number: 148,
+    url: 'https://github.com/revisium/orchestrator/issues/148',
+  };
+  const stubChange: ProducedChangeArtifact = {
+    branch: 'feat/stub-produced',
+    headSha: 'stub-produced-sha',
+    worktreePath: '/stub/worktree',
+    issueRef: staleIssueRef,
+  };
+  const tmpl = template('run-issue-ref-authoritative')
+    .specVersion('1.0')
+    .entry('developer')
+    .domain('approved')
+    .add(
+      node.agent('developer', 'role:developer', 'integrator', {
+        resultSchema: 'schema:change',
+        produces: { name: 'change' },
+      }),
+      node.script('integrator', 'script:integrator', 'done', {
+        resultSchema: 'schema:integration',
+        onFailure: 'route',
+        consumes: [{ node: 'developer', as: 'developerChange' }],
+        catch: [{ onError: 'revo.ScriptFailed', goto: 'failed' }],
+      }),
+      node.terminal('done', 'succeeded'),
+      node.terminal('failed', 'failed'),
+    )
+    .build();
+  const { run, rec } = buildAdapter({
+    template: tmpl,
+    route: makeRoute({ developerRunnerId: 'script', integratorRunnerId: 'script' }),
+    issueRef: runIssueRef,
+    results: {
+      developer: {
+        output: { from: 'developer', change: stubChange },
+        verdict: 'approved',
+        nextSteps: [],
+        costs: [],
+      },
+    },
+  });
+
+  const result = await run();
+
+  assert.equal(result.status, 'succeeded');
+  assert.deepEqual(rec.integratorInputs[0]?.issueRef, runIssueRef);
+  assert.deepEqual(rec.integratorInputs[0]?.change, { ...stubChange, issueRef: runIssueRef });
+});
+
+test('issueRef: no-issue run strips produced change issueRef before integrator handoff', async () => {
+  const artifactIssueRef: IssueRef = {
+    repo: 'revisium/orchestrator',
+    number: 147,
+    url: 'https://github.com/revisium/orchestrator/issues/147',
+  };
+  const stubChange: ProducedChangeArtifact = {
+    branch: 'feat/stub-produced',
+    headSha: 'stub-produced-sha',
+    worktreePath: '/stub/worktree',
+    issueRef: artifactIssueRef,
+  };
+  const tmpl = template('no-issue-run-ignores-artifact-issue-ref')
+    .specVersion('1.0')
+    .entry('developer')
+    .domain('approved')
+    .add(
+      node.agent('developer', 'role:developer', 'integrator', {
+        resultSchema: 'schema:change',
+        produces: { name: 'change' },
+      }),
+      node.script('integrator', 'script:integrator', 'done', {
+        resultSchema: 'schema:integration',
+        onFailure: 'route',
+        consumes: [{ node: 'developer', as: 'developerChange' }],
+        catch: [{ onError: 'revo.ScriptFailed', goto: 'failed' }],
+      }),
+      node.terminal('done', 'succeeded'),
+      node.terminal('failed', 'failed'),
+    )
+    .build();
+  const { run, rec } = buildAdapter({
+    template: tmpl,
+    route: makeRoute({ developerRunnerId: 'script', integratorRunnerId: 'script' }),
+    results: {
+      developer: {
+        output: { from: 'developer', change: stubChange },
+        verdict: 'approved',
+        nextSteps: [],
+        costs: [],
+      },
+    },
+  });
+
+  const result = await run();
+
+  assert.equal(result.status, 'succeeded');
+  assert.equal(rec.integratorInputs[0]?.issueRef, undefined);
+  assert.deepEqual(rec.integratorInputs[0]?.change, {
+    branch: 'feat/stub-produced',
+    headSha: 'stub-produced-sha',
+    worktreePath: '/stub/worktree',
+  });
 });
 
 test('DD4a-issue-140: non-live produced change metadata reaches the integrator without worktree capture', async () => {

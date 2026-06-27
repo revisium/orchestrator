@@ -15,6 +15,7 @@ import { completeRun, type CompleteRunResult } from '../run/complete-run.js';
 import { blockRun, type BlockRunResult } from '../run/block-run.js';
 import { appendRunEvent, appendRunCost, appendRunAttempt, type AppendEventInput, type AppendCostInput, type AppendAttemptInput } from '../run/append-event.js';
 import { appendRunOutput as appendRunOutputRow, type RunOutputRow } from '../run/run-outputs.js';
+import type { IssueRef } from '../run/issue-ref.js';
 import { REVISIUM_TRANSPORT_DRAFT } from './tokens.js';
 
 /**
@@ -202,6 +203,7 @@ export class RunService {
     title: string;
     base: string;
     repoRef: string;
+    issueRef?: IssueRef;
   }> {
     const detail = await showRun(this.da, runId);
     if (!detail) {
@@ -219,6 +221,7 @@ export class RunService {
       title: task.title,
       base: 'master', // MVP: base branch pinned to 'master' (see plan 0005); dynamic default-branch detection is post-MVP.
       repoRef: detail.run.repos[0] ?? '',
+      ...(detail.run.issueRef ? { issueRef: detail.run.issueRef } : {}),
     };
   }
 

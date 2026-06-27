@@ -42,6 +42,7 @@ import {
   type CreateRunResult,
 } from '../run/create-run.js';
 import type { AttemptSummary, EventSummary } from '../run/inspect-run.js';
+import type { IssueRef } from '../run/issue-ref.js';
 import { PrReadinessService, type GetPrReadinessInput } from './pr-readiness.service.js';
 
 const execFileAsync = promisify(execFile);
@@ -90,6 +91,7 @@ export type RunState = {
   inbox?: InboxItem;
   latestBlockingEvent?: unknown;
   blockedReason?: string;
+  issueRef?: IssueRef;
 };
 
 /* node:coverage disable */
@@ -386,6 +388,7 @@ function mapRunForWorkflow(run: {
   scope?: string;
   repos?: string[];
   createdAt?: Date | string;
+  issueRef?: IssueRef;
 }) {
   return {
     id: run.runId ?? run.id ?? '',
@@ -396,6 +399,7 @@ function mapRunForWorkflow(run: {
     scope: run.scope,
     repos: run.repos ?? [],
     createdAt: dateOrEpoch(run.createdAt),
+    ...(run.issueRef ? { issueRef: run.issueRef } : {}),
   };
 }
 
@@ -616,6 +620,7 @@ export class TaskControlPlaneApiService {
     playbookId?: string;
     pipelineId?: string;
     params?: unknown;
+    issueRef?: unknown;
     /** Private test/service seam; public MCP/CLI do not expose runner profile selection. */
     executionProfile?: unknown;
     role?: string;
@@ -631,6 +636,7 @@ export class TaskControlPlaneApiService {
       playbookId: input.playbookId,
       pipelineId: input.pipelineId,
       params: input.params,
+      issueRef: input.issueRef,
       executionProfile: input.executionProfile,
       source: input.pipelineId ? 'explicit' : 'deterministic-installed-playbook',
     });
@@ -644,6 +650,7 @@ export class TaskControlPlaneApiService {
       playbookId: route.playbookId,
       pipelineId: route.pipelineId,
       params: route.params,
+      issueRef: route.params.issueRef,
       routeDecision: route,
       executionProfile: route.executionProfile,
     });
@@ -1032,6 +1039,8 @@ export class TaskControlPlaneApiService {
   async resolveRunState(runId: string): Promise<RunState> {
     const detail = await this.runs.showRun(runId);
     if (!detail) throw new ControlPlaneError('ROW_NOT_FOUND', `run not found: ${runId}`);
+    const issueRef = detail.run.issueRef;
+    const issueRefPart = issueRef ? { issueRef } : {};
     const [inbox, events, workflow] = await Promise.all([
       this.inbox.listInbox({ runId, status: 'pending', limit: 20 }),
       this.runs.listRunEvents(runId, { limit: 20 }),
@@ -1046,6 +1055,7 @@ export class TaskControlPlaneApiService {
         runStatus: detail.run.status,
         workflowStatus: workflow?.status ?? '',
         inbox: gate,
+        ...issueRefPart,
       };
     }
     const question = inbox.find((item) => item.kind === 'question');
@@ -1057,16 +1067,17 @@ export class TaskControlPlaneApiService {
         runStatus: detail.run.status,
         workflowStatus: workflow?.status ?? '',
         inbox: question,
+        ...issueRefPart,
       };
     }
     if (detail.run.status === 'completed') {
-      return { runId, state: 'completed', nextAction: 'none', runStatus: detail.run.status, workflowStatus: workflow?.status ?? '' };
+      return { runId, state: 'completed', nextAction: 'none', runStatus: detail.run.status, workflowStatus: workflow?.status ?? '', ...issueRefPart };
     }
     if (detail.run.status === 'failed') {
-      return { runId, state: 'failed', nextAction: 'inspect get_run_events/get_run_log', runStatus: detail.run.status, workflowStatus: workflow?.status ?? '' };
+      return { runId, state: 'failed', nextAction: 'inspect get_run_events/get_run_log', runStatus: detail.run.status, workflowStatus: workflow?.status ?? '', ...issueRefPart };
     }
     if (detail.run.status === 'cancelled') {
-      return { runId, state: 'blocked', nextAction: 'run was cancelled; create or resume a different run', runStatus: detail.run.status, workflowStatus: workflow?.status ?? '' };
+      return { runId, state: 'blocked', nextAction: 'run was cancelled; create or resume a different run', runStatus: detail.run.status, workflowStatus: workflow?.status ?? '', ...issueRefPart };
     }
     const blockingEvent = latestPipelineBlockedEvent(events);
     const blockedReason = blockingEvent ? blockedReasonFromEvent(blockingEvent) : undefined;
@@ -1078,6 +1089,7 @@ export class TaskControlPlaneApiService {
         runStatus: detail.run.status,
         workflowStatus: workflow?.status ?? '',
         ...(blockedReason !== undefined ? { blockedReason } : {}),
+        ...issueRefPart,
       };
     }
     if (blockingEvent) {
@@ -1089,13 +1101,14 @@ export class TaskControlPlaneApiService {
         workflowStatus: workflow?.status ?? '',
         latestBlockingEvent: blockingEvent,
         ...(blockedReason !== undefined ? { blockedReason } : {}),
+        ...issueRefPart,
       };
     }
     if (workflow?.status === 'ERROR') {
-      return { runId, state: 'failed', nextAction: 'inspect get_run_events/get_run_log', runStatus: detail.run.status, workflowStatus: workflow.status };
+      return { runId, state: 'failed', nextAction: 'inspect get_run_events/get_run_log', runStatus: detail.run.status, workflowStatus: workflow.status, ...issueRefPart };
     }
     if (workflow?.status === 'SUCCESS') {
-      return { runId, state: 'completed', nextAction: 'none', runStatus: detail.run.status, workflowStatus: workflow.status };
+      return { runId, state: 'completed', nextAction: 'none', runStatus: detail.run.status, workflowStatus: workflow.status, ...issueRefPart };
     }
     return {
       runId,
@@ -1103,6 +1116,7 @@ export class TaskControlPlaneApiService {
       nextAction: 'wait_for_run again or inspect get_run_digest',
       runStatus: detail.run.status,
       workflowStatus: workflow?.status ?? '',
+      ...issueRefPart,
     };
   }
 
@@ -1279,10 +1293,11 @@ export class TaskControlPlaneApiService {
     playbookId?: string;
     pipelineId?: string;
     params?: unknown;
+    issueRef?: unknown;
     executionProfile?: unknown;
     source: RouteDecision['source'];
   }): Promise<RouteDecision> {
-    const params = normalizeParams(input.params);
+    const params = normalizeParams(input.params, input.issueRef);
     const executionProfile = normalizeExecutionProfile(input.executionProfile);
     const playbook = await this.playbooks.resolvePlaybook(input.playbookId);
     const pipeline = input.pipelineId

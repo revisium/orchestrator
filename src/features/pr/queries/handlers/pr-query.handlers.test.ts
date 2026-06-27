@@ -6,7 +6,15 @@ import { ListPrFeedbackQuery } from '../impl/list-pr-feedback.query.js';
 import { GetPrReadinessHandler, ListPrFeedbackHandler } from './pr-query.handlers.js';
 
 test('pr query handlers delegate readiness and feedback requests', async () => {
-  const input = { repo: 'revisium/orchestrator', prNumber: 90 };
+  const input = {
+    repo: 'revisium/orchestrator',
+    prNumber: 90,
+    issueRef: {
+      repo: 'revisium/orchestrator',
+      number: 147,
+      url: 'https://github.com/revisium/orchestrator/issues/147',
+    },
+  };
   const api = {
     async getPrReadiness(data: unknown) {
       assert.deepEqual(data, input);
