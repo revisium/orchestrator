@@ -1853,7 +1853,10 @@
                 "node": "analyst",
                 "as": "plan"
               }
-            ]
+            ],
+            "produces": {
+              "name": "change"
+            }
           },
           "codeReview": {
             "id": "codeReview",
@@ -1861,7 +1864,19 @@
             "roleRef": "role:reviewer",
             "next": "codeReviewRouter",
             "onFailure": "abort",
-            "resultSchema": "schema:reviewVerdict"
+            "resultSchema": "schema:reviewVerdict",
+            "consumes": [
+              {
+                "node": "developer",
+                "as": "developerChange",
+                "staleOk": true
+              },
+              {
+                "node": "reworkDeveloper",
+                "as": "reworkChange",
+                "optional": true
+              }
+            ]
           },
           "codeReviewRouter": {
             "id": "codeReviewRouter",
@@ -1908,7 +1923,10 @@
             "resultSchema": "schema:change",
             "incrementCounters": [
               "codeReviewLoop"
-            ]
+            ],
+            "produces": {
+              "name": "change"
+            }
           },
           "integrator": {
             "id": "integrator",
@@ -1922,7 +1940,19 @@
               }
             ],
             "onFailure": "route",
-            "resultSchema": "schema:integration"
+            "resultSchema": "schema:integration",
+            "consumes": [
+              {
+                "node": "developer",
+                "as": "developerChange",
+                "staleOk": true
+              },
+              {
+                "node": "reworkDeveloper",
+                "as": "reworkChange",
+                "optional": true
+              }
+            ]
           },
           "watcherPost": {
             "id": "watcherPost",
