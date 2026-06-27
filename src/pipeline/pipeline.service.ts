@@ -78,6 +78,24 @@ type StartDataDrivenTaskOpts = Omit<DataDrivenTaskOpts, 'runnerRetryPolicy'> & {
   runnerRetryPolicy?: RunnerTransientRetryPolicy;
 };
 
+function validateRunnerTransientRetryPolicy(
+  policy: RunnerTransientRetryPolicy,
+): RunnerTransientRetryPolicy {
+  if (!Number.isSafeInteger(policy.maxAttempts) || policy.maxAttempts <= 0) {
+    throw new Error('runnerRetryPolicy.maxAttempts must be a positive integer');
+  }
+  if (!Number.isSafeInteger(policy.backoffMs) || policy.backoffMs < 0) {
+    throw new Error('runnerRetryPolicy.backoffMs must be a non-negative integer');
+  }
+  return policy;
+}
+
+function pinRunnerTransientRetryPolicy(
+  policy: RunnerTransientRetryPolicy | undefined,
+): RunnerTransientRetryPolicy {
+  return validateRunnerTransientRetryPolicy(policy ?? resolveRunnerTransientRetryPolicy());
+}
+
 /**
  * Durable mode controlling whether real or stub runners + integrator are used.
  *
@@ -673,7 +691,7 @@ export class PipelineService {
   ): Promise<WorkflowHandle<DataDrivenResult>> {
     const pinnedOpts: DataDrivenTaskOpts = {
       ...opts,
-      runnerRetryPolicy: opts.runnerRetryPolicy ?? resolveRunnerTransientRetryPolicy(),
+      runnerRetryPolicy: pinRunnerTransientRetryPolicy(opts.runnerRetryPolicy),
     };
     return this.dbos.startWorkflowOn(this.dataDrivenTaskFn, runId, DEV_TASKS_QUEUE, runId, pinnedOpts);
   }

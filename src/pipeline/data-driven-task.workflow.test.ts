@@ -143,7 +143,7 @@ function buildAdapter(opts: {
     });
     // Capture hydrated consumes (0016) so a test can assert an upstream output reached this step.
     if (input !== null && typeof input === 'object' && 'inputs' in (input as Record<string, unknown>)) {
-      rec.inputsByStep[nodeId] = (input as Record<string, unknown>).inputs;
+      rec.inputsByStep[stepKey] = (input as Record<string, unknown>).inputs;
     }
     if (opts.needsHumanNodes?.has(nodeId)) {
       return { output: { from: nodeId }, verdict: 'blocker', nextSteps: [], costs: [], needsHuman: true, lesson: 'parked' };

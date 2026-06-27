@@ -230,6 +230,39 @@ const REVO_SCRIPT_BLOCKED = 'revo.ScriptBlocked' as const;
 const REVO_RESULT_INVALID = 'revo.ResultInvalid' as const;
 const REVO_INPUT_MISSING = 'revo.InputMissing' as const;
 
+function invalidRoleResult(
+  reason: string,
+  physicalAttempt: PhysicalRunStepAttempt,
+): InvokeRoleFailedResult {
+  return {
+    failed: true,
+    errorCode: REVO_RESULT_INVALID,
+    reason,
+    attemptId: physicalAttempt.attemptId,
+    attemptsMade: physicalAttempt.attemptNo,
+  };
+}
+
+function runnerBlockReason(transient: TransientRunnerFailure): string {
+  if (transient.failureKind) return transient.failureKind;
+  return `runner-transient-failure:${transient.transientKind}`;
+}
+
+function runnerBlockLesson(transient: TransientRunnerFailure): string {
+  const safe = String(redactEventPayload(transient.reason));
+  if (transient.failureKind) return `${transient.failureKind}: ${safe || 'runner failed'}`;
+  return `runner-transient-failure (${transient.transientKind}): ${safe || 'runner failed'}`;
+}
+
+function pipelineBlockedPayload(
+  reason: string,
+  lesson: string,
+  retry: RunnerRetryBlockPayload | undefined,
+): Record<string, unknown> {
+  if (retry === undefined) return { reason, lesson };
+  return { ...retry };
+}
+
 /** Per-node execution stepKey: the bare nodeId on the first entry (stable ids for existing tests), an
  *  ordinal-suffixed key on loop re-entries so attempts/events/outputs are distinct per iteration (0016
  *  §4.1 — fixes the latent 0015 stepKey-reuse collision). */
@@ -1106,19 +1139,6 @@ export function makeDataDrivenTask(
     );
   }
 
-  function invalidRoleResult(
-    reason: string,
-    physicalAttempt: PhysicalRunStepAttempt,
-  ): InvokeRoleFailedResult {
-    return {
-      failed: true,
-      errorCode: REVO_RESULT_INVALID,
-      reason,
-      attemptId: physicalAttempt.attemptId,
-      attemptsMade: physicalAttempt.attemptNo,
-    };
-  }
-
   function runnerRetryBlockPayload(input: {
     transient: TransientRunnerFailure;
     attemptIds: string[];
@@ -1141,17 +1161,6 @@ export function makeDataDrivenTask(
       transientKind: transient.transientKind,
       ...optionalTiming(transient.timing),
     };
-  }
-
-  function runnerBlockReason(transient: TransientRunnerFailure): string {
-    if (transient.failureKind) return transient.failureKind;
-    return `runner-transient-failure:${transient.transientKind}`;
-  }
-
-  function runnerBlockLesson(transient: TransientRunnerFailure): string {
-    const safe = String(redactEventPayload(transient.reason));
-    if (transient.failureKind) return `${transient.failureKind}: ${safe || 'runner failed'}`;
-    return `runner-transient-failure (${transient.transientKind}): ${safe || 'runner failed'}`;
   }
 
   async function appendRunnerRetryScheduled(input: {
@@ -1375,7 +1384,7 @@ export function makeDataDrivenTask(
       stepId: '',
       stepKey: 'pipeline',
       type: 'pipeline_blocked',
-      payload: { reason, lesson, ...(retry ?? {}) },
+      payload: pipelineBlockedPayload(reason, lesson, retry),
     });
     await blockRun(runId, { actor: 'pipeline', source: `data-driven-${reason}`, reason });
     return { runId, status: 'blocked', verdict: 'blocked', steps };
