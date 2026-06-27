@@ -41,6 +41,14 @@ function assertNoValidationErrors(template: Template): void {
   assert.deepEqual(errors, [], `${template.pipelineId} template must have no validation errors`);
 }
 
+for (const pipeline of e2eFixtureCatalog) {
+  test(`e2e fixture: ${pipeline.id} template validates via validateTemplate (zero errors)`, () => {
+    const template = pipeline.execution_policy?.template_json;
+    assert.ok(template, `${pipeline.id} carries execution_policy.template_json`);
+    assertNoValidationErrors(template);
+  });
+}
+
 test('e2e fixture: feature-development-dd preserves produced-change dataflow from the default feature pipeline', () => {
   const defaultFeature = templateFrom(defaultCatalog, 'feature-development');
   const fixtureFeatureDd = templateFrom(e2eFixtureCatalog, 'feature-development-dd');

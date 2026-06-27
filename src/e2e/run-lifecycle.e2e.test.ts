@@ -106,10 +106,11 @@ test('feature-development: plan→merge approve completes and opens a PR', { ski
     assert.deepEqual(terminal.approvedTopics, ['plan', 'merge']);
 
     await assertCompleted(h.api, run.runId);
-    // analyst -> planReviewer -> developer -> codeReview -> integrator -> (pollPr clean) -> merge. FOUR approved
-    // agent attempts (the old watcher agent node was replaced by the deterministic pollPr script, 0018).
+    // analyst -> planReviewer -> developer -> codeReview -> integrator -> (pollPr clean) ->
+    // mergeReadiness clean -> merge. FOUR approved agent attempts (the old watcher agent node was replaced
+    // by deterministic pollPr script nodes, 0018 + issue 143).
     await assertAttemptVerdicts(h.api, run.runId, ['approved', 'approved', 'approved', 'approved']);
-    // pollPr observes the PR (clean → merge gate) and confirmMerge reports the PR merged.
+    // pollPr observes the PR, mergeReadiness rechecks it before the merge gate, and confirmMerge reports the PR merged.
     await assertEventsPresent(h.api, run.runId, ['gate_signaled', 'integrate_succeeded', 'pr_polled', 'merge_confirmed', 'run_completed']);
 
     const branch = assertPrOpened(h, run.taskId);

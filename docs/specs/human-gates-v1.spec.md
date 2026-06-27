@@ -220,7 +220,10 @@ The review-feedback loop is a pipeline tail pattern:
 
 ```text
 integrator -> pollPr
-pollPr clean -> mergeGate
+pollPr clean -> mergeReadiness
+mergeReadiness clean -> mergeGate
+mergeReadiness ci_changes -> developer rework -> integrator
+mergeReadiness review_changes -> analyst triage
 pollPr ci_changes -> developer rework -> integrator
 pollPr review_changes -> analyst triage
 triage question -> questionGate -> triage

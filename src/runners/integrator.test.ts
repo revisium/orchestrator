@@ -1176,7 +1176,13 @@ test('parseOwnerRepo: bare owner/repo (no scheme/host) → null', () => {
 
 // ─── confirmMerge (plan 0017 follow-up: gate cleanup on a real merge) ─────────
 
-const MERGE_INPUT: IntegratorInput = { runId: 'r1', taskId: 't1', title: 'T', base: 'master' };
+const MERGE_INPUT: IntegratorInput = {
+  runId: 'r1',
+  taskId: 't1',
+  title: 'T',
+  base: 'master',
+  mergeReadiness: { headSha: 'ready-head' },
+};
 
 // Mirrors REAL gh: no `merged` field — `state` (OPEN|MERGED|CLOSED) is the merged indicator. The
 // integrator opens PRs as drafts, so `isDraft` gates whether confirmMerge must `gh pr ready` first.
@@ -1220,6 +1226,37 @@ test('confirmMerge: OPEN + CLEAN draft → marks ready, squash-merges, confirms 
   assert.ok(readyIdx >= 0, 'a draft PR is marked ready before merge');
   assert.ok(mergeIdx > readyIdx, 'ready precedes merge');
   assert.ok(calls[mergeIdx].includes('--squash') && calls[mergeIdx].includes('--delete-branch'), 'squash + delete-branch merge');
+  assert.deepEqual(
+    calls[mergeIdx].slice(-2),
+    ['--match-head-commit', 'ready-head'],
+    'merge is guarded by the fresh merge-readiness head sha',
+  );
+});
+
+test('confirmMerge: OPEN + CLEAN without merge readiness head blocks before merge', async () => {
+  const calls: string[][] = [];
+  const gh: ExecGhFn = (a) => { calls.push(a); return prView('OPEN', 'CLEAN'); };
+  const inputWithoutReadiness: IntegratorInput = { runId: 'r1', taskId: 't1', title: 'T', base: 'master' };
+  const r = await confirmMerge(inputWithoutReadiness, confirmDeps(gh));
+  assert.ok('needsHuman' in r, 'blocked when the merge SHA guard is missing');
+  assert.ok(!calls.some((a) => a[1] === 'merge'), 'never calls gh pr merge without a head guard');
+});
+
+test('confirmMerge: GitHub head guard failure blocks instead of merging a changed head', async () => {
+  const calls: string[][] = [];
+  const gh: ExecGhFn = (a) => {
+    calls.push(a);
+    if (a[1] === 'merge') throw new Error('Head commit changed');
+    return prView('OPEN', 'CLEAN');
+  };
+
+  const r = await confirmMerge(MERGE_INPUT, confirmDeps(gh));
+
+  assert.ok('needsHuman' in r, 'head-guard failure blocks for human/recheck handling');
+  assert.match(r.lesson, /ready-head/);
+  const mergeCall = calls.find((a) => a[1] === 'merge');
+  assert.deepEqual(mergeCall?.slice(-2), ['--match-head-commit', 'ready-head']);
+  assert.equal(calls.filter((a) => a[1] === 'view').length, 1, 'does not report success after a guarded merge failure');
 });
 
 test('confirmMerge: OPEN but not CLEAN (red CI / conflicts) → blocked, no merge', async () => {
@@ -1253,11 +1290,13 @@ function readiness(opts: {
   threads?: PollPrReadiness['reviewThreads']['items'];
   pending?: string[];
   headSha?: string;
+  evidence?: string[];
 }): PollPrReadiness {
   return {
     pr: { number: 5, headSha: opts.headSha ?? 'sha5' },
     checks: { pending: opts.pending ?? [], fail: opts.fail ?? [], list: opts.list ?? [{ name: 'build', result: 'SUCCESS' }] },
     reviewThreads: { items: opts.threads ?? [] },
+    evidence: opts.evidence ?? [`PR head ${opts.headSha ?? 'sha5'}`],
   };
 }
 
@@ -1399,6 +1438,51 @@ test('pollPr: no review thread after the grace → clean (merge gate is the back
   const collect = async (): Promise<PollPrReadiness> => readiness({});
   const r = await pollPr(POLL_INPUT, pollDeps(collect, { reviewGracePolls: 3 }));
   assert.ok(!('needsHuman' in r) && r.verdict === 'clean', 'absent reviewer falls through to the human merge gate, not a block');
+});
+
+test('pollPr: a provider check pending during review grace blocks instead of declaring clean', async () => {
+  let calls = 0;
+  const collect = async (): Promise<PollPrReadiness> => {
+    calls++;
+    return calls === 1
+      ? readiness({ headSha: 'green-head' })
+      : readiness({
+          headSha: 'green-head',
+          pending: ['CodeRabbit'],
+          list: [{ name: 'CodeRabbit', result: 'IN_PROGRESS' }],
+          evidence: ['Pending checks: CodeRabbit'],
+        });
+  };
+
+  const r = await pollPr(POLL_INPUT, pollDeps(collect, { reviewGracePolls: 1 }));
+
+  assert.ok('needsHuman' in r, 'pending provider state after PR ready is not merge-ready');
+  assert.match(r.lesson, /pending checks: CodeRabbit/);
+});
+
+test('pollPr: a required CI failure appearing during review grace routes to ci_changes', async () => {
+  let calls = 0;
+  const collect = async (): Promise<PollPrReadiness> => {
+    calls++;
+    return calls === 1
+      ? readiness({ headSha: 'green-head' })
+      : readiness({
+          headSha: 'green-head',
+          fail: ['Verify'],
+          list: [{ name: 'Verify', result: 'FAILURE' }],
+          evidence: ['Verify failed after PR was marked ready'],
+        });
+  };
+
+  const r = await pollPr(POLL_INPUT, pollDeps(collect, {
+    reviewGracePolls: 1,
+    requiredChecks: () => new Set(['Verify']),
+  }));
+
+  assert.ok(!('needsHuman' in r));
+  assert.equal(r.verdict, 'ci_changes', 'final grace snapshot drives the CI verdict');
+  assert.deepEqual(r.ciFailures, [{ name: 'Verify', conclusion: 'FAILURE' }]);
+  assert.deepEqual(r.evidence.slice(0, 1), ['Verify failed after PR was marked ready']);
 });
 
 test('pollPr: timeout with checks still pending → needsHuman (block)', async () => {

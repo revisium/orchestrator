@@ -19,6 +19,9 @@ the PR number, head sha, failing CI checks, and the unresolved `reviewThreads`
 (`{threadId, path, line, author, body}`). Read the diff (`git diff origin/<base>`) in the worktree to
 judge each comment against the real change.
 
+If both `feedback` and `mergeFeedback` are present, use `mergeFeedback`: it is the fresh readiness
+recheck taken immediately before the merge gate.
+
 ## What to do
 
 1. Read the diff and the files each thread points at.

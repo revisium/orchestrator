@@ -81,9 +81,9 @@ test('M1: a seeded feature-development run drives plan→merge to completed on r
   assert.equal((run.workflow as { engine?: string }).engine, 'data-driven', 'the seeded pipeline routes to the data-driven engine');
 
   // analyst → planReviewer → planGate → developer → codeReview → integrator(script) → pollPr(clean) →
-  // prRouter(clean) → mergeGate → confirmMerge. Approving both gates drives it to the `succeeded`
-  // terminal. (The pollPr poll is a stub here — runnerOverrides stub the integrator → pollPr reports
-  // clean — so the run skips the triage/CI-rework loop and goes straight to the merge gate.)
+  // mergeReadiness(clean) → mergeGate → confirmMerge. Approving both gates drives it to the
+  // `succeeded` terminal. (The pollPr polls are stubbed here — runnerOverrides stub the integrator, so
+  // the run skips the triage/CI-rework loop after the fresh pre-gate readiness check.)
   const terminal = await approveUntilTerminal(h.api, run.runId);
   assert.equal(terminal.state, 'completed');
   assert.deepEqual(terminal.approvedTopics, ['plan', 'merge'], 'both seeded humanGate nodes opened in order');
