@@ -102,7 +102,8 @@ function makeLoadPipelineContext(taskId = 'task-001') {
 
 type Harness = {
   loadRoleArgs: string[];
-  appendEventArgs: Array<{ stepKey: string; type: string }>;
+  appendEventArgs: AppendEventInput[];
+  appendCostInputs: AppendCostInput[];
   appendAttemptInputs: AppendAttemptInput[];
 };
 
@@ -116,7 +117,7 @@ function buildRunStepDeps(opts: { roles?: Map<string, Role> } = {}): {
   harness: Harness;
   throwingClaudeCode: RunAgent;
 } {
-  const harness: Harness = { loadRoleArgs: [], appendEventArgs: [], appendAttemptInputs: [] };
+  const harness: Harness = { loadRoleArgs: [], appendEventArgs: [], appendCostInputs: [], appendAttemptInputs: [] };
 
   const roles = opts.roles ?? new Map<string, Role>([
     ['architect', makeRole('architect')],
@@ -137,9 +138,11 @@ function buildRunStepDeps(opts: { roles?: Map<string, Role> } = {}): {
       makeProfile(level as 'cheap' | 'standard' | 'deep'),
     loadPipelineContext: makeLoadPipelineContext(),
     appendEvent: async (input: AppendEventInput): Promise<void> => {
-      harness.appendEventArgs.push({ stepKey: input.stepKey, type: input.type });
+      harness.appendEventArgs.push(input);
     },
-    appendCost: async (_input: AppendCostInput): Promise<void> => undefined,
+    appendCost: async (input: AppendCostInput): Promise<void> => {
+      harness.appendCostInputs.push(input);
+    },
     appendAttempt: async (input: AppendAttemptInput): Promise<void> => {
       harness.appendAttemptInputs.push(input);
     },
@@ -272,6 +275,50 @@ test('attempt row surfaces the verdict + iteration (from stepKey) + a determinis
   assert.equal(attempt.status, 'succeeded');
   assert.ok(attempt.attemptId.startsWith('attempt_'));
   assert.ok((attempt.inputTokens ?? 0) === 10 && (attempt.outputTokens ?? 0) === 5, 'tokens aggregated from costs');
+});
+
+test('physical attempt argument scopes attempt row, events, costs, reporter, and runner dispatch', async () => {
+  const runId = 'run-physical';
+  const { deps, harness } = buildRunStepDeps();
+  const physicalAttempt = { attemptNo: 2, attemptId: 'attempt_physical_2' };
+  const streamEvents: AgentOutputEvent[] = [];
+  let seenAttemptId = '';
+  deps.writeAgentOutputEvent = async (event) => {
+    streamEvents.push(event);
+  };
+  deps.runAgent = async ({ attemptId, reporter }): Promise<AttemptResult> => {
+    seenAttemptId = attemptId;
+    reporter?.started();
+    return {
+      output: { ok: true },
+      verdict: 'approved',
+      nextSteps: [],
+      costs: [{ modelProfile: 'standard', inputTokens: 1, outputTokens: 2, costAmount: 0.003 }],
+      needsHuman: false,
+    };
+  };
+  const runStep = makeRunStep(deps);
+
+  await runStep(
+    runId,
+    'developer',
+    'developer',
+    { nodeId: 'developer', attempt: physicalAttempt },
+    'script',
+    undefined,
+    physicalAttempt,
+  );
+
+  const event = harness.appendEventArgs.find((e) => e.type === 'step_succeeded');
+  const payload = event?.payload as { attemptId?: string; attemptNo?: number } | undefined;
+  assert.equal(seenAttemptId, physicalAttempt.attemptId, 'runner receives the physical attempt id');
+  assert.equal(event?.idempotencyKey, physicalAttempt.attemptId, 'event id is scoped by attempt id');
+  assert.equal(payload?.attemptId, physicalAttempt.attemptId);
+  assert.equal(payload?.attemptNo, physicalAttempt.attemptNo);
+  assert.equal(harness.appendCostInputs[0]?.attemptId, physicalAttempt.attemptId, 'cost row points at the attempt');
+  assert.equal(harness.appendAttemptInputs[0]?.attemptId, physicalAttempt.attemptId);
+  assert.equal(harness.appendAttemptInputs[0]?.attemptNo, physicalAttempt.attemptNo);
+  assert.equal(streamEvents[0]?.attemptId, physicalAttempt.attemptId, 'reporter stream is scoped by attempt id');
 });
 
 test('attempt row includes the process artifact ref + stdout/stderr tails', async () => {

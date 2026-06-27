@@ -10,11 +10,12 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { makeDataDrivenTask, type DataDrivenProgressCursor, type DataDrivenTaskDeps } from './data-driven-task.workflow.js';
+import { makeDataDrivenTask, resolveRunnerTransientRetryPolicy, type DataDrivenProgressCursor, type DataDrivenTaskDeps, type RunnerTransientRetryPolicy } from './data-driven-task.workflow.js';
 import { templateFromExecutionPolicy } from './data-driven-template.js';
 import { featureDevelopment, featureDevelopmentPrReview, confirmMergeFlow } from '../pipeline-core/kit/fixtures.js';
 import type { Template } from '../pipeline-core/index.js';
 import type { AttemptResult } from '../worker/runner.js';
+import type { AppendEventInput } from '../run/append-event.js';
 import type { RouteDecision, RouteRoleBinding } from './route-contract.js';
 import type { Decision as GateDecision } from './await-human.js';
 import type { IntegratorInput, IntegratorOutput, IntegratorBlocked, ConfirmMergeOutput, PrFeedback, RespondThreadsOutput } from '../runners/integrator.js';
@@ -66,10 +67,13 @@ type Recorder = {
   /** The triage each respondThreads call consumed (asserts the 0016 script-consumes hydration). */
   respondTriage: unknown[];
   events: string[];
+  eventRecords: AppendEventInput[];
   /** Persisted step outputs (0016 dataflow). */
-  outputs: Array<{ nodeId: string; ordinal: number; name: string; payload: unknown }>;
+  outputs: Array<{ nodeId: string; ordinal: number; name: string; payload: unknown; attemptId?: string }>;
   /** Hydrated `inputs` the adapter passed to each step, keyed by stepKey (0016 consumes). */
   inputsByStep: Record<string, unknown>;
+  runStepAttempts: Array<{ stepKey: string; attemptNo?: number; attemptId?: string }>;
+  retrySleeps: number[];
   progress: DataDrivenProgressCursor[];
 };
 
@@ -93,7 +97,9 @@ function buildAdapter(opts: {
   /** Override respondThreads (default: replied/resolved 0). Lets a test capture the triage it consumed. */
   respondThreads?: (input: IntegratorInput) => RespondThreadsOutput | IntegratorBlocked | Promise<RespondThreadsOutput | IntegratorBlocked>;
   /** Exact per-node result override for invalid-result contract tests. */
-  results?: Record<string, AttemptResult>;
+  results?: Record<string, AttemptResult | AttemptResult[]>;
+  retryPolicy?: RunnerTransientRetryPolicy;
+  onSleep?: (ms: number) => void | Promise<void>;
 }) {
   const rec: Recorder = {
     gates: [],
@@ -107,8 +113,11 @@ function buildAdapter(opts: {
     respondCalls: 0,
     respondTriage: [],
     events: [],
+    eventRecords: [],
     outputs: [],
     inputsByStep: {},
+    runStepAttempts: [],
+    retrySleeps: [],
     progress: [],
   };
   const visits = new Map<string, number>();
@@ -118,20 +127,29 @@ function buildAdapter(opts: {
     _role: string,
     stepKey: string,
     input: unknown,
+    _resolvedRunnerId?: string,
+    _executionProfile?: unknown,
+    physicalAttempt?: { attemptNo: number; attemptId: string },
   ): Promise<AttemptResult> => {
     // The adapter ordinal-suffixes the stepKey on loop re-entries (0016 §4.1: `nodeId#2`); the verdict
     // script + visit count are keyed by the NODE (a verdict is a property of the role, not the iteration).
     const nodeId = stepKey.includes('#') ? stepKey.slice(0, stepKey.indexOf('#')) : stepKey;
     const n = visits.get(nodeId) ?? 0;
     visits.set(nodeId, n + 1);
+    rec.runStepAttempts.push({
+      stepKey,
+      attemptNo: physicalAttempt?.attemptNo,
+      attemptId: physicalAttempt?.attemptId,
+    });
     // Capture hydrated consumes (0016) so a test can assert an upstream output reached this step.
     if (input !== null && typeof input === 'object' && 'inputs' in (input as Record<string, unknown>)) {
-      rec.inputsByStep[nodeId] = (input as Record<string, unknown>).inputs;
+      rec.inputsByStep[stepKey] = (input as Record<string, unknown>).inputs;
     }
     if (opts.needsHumanNodes?.has(nodeId)) {
       return { output: { from: nodeId }, verdict: 'blocker', nextSteps: [], costs: [], needsHuman: true, lesson: 'parked' };
     }
-    const exact = opts.results?.[nodeId];
+    const scripted = opts.results?.[nodeId];
+    const exact = Array.isArray(scripted) ? scripted[Math.min(n, scripted.length - 1)] : scripted;
     if (exact) return exact;
     const entry = opts.verdicts?.[nodeId];
     const verdict = Array.isArray(entry) ? (entry[Math.min(n, entry.length - 1)] ?? 'approved') : (entry ?? 'approved');
@@ -140,14 +158,19 @@ function buildAdapter(opts: {
 
   const deps: DataDrivenTaskDeps = {
     appendEvent: async (e) => {
+      rec.eventRecords.push(e);
       rec.events.push(`${e.type}:${e.stepKey}`);
       if (e.type === 'pipeline_blocked' && e.payload && typeof e.payload === 'object') {
         const lesson = (e.payload as { lesson?: unknown }).lesson;
         if (typeof lesson === 'string') rec.blockedLessons.push(lesson);
       }
     },
-    appendRunOutput: async (o) => { rec.outputs.push({ nodeId: o.nodeId, ordinal: o.ordinal, name: o.name, payload: o.payload }); },
+    appendRunOutput: async (o) => { rec.outputs.push({ nodeId: o.nodeId, ordinal: o.ordinal, name: o.name, payload: o.payload, attemptId: o.attemptId }); },
     setProgress: async (_runId, cursor) => { rec.progress.push(cursor); },
+    sleep: async (ms) => {
+      rec.retrySleeps.push(ms);
+      await opts.onSleep?.(ms);
+    },
     awaitHuman: async (_runId, topic, _gateKey, _title, _summary): Promise<GateDecision> => {
       rec.gates.push(topic);
       return (opts.gate ?? (() => ({ decision: 'approve' })))(topic);
@@ -198,7 +221,52 @@ function buildAdapter(opts: {
 
   const fn = makeDataDrivenTask(runStepFn, deps);
   const template = opts.template ?? featureDevelopment();
-  return { run: () => fn(RUN_ID, { route: makeRoute(), template }), rec };
+  return {
+    run: () => fn(RUN_ID, {
+      route: makeRoute(),
+      template,
+      runnerRetryPolicy: opts.retryPolicy ?? resolveRunnerTransientRetryPolicy(),
+    }),
+    rec,
+  };
+}
+
+function singleDeveloperTemplate(pipelineId: string): Template {
+  return template(pipelineId)
+    .specVersion('1.0')
+    .entry('developer')
+    .domain('approved')
+    .add(
+      node.agent('developer', 'role:developer', 'done', {
+        resultSchema: 'schema:change',
+        produces: { name: 'change' },
+      }),
+      node.terminal('done', 'succeeded'),
+    )
+    .build();
+}
+
+function runnerFailedResult(reason: string, extraOutput: Record<string, unknown> = {}): AttemptResult {
+  return {
+    output: {
+      verdict: 'BLOCKER',
+      error: 'runner_failed',
+      role: 'developer',
+      stepKey: 'developer',
+      reason,
+      ...extraOutput,
+    },
+    verdict: 'BLOCKER',
+    nextSteps: [],
+    costs: [],
+    needsHuman: true,
+    lesson: reason,
+  };
+}
+
+function restoreEnvVar(key: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
 }
 
 test('DD1: happy path — analyst→plan→developer→review→integrate→pollPr(clean)→merge→confirmMerge → succeeded', async () => {
@@ -405,6 +473,169 @@ test('DD5-transient: a TRANSIENT runner_failed (crash/timeout/429) → blocked w
     rec.blockedLessons.some((l) => l.includes('runner-transient-failure') && l.includes('timeout')),
     'the transient lesson names the recoverable runner reason',
   );
+  assert.deepEqual(
+    rec.runStepAttempts.filter((a) => a.stepKey === 'developer').map((a) => a.attemptNo),
+    [1, 2],
+    'default retry policy makes two physical attempts',
+  );
+  assert.ok(rec.events.includes('runner_retry_scheduled:developer'), 'retry scheduling is durable evidence');
+  assert.ok(rec.events.includes('runner_retry_exhausted:developer'), 'retry exhaustion is durable evidence');
+  const blocked = rec.eventRecords.find((e) => e.type === 'pipeline_blocked')?.payload as Record<string, unknown>;
+  assert.equal(blocked.attemptsExhausted, true);
+  assert.equal(blocked.attemptsMade, 2);
+  assert.equal(blocked.maxAttempts, 2);
+  assert.equal(blocked.lastAttemptId, rec.runStepAttempts.find((a) => a.attemptNo === 2)?.attemptId);
+});
+
+test('DD5-retry: retryable transient runner failure retries once and stores output against the winning attempt', async () => {
+  const tmpl = singleDeveloperTemplate('retry-success');
+  const { run, rec } = buildAdapter({
+    template: tmpl,
+    results: {
+      developer: [
+        {
+          output: { verdict: 'BLOCKER', error: 'runner_failed', role: 'developer', stepKey: 'developer', reason: 'runner process timed out' },
+          verdict: 'BLOCKER',
+          nextSteps: [],
+          costs: [],
+          needsHuman: true,
+          lesson: 'runner process timed out',
+        },
+        {
+          output: { from: 'developer', ok: true },
+          verdict: 'approved',
+          nextSteps: [],
+          costs: [],
+          needsHuman: false,
+        },
+      ],
+    },
+  });
+
+  const result = await run();
+  const attempts = rec.runStepAttempts.filter((a) => a.stepKey === 'developer');
+
+  assert.equal(result.status, 'succeeded');
+  assert.deepEqual(attempts.map((a) => a.attemptNo), [1, 2]);
+  assert.notEqual(attempts[0]?.attemptId, attempts[1]?.attemptId, 'physical attempt ids differ');
+  assert.deepEqual(rec.retrySleeps, [2_000], 'default backoff uses the DBOS sleep seam');
+  assert.ok(rec.events.includes('runner_retry_scheduled:developer'));
+  assert.equal(rec.events.includes('runner_retry_exhausted:developer'), false);
+  assert.equal(rec.outputs[0]?.attemptId, attempts[1]?.attemptId, 'run_outputs points at the winner');
+  assert.equal(rec.blocked.length, 0);
+});
+
+test('DD5-retry-policy-pin: changed env during recovery/between attempts does not change pinned policy', async () => {
+  const oldMaxAttempts = process.env['REVO_RUNNER_TRANSIENT_MAX_ATTEMPTS'];
+  const oldBackoff = process.env['REVO_RUNNER_TRANSIENT_RETRY_BACKOFF_MS'];
+  const pinnedPolicy = resolveRunnerTransientRetryPolicy({
+    REVO_RUNNER_TRANSIENT_MAX_ATTEMPTS: '2',
+    REVO_RUNNER_TRANSIENT_RETRY_BACKOFF_MS: '1',
+  } as NodeJS.ProcessEnv);
+  let changedBetweenAttempts = false;
+  try {
+    process.env['REVO_RUNNER_TRANSIENT_MAX_ATTEMPTS'] = '1';
+    process.env['REVO_RUNNER_TRANSIENT_RETRY_BACKOFF_MS'] = '0';
+    const { run, rec } = buildAdapter({
+      template: singleDeveloperTemplate('retry-policy-pin'),
+      retryPolicy: pinnedPolicy,
+      onSleep: () => {
+        process.env['REVO_RUNNER_TRANSIENT_MAX_ATTEMPTS'] = '1';
+        process.env['REVO_RUNNER_TRANSIENT_RETRY_BACKOFF_MS'] = '0';
+        changedBetweenAttempts = true;
+      },
+      results: {
+        developer: [
+          runnerFailedResult('runner process timed out'),
+          {
+            output: { from: 'developer', ok: true },
+            verdict: 'approved',
+            nextSteps: [],
+            costs: [],
+            needsHuman: false,
+          },
+        ],
+      },
+    });
+
+    const result = await run();
+
+    assert.equal(result.status, 'succeeded');
+    assert.deepEqual(
+      rec.runStepAttempts.filter((a) => a.stepKey === 'developer').map((a) => a.attemptNo),
+      [1, 2],
+      'the persisted workflow input keeps maxAttempts=2 even when process env now disables retry',
+    );
+    assert.deepEqual(rec.retrySleeps, [1], 'the persisted workflow input keeps the original backoff');
+    assert.equal(changedBetweenAttempts, true, 'the environment changed after the first failed attempt');
+  } finally {
+    restoreEnvVar('REVO_RUNNER_TRANSIENT_MAX_ATTEMPTS', oldMaxAttempts);
+    restoreEnvVar('REVO_RUNNER_TRANSIENT_RETRY_BACKOFF_MS', oldBackoff);
+  }
+});
+
+test('DD5-no-retry: retryableCandidate:false does not schedule another attempt', async () => {
+  const { run, rec } = buildAdapter({
+    results: {
+      developer: {
+        output: {
+          verdict: 'BLOCKER',
+          error: 'runner_failed',
+          role: 'developer',
+          stepKey: 'developer',
+          reason: 'runner process timed out but marked deterministic',
+          retryableCandidate: false,
+        },
+        verdict: 'BLOCKER',
+        nextSteps: [],
+        costs: [],
+        needsHuman: true,
+        lesson: 'runner process timed out but marked deterministic',
+      },
+    },
+  });
+
+  const result = await run();
+  const blocked = rec.eventRecords.find((e) => e.type === 'pipeline_blocked')?.payload as Record<string, unknown>;
+
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(rec.runStepAttempts.filter((a) => a.stepKey === 'developer').map((a) => a.attemptNo), [1]);
+  assert.equal(rec.events.includes('runner_retry_scheduled:developer'), false);
+  assert.equal(rec.events.includes('runner_retry_exhausted:developer'), false);
+  assert.equal(blocked.attemptsExhausted, false);
+  assert.equal(blocked.attemptsMade, 1);
+});
+
+test('DD5-no-retry: quota, overage, auth, config, and contract runner failures are deterministic', async (t) => {
+  const cases = [
+    { name: 'quota', reason: 'provider quota exhausted' },
+    { name: 'overage', reason: 'billing overage reached' },
+    { name: 'auth', reason: 'auth required for runner account' },
+    { name: 'config', reason: 'config gap: missing runner account' },
+    { name: 'contract', reason: 'malformed runner contract envelope' },
+  ];
+
+  for (const c of cases) {
+    await t.test(c.name, async () => {
+      const { run, rec } = buildAdapter({
+        template: singleDeveloperTemplate(`no-retry-${c.name}`),
+        results: { developer: runnerFailedResult(c.reason) },
+      });
+
+      const result = await run();
+      const blocked = rec.eventRecords.find((e) => e.type === 'pipeline_blocked')?.payload as Record<string, unknown>;
+
+      assert.equal(result.status, 'blocked');
+      assert.deepEqual(
+        rec.runStepAttempts.filter((a) => a.stepKey === 'developer').map((a) => a.attemptNo),
+        [1],
+      );
+      assert.equal(rec.events.includes('runner_retry_scheduled:developer'), false);
+      assert.equal(rec.events.includes('runner_retry_exhausted:developer'), false);
+      assert.equal(blocked.attemptsExhausted, false);
+      assert.equal(blocked.transientKind, 'unknown');
+    });
+  }
 });
 
 test('DD5-structured-timeouts: structured runner failureKind maps to exact public blocked reasons', async () => {
@@ -600,6 +831,28 @@ test('SEL4: a serialized (string) template_json is parsed + validated', () => {
   const got = templateFromExecutionPolicy({ template_json: JSON.stringify(template) });
   assert.ok(got);
   assert.equal(got.pipelineId, 'feature-development');
+});
+
+test('retry policy env: defaults, overrides, and invalid set values fail loud', () => {
+  assert.deepEqual(resolveRunnerTransientRetryPolicy({} as NodeJS.ProcessEnv), {
+    maxAttempts: 2,
+    backoffMs: 2_000,
+  });
+  assert.deepEqual(
+    resolveRunnerTransientRetryPolicy({
+      REVO_RUNNER_TRANSIENT_MAX_ATTEMPTS: '3',
+      REVO_RUNNER_TRANSIENT_RETRY_BACKOFF_MS: '0',
+    } as NodeJS.ProcessEnv),
+    { maxAttempts: 3, backoffMs: 0 },
+  );
+  assert.throws(
+    () => resolveRunnerTransientRetryPolicy({ REVO_RUNNER_TRANSIENT_MAX_ATTEMPTS: '0' } as NodeJS.ProcessEnv),
+    /REVO_RUNNER_TRANSIENT_MAX_ATTEMPTS must be a positive integer/,
+  );
+  assert.throws(
+    () => resolveRunnerTransientRetryPolicy({ REVO_RUNNER_TRANSIENT_RETRY_BACKOFF_MS: '-1' } as NodeJS.ProcessEnv),
+    /REVO_RUNNER_TRANSIENT_RETRY_BACKOFF_MS must be a non-negative integer/,
+  );
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

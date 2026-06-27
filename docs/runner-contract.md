@@ -48,6 +48,60 @@ runner construction or executor policy resolution time. The wall-clock env overr
 precedence over `role.timeoutMs`; runner request metadata, artifact metadata, and executor enforcement must report
 the same effective cap.
 
+## Transient Retry Policy
+
+Transient runner retry is owned by the data-driven DBOS adapter, not by `pipeline-core`, templates, runner
+implementations, or the process executor. `makeRunStep` remains the single physical runner attempt owner. The
+adapter wraps `runStep` with an explicit retry loop for retryable synthetic runner failures and passes a real
+physical attempt argument into each `runStep` call, so DBOS memoization, attempts, reporter streams, artifacts,
+events, costs, and prompts are scoped by the physical attempt.
+
+Defaults:
+
+- total max attempts: `2`;
+- retry backoff: `2000` milliseconds.
+
+Environment overrides:
+
+- `REVO_RUNNER_TRANSIENT_MAX_ATTEMPTS`
+- `REVO_RUNNER_TRANSIENT_RETRY_BACKOFF_MS`
+
+`REVO_RUNNER_TRANSIENT_MAX_ATTEMPTS` must be a positive integer. Setting it to `1` disables retry.
+`REVO_RUNNER_TRANSIENT_RETRY_BACKOFF_MS` must be a non-negative integer. Invalid set values fail loud. Backoff uses
+a DBOS-backed workflow sleep seam, not a raw workflow timer.
+
+The retry policy is resolved before the DBOS workflow is enqueued and is persisted in the workflow input together
+with the pinned template and route. Workflow recovery and replay use that pinned policy even if process environment
+values change before or between physical attempts.
+
+Retry applies only when the runner result is the synthetic failure envelope and `retryableCandidate` is not `false`:
+
+```json
+{
+  "error": "runner_failed",
+  "retryableCandidate": true
+}
+```
+
+`retryableCandidate: false` disables retry. Structured timeout failures with `failureKind` equal to
+`runner-idle-timeout` or `runner-wall-clock-limit` are retryable. Legacy synthetic runner failures are retryable
+only for transient `timeout`, `rate_limit`, or narrowly classified crash reasons. Auth, permission, schema,
+malformed output, quota, overage, missing binary, unknown runner, and configuration failures are deterministic and
+are not retried.
+
+Each physical attempt has 1-based `attemptNo` within the logical node execution. The physical `attemptId` is
+deterministic from the run id, logical step key, and attempt number. The logical `stepKey` remains the graph/dataflow
+identity and does not change across retry attempts for one node execution.
+
+Durable evidence:
+
+- `step_failed` is emitted for each failed physical attempt;
+- `runner_retry_scheduled` is emitted before a retry backoff;
+- `step_succeeded` is emitted for the winning physical attempt;
+- `runner_retry_exhausted` is emitted when retryable attempts are exhausted;
+- final `pipeline_blocked` for exhausted runner retry includes `attemptsExhausted`, `attemptsMade`, `maxAttempts`,
+  `attemptIds`, `lastAttemptId`, `reason`, `lesson`, and available `failureKind`, `transientKind`, and timing data.
+
 Activity rules:
 
 - stdout/stderr byte chunks reset idle activity;
@@ -79,3 +133,8 @@ Runner output is split:
 - content: optional produced output stored through run dataflow.
 
 The exact dataflow contract lives in [specs/run-dataflow-v1.spec.md](./specs/run-dataflow-v1.spec.md).
+
+## Changelog
+
+- 2026-06-27: Documented adapter-level transient runner retry, physical attempt identity, retry policy env vars,
+  and durable retry evidence.

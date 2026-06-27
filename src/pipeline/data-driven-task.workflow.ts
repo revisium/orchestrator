@@ -47,6 +47,7 @@ import type { IntegratorInput, IntegratorOutput, IntegratorBlocked, ConfirmMerge
 import type { AppendEventInput } from '../run/append-event.js';
 import { redactEventPayload } from '../run/append-event.js';
 import { redactSecrets } from '../control-plane/inbox.js';
+import { fnv1a64Hex } from '../control-plane/steps.js';
 import type { RunOutputRow } from '../run/run-outputs.js';
 import type { Decision as GateDecision } from './await-human.js';
 import type { CompleteRunResult } from '../run/complete-run.js';
@@ -83,9 +84,135 @@ export type DataDrivenTaskOpts = {
   route: RouteDecision;
   /** The pinned, validated state-machine template (a DBOS workflow arg ⇒ durable on recovery). */
   template: Template;
+  /** Pinned before DBOS workflow enqueue so recovery cannot branch on changed process env. */
+  runnerRetryPolicy: RunnerTransientRetryPolicy;
 };
 
 const MAX_STEPS = 1_000; // a VALID template terminates; guards a data/loop authoring mistake at runtime.
+const DEFAULT_RUNNER_TRANSIENT_MAX_ATTEMPTS = 2;
+const DEFAULT_RUNNER_TRANSIENT_RETRY_BACKOFF_MS = 2_000;
+
+export type RunnerTransientRetryPolicy = {
+  maxAttempts: number;
+  backoffMs: number;
+};
+
+type PhysicalRunStepAttempt = {
+  attemptNo: number;
+  attemptId: string;
+};
+
+type RunnerRetryBlockPayload = {
+  attemptsExhausted: boolean;
+  attemptsMade: number;
+  maxAttempts: number;
+  attemptIds: string[];
+  lastAttemptId: string;
+  reason: string;
+  lesson: string;
+  failureKind?: RunnerTimeoutFailureKind;
+  transientKind?: TransientRunnerFailure['transientKind'];
+  timing?: unknown;
+};
+
+type InvokeRoleFailedResult = {
+  failed: true;
+  errorCode: typeof REVO_RESULT_INVALID;
+  reason: string;
+  attemptId: string;
+  attemptsMade: number;
+};
+
+type InvokeRoleBlockedResult = {
+  blocked: true;
+  reason: string;
+  lesson: string;
+  retry?: RunnerRetryBlockPayload;
+  attemptsMade: number;
+};
+
+type InvokeRoleSucceededResult = {
+  failed: false;
+  verdict?: string;
+  output: unknown;
+  attemptId: string;
+  attemptsMade: number;
+};
+
+type InvokeRoleResult = InvokeRoleFailedResult | InvokeRoleBlockedResult | InvokeRoleSucceededResult;
+
+function readPositiveIntegerEnv(
+  env: NodeJS.ProcessEnv,
+  key: string,
+  fallback: number,
+): number {
+  const raw = env[key];
+  if (raw === undefined) return fallback;
+  if (!/^\d+$/.test(raw)) throw new Error(`${key} must be a positive integer`);
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`${key} must be a positive integer`);
+  return parsed;
+}
+
+function readNonNegativeIntegerEnv(
+  env: NodeJS.ProcessEnv,
+  key: string,
+  fallback: number,
+): number {
+  const raw = env[key];
+  if (raw === undefined) return fallback;
+  if (!/^\d+$/.test(raw)) throw new Error(`${key} must be a non-negative integer`);
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error(`${key} must be a non-negative integer`);
+  return parsed;
+}
+
+export function resolveRunnerTransientRetryPolicy(
+  env: NodeJS.ProcessEnv = process.env,
+): RunnerTransientRetryPolicy {
+  return {
+    maxAttempts: readPositiveIntegerEnv(
+      env,
+      'REVO_RUNNER_TRANSIENT_MAX_ATTEMPTS',
+      DEFAULT_RUNNER_TRANSIENT_MAX_ATTEMPTS,
+    ),
+    backoffMs: readNonNegativeIntegerEnv(
+      env,
+      'REVO_RUNNER_TRANSIENT_RETRY_BACKOFF_MS',
+      DEFAULT_RUNNER_TRANSIENT_RETRY_BACKOFF_MS,
+    ),
+  };
+}
+
+function physicalAttemptFor(runId: string, stepKey: string, attemptNo: number): PhysicalRunStepAttempt {
+  const attemptKey = `${runId}|${stepKey}|${attemptNo}`;
+  return {
+    attemptNo,
+    attemptId: `attempt_${fnv1a64Hex(attemptKey)}`,
+  };
+}
+
+function stepInputForAttempt(
+  nodeId: string,
+  inputs: Record<string, unknown>,
+  attempt: PhysicalRunStepAttempt,
+): Record<string, unknown> {
+  return {
+    nodeId,
+    attempt: { attemptNo: attempt.attemptNo, attemptId: attempt.attemptId },
+    ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
+  };
+}
+
+function optionalTiming(timing: unknown): { timing: unknown } | Record<string, never> {
+  return timing === undefined ? {} : { timing };
+}
+
+function optionalFailureKind(
+  failureKind: RunnerTimeoutFailureKind | undefined,
+): { failureKind: RunnerTimeoutFailureKind } | Record<string, never> {
+  return failureKind === undefined ? {} : { failureKind };
+}
 
 /**
  * Reserved engine error codes (matched only by a node's `catch`, §3/§6).
@@ -102,6 +229,39 @@ const REVO_SCRIPT_FAILED = 'revo.ScriptFailed' as const;
 const REVO_SCRIPT_BLOCKED = 'revo.ScriptBlocked' as const;
 const REVO_RESULT_INVALID = 'revo.ResultInvalid' as const;
 const REVO_INPUT_MISSING = 'revo.InputMissing' as const;
+
+function invalidRoleResult(
+  reason: string,
+  physicalAttempt: PhysicalRunStepAttempt,
+): InvokeRoleFailedResult {
+  return {
+    failed: true,
+    errorCode: REVO_RESULT_INVALID,
+    reason,
+    attemptId: physicalAttempt.attemptId,
+    attemptsMade: physicalAttempt.attemptNo,
+  };
+}
+
+function runnerBlockReason(transient: TransientRunnerFailure): string {
+  if (transient.failureKind) return transient.failureKind;
+  return `runner-transient-failure:${transient.transientKind}`;
+}
+
+function runnerBlockLesson(transient: TransientRunnerFailure): string {
+  const safe = String(redactEventPayload(transient.reason));
+  if (transient.failureKind) return `${transient.failureKind}: ${safe || 'runner failed'}`;
+  return `runner-transient-failure (${transient.transientKind}): ${safe || 'runner failed'}`;
+}
+
+function pipelineBlockedPayload(
+  reason: string,
+  lesson: string,
+  retry: RunnerRetryBlockPayload | undefined,
+): Record<string, unknown> {
+  if (retry === undefined) return { reason, lesson };
+  return { ...retry };
+}
 
 /** Per-node execution stepKey: the bare nodeId on the first entry (stable ids for existing tests), an
  *  ordinal-suffixed key on loop re-entries so attempts/events/outputs are distinct per iteration (0016
@@ -134,7 +294,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  */
 type TransientRunnerFailure = {
   reason: string;
+  transientKind: 'timeout' | 'rate_limit' | 'crash' | 'unknown';
+  retryable: boolean;
+  retryableCandidate: boolean;
   failureKind?: RunnerTimeoutFailureKind;
+  timing?: unknown;
 };
 
 function publicTimeoutFailureKind(value: unknown): RunnerTimeoutFailureKind | undefined {
@@ -146,11 +310,17 @@ function publicTimeoutFailureKind(value: unknown): RunnerTimeoutFailureKind | un
 function transientRunnerFailure(result: AttemptResult): TransientRunnerFailure | undefined {
   const output = result.output;
   if (!isRecord(output) || output.error !== 'runner_failed') return undefined;
+  const reason = typeof output.reason === 'string' ? output.reason : '';
+  const failureKind = publicTimeoutFailureKind(output.failureKind);
+  const legacyKind = transientKind(reason);
+  const retryableCandidate = output.retryableCandidate !== false;
   return {
-    reason: typeof output.reason === 'string' ? output.reason : '',
-    ...(publicTimeoutFailureKind(output.failureKind)
-      ? { failureKind: publicTimeoutFailureKind(output.failureKind) }
-      : {}),
+    reason,
+    transientKind: failureKind ? 'timeout' : legacyKind,
+    retryableCandidate,
+    retryable: retryableCandidate && (failureKind !== undefined || legacyKind !== 'unknown'),
+    ...optionalFailureKind(failureKind),
+    ...optionalTiming(output.timing),
   };
 }
 
@@ -159,11 +329,22 @@ function transientRunnerFailure(result: AttemptResult): TransientRunnerFailure |
  * timeout / rate-limit / crash apart from `pipeline_blocked.payload.reason` alone (the full detail
  * stays in the lesson). Checked timeout-first so a "exited 1 (timeout)" message reads as a timeout.
  */
-function transientKind(reason: string): string {
+function transientKind(reason: string): TransientRunnerFailure['transientKind'] {
   if (/exceeded\s*\d+\s*ms|timed?\s*out|\btimeout\b/i.test(reason)) return 'timeout';
-  if (/\b429\b|rate.?limit|session limit|quota|overage/i.test(reason)) return 'rate_limit';
-  if (/exit(ed)?\b|signal|crash|killed|ENOENT|spawn/i.test(reason)) return 'crash';
+  if (/\b429\b|rate.?limit|session limit/i.test(reason)) return 'rate_limit';
+  if (isLegacyRetryableCrashReason(reason)) return 'crash';
   return 'unknown';
+}
+
+function isLegacyRetryableCrashReason(reason: string): boolean {
+  if (
+    /\b(auth|credential|permission|forbidden|denied|unauthori[sz]ed|config|schema|malformed|parseable|invalid|RUNNER_NOT_IMPLEMENTED|not wired|unknown runner|requires an OpenAI|ENOENT|not found)\b/i
+      .test(reason)
+  ) {
+    return false;
+  }
+  return /\b(signal|crash(?:ed)?|killed|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|ENOMEM|EAGAIN)\b/i
+    .test(reason);
 }
 
 /** Extract the DOMAIN verdict from the only supported source: top-level AttemptResult.verdict. */
@@ -210,6 +391,8 @@ export type DataDrivenTaskDeps = {
   appendRunOutput: (input: RunOutputRow) => Promise<void>;
   /** Public DBOS event seam for the latest graph cursor; never writes Revisium progress rows. */
   setProgress?: (runId: string, cursor: DataDrivenProgressCursor) => Promise<void>;
+  /** DBOS-backed workflow sleep seam for retry backoff. Tests provide a no-op fake. */
+  sleep: (ms: number) => Promise<void>;
   /** Reuse of the gate park/resume (DBOS recv/send) — the SAME mechanism the hardcoded path uses. */
   awaitHuman: (
     runId: string,
@@ -393,6 +576,7 @@ export function makeDataDrivenTask(
     stepInput: unknown,
     resolvedRunnerId?: string,
     executionProfile?: ExecutionProfile,
+    physicalAttempt?: PhysicalRunStepAttempt,
   ) => Promise<AttemptResult>,
   deps: DataDrivenTaskDeps,
 ) {
@@ -437,6 +621,7 @@ export function makeDataDrivenTask(
     runId: string,
     node: Node,
     ordinal: number,
+    attemptId: string,
     output: unknown,
     outputsByNode: Map<string, RunOutputRow[]>,
   ): Promise<void> {
@@ -448,7 +633,7 @@ export function makeDataDrivenTask(
       name: node.produces.name,
       schemaRef: ('resultSchema' in node && node.resultSchema) || '',
       payload: output,
-      attemptId: stepKeyFor(node.id, ordinal),
+      attemptId,
     };
     const list = outputsByNode.get(node.id) ?? [];
     list.push(row);
@@ -540,7 +725,7 @@ export function makeDataDrivenTask(
     title: string,
     base: string,
   ): Promise<DataDrivenResult> {
-    const { route, template } = opts;
+    const { route, template, runnerRetryPolicy } = opts;
 
     // Capability resolution map (GENERIC — no role-ids in the engine): roleRef/scriptRef → route binding.
     // The route's bindings are authoritative for runner dispatch (and durable on recovery via the DBOS
@@ -581,7 +766,7 @@ export function makeDataDrivenTask(
 
       const eff = await applyDecision(decision, {
         runId, template, bindingByRef, executionProfile, taskId, title, base,
-        effectOrdinalByNode, outputsByNode,
+        effectOrdinalByNode, outputsByNode, runnerRetryPolicy,
         // The verdict from the PRIOR effect (the reviewer/poller that routed into this node). At an
         // awaitGate this is the routing verdict that opened the gate → D3's default reviewerVerdict.
         lastVerdict,
@@ -592,7 +777,14 @@ export function makeDataDrivenTask(
       // (which would fail the run). blockWithLesson emits the single `pipeline_blocked` (token-redacted
       // at the persist boundary) + marks the run-row blocked — the same guard the preflight block uses.
       if (eff.terminal) {
-        return await blockWithLesson(runId, taskId, eff.terminal.reason, eff.terminal.lesson, stepCount);
+        return await blockWithLesson(
+          runId,
+          taskId,
+          eff.terminal.reason,
+          eff.terminal.lesson,
+          stepCount,
+          eff.terminal.retry,
+        );
       }
       lastResult = eff.lastResult;
       if (eff.lastVerdict !== undefined) lastVerdict = eff.lastVerdict;
@@ -617,7 +809,13 @@ export function makeDataDrivenTask(
    * visible, lesson-bearing `blocked` terminal, exactly as the engine-level preflight guard does
    * (blockWithLesson). The block is recovery-bearing, not a silent ResultInvalid abort.
    */
-  type DecisionEffect = { lastResult: LastResult | undefined; lastVerdict?: string; failureReason?: string; stepDelta: number; terminal?: { status: 'blocked'; reason: string; lesson: string } };
+  type DecisionEffect = {
+    lastResult: LastResult | undefined;
+    lastVerdict?: string;
+    failureReason?: string;
+    stepDelta: number;
+    terminal?: { status: 'blocked'; reason: string; lesson: string; retry?: RunnerRetryBlockPayload };
+  };
   type EffectCtx = {
     runId: string;
     template: Template;
@@ -628,8 +826,19 @@ export function makeDataDrivenTask(
     base: string;
     effectOrdinalByNode: Map<string, number>;
     outputsByNode: Map<string, RunOutputRow[]>;
+    runnerRetryPolicy: RunnerTransientRetryPolicy;
     lastVerdict: string; //                               D3 — the prior effect's verdict (gate's default reviewerVerdict)
   };
+  type InvokeRoleAttemptInput = {
+    runId: string;
+    decision: Extract<Decision, { type: 'invokeRole' }>;
+    node: Node;
+    ctx: EffectCtx;
+    inputs: Record<string, unknown>;
+    stepKey: string;
+    binding: RouteRoleBinding;
+  };
+  type NeedsHumanRoleResult = 'retry' | InvokeRoleBlockedResult | undefined;
 
   /**
    * Execute ONE non-terminal Decision as a durable effect and return the next `lastResult`/`lastVerdict`
@@ -662,21 +871,31 @@ export function makeDataDrivenTask(
           // needsHuman (deliberate agent block OR transient runner failure): short-circuit to a visible
           // `blocked` terminal carrying the per-kind lesson (runGraph emits the pipeline_blocked + blocks
           // the run-row via blockWithLesson). NOT a failed/aborted run — the block is recoverable.
-          return { lastResult: undefined, terminal: { status: 'blocked', reason: result.reason, lesson: result.lesson }, stepDelta: 1 };
+          return {
+            lastResult: undefined,
+            terminal: {
+              status: 'blocked',
+              reason: result.reason,
+              lesson: result.lesson,
+              ...(result.retry ? { retry: result.retry } : {}),
+            },
+            stepDelta: result.attemptsMade,
+          };
         }
         if (result.failed) {
           await appendEvent({
             runId, taskId, stepId: '', stepKey, type: 'step_failed',
+            idempotencyKey: result.attemptId,
             payload: { nodeId: node.id, error: result.errorCode },
           });
-          return { lastResult: { outcome: 'failed', errorCode: result.errorCode }, lastVerdict: 'failed', failureReason: result.reason, stepDelta: 1 };
+          return { lastResult: { outcome: 'failed', errorCode: result.errorCode }, lastVerdict: 'failed', failureReason: result.reason, stepDelta: result.attemptsMade };
         }
-        await recordOutput(runId, node, ordinal, result.output, ctx.outputsByNode);
+        await recordOutput(runId, node, ordinal, result.attemptId, result.output, ctx.outputsByNode);
         const verdict = result.verdict;
         return {
           lastResult: { outcome: 'succeeded', ...(verdict ? { verdict } : {}) },
           ...(verdict ? { lastVerdict: verdict } : {}),
-          stepDelta: 1,
+          stepDelta: result.attemptsMade,
         };
       }
       case 'invokeScript': {
@@ -702,7 +921,7 @@ export function makeDataDrivenTask(
         if (scriptResult.outcome === 'failed') {
           return { lastResult: { outcome: 'failed', errorCode: REVO_SCRIPT_FAILED }, lastVerdict: 'failed', stepDelta: 1 };
         }
-        await recordOutput(runId, node, ordinal, scriptResult.pointer, ctx.outputsByNode);
+        await recordOutput(runId, node, ordinal, stepKeyFor(node.id, ordinal), scriptResult.pointer, ctx.outputsByNode);
         // A classifying script (pollPr, plan 0018) surfaces a DOMAIN verdict so the next `choice` can
         // route on it (§8). Scripts with a single fixed `next` (integrator/confirmMerge) carry none.
         const sv = scriptResult.verdict;
@@ -757,63 +976,249 @@ export function makeDataDrivenTask(
     ctx: EffectCtx,
     inputs: Record<string, unknown>,
     stepKey: string,
-  ): Promise<
-    | { failed: true; errorCode: typeof REVO_RESULT_INVALID; reason: string }
-    | { blocked: true; reason: string; lesson: string }
-    | { failed: false; verdict?: string; output: unknown }
-  > {
-    const binding = ctx.bindingByRef.get(decision.roleRef);
-    if (!binding) {
-      // A VALID template's caps resolve at run start; an unresolved roleRef is a fatal config gap.
-      throw new Error(`CAPABILITY_UNRESOLVED: roleRef ${decision.roleRef} has no route binding`);
-    }
+  ): Promise<InvokeRoleResult> {
+    const binding = resolveRoleBinding(ctx, decision);
     // stepKey is ordinal-aware (0016 §4.1): distinct per loop iteration, stable across replay. The
     // hydrated `inputs` (consumed upstream outputs) ride in stepInput → the runner renders them as a
     // `## Inputs (from previous steps)` prompt section (build-context).
-    const stepInput =
-      Object.keys(inputs).length > 0 ? { nodeId: decision.nodeId, inputs } : { nodeId: decision.nodeId };
-    const result = await runStepFn(runId, binding.rowId, stepKey, stepInput, binding.resolvedRunnerId, ctx.executionProfile);
-    // A `needsHuman` result is NOT a wiring fault — it is a recoverable human-block. Route it to a
-    // visible `blocked` terminal (like a blocked SCRIPT), never a ResultInvalid abort (which permanently
-    // kills the run). TWO distinct things produce needsHuman; both block, but the human must see WHICH:
-    //  - DELIBERATE: the agent self-reported `needsHuman:true` (the result-envelope contract). It carries
-    //    the agent's own `output` + `lesson` — a genuine "I need a human decision".
-    //  - TRANSIENT: runStep (pipeline.service.ts) wraps a runner-process crash / non-zero exit / 429 /
-    //    600s timeout as a SYNTHETIC blocking attempt — `output:{ verdict:'BLOCKER', error:'runner_failed',
-    //    reason }`, needsHuman:true. This is fully recoverable; turning it into an abort killed real runs.
-    // The reliable discriminator is that SYNTHETIC marker (`output.error === 'runner_failed'`), set ONLY
-    // on the transient path — a deliberate agent's output is its own free-form result, never that shape.
+    return invokeRoleAttempts({ runId, decision, node, ctx, inputs, stepKey, binding });
+  }
+
+  function resolveRoleBinding(
+    ctx: EffectCtx,
+    decision: Extract<Decision, { type: 'invokeRole' }>,
+  ): RouteRoleBinding {
+    const binding = ctx.bindingByRef.get(decision.roleRef);
+    if (binding === undefined) {
+      // A VALID template's caps resolve at run start; an unresolved roleRef is a fatal config gap.
+      throw new Error(`CAPABILITY_UNRESOLVED: roleRef ${decision.roleRef} has no route binding`);
+    }
+    return binding;
+  }
+
+  async function invokeRoleAttempts(input: InvokeRoleAttemptInput): Promise<InvokeRoleResult> {
+    const { runId, decision, node, ctx, inputs, stepKey, binding } = input;
+    const attemptIds: string[] = [];
+
+    for (let attemptNo = 1; attemptNo <= ctx.runnerRetryPolicy.maxAttempts; attemptNo++) {
+      const physicalAttempt = physicalAttemptFor(runId, stepKey, attemptNo);
+      attemptIds.push(physicalAttempt.attemptId);
+      const result = await runStepFn(
+        runId,
+        binding.rowId,
+        stepKey,
+        stepInputForAttempt(decision.nodeId, inputs, physicalAttempt),
+        binding.resolvedRunnerId,
+        ctx.executionProfile,
+        physicalAttempt,
+      );
+
+      const needsHuman = await maybeHandleNeedsHumanRoleResult({
+        ...input,
+        attemptIds,
+        physicalAttempt,
+        result,
+      });
+      if (needsHuman === 'retry') continue;
+      if (needsHuman) return needsHuman;
+
+      const failed = roleValidationFailure(ctx.template, node, result, physicalAttempt);
+      if (failed) return failed;
+
+      return {
+        failed: false,
+        verdict: domainVerdictOf(result),
+        output: result.output,
+        attemptId: physicalAttempt.attemptId,
+        attemptsMade: attemptNo,
+      };
+    }
+
+    throw new InterpretError(`runner retry loop for ${stepKey} exceeded maxAttempts`);
+  }
+
+  async function maybeHandleNeedsHumanRoleResult(
+    input: InvokeRoleAttemptInput & {
+      attemptIds: string[];
+      physicalAttempt: PhysicalRunStepAttempt;
+      result: AttemptResult;
+    },
+  ): Promise<NeedsHumanRoleResult> {
+    const { result, node, physicalAttempt } = input;
     if (result.needsHuman) {
-      // Redact token shapes at THIS build site (a lesson is free text — pushInbox/appendEvent only mask
-      // secret-NAMED keys), mirroring gateArtifactView; the persist boundary redacts again, belt-and-suspenders.
+      // A `needsHuman` result is NOT a wiring fault — it is a recoverable human-block. Route it to a
+      // visible `blocked` terminal (like a blocked SCRIPT), never a ResultInvalid abort (which permanently
+      // kills the run). TWO distinct things produce needsHuman; both block, but the human must see WHICH:
+      //  - DELIBERATE: the agent self-reported `needsHuman:true` (the result-envelope contract). It carries
+      //    the agent's own `output` + `lesson` — a genuine "I need a human decision".
+      //  - TRANSIENT: runStep wraps a runner-process failure as `output.error === 'runner_failed'`.
       const transient = transientRunnerFailure(result);
-      if (transient !== undefined) {
-        const safe = String(redactEventPayload(transient.reason));
-        if (transient.failureKind) {
-          return {
-            blocked: true,
-            reason: transient.failureKind,
-            lesson: `${transient.failureKind}: ${safe || 'runner failed'}`,
-          };
-        }
-        const kind = transientKind(transient.reason);
-        return {
-          blocked: true,
-          reason: `runner-transient-failure:${kind}`,
-          lesson: `runner-transient-failure (${kind}): ${safe || 'runner failed'}`,
-        };
+      if (transient === undefined) {
+        const safeLesson = String(redactEventPayload(result.lesson ?? `agent ${node.id} reported needsHuman`));
+        return { blocked: true, reason: 'agent-needs-human', lesson: safeLesson, attemptsMade: physicalAttempt.attemptNo };
       }
-      const safeLesson = String(redactEventPayload(result.lesson ?? `agent ${node.id} reported needsHuman`));
-      return { blocked: true, reason: 'agent-needs-human', lesson: safeLesson };
+      return handleTransientRoleResult({ ...input, transient });
     }
-    if (!resultSatisfiesSchema(node, result)) {
-      return { failed: true, errorCode: REVO_RESULT_INVALID, reason: `${REVO_RESULT_INVALID}: node ${node.id} result did not satisfy resultSchema ${String('resultSchema' in node ? node.resultSchema : '')}` };
+
+    return undefined;
+  }
+
+  async function handleTransientRoleResult(
+    input: InvokeRoleAttemptInput & {
+      attemptIds: string[];
+      physicalAttempt: PhysicalRunStepAttempt;
+      transient: TransientRunnerFailure;
+    },
+  ): Promise<'retry' | InvokeRoleBlockedResult> {
+    const { runId, node, ctx, stepKey, attemptIds, physicalAttempt, transient } = input;
+    const policy = ctx.runnerRetryPolicy;
+    if (shouldRetryTransient(transient, physicalAttempt, policy)) {
+      const nextAttempt = physicalAttemptFor(runId, stepKey, physicalAttempt.attemptNo + 1);
+      await appendRunnerRetryScheduled({
+        runId,
+        taskId: ctx.taskId,
+        stepKey,
+        nodeId: node.id,
+        failedAttempt: physicalAttempt,
+        nextAttempt,
+        policy,
+        transient,
+      });
+      if (policy.backoffMs > 0) await deps.sleep(policy.backoffMs);
+      return 'retry';
     }
-    const verdictProblem = resultVerdictProblem(ctx.template, node, result);
-    if (verdictProblem) {
-      return { failed: true, errorCode: REVO_RESULT_INVALID, reason: verdictProblem };
+
+    const retry = runnerRetryBlockPayload({
+      transient,
+      attemptIds,
+      lastAttempt: physicalAttempt,
+      policy,
+      attemptsExhausted: transient.retryable && physicalAttempt.attemptNo >= policy.maxAttempts,
+    });
+    if (retry.attemptsExhausted) {
+      await appendRunnerRetryExhausted({
+        runId,
+        taskId: ctx.taskId,
+        stepKey,
+        nodeId: node.id,
+        retry,
+        idempotencyKey: physicalAttempt.attemptId,
+      });
     }
-    return { failed: false, verdict: domainVerdictOf(result), output: result.output };
+    return {
+      blocked: true,
+      reason: retry.reason,
+      lesson: retry.lesson,
+      retry,
+      attemptsMade: physicalAttempt.attemptNo,
+    };
+  }
+
+  function shouldRetryTransient(
+    transient: TransientRunnerFailure,
+    attempt: PhysicalRunStepAttempt,
+    policy: RunnerTransientRetryPolicy,
+  ): boolean {
+    return transient.retryable && attempt.attemptNo < policy.maxAttempts;
+  }
+
+  function roleValidationFailure(
+    template: Template,
+    node: Node,
+    result: AttemptResult,
+    physicalAttempt: PhysicalRunStepAttempt,
+  ): InvokeRoleFailedResult | undefined {
+    if (resultSatisfiesSchema(node, result)) {
+      const verdictProblem = resultVerdictProblem(template, node, result);
+      if (verdictProblem) return invalidRoleResult(verdictProblem, physicalAttempt);
+      return undefined;
+    }
+    return invalidRoleResult(
+      `${REVO_RESULT_INVALID}: node ${node.id} result did not satisfy resultSchema ${String('resultSchema' in node ? node.resultSchema : '')}`,
+      physicalAttempt,
+    );
+  }
+
+  function runnerRetryBlockPayload(input: {
+    transient: TransientRunnerFailure;
+    attemptIds: string[];
+    lastAttempt: PhysicalRunStepAttempt;
+    policy: RunnerTransientRetryPolicy;
+    attemptsExhausted: boolean;
+  }): RunnerRetryBlockPayload {
+    const { transient, attemptIds, lastAttempt, policy, attemptsExhausted } = input;
+    const reason = runnerBlockReason(transient);
+    const lesson = runnerBlockLesson(transient);
+    return {
+      attemptsExhausted,
+      attemptsMade: lastAttempt.attemptNo,
+      maxAttempts: policy.maxAttempts,
+      attemptIds: [...attemptIds],
+      lastAttemptId: lastAttempt.attemptId,
+      reason,
+      lesson,
+      ...optionalFailureKind(transient.failureKind),
+      transientKind: transient.transientKind,
+      ...optionalTiming(transient.timing),
+    };
+  }
+
+  async function appendRunnerRetryScheduled(input: {
+    runId: string;
+    taskId: string;
+    stepKey: string;
+    nodeId: string;
+    failedAttempt: PhysicalRunStepAttempt;
+    nextAttempt: PhysicalRunStepAttempt;
+    policy: RunnerTransientRetryPolicy;
+    transient: TransientRunnerFailure;
+  }): Promise<void> {
+    const { runId, taskId, stepKey, nodeId, failedAttempt, nextAttempt, policy, transient } = input;
+    await appendEvent({
+      runId,
+      taskId,
+      stepId: '',
+      stepKey,
+      type: 'runner_retry_scheduled',
+      idempotencyKey: failedAttempt.attemptId,
+      payload: {
+        nodeId,
+        failedAttemptNo: failedAttempt.attemptNo,
+        failedAttemptId: failedAttempt.attemptId,
+        nextAttemptNo: nextAttempt.attemptNo,
+        nextAttemptId: nextAttempt.attemptId,
+        maxAttempts: policy.maxAttempts,
+        backoffMs: policy.backoffMs,
+        reason: runnerBlockReason(transient),
+        lesson: runnerBlockLesson(transient),
+        ...optionalFailureKind(transient.failureKind),
+        transientKind: transient.transientKind,
+        ...optionalTiming(transient.timing),
+      },
+    });
+  }
+
+  async function appendRunnerRetryExhausted(input: {
+    runId: string;
+    taskId: string;
+    stepKey: string;
+    nodeId: string;
+    retry: RunnerRetryBlockPayload;
+    idempotencyKey: string;
+  }): Promise<void> {
+    const { runId, taskId, stepKey, nodeId, retry, idempotencyKey } = input;
+    await appendEvent({
+      runId,
+      taskId,
+      stepId: '',
+      stepKey,
+      type: 'runner_retry_exhausted',
+      idempotencyKey,
+      payload: {
+        nodeId,
+        ...retry,
+      },
+    });
   }
 
   /**
@@ -971,6 +1376,7 @@ export function makeDataDrivenTask(
     reason: string,
     lesson: string,
     steps: number,
+    retry?: RunnerRetryBlockPayload,
   ): Promise<DataDrivenResult> {
     await appendEvent({
       runId,
@@ -978,7 +1384,7 @@ export function makeDataDrivenTask(
       stepId: '',
       stepKey: 'pipeline',
       type: 'pipeline_blocked',
-      payload: { reason, lesson },
+      payload: pipelineBlockedPayload(reason, lesson, retry),
     });
     await blockRun(runId, { actor: 'pipeline', source: `data-driven-${reason}`, reason });
     return { runId, status: 'blocked', verdict: 'blocked', steps };
