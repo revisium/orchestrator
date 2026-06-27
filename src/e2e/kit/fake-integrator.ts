@@ -4,8 +4,10 @@ import {
   preflightLive,
   pollPr,
   respondThreads,
+  captureProducedChange,
   asTriage,
   stubIntegrate,
+  type CaptureProducedChangeInput,
   type ConfirmMergeOutput,
   type IntegratorBlocked,
   type IntegratorDeps,
@@ -41,6 +43,7 @@ export function createFakeIntegrator(runs: RunService, execGh: ExecGhFn): Integr
     runConfirmStub: (input: IntegratorInput): ConfirmMergeOutput => ({ merged: true, prNumber: 0, prUrl: `stub://pr/${input.taskId}/merged` }),
     runPreflight: (taskId: string, base: string): Promise<{ ok: true } | IntegratorBlocked> =>
       preflightLive(taskId, base, deps),
+    runCaptureProducedChange: (input: CaptureProducedChangeInput) => captureProducedChange(input, deps),
     // plan 0018 — pollPr/respondThreads against the fake gh. pollPr's sleep is a no-op + a small poll cap
     // so the e2e gh emulator converges fast (CI/threads flip deterministically per call).
     runPollPr: (input: IntegratorInput): Promise<PrFeedback | IntegratorBlocked> =>
@@ -77,6 +80,7 @@ export function routedIntegrator(
     runConfirmMerge: base.runConfirmMerge,
     runConfirmStub: base.runConfirmStub,
     runPreflight: base.runPreflight,
+    runCaptureProducedChange: base.runCaptureProducedChange,
     runPollPr: base.runPollPr,
     runPollStub: base.runPollStub,
     runRespondThreads: base.runRespondThreads,

@@ -19,6 +19,7 @@ import {
   otherwise,
   template,
   verdictEq,
+  verdictIn,
 } from './builders.js';
 import type { Template } from '../types.js';
 
@@ -48,7 +49,7 @@ export function featureDevelopment(): Template {
       }),
       node.choice('codeReviewRouter', [
         on(verdictEq('approved'), 'integrator'),
-        on(allOf(verdictEq('blocker'), counterLt('codeReviewLoop', 3)), 'reworkDeveloper'),
+        on(allOf(verdictIn('blocker', 'changes_requested'), counterLt('codeReviewLoop', 3)), 'reworkDeveloper'),
         otherwise('blockedEnd'),
       ]),
       node.agent('reworkDeveloper', 'role:developer', 'codeReview', {
@@ -131,16 +132,37 @@ export function featureDevelopmentPrReview(): Template {
         on(verdictEq('changes_requested'), 'analyst'),
         otherwise('blockedEnd'),
       ]),
-      node.agent('developer', 'role:developer', 'codeReview', { resultSchema: 'schema:change', onFailure: 'abort' }),
-      node.agent('codeReview', 'role:reviewer', 'codeReviewRouter', { resultSchema: 'schema:reviewVerdict', onFailure: 'abort' }),
+      node.agent('developer', 'role:developer', 'codeReview', {
+        resultSchema: 'schema:change',
+        onFailure: 'abort',
+        produces: { name: 'change' },
+      }),
+      node.agent('codeReview', 'role:reviewer', 'codeReviewRouter', {
+        resultSchema: 'schema:reviewVerdict',
+        onFailure: 'abort',
+        consumes: [
+          { node: 'developer', as: 'developerChange', staleOk: true },
+          { node: 'reworkDeveloper', as: 'reworkChange', optional: true },
+        ],
+      }),
       node.choice('codeReviewRouter', [
         on(verdictEq('approved'), 'integrator'),
-        on(allOf(verdictEq('blocker'), counterLt('codeReviewLoop', 3)), 'reworkDeveloper'),
+        on(allOf(verdictIn('blocker', 'changes_requested'), counterLt('codeReviewLoop', 3)), 'reworkDeveloper'),
         otherwise('blockedEnd'),
       ]),
-      node.agent('reworkDeveloper', 'role:developer', 'codeReview', { resultSchema: 'schema:change', incrementCounters: ['codeReviewLoop'], onFailure: 'abort' }),
+      node.agent('reworkDeveloper', 'role:developer', 'codeReview', {
+        resultSchema: 'schema:change',
+        incrementCounters: ['codeReviewLoop'],
+        onFailure: 'abort',
+        produces: { name: 'change' },
+      }),
       node.script('integrator', 'script:integrator', 'pollPr', {
         resultSchema: 'schema:integration', onFailure: 'route',
+        consumes: [
+          { node: 'developer', as: 'developerChange', staleOk: true },
+          { node: 'reworkDeveloper', as: 'reworkChange', optional: true },
+          { node: 'ciRework', as: 'ciChange', optional: true, staleOk: true },
+        ],
         catch: [{ onError: 'revo.ScriptFailed', goto: 'failedEnd' }],
       }),
       // ── plan 0018 — observe the PR, classify, route by feedback type ──
@@ -156,6 +178,7 @@ export function featureDevelopmentPrReview(): Template {
       ]),
       node.agent('ciRework', 'role:developer', 'integrator', {
         resultSchema: 'schema:change', incrementCounters: ['ciLoop'], onFailure: 'abort',
+        produces: { name: 'change' },
         consumes: [{ node: 'pollPr', as: 'feedback' }],
       }),
       node.agent('triage', 'role:triager', 'triageRouter', {
@@ -174,10 +197,12 @@ export function featureDevelopmentPrReview(): Template {
       ], { incrementCounters: ['questionLoop'] }),
       node.agent('reviewRework', 'role:developer', 'reviewIntegrator', {
         resultSchema: 'schema:change', incrementCounters: ['reviewLoop'], onFailure: 'abort',
+        produces: { name: 'change' },
         consumes: [{ node: 'triage', as: 'triage' }],
       }),
       node.script('reviewIntegrator', 'script:integrator', 'respondThreads', {
         resultSchema: 'schema:integration', onFailure: 'route',
+        consumes: [{ node: 'reviewRework', as: 'reviewChange' }],
         catch: [{ onError: 'revo.ScriptBlocked', goto: 'blockedEnd' }, { onError: 'revo.ScriptFailed', goto: 'failedEnd' }],
       }),
       node.script('respondThreads', 'script:respondThreads', 'pollPr', {
