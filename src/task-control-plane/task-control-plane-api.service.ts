@@ -277,6 +277,37 @@ function firstRepoRef(value: unknown, runId: string): string {
   );
 }
 
+function makeRecoveryLineage(parentRunId: string, recoveryRunId: string, blockedEventId: string): RecoveryRunLineage {
+  return { parentRunId, recoveryRunId, blockedEventId, reason: 'preflight' };
+}
+
+function recoveryLineagePayload(lineage: RecoveryRunLineage): Record<string, unknown> {
+  return {
+    parentRunId: lineage.parentRunId,
+    recoveryRunId: lineage.recoveryRunId,
+    blockedEventId: lineage.blockedEventId,
+    reason: lineage.reason,
+  };
+}
+
+function recoveryLineageEvent(
+  lineage: RecoveryRunLineage,
+  runId: string,
+  taskId: string,
+  type: 'run_recovery_created' | 'run_recovery_parent',
+) {
+  return {
+    runId,
+    taskId,
+    stepId: '',
+    stepKey: 'recovery',
+    type,
+    idempotencyKey: lineage.blockedEventId,
+    payload: recoveryLineagePayload(lineage),
+    actor: 'orchestrator',
+  };
+}
+
 function stepKeyBase(stepKey: string): string {
   return stepKey.split('#')[0] ?? stepKey;
 }
@@ -725,18 +756,9 @@ export class TaskControlPlaneApiService {
     const createInput = this.buildPreflightRecoveryCreateInput(parentRunId, parentData, parentTask.roleHint, blockedEvent);
     const expected = previewCreateRunIds(createInput);
     const created = await this.createRecoveryRunOrReuseExpected(createInput, expected);
-    await this.recordRecoveryLineage({
-      parentRunId,
-      recoveryRunId: created.runId,
-      blockedEventId: blockedEvent.eventId,
-      reason: 'preflight',
-    });
-    return {
-      parentRunId,
-      recoveryRunId: created.runId,
-      blockedEventId: blockedEvent.eventId,
-      reason: 'preflight',
-    };
+    const lineage = makeRecoveryLineage(parentRunId, created.runId, blockedEvent.eventId);
+    await this.recordRecoveryLineage(lineage);
+    return lineage;
   }
 
   private async existingPreflightRecoveryRun(
@@ -755,13 +777,9 @@ export class TaskControlPlaneApiService {
         `Cannot recover run ${parentRunId}: recovery run ${recoveryRunId} referenced by lineage event is missing`,
       );
     }
-    await this.recordRecoveryLineage({
-      parentRunId,
-      recoveryRunId,
-      blockedEventId: blockedEvent.eventId,
-      reason: 'preflight',
-    });
-    return { parentRunId, recoveryRunId, blockedEventId: blockedEvent.eventId, reason: 'preflight' };
+    const lineage = makeRecoveryLineage(parentRunId, recoveryRunId, blockedEvent.eventId);
+    await this.recordRecoveryLineage(lineage);
+    return lineage;
   }
 
   private buildPreflightRecoveryCreateInput(
@@ -809,32 +827,8 @@ export class TaskControlPlaneApiService {
     ]);
     const parentTaskId = parentDetail?.tasks[0]?.taskId ?? '';
     const recoveryTaskId = recoveryDetail?.tasks[0]?.taskId ?? '';
-    const payload = {
-      parentRunId: lineage.parentRunId,
-      recoveryRunId: lineage.recoveryRunId,
-      blockedEventId: lineage.blockedEventId,
-      reason: lineage.reason,
-    };
-    await this.runs.appendEvent({
-      runId: lineage.parentRunId,
-      taskId: parentTaskId,
-      stepId: '',
-      stepKey: 'recovery',
-      type: 'run_recovery_created',
-      idempotencyKey: lineage.blockedEventId,
-      payload,
-      actor: 'orchestrator',
-    });
-    await this.runs.appendEvent({
-      runId: lineage.recoveryRunId,
-      taskId: recoveryTaskId,
-      stepId: '',
-      stepKey: 'recovery',
-      type: 'run_recovery_parent',
-      idempotencyKey: lineage.blockedEventId,
-      payload,
-      actor: 'orchestrator',
-    });
+    await this.runs.appendEvent(recoveryLineageEvent(lineage, lineage.parentRunId, parentTaskId, 'run_recovery_created'));
+    await this.runs.appendEvent(recoveryLineageEvent(lineage, lineage.recoveryRunId, recoveryTaskId, 'run_recovery_parent'));
   }
 
   async cancelRun(runId: string) {
