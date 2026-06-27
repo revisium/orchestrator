@@ -117,7 +117,7 @@ input AnswerQuestionInput {
 
 input CreateRunInput {
   description: String
-  issueRef: JSON
+  issueRef: IssueRefInput
   params: JSON
   pipelineId: String
   playbookId: String
@@ -230,6 +230,18 @@ type InboxResolutionModel {
   runId: String
   signaled: Boolean!
   topic: String
+}
+
+input IssueRefInput {
+  number: Int!
+  repo: String!
+  url: String!
+}
+
+type IssueRefModel {
+  number: Int!
+  repo: String!
+  url: String!
 }
 
 """
@@ -367,7 +379,7 @@ input PrReadinessInput {
   headBranch: String
   includeComments: Boolean
   includeReviewThreads: Boolean
-  issueRef: JSON
+  issueRef: IssueRefInput
   prNumber: Int
   repo: String!
   sonarProject: String
@@ -378,7 +390,7 @@ type PrReadinessModel {
   ciSummary: JSON!
   evidence: [String!]!
   feedback: PrFeedbackModel!
-  issueRef: JSON
+  issueRef: IssueRefModel
   nextAction: String!
   pr: PrInfoModel!
   providerState: JSON!
@@ -645,7 +657,7 @@ type RunModel {
   digest: RunDigestModel!
   events(after: String, first: Int! = 50, type: String): RunEventConnection!
   id: ID!
-  issueRef: JSON
+  issueRef: IssueRefModel
   priority: Int!
   progress: RunProgressModel!
   repos: [String!]!

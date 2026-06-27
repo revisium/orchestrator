@@ -95,13 +95,13 @@ export type IntegratorOutput = {
 type PrListEntry = { number: number; url: string; baseRefName: string; headRefOid?: string };
 type PrSummary = { prUrl: string; prNumber: number; headSha?: string };
 
-function issueBoundTitle(title: string, issueRef?: IssueRef): string {
-  const tag = issueRefTag(issueRef);
+function issueBoundTitle(title: string, issueRef?: IssueRef, ownerRepo?: string): string {
+  const tag = issueRefTag(issueRef, ownerRepo);
   return tag ? `${tag} ${title}` : title;
 }
 
-function commitMessage(title: string, issueRef?: IssueRef): string {
-  const tag = issueRefTag(issueRef);
+function commitMessage(title: string, issueRef?: IssueRef, ownerRepo?: string): string {
+  const tag = issueRefTag(issueRef, ownerRepo);
   return tag ? `feat: ${tag} ${title}` : `feat: ${title}`;
 }
 
@@ -171,7 +171,7 @@ function createPr(
     '--head',
     branch,
     '--title',
-    issueBoundTitle(title, issueRef),
+    issueBoundTitle(title, issueRef, ownerRepo),
     '--body',
     '',
   ]);
@@ -334,6 +334,8 @@ export async function captureProducedChange(
   const { execGit: git, resolveRunCwd } = deps;
   const cwd = await resolveRunCwd(input.runId, input.taskId);
   const branch = branchName(input.taskId, input.title, input.issueRef);
+  const ownerRepoResult = resolveOwnerRepo(git, cwd);
+  const ownerRepo = 'needsHuman' in ownerRepoResult ? undefined : ownerRepoResult.ownerRepo;
 
   if (branchExists(git, cwd, branch)) {
     git(['switch', branch], cwd);
@@ -343,7 +345,7 @@ export async function captureProducedChange(
 
   git(['add', '-A'], cwd);
   if (stagedDiffPresent(git, cwd)) {
-    git(['commit', '-m', commitMessage(input.title, input.issueRef)], cwd);
+    git(['commit', '-m', commitMessage(input.title, input.issueRef, ownerRepo)], cwd);
   }
 
   const headSha = git(['rev-parse', 'HEAD'], cwd).trim();
@@ -406,7 +408,7 @@ export async function integrate(
   // 5. Commit decision (B4 replay safety)
   if (stagedDiffPresent(git, cwd)) {
     // Commit — NO Co-Authored-By, NO summary footer (MEMORY)
-    const commitMsg = commitMessage(input.title, input.issueRef);
+    const commitMsg = commitMessage(input.title, input.issueRef, ownerRepo);
     git(['commit', '-m', commitMsg], cwd);
   } else {
     // No staged diff — check if branch is ahead of origin/<base>

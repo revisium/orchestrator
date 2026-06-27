@@ -755,16 +755,40 @@ function providerWaitFeedback(state: ReturnType<typeof providerState>, botCommen
   }];
 }
 
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function issueRefTitleTag(issueRef: IssueRef, repo: string): string {
+  return issueRef.repo.toLowerCase() === repo.toLowerCase()
+    ? `#${issueRef.number}`
+    : `${issueRef.repo}#${issueRef.number}`;
+}
+
+function hasIssueBranchToken(head: string | undefined, issueRef: IssueRef): boolean {
+  return new RegExp(`(?:^|[/-])issue-${issueRef.number}(?:-|$)`).test(head ?? '');
+}
+
+function hasIssueTitleToken(title: string | undefined, issueRef: IssueRef, repo: string): boolean {
+  const boundaryBefore = String.raw`(?:^|[\s([{"'])`;
+  const boundaryAfter = String.raw`(?=$|[^A-Za-z0-9_-])`;
+  const qualified = new RegExp(`${boundaryBefore}${escapeRegExp(`${issueRef.repo}#${issueRef.number}`)}${boundaryAfter}`, 'i');
+  if (qualified.test(title ?? '')) return true;
+  if (issueRef.repo.toLowerCase() !== repo.toLowerCase()) return false;
+  return new RegExp(`${boundaryBefore}#${issueRef.number}${boundaryAfter}`).test(title ?? '');
+}
+
 function issueLinkageFeedback(
   issueRef: IssueRef | undefined,
+  repo: string,
   pr: { head?: string; title?: string },
 ) {
   if (!issueRef) return [];
   const issueBranch = `issue-${issueRef.number}`;
-  const issueTag = `#${issueRef.number}`;
+  const issueTag = issueRefTitleTag(issueRef, repo);
   const missing: string[] = [];
-  if (!pr.head?.includes(issueBranch)) missing.push(`branch missing ${issueBranch}`);
-  if (!pr.title?.includes(issueTag)) missing.push(`title missing ${issueTag}`);
+  if (!hasIssueBranchToken(pr.head, issueRef)) missing.push(`branch missing ${issueBranch}`);
+  if (!hasIssueTitleToken(pr.title, issueRef, repo)) missing.push(`title missing ${issueTag}`);
   if (missing.length === 0) return [];
   return [{
     source: 'issue_ref_linkage',
@@ -784,6 +808,7 @@ function buildFeedback(input: {
   botComments: CommentEntry[];
   coderabbitReviews?: ReviewEntry[];
   issueRef?: IssueRef;
+  repo: string;
   pr?: { head?: string; title?: string };
 }) {
   const developerFixes: DeveloperFix[] = [
@@ -845,7 +870,7 @@ function buildFeedback(input: {
       ? [{ source: 'github_review_decision', summary: `Review decision is ${input.reviewDecision}` }]
       : []),
     ...(input.sonar.unavailable ? [{ source: 'sonar', summary: 'Sonar was configured but unavailable.' }] : []),
-    ...issueLinkageFeedback(input.issueRef, input.pr ?? {}),
+    ...issueLinkageFeedback(input.issueRef, input.repo, input.pr ?? {}),
   ];
 
   const ignoredNoise = input.botComments
@@ -957,6 +982,7 @@ function buildEmptyFeedback(input: {
     humanComments: [],
     botComments: [],
     issueRef: input.issueRef,
+    repo: '',
   });
 }
 
@@ -1000,6 +1026,7 @@ function buildNeedsHumanReadiness(input: PrReadinessInput, resolved: Extract<Ope
 }
 
 function buildWaitingReadiness(input: {
+  repo: string;
   prNumber: number;
   prView: PrViewData;
   checkLists: ReturnType<typeof compactCheckLists>;
@@ -1037,6 +1064,7 @@ function buildWaitingReadiness(input: {
     humanComments: [],
     botComments: [],
     issueRef: input.issueRef,
+    repo: input.repo,
     pr: { head: input.prView.headRefName, title: input.prView.title },
   });
 
@@ -1125,6 +1153,7 @@ export async function collectPrReadiness(
 
   if (prView.isDraft === true) {
     return buildWaitingReadiness({
+      repo: input.repo,
       prNumber,
       prView,
       checkLists,
@@ -1139,6 +1168,7 @@ export async function collectPrReadiness(
 
   if (ci.pending) {
     return buildWaitingReadiness({
+      repo: input.repo,
       prNumber,
       prView,
       checkLists,
@@ -1172,6 +1202,7 @@ export async function collectPrReadiness(
     botComments: comments.bot_comments,
     coderabbitReviews: comments.coderabbit_reviews,
     issueRef: input.issueRef,
+    repo: input.repo,
     pr: { head: prView.headRefName, title: prView.title },
   });
   const ciSummary: CiSummary = {
@@ -1204,7 +1235,7 @@ export async function collectPrReadiness(
     evidence: [
       `PR #${prNumber} state=${prView.state ?? 'unknown'} draft=${Boolean(prView.isDraft)}`,
       `checks pass=${checkLists.pass.length} fail=${checkLists.fail.length} pending=${checkLists.pending.length}`,
-      ...(input.issueRef ? [`issueRef #${input.issueRef.number} expected in branch and title`] : []),
+      ...(input.issueRef ? [`issueRef ${issueRefTitleTag(input.issueRef, input.repo)} expected in branch and title`] : []),
       ...(providers.codeRabbit?.reason === 'provider_limit' ? ['CodeRabbit provider/rate limit comment detected.'] : []),
       ...(verdict === 'ready' && hasInformationalProviderWait
         ? ['Provider wait is informational (stale CodeRabbit rate-limit comment); not blocking readiness.']

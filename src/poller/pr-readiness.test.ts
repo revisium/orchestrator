@@ -229,6 +229,87 @@ test('issueRef readiness: branch and title linkage keep a clean PR ready', async
   assert.deepEqual(readiness.feedback.humanDecisions, []);
 });
 
+test('issueRef readiness: branch and title matching does not accept larger issue numbers', async () => {
+  const issueRef = {
+    repo: 'owner/repo',
+    number: 147,
+    url: 'https://github.com/owner/repo/issues/147',
+  };
+  const terminalView = prViewResponse([checkRun('Gitar', 'COMPLETED', 'SUCCESS')], {
+    number: 42,
+    url: 'https://github.com/owner/repo/pull/42',
+    state: 'OPEN',
+    isDraft: false,
+    baseRefName: 'master',
+    headRefName: 'feat/abcd-issue-1477-add-feature',
+    headRefOid: 'sha',
+    title: '#1477 Add feature',
+  });
+  const execGh = makeFullResponses(terminalView);
+
+  const readiness = await collectPrReadiness({ repo: 'owner/repo', prNumber: 42, issueRef }, execGh);
+
+  assert.equal(readiness.verdict, 'needs_human');
+  const linkageDecision = readiness.feedback.humanDecisions.find((decision) => decision.source === 'issue_ref_linkage');
+  assert.ok(linkageDecision);
+  assert.ok('evidence' in linkageDecision);
+  assert.match(linkageDecision.evidence, /branch missing issue-147/);
+  assert.match(linkageDecision.evidence, /title missing #147/);
+});
+
+test('issueRef readiness: cross-repo title linkage requires repo-qualified issue ref', async () => {
+  const issueRef = {
+    repo: 'other/repo',
+    number: 147,
+    url: 'https://github.com/other/repo/issues/147',
+  };
+  const terminalView = prViewResponse([checkRun('Gitar', 'COMPLETED', 'SUCCESS')], {
+    number: 42,
+    url: 'https://github.com/owner/repo/pull/42',
+    state: 'OPEN',
+    isDraft: false,
+    baseRefName: 'master',
+    headRefName: 'feat/abcd-issue-147-add-feature',
+    headRefOid: 'sha',
+    title: '#147 Add feature',
+  });
+  const execGh = makeFullResponses(terminalView);
+
+  const readiness = await collectPrReadiness({ repo: 'owner/repo', prNumber: 42, issueRef }, execGh);
+
+  assert.equal(readiness.verdict, 'needs_human');
+  const linkageDecision = readiness.feedback.humanDecisions.find((decision) => decision.source === 'issue_ref_linkage');
+  assert.ok(linkageDecision);
+  assert.ok('evidence' in linkageDecision);
+  assert.doesNotMatch(linkageDecision.evidence, /branch missing/);
+  assert.match(linkageDecision.evidence, /title missing other\/repo#147/);
+});
+
+test('issueRef readiness: cross-repo qualified title linkage keeps a clean PR ready', async () => {
+  const issueRef = {
+    repo: 'other/repo',
+    number: 147,
+    url: 'https://github.com/other/repo/issues/147',
+  };
+  const terminalView = prViewResponse([checkRun('Gitar', 'COMPLETED', 'SUCCESS')], {
+    number: 42,
+    url: 'https://github.com/owner/repo/pull/42',
+    state: 'OPEN',
+    isDraft: false,
+    baseRefName: 'master',
+    headRefName: 'feat/abcd-issue-147-add-feature',
+    headRefOid: 'sha',
+    title: 'other/repo#147 Add feature',
+  });
+  const execGh = makeFullResponses(terminalView);
+
+  const readiness = await collectPrReadiness({ repo: 'owner/repo', prNumber: 42, issueRef }, execGh);
+
+  assert.equal(readiness.verdict, 'ready');
+  assert.equal(readiness.nextAction, 'ready_for_merge_gate');
+  assert.deepEqual(readiness.feedback.humanDecisions, []);
+});
+
 test('all checks terminal + CI failed: judge step with ci_passed:false', async () => {
   const failedView = prViewResponse([
     checkRun('SonarCloud', 'COMPLETED', 'FAILURE'),

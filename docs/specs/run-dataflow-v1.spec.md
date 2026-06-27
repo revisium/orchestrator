@@ -135,8 +135,8 @@ Issue-bound runs carry their canonical issue traceability metadata through `issu
 context into produced change artifacts and integrator inputs so branch, commit, PR title, and readiness checks use
 the same issue reference while preserving the produced artifact's authoritative `branch`. Publication uses
 reference-only issue linkage: branch names contain `issue-<number>`, commits and PR titles may include a non-closing
-`#<number>` reference, PR bodies may remain empty for compatibility with existing publication behavior, and issue
-closure stays manual/out-of-band.
+`#<number>` same-repo reference or `owner/repo#<number>` cross-repo reference, PR bodies may remain empty for
+compatibility with existing publication behavior, and issue closure stays manual/out-of-band.
 
 ## Static Validation
 

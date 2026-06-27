@@ -1,5 +1,5 @@
 import { Field, InputType, Int } from '@nestjs/graphql';
-import { GraphQLJSON } from 'graphql-scalars';
+import { IssueRefInput } from '../../share/model/issue-ref.model.js';
 
 @InputType()
 export class PrReadinessInput {
@@ -18,8 +18,8 @@ export class PrReadinessInput {
   @Field(() => String, { nullable: true })
   sonarProject?: string;
 
-  @Field(() => GraphQLJSON, { nullable: true })
-  issueRef?: { repo: string; number: number; url: string };
+  @Field(() => IssueRefInput, { nullable: true })
+  issueRef?: IssueRefInput;
 
   @Field(() => Boolean, { nullable: true })
   includeComments?: boolean;

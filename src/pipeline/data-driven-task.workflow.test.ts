@@ -569,6 +569,118 @@ test('issueRef: run context reaches worktree creation, produced change, and inte
   assert.deepEqual(rec.integratorInputs[0]?.change?.issueRef, issueRef);
 });
 
+test('issueRef: run context overrides mismatched produced change issueRef before integrator handoff', async () => {
+  const runIssueRef: IssueRef = {
+    repo: 'revisium/orchestrator',
+    number: 147,
+    url: 'https://github.com/revisium/orchestrator/issues/147',
+  };
+  const staleIssueRef: IssueRef = {
+    repo: 'revisium/orchestrator',
+    number: 148,
+    url: 'https://github.com/revisium/orchestrator/issues/148',
+  };
+  const stubChange: ProducedChangeArtifact = {
+    branch: 'feat/stub-produced',
+    headSha: 'stub-produced-sha',
+    worktreePath: '/stub/worktree',
+    issueRef: staleIssueRef,
+  };
+  const tmpl = template('run-issue-ref-authoritative')
+    .specVersion('1.0')
+    .entry('developer')
+    .domain('approved')
+    .add(
+      node.agent('developer', 'role:developer', 'integrator', {
+        resultSchema: 'schema:change',
+        produces: { name: 'change' },
+      }),
+      node.script('integrator', 'script:integrator', 'done', {
+        resultSchema: 'schema:integration',
+        onFailure: 'route',
+        consumes: [{ node: 'developer', as: 'developerChange' }],
+        catch: [{ onError: 'revo.ScriptFailed', goto: 'failed' }],
+      }),
+      node.terminal('done', 'succeeded'),
+      node.terminal('failed', 'failed'),
+    )
+    .build();
+  const { run, rec } = buildAdapter({
+    template: tmpl,
+    route: makeRoute({ developerRunnerId: 'script', integratorRunnerId: 'script' }),
+    issueRef: runIssueRef,
+    results: {
+      developer: {
+        output: { from: 'developer', change: stubChange },
+        verdict: 'approved',
+        nextSteps: [],
+        costs: [],
+      },
+    },
+  });
+
+  const result = await run();
+
+  assert.equal(result.status, 'succeeded');
+  assert.deepEqual(rec.integratorInputs[0]?.issueRef, runIssueRef);
+  assert.deepEqual(rec.integratorInputs[0]?.change, { ...stubChange, issueRef: runIssueRef });
+});
+
+test('issueRef: no-issue run strips produced change issueRef before integrator handoff', async () => {
+  const artifactIssueRef: IssueRef = {
+    repo: 'revisium/orchestrator',
+    number: 147,
+    url: 'https://github.com/revisium/orchestrator/issues/147',
+  };
+  const stubChange: ProducedChangeArtifact = {
+    branch: 'feat/stub-produced',
+    headSha: 'stub-produced-sha',
+    worktreePath: '/stub/worktree',
+    issueRef: artifactIssueRef,
+  };
+  const tmpl = template('no-issue-run-ignores-artifact-issue-ref')
+    .specVersion('1.0')
+    .entry('developer')
+    .domain('approved')
+    .add(
+      node.agent('developer', 'role:developer', 'integrator', {
+        resultSchema: 'schema:change',
+        produces: { name: 'change' },
+      }),
+      node.script('integrator', 'script:integrator', 'done', {
+        resultSchema: 'schema:integration',
+        onFailure: 'route',
+        consumes: [{ node: 'developer', as: 'developerChange' }],
+        catch: [{ onError: 'revo.ScriptFailed', goto: 'failed' }],
+      }),
+      node.terminal('done', 'succeeded'),
+      node.terminal('failed', 'failed'),
+    )
+    .build();
+  const { run, rec } = buildAdapter({
+    template: tmpl,
+    route: makeRoute({ developerRunnerId: 'script', integratorRunnerId: 'script' }),
+    results: {
+      developer: {
+        output: { from: 'developer', change: stubChange },
+        verdict: 'approved',
+        nextSteps: [],
+        costs: [],
+      },
+    },
+  });
+
+  const result = await run();
+
+  assert.equal(result.status, 'succeeded');
+  assert.equal(rec.integratorInputs[0]?.issueRef, undefined);
+  assert.deepEqual(rec.integratorInputs[0]?.change, {
+    branch: 'feat/stub-produced',
+    headSha: 'stub-produced-sha',
+    worktreePath: '/stub/worktree',
+  });
+});
+
 test('DD4a-issue-140: non-live produced change metadata reaches the integrator without worktree capture', async () => {
   const stubChange: ProducedChangeArtifact = {
     branch: 'feat/stub-produced',

@@ -27,7 +27,7 @@ test('normalizePrReadinessInput forwards normalized issueRef to readiness core i
       repo: 'revisium/orchestrator',
       prNumber: 191,
       issueRef: {
-        repo: ' revisium/orchestrator ',
+        repo: 'revisium/orchestrator',
         number: 147,
         url: ' https://github.com/revisium/orchestrator/issues/147 ',
       },

@@ -39,6 +39,24 @@ test('issueRef: branch keeps feat/<shortId>- prefix and includes issue number', 
   assert.ok(result.startsWith('feat/abcd1234-'));
 });
 
+test('issueRef: long titles keep issue-bound suffix within the slug budget', () => {
+  const result = branchName(
+    'task_20260627T000000000Z_issue-ref-traceability_abcd1234',
+    'Implement issue reference traceability across every public runtime surface and publication path',
+    {
+      repo: 'revisium/orchestrator',
+      number: 147,
+      url: 'https://github.com/revisium/orchestrator/issues/147',
+    },
+  );
+
+  const prefix = 'feat/abcd1234-';
+  const suffix = result.slice(prefix.length);
+  assert.ok(result.startsWith(prefix));
+  assert.ok(suffix.startsWith('issue-147-'));
+  assert.ok(suffix.length <= 40, `issue-bound suffix too long (${suffix.length}): ${suffix}`);
+});
+
 // ─── taskBranchPrefix ─────────────────────────────────────────────────────────
 
 test('taskBranchPrefix: returns feat/<shortId>- for a canonical taskId', () => {
