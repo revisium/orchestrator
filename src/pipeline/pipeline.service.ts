@@ -36,7 +36,7 @@ import { RUN_AGENT } from '../runners/tokens.js';
 import { buildContext, ContextMissingError } from '../worker/build-context.js';
 import type { RunAgent, AttemptResult } from '../worker/runner.js';
 import { artifactsFromRunAgentError, failureMetadataFromRunAgentError } from '../worker/runner.js';
-import { fnv1a64Hex } from '../control-plane/steps.js';
+import { fnv1a64Hex, type CostRecord, type Step } from '../control-plane/steps.js';
 import { getConfig } from '../config.js';
 import type { AppendEventInput } from '../run/append-event.js';
 import {
@@ -150,6 +150,186 @@ function processArtifactFields(artifacts: unknown): { artifactRef?: string; stdo
   };
 }
 
+type StepAttemptContext = {
+  runId: string;
+  role: string;
+  stepKey: string;
+  attemptId: string;
+  step: Step;
+  durationMs: number;
+};
+
+type RunnerFailureDetails = {
+  reason: string;
+  output: {
+    verdict: 'BLOCKER';
+    error: 'runner_failed';
+    role: string;
+    stepKey: string;
+    reason: string;
+    failureKind?: string;
+    retryableCandidate?: boolean;
+    timing?: unknown;
+  };
+  artifactFields: { artifactRef?: string; stdoutTail?: string; stderrTail?: string };
+};
+
+async function runAgentWithReporterFlush(
+  runAgent: RunAgent,
+  args: Parameters<RunAgent>[0],
+): Promise<AttemptResult> {
+  try {
+    return await runAgent(args);
+  } finally {
+    await flushReporter(args.reporter);
+  }
+}
+
+function runnerFailureDetails(err: unknown, role: string, stepKey: string): RunnerFailureDetails {
+  const reason = runnerFailureReason(err);
+  const output: RunnerFailureDetails['output'] = {
+    verdict: 'BLOCKER',
+    error: 'runner_failed',
+    role,
+    stepKey,
+    reason,
+  };
+  const failureMetadata = failureMetadataFromRunAgentError(err);
+  if (failureMetadata.failureKind) output.failureKind = failureMetadata.failureKind;
+  if (failureMetadata.retryableCandidate !== undefined) output.retryableCandidate = failureMetadata.retryableCandidate;
+  if (failureMetadata.timing) output.timing = failureMetadata.timing;
+
+  return {
+    reason,
+    output,
+    artifactFields: processArtifactFields(artifactsFromRunAgentError(err)),
+  };
+}
+
+async function appendRunnerFailureAttempt(
+  appendAttempt: RunStepDeps['appendAttempt'],
+  attemptContext: StepAttemptContext,
+  failure: RunnerFailureDetails,
+): Promise<void> {
+  try {
+    await appendAttempt({
+      runId: attemptContext.runId,
+      stepId: attemptContext.step.id,
+      attemptId: attemptContext.attemptId,
+      attemptNo: iterationOf(attemptContext.stepKey) + 1,
+      iteration: iterationOf(attemptContext.stepKey),
+      status: 'failed',
+      modelProfile: attemptContext.step.modelProfile,
+      verdict: 'BLOCKER',
+      inputTokens: 0,
+      outputTokens: 0,
+      costAmount: 0,
+      durationMs: attemptContext.durationMs,
+      output: failure.output,
+      lesson: failure.reason,
+      error: failure.reason,
+      ...failure.artifactFields,
+    });
+  } catch (attemptErr) {
+    console.warn(
+      `[pipeline] failed-attempt row write failed for ${attemptContext.stepKey} (${attemptContext.attemptId}) — observability only. ` +
+        `${String(attemptErr)}`,
+    );
+  }
+}
+
+async function handleRunnerFailure(
+  appendEvent: RunStepDeps['appendEvent'],
+  appendAttempt: RunStepDeps['appendAttempt'],
+  attemptContext: StepAttemptContext,
+  err: unknown,
+): Promise<AttemptResult> {
+  const failure = runnerFailureDetails(err, attemptContext.role, attemptContext.stepKey);
+  await appendEvent({
+    runId: attemptContext.runId,
+    taskId: attemptContext.step.taskId,
+    stepId: attemptContext.step.id,
+    stepKey: attemptContext.stepKey,
+    type: 'step_failed',
+    payload: {
+      output: failure.output,
+      role: attemptContext.role,
+      stepKey: attemptContext.stepKey,
+      attemptId: attemptContext.attemptId,
+    },
+  });
+  await appendRunnerFailureAttempt(appendAttempt, attemptContext, failure);
+  return { output: failure.output, nextSteps: [], costs: [], needsHuman: true, lesson: failure.reason };
+}
+
+async function appendAttemptCosts(
+  appendCost: RunStepDeps['appendCost'],
+  runId: string,
+  step: Step,
+  stepKey: string,
+  attemptId: string,
+  costs: CostRecord[],
+): Promise<void> {
+  for (let i = 0; i < costs.length; i++) {
+    const cost = costs[i];
+    if (!cost) continue;
+    await appendCost({
+      runId,
+      stepId: step.id,
+      stepKey,
+      attemptId,
+      cost,
+      index: i,
+    });
+  }
+}
+
+function aggregateCostTotals(
+  costs: readonly (Partial<CostRecord> | undefined)[],
+): { inputTokens: number; outputTokens: number; costAmount: number } {
+  return costs.reduce<{ inputTokens: number; outputTokens: number; costAmount: number }>(
+    (sum, cost) => ({
+      inputTokens: sum.inputTokens + (cost?.inputTokens ?? 0),
+      outputTokens: sum.outputTokens + (cost?.outputTokens ?? 0),
+      costAmount: sum.costAmount + (cost?.costAmount ?? 0),
+    }),
+    { inputTokens: 0, outputTokens: 0, costAmount: 0 },
+  );
+}
+
+async function appendSuccessfulAttempt(
+  appendAttempt: RunStepDeps['appendAttempt'],
+  attemptContext: StepAttemptContext,
+  result: AttemptResult,
+  artifactFields: { artifactRef?: string; stdoutTail?: string; stderrTail?: string },
+): Promise<void> {
+  const { inputTokens, outputTokens, costAmount } = aggregateCostTotals(result.costs);
+  try {
+    await appendAttempt({
+      runId: attemptContext.runId,
+      stepId: attemptContext.step.id,
+      attemptId: attemptContext.attemptId,
+      attemptNo: iterationOf(attemptContext.stepKey) + 1,
+      iteration: iterationOf(attemptContext.stepKey),
+      status: result.needsHuman ? 'awaiting_approval' : 'succeeded',
+      modelProfile: attemptContext.step.modelProfile,
+      verdict: verdictForAttemptRow(result),
+      inputTokens,
+      outputTokens,
+      costAmount,
+      durationMs: attemptContext.durationMs,
+      output: result.output,
+      lesson: result.lesson,
+      ...artifactFields,
+    });
+  } catch (err) {
+    console.warn(
+      `[pipeline] attempt-row write failed for ${attemptContext.stepKey} (${attemptContext.attemptId}) — observability only, step still succeeds. ` +
+        `If this is a schema-drift error, migrate the control-plane attempts table to the 0008 fields. ${String(err)}`,
+    );
+  }
+}
+
 /**
  * makeRunStep — DBOS-free factory for the runStep async function.
  *
@@ -242,62 +422,13 @@ export function makeRunStep(deps: RunStepDeps) {
     const startedAt = clock();
     let result: AttemptResult;
     try {
-      result = await runAgent({ role: dispatchRole, profile, context, attemptId, step, reporter });
-      await flushReporter(reporter);
+      result = await runAgentWithReporterFlush(runAgent, { role: dispatchRole, profile, context, attemptId, step, reporter });
     } catch (err) {
-      await flushReporter(reporter);
       const durationMs = Math.max(0, clock() - startedAt);
-      const reason = runnerFailureReason(err);
-      const artifactFields = processArtifactFields(artifactsFromRunAgentError(err));
-      const failureMetadata = failureMetadataFromRunAgentError(err);
-      const output = {
-        verdict: 'BLOCKER',
-        error: 'runner_failed',
-        role,
-        stepKey,
-        reason,
-        ...(failureMetadata.failureKind ? { failureKind: failureMetadata.failureKind } : {}),
-        ...(failureMetadata.retryableCandidate === undefined
-          ? {}
-          : { retryableCandidate: failureMetadata.retryableCandidate }),
-        ...(failureMetadata.timing ? { timing: failureMetadata.timing } : {}),
-      };
-      await appendEvent({
-        runId,
-        taskId: step.taskId,
-        stepId: step.id,
-        stepKey,
-        type: 'step_failed',
-        payload: { output, role, stepKey, attemptId },
-      });
-      try {
-        await appendAttempt({
-          runId,
-          stepId: step.id,
-          attemptId,
-          attemptNo: iterationOf(stepKey) + 1,
-          iteration: iterationOf(stepKey),
-          status: 'failed',
-          modelProfile: step.modelProfile,
-          verdict: 'BLOCKER',
-          inputTokens: 0,
-          outputTokens: 0,
-          costAmount: 0,
-          durationMs,
-          output,
-          lesson: reason,
-          error: reason,
-          ...artifactFields,
-        });
-      } catch (attemptErr) {
-        console.warn(
-          `[pipeline] failed-attempt row write failed for ${stepKey} (${attemptId}) — observability only. ` +
-            `${String(attemptErr)}`,
-        );
-      }
-      return { output, nextSteps: [], costs: [], needsHuman: true, lesson: reason };
+      return handleRunnerFailure(appendEvent, appendAttempt, { runId, role, stepKey, attemptId, step, durationMs }, err);
     }
     const durationMs = Math.max(0, clock() - startedAt);
+    const attemptContext = { runId, role, stepKey, attemptId, step, durationMs };
     const artifactFields = processArtifactFields(result.artifacts);
 
     // 8. Persist event to Revisium draft (idempotent — ROW_CONFLICT = no-op on replay).
@@ -311,51 +442,14 @@ export function makeRunStep(deps: RunStepDeps) {
     });
 
     // 9. Persist cost rows (idempotent by index).
-    for (let i = 0; i < result.costs.length; i++) {
-      const cost = result.costs[i];
-      if (!cost) continue;
-      await appendCost({
-        runId,
-        stepId: step.id,
-        stepKey,
-        attemptId,
-        cost,
-        index: i,
-      });
-    }
+    await appendAttemptCosts(appendCost, runId, step, stepKey, attemptId, result.costs);
 
     // 10. Persist the per-attempt observability row (0008 #4). Aggregate tokens/cost from the
     //     cost records; surface the verdict; redact secrets on store. Idempotent by attemptId.
     //     NON-FATAL: the attempts row is pure observability — a write failure (e.g. a control-plane
     //     whose attempts schema predates 0008's fields, additionalProperties:false → VALIDATION_FAILURE)
     //     must NEVER fail an otherwise-successful agent step. Log and continue.
-    const inputTokens = result.costs.reduce((sum, c) => sum + (c?.inputTokens ?? 0), 0);
-    const outputTokens = result.costs.reduce((sum, c) => sum + (c?.outputTokens ?? 0), 0);
-    const costAmount = result.costs.reduce((sum, c) => sum + (c?.costAmount ?? 0), 0);
-    try {
-      await appendAttempt({
-        runId,
-        stepId: step.id,
-        attemptId,
-        attemptNo: iterationOf(stepKey) + 1,
-        iteration: iterationOf(stepKey),
-        status: result.needsHuman ? 'awaiting_approval' : 'succeeded',
-        modelProfile: step.modelProfile,
-        verdict: verdictForAttemptRow(result),
-        inputTokens,
-        outputTokens,
-        costAmount,
-        durationMs,
-        output: result.output,
-        lesson: result.lesson,
-        ...artifactFields,
-      });
-    } catch (err) {
-      console.warn(
-        `[pipeline] attempt-row write failed for ${stepKey} (${attemptId}) — observability only, step still succeeds. ` +
-          `If this is a schema-drift error, migrate the control-plane attempts table to the 0008 fields. ${String(err)}`,
-      );
-    }
+    await appendSuccessfulAttempt(appendAttempt, attemptContext, result, artifactFields);
 
     return result;
   };
