@@ -1109,6 +1109,190 @@ test('TaskControlPlaneApiService.resumeRun rejects preflight recovery when the p
   );
 });
 
+type RecoveryTestEvent = {
+  eventId: string;
+  type: string;
+  actor: string;
+  createdAt: string;
+  taskId: string;
+  stepId: string;
+  payload: unknown;
+};
+
+function pausedRecoveryParentData(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: 'run-parent',
+    title: 'Recover preflight',
+    status: 'paused',
+    repos: [process.cwd()],
+    route_decision: LOCAL_CHANGE_ROUTE,
+    execution_profile: LOCAL_CHANGE_ROUTE.executionProfile,
+    ...overrides,
+  };
+}
+
+function preflightBlockedEvent(overrides: Partial<RecoveryTestEvent> = {}): RecoveryTestEvent {
+  return {
+    eventId: 'event-preflight',
+    type: 'pipeline_blocked',
+    actor: 'pipeline',
+    createdAt: '2026-06-27T10:00:00.000Z',
+    taskId: 'task-parent',
+    stepId: '',
+    payload: { reason: 'preflight', lesson: 'dirty repo' },
+    ...overrides,
+  };
+}
+
+function recoveryWorkflowStatus(runId = 'run-parent'): Awaited<ReturnType<DbosService['getWorkflowStatus']>> {
+  return {
+    workflowID: runId,
+    status: 'SUCCESS',
+    workflowName: 'dataDrivenTask',
+    workflowClassName: 'PipelineService',
+    createdAt: Date.parse('2026-06-27T10:00:00.000Z'),
+    updatedAt: Date.parse('2026-06-27T10:00:01.000Z'),
+    priority: 0,
+    applicationID: 'test',
+  } as Awaited<ReturnType<DbosService['getWorkflowStatus']>>;
+}
+
+function recoveryRunDetail(
+  runId = 'run-parent',
+  title = 'Recover preflight',
+  tasks = [{ taskId: 'task-parent', title, status: 'paused', roleHint: 'developer' }],
+) {
+  return {
+    run: {
+      runId,
+      title,
+      status: 'paused',
+      priority: 0,
+      createdAt: '2026-06-27T09:00:00.000Z',
+      description: '',
+      scope: '',
+      repos: [process.cwd()],
+    },
+    tasks,
+  };
+}
+
+test('TaskControlPlaneApiService.resumeRun rejects preflight recovery when the parent title is missing', async () => {
+  const parentData = pausedRecoveryParentData({ title: undefined });
+  const api = makeApi({
+    runService: {
+      async getRun() {
+        return { rowId: 'run-parent', data: parentData };
+      },
+      async showRun() {
+        return recoveryRunDetail('run-parent', '');
+      },
+      async listRunEvents() {
+        return [preflightBlockedEvent({ payload: { reason: 'preflight', lesson: 'missing title' } })];
+      },
+      async createRun() {
+        assert.fail('invalid recovery input must not create a child run');
+      },
+    },
+    dbosService: {
+      async getWorkflowStatus() {
+        return recoveryWorkflowStatus();
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => api.resumeRun({ runId: 'run-parent' }),
+    (error: unknown) =>
+      error instanceof ControlPlaneError &&
+      error.code === 'VALIDATION_FAILURE' &&
+      error.message.includes('parent title is missing'),
+  );
+});
+
+test('TaskControlPlaneApiService.resumeRun rejects preflight recovery when the parent task is missing', async () => {
+  const parentData = pausedRecoveryParentData({ title: 'Recover missing task' });
+  const api = makeApi({
+    runService: {
+      async getRun() {
+        return { rowId: 'run-parent', data: parentData };
+      },
+      async showRun() {
+        return recoveryRunDetail('run-parent', String(parentData.title), []);
+      },
+      async listRunEvents() {
+        return [preflightBlockedEvent({ payload: { reason: 'preflight', lesson: 'missing task' } })];
+      },
+      async createRun() {
+        assert.fail('recovery without a parent task must not create a child run');
+      },
+    },
+    dbosService: {
+      async getWorkflowStatus() {
+        return recoveryWorkflowStatus();
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => api.resumeRun({ runId: 'run-parent' }),
+    (error: unknown) =>
+      error instanceof ControlPlaneError &&
+      error.code === 'ROW_NOT_FOUND' &&
+      error.message.includes('parent task is missing'),
+  );
+});
+
+test('TaskControlPlaneApiService.resumeRun rejects stale recovery lineage that points at a missing child run', async () => {
+  const parentData = pausedRecoveryParentData({ title: 'Recover stale lineage' });
+  const api = makeApi({
+    runService: {
+      async getRun() {
+        return { rowId: 'run-parent', data: parentData };
+      },
+      async showRun(runId) {
+        if (runId === 'run-missing') return null;
+        return recoveryRunDetail(runId, String(parentData.title));
+      },
+      async listRunEvents() {
+        return [
+          preflightBlockedEvent(),
+          {
+            eventId: 'event-lineage',
+            type: 'run_recovery_created',
+            actor: 'orchestrator',
+            createdAt: '2026-06-27T10:00:01.000Z',
+            taskId: 'task-parent',
+            stepId: '',
+            payload: {
+              parentRunId: 'run-parent',
+              recoveryRunId: 'run-missing',
+              blockedEventId: 'event-preflight',
+              reason: 'preflight',
+            },
+          },
+        ];
+      },
+      async createRun() {
+        assert.fail('stale recovery lineage must not create another child run');
+      },
+    },
+    dbosService: {
+      async getWorkflowStatus() {
+        return recoveryWorkflowStatus();
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => api.resumeRun({ runId: 'run-parent' }),
+    (error: unknown) =>
+      error instanceof ControlPlaneError &&
+      error.code === 'ROW_NOT_FOUND' &&
+      error.message.includes('recovery run run-missing referenced by lineage event is missing'),
+  );
+});
+
 test('TaskControlPlaneApiService.resumeRun reuses the expected recovery run after a partial create conflict', async () => {
   const parentData = {
     id: 'run-parent',
@@ -1335,6 +1519,38 @@ test('TaskControlPlaneApiService.resumeRun rethrows partial create conflicts whe
   await assert.rejects(
     () => api.resumeRun({ runId: 'run-parent' }),
     (error: unknown) => error instanceof CreateRunWorkflowError,
+  );
+});
+
+test('TaskControlPlaneApiService.resumeRun rethrows unexpected recovery child create failures', async () => {
+  const createFailure = new Error('storage unavailable');
+  const parentData = pausedRecoveryParentData({ title: 'Recover create failure' });
+
+  const api = makeApi({
+    runService: {
+      async getRun() {
+        return { rowId: 'run-parent', data: parentData };
+      },
+      async showRun() {
+        return recoveryRunDetail('run-parent', String(parentData.title));
+      },
+      async listRunEvents() {
+        return [preflightBlockedEvent()];
+      },
+      async createRun() {
+        throw createFailure;
+      },
+    },
+    dbosService: {
+      async getWorkflowStatus() {
+        return recoveryWorkflowStatus();
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => api.resumeRun({ runId: 'run-parent' }),
+    (error: unknown) => error === createFailure,
   );
 });
 
