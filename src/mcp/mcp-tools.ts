@@ -143,7 +143,8 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
   server.registerTool(
     'start_run',
     {
-      description: 'Start or reattach the durable pipeline workflow for an existing run.',
+      description:
+        'Start or reattach the durable pipeline workflow for an existing run. For a terminal recoverable preflight block, returns nextAction:"resume_run" without retrying or creating recovery.',
       inputSchema: {
         runId: runIdSchema,
       },
@@ -155,7 +156,8 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
   server.registerTool(
     'resume_run',
     {
-      description: 'Alias for start_run; reattaches a durable workflow by run ID.',
+      description:
+        'Resume an existing run. If the run is a terminal recoverable preflight block, creates or reuses a follow-up recovery run and starts that child workflow.',
       inputSchema: {
         runId: runIdSchema,
       },

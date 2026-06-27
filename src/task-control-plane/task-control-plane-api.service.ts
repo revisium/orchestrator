@@ -16,6 +16,7 @@ import type {
 } from '../observability/types.js';
 import { ControlPlaneError } from '../control-plane/errors.js';
 import type { InboxItem } from '../control-plane/inbox.js';
+import { fnv1a64Hex } from '../control-plane/steps.js';
 import { DbosService } from '../engine/dbos.service.js';
 import { PipelineService, type RunnerMode } from '../pipeline/pipeline.service.js';
 import { RUN_PROGRESS_EVENT_KEY, type DataDrivenProgressCursor } from '../pipeline/data-driven-task.workflow.js';
@@ -34,6 +35,12 @@ import { PlaybooksService } from '../revisium/playbooks.service.js';
 import type { PipelineSummary } from '../revisium/playbooks.service.js';
 import { RolesService, type RoleSummary } from '../revisium/roles.service.js';
 import { RunService } from '../revisium/run.service.js';
+import {
+  CreateRunWorkflowError,
+  previewCreateRunIds,
+  type CreateRunInput,
+  type CreateRunResult,
+} from '../run/create-run.js';
 import type { AttemptSummary, EventSummary } from '../run/inspect-run.js';
 import { PrReadinessService, type GetPrReadinessInput } from './pr-readiness.service.js';
 
@@ -83,6 +90,23 @@ export type RunState = {
   inbox?: InboxItem;
   latestBlockingEvent?: unknown;
   blockedReason?: string;
+};
+
+type WorkflowStatusSnapshot = Awaited<ReturnType<DbosService['getWorkflowStatus']>>;
+
+type RecoverablePreflightBlock = {
+  blockedEvent: EventSummary;
+  blockedEventId: string;
+  reason: 'preflight';
+  workflowID: string;
+  workflowStatus: 'SUCCESS';
+};
+
+type RecoveryRunLineage = {
+  parentRunId: string;
+  recoveryRunId: string;
+  blockedEventId: string;
+  reason: 'preflight';
 };
 
 type GitResult = {
@@ -201,6 +225,56 @@ function eventSummary(event: EventSummary): string {
 function blockedReasonFromEvent(event: EventSummary): string | undefined {
   const reason = payloadRecord(event)?.reason;
   return typeof reason === 'string' && reason ? reason : undefined;
+}
+
+function latestPipelineBlockedEvent(events: EventSummary[]): EventSummary | undefined {
+  return [...events].reverse().find((event) => event.type === 'pipeline_blocked');
+}
+
+function recoveryCreatedForBlockedEvent(events: EventSummary[], blockedEventId: string): EventSummary | undefined {
+  return [...events]
+    .reverse()
+    .find((event) => {
+      if (event.type !== 'run_recovery_created') return false;
+      return payloadRecord(event)?.blockedEventId === blockedEventId;
+    });
+}
+
+function requiredString(value: unknown, field: string, runId: string): string {
+  if (typeof value === 'string' && value.trim()) return value;
+  throw new ControlPlaneError(
+    'VALIDATION_FAILURE',
+    `Cannot recover run ${runId}: parent ${field} is missing`,
+  );
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined;
+}
+
+function optionalInteger(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isSafeInteger(value) ? value : undefined;
+}
+
+function requiredRecord(value: unknown, field: string, runId: string): Record<string, unknown> {
+  const record = asRecord(value);
+  if (record) return record;
+  throw new ControlPlaneError(
+    'VALIDATION_FAILURE',
+    `Cannot recover run ${runId}: parent ${field} is not a record`,
+  );
+}
+
+function optionalRecord(value: unknown): Record<string, unknown> {
+  return asRecord(value) ?? {};
+}
+
+function firstRepoRef(value: unknown, runId: string): string {
+  if (Array.isArray(value) && typeof value[0] === 'string' && value[0].trim()) return value[0];
+  throw new ControlPlaneError(
+    'VALIDATION_FAILURE',
+    `Cannot recover run ${runId}: parent repo is missing`,
+  );
 }
 
 function stepKeyBase(stepKey: string): string {
@@ -552,8 +626,24 @@ export class TaskControlPlaneApiService {
   async startRun(input: { runId: string; runnerMode?: RunnerModeInput; route?: RouteDecision }) {
     const run = await this.runs.getRun(input.runId);
     if (!run) throw new ControlPlaneError('ROW_NOT_FOUND', `run not found: ${input.runId}`);
-    const route = input.route ?? await this.routeForRun(run);
     const existingStatus = await this.dbos.getWorkflowStatus(input.runId);
+    const route = input.route ?? await this.routeForRun(run);
+    const recoverable = await this.detectRecoverablePreflightBlock(input.runId, run.data.status, existingStatus);
+    if (recoverable) {
+      return {
+        runId: input.runId,
+        workflowID: recoverable.workflowID,
+        alreadyStarted: true,
+        recoverable: true,
+        retryStarted: false,
+        nextAction: 'resume_run' as const,
+        blockedEventId: recoverable.blockedEventId,
+        blockedReason: recoverable.reason,
+        workflowStatus: recoverable.workflowStatus,
+        route,
+        engine: 'data-driven' as const,
+      };
+    }
 
     // CUTOVER (plan 0015 slice 3): the data-driven engine is the SOLE pipeline engine. EVERY pipeline
     // routes to the data-driven workflow, executing the state-machine template carried in its
@@ -578,8 +668,173 @@ export class TaskControlPlaneApiService {
     };
   }
 
-  resumeRun(input: { runId: string; runnerMode?: RunnerModeInput }) {
-    return this.startRun(input);
+  async resumeRun(input: { runId: string; runnerMode?: RunnerModeInput }) {
+    const run = await this.runs.getRun(input.runId);
+    if (!run) throw new ControlPlaneError('ROW_NOT_FOUND', `run not found: ${input.runId}`);
+    const workflow = await this.dbos.getWorkflowStatus(input.runId);
+    const recoverable = await this.detectRecoverablePreflightBlock(input.runId, run.data.status, workflow);
+    if (!recoverable) return this.startRun(input);
+
+    const recovery = await this.createOrReusePreflightRecoveryRun(input.runId, run.data, recoverable.blockedEvent);
+    const started = await this.startRun({
+      runId: recovery.recoveryRunId,
+      runnerMode: input.runnerMode,
+    });
+    return {
+      ...started,
+      recovered: true,
+      recovery,
+    };
+  }
+
+  private async detectRecoverablePreflightBlock(
+    runId: string,
+    runStatus: unknown,
+    workflow: WorkflowStatusSnapshot,
+  ): Promise<RecoverablePreflightBlock | null> {
+    if (runStatus !== 'paused' || workflow?.status !== 'SUCCESS') return null;
+    const events = await this.runs.listRunEvents(runId, { type: 'pipeline_blocked', limit: 500 });
+    const blockedEvent = latestPipelineBlockedEvent(events);
+    if (!blockedEvent || blockedReasonFromEvent(blockedEvent) !== 'preflight') return null;
+    return {
+      blockedEvent,
+      blockedEventId: blockedEvent.eventId,
+      reason: 'preflight',
+      workflowID: workflow.workflowID,
+      workflowStatus: 'SUCCESS',
+    };
+  }
+
+  private async createOrReusePreflightRecoveryRun(
+    parentRunId: string,
+    parentData: Record<string, unknown>,
+    blockedEvent: EventSummary,
+  ): Promise<RecoveryRunLineage> {
+    const existing = await this.existingPreflightRecoveryRun(parentRunId, blockedEvent);
+    if (existing) return existing;
+
+    const parentDetail = await this.runs.showRun(parentRunId);
+    const parentTask = parentDetail?.tasks[0];
+    if (!parentTask) {
+      throw new ControlPlaneError(
+        'ROW_NOT_FOUND',
+        `Cannot recover run ${parentRunId}: parent task is missing`,
+      );
+    }
+
+    const createInput = this.buildPreflightRecoveryCreateInput(parentRunId, parentData, parentTask.roleHint, blockedEvent);
+    const expected = previewCreateRunIds(createInput);
+    const created = await this.createRecoveryRunOrReuseExpected(createInput, expected);
+    await this.recordRecoveryLineage({
+      parentRunId,
+      recoveryRunId: created.runId,
+      blockedEventId: blockedEvent.eventId,
+      reason: 'preflight',
+    });
+    return {
+      parentRunId,
+      recoveryRunId: created.runId,
+      blockedEventId: blockedEvent.eventId,
+      reason: 'preflight',
+    };
+  }
+
+  private async existingPreflightRecoveryRun(
+    parentRunId: string,
+    blockedEvent: EventSummary,
+  ): Promise<RecoveryRunLineage | null> {
+    const events = await this.runs.listRunEvents(parentRunId, { limit: 500 });
+    const event = recoveryCreatedForBlockedEvent(events, blockedEvent.eventId);
+    if (!event) return null;
+    const recoveryRunId = payloadRecord(event)?.recoveryRunId;
+    if (typeof recoveryRunId !== 'string' || !recoveryRunId) return null;
+    const recovery = await this.runs.showRun(recoveryRunId);
+    if (!recovery) {
+      throw new ControlPlaneError(
+        'ROW_NOT_FOUND',
+        `Cannot recover run ${parentRunId}: recovery run ${recoveryRunId} referenced by lineage event is missing`,
+      );
+    }
+    await this.recordRecoveryLineage({
+      parentRunId,
+      recoveryRunId,
+      blockedEventId: blockedEvent.eventId,
+      reason: 'preflight',
+    });
+    return { parentRunId, recoveryRunId, blockedEventId: blockedEvent.eventId, reason: 'preflight' };
+  }
+
+  private buildPreflightRecoveryCreateInput(
+    parentRunId: string,
+    parentData: Record<string, unknown>,
+    role: string,
+    blockedEvent: EventSummary,
+  ): CreateRunInput {
+    const now = dateOrEpoch(blockedEvent.createdAt);
+    return {
+      title: requiredString(parentData.title, 'title', parentRunId),
+      repo: firstRepoRef(parentData.repos, parentRunId),
+      description: optionalString(parentData.description),
+      scope: optionalString(parentData.scope),
+      priority: optionalInteger(parentData.priority),
+      role: requiredString(role, 'task role_hint', parentRunId),
+      playbookId: optionalString(parentData.playbook_id),
+      pipelineId: optionalString(parentData.pipeline_id),
+      params: optionalRecord(parentData.params),
+      routeDecision: requiredRecord(parentData.route_decision, 'route_decision', parentRunId),
+      executionProfile: requiredRecord(parentData.execution_profile, 'execution_profile', parentRunId),
+      now,
+      idSuffix: fnv1a64Hex(`${parentRunId}|${blockedEvent.eventId}`).slice(0, 8),
+    };
+  }
+
+  private async createRecoveryRunOrReuseExpected(
+    input: CreateRunInput,
+    expected: CreateRunResult,
+  ): Promise<CreateRunResult> {
+    try {
+      return await this.runs.createRun(input);
+    } catch (error) {
+      if (!(error instanceof CreateRunWorkflowError)) throw error;
+      const existing = await this.runs.showRun(expected.runId);
+      if (existing?.tasks[0]) return expected;
+      throw error;
+    }
+  }
+
+  private async recordRecoveryLineage(lineage: RecoveryRunLineage): Promise<void> {
+    const [parentDetail, recoveryDetail] = await Promise.all([
+      this.runs.showRun(lineage.parentRunId),
+      this.runs.showRun(lineage.recoveryRunId),
+    ]);
+    const parentTaskId = parentDetail?.tasks[0]?.taskId ?? '';
+    const recoveryTaskId = recoveryDetail?.tasks[0]?.taskId ?? '';
+    const payload = {
+      parentRunId: lineage.parentRunId,
+      recoveryRunId: lineage.recoveryRunId,
+      blockedEventId: lineage.blockedEventId,
+      reason: lineage.reason,
+    };
+    await this.runs.appendEvent({
+      runId: lineage.parentRunId,
+      taskId: parentTaskId,
+      stepId: '',
+      stepKey: 'recovery',
+      type: 'run_recovery_created',
+      idempotencyKey: lineage.blockedEventId,
+      payload,
+      actor: 'orchestrator',
+    });
+    await this.runs.appendEvent({
+      runId: lineage.recoveryRunId,
+      taskId: recoveryTaskId,
+      stepId: '',
+      stepKey: 'recovery',
+      type: 'run_recovery_parent',
+      idempotencyKey: lineage.blockedEventId,
+      payload,
+      actor: 'orchestrator',
+    });
   }
 
   async cancelRun(runId: string) {
@@ -761,7 +1016,7 @@ export class TaskControlPlaneApiService {
       this.runs.listRunAttempts(runId, { limit: 100 }),
       this.inbox.listInbox({ runId, status: 'pending', limit: 50 }),
     ]);
-    const latestBlockingEvent = [...events].reverse().find((e) => e.type === 'pipeline_blocked');
+    const latestBlockingEvent = latestPipelineBlockedEvent(events);
     const blockedReason = latestBlockingEvent ? blockedReasonFromEvent(latestBlockingEvent) : undefined;
     return {
       run: detail.run,
@@ -828,7 +1083,7 @@ export class TaskControlPlaneApiService {
     if (detail.run.status === 'cancelled') {
       return { runId, state: 'blocked', nextAction: 'run was cancelled; create or resume a different run', runStatus: detail.run.status, workflowStatus: workflow?.status ?? '' };
     }
-    const blockingEvent = [...events].reverse().find((event) => event.type === 'pipeline_blocked');
+    const blockingEvent = latestPipelineBlockedEvent(events);
     const blockedReason = blockingEvent ? blockedReasonFromEvent(blockingEvent) : undefined;
     if (detail.run.status === 'paused') {
       return {

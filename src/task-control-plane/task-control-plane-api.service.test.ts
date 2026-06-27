@@ -9,6 +9,7 @@ import type { InboxItem } from '../control-plane/inbox.js';
 import type { DbosService } from '../engine/dbos.service.js';
 import { AgentObservabilityError, AgentObservabilityService } from '../observability/index.js';
 import type { PipelineService } from '../pipeline/pipeline.service.js';
+import type { RouteDecision } from '../pipeline/route-contract.js';
 import type { InboxService } from '../revisium/inbox.service.js';
 import type { PlaybooksService } from '../revisium/playbooks.service.js';
 import type { RolesService } from '../revisium/roles.service.js';
@@ -32,6 +33,29 @@ const LOCAL_CHANGE_TEMPLATE = {
   },
 };
 const LOCAL_CHANGE_POLICY = { template_json: LOCAL_CHANGE_TEMPLATE };
+const LOCAL_CHANGE_ROUTE: RouteDecision = {
+  playbookId: 'pb',
+  pipelineId: 'local-change',
+  pipelineRowId: 'pb-local-change',
+  source: 'explicit',
+  roles: ['developer'],
+  requiredRoles: ['developer'],
+  optionalRoles: [],
+  routeGates: [],
+  executionPolicy: LOCAL_CHANGE_POLICY,
+  executionProfile: { id: 'test', runnerOverrides: { 'claude-code': 'stub-agent' } },
+  roleBindings: [
+    {
+      roleId: 'developer',
+      rowId: 'pb-developer',
+      modelLevel: 'standard',
+      runnerId: 'claude-code',
+      resolvedRunnerId: 'stub-agent',
+      runnerSource: 'execution-profile',
+    },
+  ],
+  params: { ticket: 'T-1' },
+};
 
 function makeInboxItem(overrides: Partial<InboxItem> = {}): InboxItem {
   return {
@@ -704,6 +728,314 @@ test('TaskControlPlaneApiService.createRun can immediately start the workflow', 
 
   assert.equal(result.started, true);
   assert.deepEqual(starts, [{ runId: 'run-1', pipelineId: 'local-change', override: 'stub-agent' }]);
+});
+
+test('TaskControlPlaneApiService.startRun reports terminal preflight recovery without retrying', async () => {
+  let started = false;
+  const api = makeApi({
+    runService: {
+      async getRun() {
+        return {
+          rowId: 'run-1',
+          data: {
+            id: 'run-1',
+            status: 'paused',
+            route_decision: LOCAL_CHANGE_ROUTE,
+          },
+        };
+      },
+      async listRunEvents() {
+        return [
+          {
+            eventId: 'event-preflight',
+            type: 'pipeline_blocked',
+            actor: 'pipeline',
+            createdAt: '2026-06-27T10:00:00.000Z',
+            taskId: 'task-1',
+            stepId: '',
+            payload: { reason: 'preflight', lesson: 'dirty repo' },
+          },
+        ];
+      },
+    },
+    dbosService: {
+      async getWorkflowStatus() {
+        return {
+          workflowID: 'run-1',
+          status: 'SUCCESS',
+          workflowName: 'dataDrivenTask',
+          workflowClassName: 'PipelineService',
+          createdAt: Date.parse('2026-06-27T10:00:00.000Z'),
+          updatedAt: Date.parse('2026-06-27T10:00:01.000Z'),
+          priority: 0,
+          applicationID: 'test',
+        } as Awaited<ReturnType<DbosService['getWorkflowStatus']>>;
+      },
+    },
+    pipelineService: {
+      async startDataDrivenTask(runId) {
+        started = true;
+        return { workflowID: runId } as Awaited<ReturnType<PipelineService['startDataDrivenTask']>>;
+      },
+    },
+  });
+
+  const result = await api.startRun({ runId: 'run-1', route: LOCAL_CHANGE_ROUTE });
+  const record = result as Record<string, unknown>;
+
+  assert.equal(started, false, 'recoverable parent must not be restarted by startRun');
+  assert.equal(record.recoverable, true);
+  assert.equal(record.retryStarted, false);
+  assert.equal(record.nextAction, 'resume_run');
+  assert.equal(record.workflowID, 'run-1');
+  assert.equal(record.blockedEventId, 'event-preflight');
+});
+
+test('TaskControlPlaneApiService.resumeRun creates and reuses a preflight recovery child run', async () => {
+  const parentData = {
+    id: 'run-parent',
+    title: 'Recover dirty preflight',
+    description: 'Parent description',
+    status: 'paused',
+    repos: [process.cwd()],
+    scope: 'Parent scope',
+    priority: 7,
+    playbook_id: 'pb',
+    pipeline_id: 'local-change',
+    params: { ticket: 'T-1' },
+    route_decision: LOCAL_CHANGE_ROUTE,
+    execution_profile: LOCAL_CHANGE_ROUTE.executionProfile,
+  };
+  const childRows = new Map<string, Record<string, unknown>>();
+  const events = new Map<string, Array<{
+    eventId: string;
+    type: string;
+    actor: string;
+    createdAt: string;
+    taskId: string;
+    stepId: string;
+    payload: unknown;
+  }>>([
+    ['run-parent', [
+      {
+        eventId: 'event-preflight',
+        type: 'pipeline_blocked',
+        actor: 'pipeline',
+        createdAt: '2026-06-27T10:00:00.000Z',
+        taskId: 'task-parent',
+        stepId: '',
+        payload: { reason: 'preflight', lesson: 'dirty repo' },
+      },
+    ]],
+  ]);
+  const createInputs: unknown[] = [];
+  const starts: string[] = [];
+  const workflowStatus = new Map<string, string>([['run-parent', 'SUCCESS']]);
+
+  const api = makeApi({
+    runService: {
+      async getRun(runId) {
+        if (runId === 'run-parent') return { rowId: runId, data: parentData };
+        const child = childRows.get(runId);
+        return child ? { rowId: runId, data: child } : null;
+      },
+      async showRun(runId) {
+        if (runId === 'run-parent') {
+          return {
+            run: {
+              runId,
+              title: String(parentData.title),
+              status: String(parentData.status),
+              priority: Number(parentData.priority),
+              createdAt: '2026-06-27T09:00:00.000Z',
+              description: String(parentData.description),
+              scope: String(parentData.scope),
+              repos: [process.cwd()],
+            },
+            tasks: [{ taskId: 'task-parent', title: String(parentData.title), status: 'paused', roleHint: 'developer' }],
+          };
+        }
+        const child = childRows.get(runId);
+        if (!child) return null;
+        return {
+          run: {
+            runId,
+            title: String(child.title),
+            status: String(child.status),
+            priority: Number(child.priority),
+            createdAt: String(child.created_at),
+            description: String(child.description),
+            scope: String(child.scope),
+            repos: [process.cwd()],
+          },
+          tasks: [{ taskId: `task-${runId}`, title: String(child.title), status: String(child.status), roleHint: 'developer' }],
+        };
+      },
+      async listRunEvents(runId) {
+        return events.get(runId) ?? [];
+      },
+      async createRun(input) {
+        createInputs.push(input);
+        const runId = 'run-recovery';
+        childRows.set(runId, {
+          id: runId,
+          title: input.title,
+          description: input.description ?? '',
+          status: 'ready',
+          repos: [input.repo],
+          scope: input.scope ?? '',
+          priority: input.priority ?? 0,
+          playbook_id: input.playbookId ?? '',
+          pipeline_id: input.pipelineId ?? '',
+          params: input.params ?? {},
+          route_decision: input.routeDecision ?? {},
+          execution_profile: input.executionProfile ?? {},
+          created_at: input.now?.toISOString() ?? '',
+        });
+        return { runId, taskId: `task-${runId}`, eventId: 'event-recovery-created', status: 'ready' };
+      },
+      async appendEvent(input) {
+        const list = events.get(input.runId) ?? [];
+        list.push({
+          eventId: `${input.type}-${list.length + 1}`,
+          type: input.type,
+          actor: input.actor ?? '',
+          createdAt: '',
+          taskId: input.taskId,
+          stepId: input.stepId,
+          payload: input.payload,
+        });
+        events.set(input.runId, list);
+      },
+    },
+    inboxService: {
+      async listInbox() {
+        return [];
+      },
+    },
+    dbosService: {
+      async getWorkflowStatus(runId) {
+        const status = workflowStatus.get(runId);
+        if (!status) return null;
+        return {
+          workflowID: runId,
+          status,
+          workflowName: 'dataDrivenTask',
+          workflowClassName: 'PipelineService',
+          createdAt: Date.parse('2026-06-27T10:00:00.000Z'),
+          updatedAt: Date.parse('2026-06-27T10:00:01.000Z'),
+          priority: 0,
+          applicationID: 'test',
+        } as Awaited<ReturnType<DbosService['getWorkflowStatus']>>;
+      },
+    },
+    pipelineService: {
+      async startDataDrivenTask(runId) {
+        starts.push(runId);
+        workflowStatus.set(runId, 'PENDING');
+        return { workflowID: runId } as Awaited<ReturnType<PipelineService['startDataDrivenTask']>>;
+      },
+    },
+  });
+
+  const first = await api.resumeRun({ runId: 'run-parent' });
+  const second = await api.resumeRun({ runId: 'run-parent' });
+  const firstRecord = first as Record<string, unknown>;
+  const secondRecord = second as Record<string, unknown>;
+  const firstRecovery = firstRecord.recovery as Record<string, unknown>;
+  const secondRecovery = secondRecord.recovery as Record<string, unknown>;
+
+  assert.equal(firstRecord.runId, 'run-recovery');
+  assert.equal(firstRecord.workflowID, 'run-recovery');
+  assert.equal(firstRecord.recovered, true);
+  assert.equal(firstRecovery.parentRunId, 'run-parent');
+  assert.equal(firstRecovery.recoveryRunId, 'run-recovery');
+  assert.equal(firstRecovery.blockedEventId, 'event-preflight');
+  assert.equal(secondRecord.runId, 'run-recovery');
+  assert.equal(secondRecovery.recoveryRunId, 'run-recovery');
+  assert.equal(createInputs.length, 1, 'second resume must reuse the recovery run');
+  assert.deepEqual(starts, ['run-recovery', 'run-recovery']);
+
+  const copied = createInputs[0] as Record<string, unknown>;
+  assert.equal(copied.title, parentData.title);
+  assert.equal(copied.description, parentData.description);
+  assert.equal(copied.scope, parentData.scope);
+  assert.equal(copied.priority, parentData.priority);
+  assert.equal(copied.playbookId, parentData.playbook_id);
+  assert.equal(copied.pipelineId, parentData.pipeline_id);
+  assert.deepEqual(copied.routeDecision, parentData.route_decision);
+  assert.deepEqual(copied.executionProfile, parentData.execution_profile);
+  assert.deepEqual(copied.params, { ticket: 'T-1' }, 'recovery metadata must not be stored in public params');
+
+  const parentRecoveryEvent = events.get('run-parent')?.find((event) => event.type === 'run_recovery_created');
+  const childRecoveryEvent = events.get('run-recovery')?.find((event) => event.type === 'run_recovery_parent');
+  assert.ok(parentRecoveryEvent, 'parent recovery event must be written');
+  assert.ok(childRecoveryEvent, 'child recovery parent event must be written');
+  assert.deepEqual(parentRecoveryEvent.payload, childRecoveryEvent.payload);
+});
+
+test('TaskControlPlaneApiService.resumeRun does not create recovery runs for non-preflight blocks', async () => {
+  const createInputs: unknown[] = [];
+  const starts: string[] = [];
+  const api = makeApi({
+    runService: {
+      async getRun() {
+        return {
+          rowId: 'run-1',
+          data: {
+            id: 'run-1',
+            status: 'paused',
+            route_decision: LOCAL_CHANGE_ROUTE,
+          },
+        };
+      },
+      async listRunEvents() {
+        return [
+          {
+            eventId: 'event-integrate',
+            type: 'pipeline_blocked',
+            actor: 'pipeline',
+            createdAt: '2026-06-27T10:00:00.000Z',
+            taskId: 'task-1',
+            stepId: '',
+            payload: { reason: 'integrate', lesson: 'manual merge needed' },
+          },
+        ];
+      },
+      async createRun(input) {
+        createInputs.push(input);
+        return { runId: 'run-recovery', taskId: 'task-recovery', eventId: 'event-recovery', status: 'ready' };
+      },
+    },
+    dbosService: {
+      async getWorkflowStatus() {
+        return {
+          workflowID: 'run-1',
+          status: 'SUCCESS',
+          workflowName: 'dataDrivenTask',
+          workflowClassName: 'PipelineService',
+          createdAt: Date.parse('2026-06-27T10:00:00.000Z'),
+          updatedAt: Date.parse('2026-06-27T10:00:01.000Z'),
+          priority: 0,
+          applicationID: 'test',
+        } as Awaited<ReturnType<DbosService['getWorkflowStatus']>>;
+      },
+    },
+    pipelineService: {
+      async startDataDrivenTask(runId) {
+        starts.push(runId);
+        return { workflowID: runId } as Awaited<ReturnType<PipelineService['startDataDrivenTask']>>;
+      },
+    },
+  });
+
+  const result = await api.resumeRun({ runId: 'run-1' });
+  const record = result as Record<string, unknown>;
+
+  assert.equal(record.runId, 'run-1');
+  assert.equal(record.workflowID, 'run-1');
+  assert.deepEqual(createInputs, []);
+  assert.deepEqual(starts, ['run-1']);
 });
 
 test('TaskControlPlaneApiService.createRun persists canonical pipeline id', async () => {
