@@ -165,12 +165,22 @@ export function featureDevelopmentPrReview(): Template {
         ],
         catch: [{ onError: 'revo.ScriptFailed', goto: 'failedEnd' }],
       }),
-      // ── plan 0018 — observe the PR, classify, route by feedback type ──
+      // ── plan 0018/issue 143 — observe the PR, then re-check readiness immediately before the merge gate ──
       node.script('pollPr', 'script:pollPr', 'prRouter', {
         resultSchema: 'schema:prFeedback', onFailure: 'route', produces: { name: 'prFeedback' },
         catch: [{ onError: 'revo.ScriptBlocked', goto: 'blockedEnd' }, { onError: 'revo.ScriptFailed', goto: 'failedEnd' }],
       }),
       node.choice('prRouter', [
+        on(verdictEq('clean'), 'mergeReadiness'),
+        on(verdictEq('review_changes'), 'triage'),
+        on(allOf(verdictEq('ci_changes'), counterLt('ciLoop', 3)), 'ciRework'),
+        otherwise('blockedEnd'),
+      ]),
+      node.script('mergeReadiness', 'script:pollPr', 'mergeReadinessRouter', {
+        resultSchema: 'schema:prFeedback', onFailure: 'route', produces: { name: 'prFeedback' },
+        catch: [{ onError: 'revo.ScriptBlocked', goto: 'blockedEnd' }, { onError: 'revo.ScriptFailed', goto: 'failedEnd' }],
+      }),
+      node.choice('mergeReadinessRouter', [
         on(verdictEq('clean'), 'mergeGate'),
         on(verdictEq('review_changes'), 'triage'),
         on(allOf(verdictEq('ci_changes'), counterLt('ciLoop', 3)), 'ciRework'),
@@ -179,11 +189,15 @@ export function featureDevelopmentPrReview(): Template {
       node.agent('ciRework', 'role:developer', 'integrator', {
         resultSchema: 'schema:change', incrementCounters: ['ciLoop'], onFailure: 'abort',
         produces: { name: 'change' },
-        consumes: [{ node: 'pollPr', as: 'feedback' }],
+        consumes: [{ node: 'pollPr', as: 'feedback' }, { node: 'mergeReadiness', as: 'mergeFeedback', optional: true, staleOk: true }],
       }),
       node.agent('triage', 'role:triager', 'triageRouter', {
         resultSchema: 'schema:triage', onFailure: 'abort', produces: { name: 'triage' },
-        consumes: [{ node: 'analyst', as: 'plan', staleOk: true }, { node: 'pollPr', as: 'feedback' }],
+        consumes: [
+          { node: 'analyst', as: 'plan', staleOk: true },
+          { node: 'pollPr', as: 'feedback' },
+          { node: 'mergeReadiness', as: 'mergeFeedback', optional: true, staleOk: true },
+        ],
       }),
       node.choice('triageRouter', [
         on(allOf(verdictEq('question'), counterLt('questionLoop', 3)), 'questionGate'),
@@ -212,9 +226,10 @@ export function featureDevelopmentPrReview(): Template {
       node.humanGate('mergeGate', 'merge-review', ['approved', 'changes_requested'], [
         on(verdictEq('approved'), 'confirmMerge'),
         otherwise('blockedEnd'),
-      ]),
+      ], { gatedArtifact: { node: 'mergeReadiness', as: 'prFeedback' } }),
       node.script('confirmMerge', 'script:confirmMerge', 'mergedEnd', {
         resultSchema: 'schema:integration', onFailure: 'route',
+        consumes: [{ node: 'mergeReadiness', as: 'mergeReadiness' }],
         catch: [{ onError: 'revo.ScriptBlocked', goto: 'blockedEnd' }, { onError: 'revo.ScriptFailed', goto: 'failedEnd' }],
       }),
       node.terminal('mergedEnd', 'succeeded'),

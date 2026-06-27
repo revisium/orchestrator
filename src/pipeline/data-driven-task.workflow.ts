@@ -315,6 +315,14 @@ function producedChangeFromInputs(inputs: Record<string, unknown>): ProducedChan
   return undefined;
 }
 
+function mergeReadinessFromInputs(inputs: Record<string, unknown>): IntegratorInput['mergeReadiness'] | undefined {
+  const value = inputs.mergeReadiness;
+  if (!isRecord(value)) return undefined;
+  const headSha = value.headSha;
+  if (typeof headSha !== 'string' || headSha.trim().length === 0) return undefined;
+  return { headSha };
+}
+
 function attachProducedChange(output: unknown, change: ProducedChangeArtifact): unknown {
   if (isRecord(output)) return { ...output, change };
   return { summary: output, change };
@@ -1333,6 +1341,7 @@ export function makeDataDrivenTask(
     // respondThreads consumes `triage` (plan 0018) — ride the hydrated input on the integrator input so
     // the live script can reply/resolve the triaged threads without a live Revisium read.
     const change = producedChangeFromInputs(inputs);
+    const mergeReadiness = mergeReadinessFromInputs(inputs);
     const integratorInput: IntegratorInput = {
       runId,
       taskId: ctx.taskId,
@@ -1340,6 +1349,7 @@ export function makeDataDrivenTask(
       base: ctx.base,
       ...(change ? { change } : {}),
       ...(inputs.triage === undefined ? {} : { triage: inputs.triage }),
+      ...(mergeReadiness ? { mergeReadiness } : {}),
     };
     // A script node whose resolved runner mechanically performs the merge uses the REAL script;
     // otherwise the pure stub (zero git/gh). Absent a binding (template-only script), default to stub.
@@ -1402,7 +1412,14 @@ export function makeDataDrivenTask(
         stepId: '',
         stepKey,
         type: 'pr_polled',
-        payload: { prNumber: feedback.prNumber, verdict: feedback.verdict, ciFailures: feedback.ciFailures.length, reviewThreads: feedback.reviewThreads.length },
+        payload: {
+          prNumber: feedback.prNumber,
+          headSha: feedback.headSha,
+          verdict: feedback.verdict,
+          evidence: feedback.evidence,
+          ciFailures: feedback.ciFailures.length,
+          reviewThreads: feedback.reviewThreads.length,
+        },
       });
       return { outcome: 'ok', pointer: feedback, verdict: feedback.verdict };
     }
