@@ -18,7 +18,15 @@ import type { AttemptResult } from '../worker/runner.js';
 import type { AppendEventInput } from '../run/append-event.js';
 import type { RouteDecision, RouteRoleBinding } from './route-contract.js';
 import type { Decision as GateDecision } from './await-human.js';
-import type { IntegratorInput, IntegratorOutput, IntegratorBlocked, ConfirmMergeOutput, PrFeedback, RespondThreadsOutput } from '../runners/integrator.js';
+import type {
+  IntegratorInput,
+  IntegratorOutput,
+  IntegratorBlocked,
+  ConfirmMergeOutput,
+  PrFeedback,
+  RespondThreadsOutput,
+  ProducedChangeArtifact,
+} from '../runners/integrator.js';
 import { template, node, on, otherwise, verdictEq, allOf, counterLt } from '../pipeline-core/kit/index.js';
 import { RUNNER_IDLE_TIMEOUT_KIND, RUNNER_WALL_CLOCK_LIMIT_KIND } from '../worker/process-executor.js';
 
@@ -61,6 +69,7 @@ type Recorder = {
   blockedLessons: string[];
   failed: string[];
   integrateCalls: number;
+  integratorInputs: IntegratorInput[];
   confirmMergeCalls: number;
   pollPrCalls: number;
   respondCalls: number;
@@ -70,6 +79,8 @@ type Recorder = {
   eventRecords: AppendEventInput[];
   /** Persisted step outputs (0016 dataflow). */
   outputs: Array<{ nodeId: string; ordinal: number; name: string; payload: unknown; attemptId?: string }>;
+  /** Captured change artifacts (issue #140 handoff contract). */
+  capturedChanges: ProducedChangeArtifact[];
   /** Hydrated `inputs` the adapter passed to each step, keyed by stepKey (0016 consumes). */
   inputsByStep: Record<string, unknown>;
   runStepAttempts: Array<{ stepKey: string; attemptNo?: number; attemptId?: string }>;
@@ -108,6 +119,7 @@ function buildAdapter(opts: {
     blockedLessons: [],
     failed: [],
     integrateCalls: 0,
+    integratorInputs: [],
     confirmMergeCalls: 0,
     pollPrCalls: 0,
     respondCalls: 0,
@@ -115,6 +127,7 @@ function buildAdapter(opts: {
     events: [],
     eventRecords: [],
     outputs: [],
+    capturedChanges: [],
     inputsByStep: {},
     runStepAttempts: [],
     retrySleeps: [],
@@ -181,11 +194,13 @@ function buildAdapter(opts: {
     loadRunTaskContext: async () => ({ taskId: 'task-1', title: 'T', base: 'master', repoRef: '' }),
     integrateFn: async (input: IntegratorInput): Promise<IntegratorOutput | IntegratorBlocked> => {
       rec.integrateCalls++;
+      rec.integratorInputs.push(input);
       if (opts.integrate) return opts.integrate(input);
       return { prUrl: `https://example/pr/${input.taskId}`, branch: 'feat/x', prNumber: 1 };
     },
     runStub: (input: IntegratorInput): IntegratorOutput => {
       rec.integrateCalls++;
+      rec.integratorInputs.push(input);
       return { prUrl: 'stub://pr/placeholder', branch: `feat/${input.taskId}-stub`, prNumber: 0 };
     },
     // The test route binds the integrator to revo-integrator (a live runner), so preflight runs. By
@@ -217,6 +232,16 @@ function buildAdapter(opts: {
       return { replied: 0, resolved: 0 };
     },
     runRespondStub: (_input: IntegratorInput): RespondThreadsOutput => ({ replied: 0, resolved: 0 }),
+    captureChangeFn: async (input) => {
+      const change: ProducedChangeArtifact = {
+        branch: `feat/${input.taskId}`,
+        headSha: `sha-${input.nodeId}-${input.attemptId}`,
+        worktreePath: '/fake/worktree',
+        ...(input.artifactRef ? { artifactRef: input.artifactRef } : {}),
+      };
+      rec.capturedChanges.push(change);
+      return change;
+    },
   };
 
   const fn = makeDataDrivenTask(runStepFn, deps);
@@ -361,6 +386,37 @@ test('DD4: pollPr ci_changes → ciRework → re-integrate → pollPr(clean) →
   // ciRework consumed the prFeedback (0016) — its hydrated input carries the failing-check feedback.
   const ciFeedback = (rec.inputsByStep['ciRework'] as { feedback?: { verdict?: string } } | undefined)?.feedback;
   assert.equal(ciFeedback?.verdict, 'ci_changes', 'ciRework consumed pollPr prFeedback');
+  assert.match(
+    rec.integratorInputs[1]?.change?.headSha ?? '',
+    /^sha-ciRework-/,
+    'the second integrator call consumes the CI rework produced head',
+  );
+});
+
+test('DD4-issue-140: code-review rework hands the latest produced change to integrator', async () => {
+  const { run, rec } = buildAdapter({
+    template: featureDevelopmentPrReview(),
+    verdicts: { codeReview: ['blocker', 'approved'] },
+    gate: () => ({ decision: 'approve' }),
+  });
+
+  const result = await run();
+
+  assert.equal(result.status, 'succeeded');
+  assert.equal(rec.integrateCalls, 1);
+  assert.match(
+    rec.integratorInputs[0]?.change?.headSha ?? '',
+    /^sha-reworkDeveloper-/,
+    'integrator must receive the reworkDeveloper head, not the initial developer head',
+  );
+  assert.ok(
+    (rec.inputsByStep['codeReview'] as { developerChange?: unknown } | undefined)?.developerChange,
+    'the first reviewer pass receives the initial developer change artifact',
+  );
+  assert.ok(
+    (rec.inputsByStep['codeReview#2'] as { reworkChange?: unknown } | undefined)?.reworkChange,
+    'the second reviewer pass receives the rework change artifact',
+  );
 });
 
 test('DD4b: pollPr ci_changes forever → cap → blocked terminal (ciLoop is DATA)', async () => {
@@ -395,6 +451,11 @@ test('DD4c: pollPr review_changes → triage(fix) → reviewRework → integrate
   assert.equal(result.status, 'succeeded');
   assert.equal(rec.respondCalls, 1, 'respondThreads ran once (reply + resolve the fixed thread)');
   assert.equal(rec.integrateCalls, 2, 'integrator ran for the initial PR + the review re-push (reviewIntegrator)');
+  assert.match(
+    rec.integratorInputs[1]?.change?.headSha ?? '',
+    /^sha-reviewRework-/,
+    'reviewIntegrator consumes the reviewRework produced head',
+  );
   // respondThreads consumed the triage produced by the analyst (0016 script-consumes hydration).
   assert.ok(rec.respondTriage.length === 1 && rec.respondTriage[0] !== undefined, 'respondThreads consumed the triage');
 });

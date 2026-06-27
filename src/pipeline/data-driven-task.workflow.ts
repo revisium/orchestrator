@@ -43,7 +43,16 @@ import {
 import type { AttemptResult } from '../worker/runner.js';
 import type { ExecutionProfile, RouteDecision, RouteRoleBinding } from './route-contract.js';
 import { runnerNeedsLivePreflight, runnerUsesRealIntegrator } from './route-contract.js';
-import type { IntegratorInput, IntegratorOutput, IntegratorBlocked, ConfirmMergeOutput, PrFeedback, RespondThreadsOutput } from '../runners/integrator.js';
+import type {
+  IntegratorInput,
+  IntegratorOutput,
+  IntegratorBlocked,
+  ConfirmMergeOutput,
+  PrFeedback,
+  RespondThreadsOutput,
+  ProducedChangeArtifact,
+  CaptureProducedChangeInput,
+} from '../runners/integrator.js';
 import type { AppendEventInput } from '../run/append-event.js';
 import { redactEventPayload } from '../run/append-event.js';
 import { redactSecrets } from '../control-plane/inbox.js';
@@ -282,6 +291,48 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+function producedChangeArtifact(value: unknown): ProducedChangeArtifact | undefined {
+  if (!isRecord(value)) return undefined;
+  const candidate = isRecord(value.change) ? value.change : value;
+  const branch = candidate.branch;
+  const headSha = candidate.headSha;
+  if (typeof branch !== 'string' || branch.trim().length === 0) return undefined;
+  if (typeof headSha !== 'string' || headSha.trim().length === 0) return undefined;
+  return {
+    branch,
+    headSha,
+    ...(typeof candidate.worktreePath === 'string' && candidate.worktreePath.trim() ? { worktreePath: candidate.worktreePath } : {}),
+    ...(typeof candidate.artifactRef === 'string' && candidate.artifactRef.trim() ? { artifactRef: candidate.artifactRef } : {}),
+    ...(typeof candidate.prNumber === 'number' && Number.isSafeInteger(candidate.prNumber) ? { prNumber: candidate.prNumber } : {}),
+  };
+}
+
+function producedChangeFromInputs(inputs: Record<string, unknown>): ProducedChangeArtifact | undefined {
+  for (const key of ['reviewChange', 'ciChange', 'reworkChange', 'developerChange', 'change']) {
+    const artifact = producedChangeArtifact(inputs[key]);
+    if (artifact) return artifact;
+  }
+  return undefined;
+}
+
+function attachProducedChange(output: unknown, change: ProducedChangeArtifact): unknown {
+  if (isRecord(output)) return { ...output, change };
+  return { summary: output, change };
+}
+
+function nodeProducesChange(node: Node): boolean {
+  return (node.kind === 'agent' || node.kind === 'script') &&
+    node.produces?.name === 'change' &&
+    node.resultSchema === 'schema:change';
+}
+
+function artifactRefFromResult(result: AttemptResult): string | undefined {
+  const artifacts = result.artifacts;
+  const processArtifact = isRecord(artifacts) && isRecord(artifacts.process) ? artifacts.process : artifacts;
+  if (!isRecord(processArtifact)) return undefined;
+  return typeof processArtifact.ref === 'string' ? processArtifact.ref : undefined;
+}
+
 /**
  * Discriminate a TRANSIENT runner failure from a DELIBERATE agent `needsHuman` (both arrive as
  * AttemptResult.needsHuman, but route to DIFFERENT pipeline_blocked lessons — see invokeRole).
@@ -428,6 +479,11 @@ export type DataDrivenTaskDeps = {
   respondThreadsFn: (input: IntegratorInput) => Promise<RespondThreadsOutput | IntegratorBlocked>;
   /** Stub respondThreads — pure (script): no threads to reply/resolve. */
   runRespondStub: (input: IntegratorInput) => RespondThreadsOutput;
+  /**
+   * Capture the developer-produced git artifact after a successful change-producing role step. This is
+   * a DBOS step in production so replay does not mint duplicate commits.
+   */
+  captureChangeFn: (input: CaptureProducedChangeInput) => Promise<ProducedChangeArtifact>;
   /**
    * Live preflight — memoized DBOS step (B5/B7). Clean check + base invariant, evaluated ONCE before
    * any live runner/integrator effect. Skipped entirely when no binding resolves to a live runner
@@ -580,7 +636,7 @@ export function makeDataDrivenTask(
   ) => Promise<AttemptResult>,
   deps: DataDrivenTaskDeps,
 ) {
-  const { appendEvent, appendRunOutput, awaitHuman, completeRun, failRun, blockRun, loadRunTaskContext, integrateFn, runStub, confirmMergeFn, runConfirmStub, pollPrFn, runPollStub, respondThreadsFn, runRespondStub, preflightFn, createWorktreeFn, releaseWorktreeFn } = deps;
+  const { appendEvent, appendRunOutput, awaitHuman, completeRun, failRun, blockRun, loadRunTaskContext, integrateFn, runStub, confirmMergeFn, runConfirmStub, pollPrFn, runPollStub, respondThreadsFn, runRespondStub, captureChangeFn, preflightFn, createWorktreeFn, releaseWorktreeFn } = deps;
 
   /** Resolve a node's `consumes` from the workflow-local output accumulator — NOT live Revisium reads
    *  (0016 §6 / consensus M4: a live read on replay can see rows written past the replay point). */
@@ -704,7 +760,7 @@ export function makeDataDrivenTask(
       if (live) {
         await createWorktreeFn(runId, taskId, title, base);
       }
-      result = await runGraph(runId, opts, taskId, title, base);
+      result = await runGraph(runId, opts, taskId, title, base, live);
       return result;
     } finally {
       if (live && result?.status !== 'blocked') {
@@ -724,6 +780,7 @@ export function makeDataDrivenTask(
     taskId: string,
     title: string,
     base: string,
+    live: boolean,
   ): Promise<DataDrivenResult> {
     const { route, template, runnerRetryPolicy } = opts;
 
@@ -767,6 +824,7 @@ export function makeDataDrivenTask(
       const eff = await applyDecision(decision, {
         runId, template, bindingByRef, executionProfile, taskId, title, base,
         effectOrdinalByNode, outputsByNode, runnerRetryPolicy,
+        live,
         // The verdict from the PRIOR effect (the reviewer/poller that routed into this node). At an
         // awaitGate this is the routing verdict that opened the gate → D3's default reviewerVerdict.
         lastVerdict,
@@ -824,6 +882,7 @@ export function makeDataDrivenTask(
     taskId: string;
     title: string;
     base: string;
+    live: boolean;
     effectOrdinalByNode: Map<string, number>;
     outputsByNode: Map<string, RunOutputRow[]>;
     runnerRetryPolicy: RunnerTransientRetryPolicy;
@@ -1025,10 +1084,25 @@ export function makeDataDrivenTask(
       const failed = roleValidationFailure(ctx.template, node, result, physicalAttempt);
       if (failed) return failed;
 
+      let output = result.output;
+      if (ctx.live && nodeProducesChange(node)) {
+        const artifactRef = artifactRefFromResult(result);
+        const change = await captureChangeFn({
+          runId,
+          taskId: ctx.taskId,
+          title: ctx.title,
+          base: ctx.base,
+          nodeId: node.id,
+          attemptId: physicalAttempt.attemptId,
+          ...(artifactRef ? { artifactRef } : {}),
+        });
+        output = attachProducedChange(output, change);
+      }
+
       return {
         failed: false,
         verdict: domainVerdictOf(result),
-        output: result.output,
+        output,
         attemptId: physicalAttempt.attemptId,
         attemptsMade: attemptNo,
       };
@@ -1248,7 +1322,15 @@ export function makeDataDrivenTask(
     const binding = bindingByRef.get(decision.scriptRef) ?? bindingByRef.get('script:integrator');
     // respondThreads consumes `triage` (plan 0018) — ride the hydrated input on the integrator input so
     // the live script can reply/resolve the triaged threads without a live Revisium read.
-    const integratorInput: IntegratorInput = { runId, taskId: ctx.taskId, title: ctx.title, base: ctx.base, ...(inputs.triage !== undefined ? { triage: inputs.triage } : {}) };
+    const change = producedChangeFromInputs(inputs);
+    const integratorInput: IntegratorInput = {
+      runId,
+      taskId: ctx.taskId,
+      title: ctx.title,
+      base: ctx.base,
+      ...(change ? { change } : {}),
+      ...(inputs.triage !== undefined ? { triage: inputs.triage } : {}),
+    };
     // A script node whose resolved runner mechanically performs the merge uses the REAL script;
     // otherwise the pure stub (zero git/gh). Absent a binding (template-only script), default to stub.
     const useReal = !!binding && runnerUsesRealIntegrator(binding.resolvedRunnerId);
@@ -1333,9 +1415,9 @@ export function makeDataDrivenTask(
       stepId: '',
       stepKey,
       type: 'integrate_succeeded',
-      payload: { prUrl: integrated.prUrl, branch: integrated.branch, prNumber: integrated.prNumber },
+      payload: { prUrl: integrated.prUrl, branch: integrated.branch, prNumber: integrated.prNumber, headSha: integrated.headSha, status: integrated.status },
     });
-    return { outcome: 'ok', pointer: { prUrl: integrated.prUrl, branch: integrated.branch, prNumber: integrated.prNumber } };
+    return { outcome: 'ok', pointer: { prUrl: integrated.prUrl, branch: integrated.branch, prNumber: integrated.prNumber, headSha: integrated.headSha, status: integrated.status } };
   }
 
   /** Terminal: finish the run in Revisium per the core's terminal status. */

@@ -439,6 +439,138 @@ test('M4: >1 matching PR → { needsHuman } naming candidates, no duplicate crea
   assert.equal(createCalled, false, 'pr create must NOT be called when ambiguous');
 });
 
+test('issue-140: produced change pushes its head to an existing PR branch without reading the base checkout', async () => {
+  let pushedRef = '';
+  let createCalled = false;
+
+  const input: IntegratorInput = {
+    ...BASE_INPUT,
+    change: {
+      branch: 'feat/produced',
+      headSha: 'new-produced-sha',
+      worktreePath: '/produced-worktree',
+    },
+  };
+  const deps: IntegratorDeps = {
+    execGit: (args, cwd) => {
+      assert.equal(cwd, '/produced-worktree', `produced path must use the artifact worktree, got ${cwd}`);
+      if (args[0] === 'remote' && args[2] === 'origin') return 'git@github.com:o/r.git\n';
+      if (args[0] === 'fetch') return '';
+      if (args[0] === 'push') {
+        pushedRef = args[2] ?? '';
+        return '';
+      }
+      throw new Error(`unexpected git: ${args.join(' ')}`);
+    },
+    execGh: (args) => {
+      if (args[0] === 'pr' && args[1] === 'list') {
+        return JSON.stringify([{ number: 42, url: 'https://github.com/o/r/pull/42', baseRefName: 'master', headRefOid: 'old-sha' }]);
+      }
+      if (args[0] === 'pr' && args[1] === 'create') {
+        createCalled = true;
+        return 'unused\n';
+      }
+      throw new Error(`unexpected gh: ${args.join(' ')}`);
+    },
+    resolveTaskCwd: async () => { throw new Error('shared checkout must not be inspected for a produced artifact'); },
+    resolveRunCwd: async () => { throw new Error('artifact worktree path should avoid resolver fallback'); },
+  };
+
+  const result = await integrate(input, deps);
+
+  assert.ok(!('needsHuman' in result));
+  assert.equal(result.status, 'pushed');
+  assert.equal(result.headSha, 'new-produced-sha');
+  assert.equal(pushedRef, 'new-produced-sha:refs/heads/feat/produced');
+  assert.equal(createCalled, false, 'existing PR must be updated, not recreated');
+});
+
+test('issue-140: produced head equal to the PR head returns a no-op nothing-to-integrate success', async () => {
+  let pushCalled = false;
+  const input: IntegratorInput = {
+    ...BASE_INPUT,
+    change: {
+      branch: 'feat/produced',
+      headSha: 'already-pushed-sha',
+      worktreePath: '/produced-worktree',
+    },
+  };
+  const deps: IntegratorDeps = {
+    execGit: (args, cwd) => {
+      assert.equal(cwd, '/produced-worktree');
+      if (args[0] === 'remote' && args[2] === 'origin') return 'git@github.com:o/r.git\n';
+      if (args[0] === 'fetch') return '';
+      if (args[0] === 'push') {
+        pushCalled = true;
+        return '';
+      }
+      throw new Error(`unexpected git: ${args.join(' ')}`);
+    },
+    execGh: (args) => {
+      if (args[0] === 'pr' && args[1] === 'list') {
+        return JSON.stringify([{ number: 42, url: 'https://github.com/o/r/pull/42', baseRefName: 'master', headRefOid: 'already-pushed-sha' }]);
+      }
+      throw new Error(`unexpected gh: ${args.join(' ')}`);
+    },
+    resolveTaskCwd: async () => { throw new Error('shared checkout must not be inspected for a produced artifact'); },
+    resolveRunCwd: async () => { throw new Error('artifact worktree path should avoid resolver fallback'); },
+  };
+
+  const result = await integrate(input, deps);
+
+  assert.ok(!('needsHuman' in result));
+  assert.equal(result.status, 'noop');
+  assert.match(result.message ?? '', /nothing to integrate/);
+  assert.equal(result.prNumber, 42);
+  assert.equal(pushCalled, false, 'already-pushed produced head must not push again');
+});
+
+test('issue-140: produced change still creates a new PR when no existing PR is present', async () => {
+  let pushCalled = false;
+  let createCalled = false;
+  const input: IntegratorInput = {
+    ...BASE_INPUT,
+    change: {
+      branch: 'feat/produced',
+      headSha: 'new-produced-sha',
+      worktreePath: '/produced-worktree',
+    },
+  };
+  const deps: IntegratorDeps = {
+    execGit: (args, cwd) => {
+      assert.equal(cwd, '/produced-worktree');
+      if (args[0] === 'remote' && args[2] === 'origin') return 'git@github.com:o/r.git\n';
+      if (args[0] === 'fetch') return '';
+      if (args[0] === 'rev-list' && args.includes('--count')) return '1\n';
+      if (args[0] === 'push') {
+        pushCalled = true;
+        assert.equal(args[2], 'new-produced-sha:refs/heads/feat/produced');
+        return '';
+      }
+      throw new Error(`unexpected git: ${args.join(' ')}`);
+    },
+    execGh: (args) => {
+      if (args[0] === 'pr' && args[1] === 'list') return JSON.stringify([]);
+      if (args[0] === 'pr' && args[1] === 'create') {
+        createCalled = true;
+        return 'https://github.com/o/r/pull/77\n';
+      }
+      if (args[0] === 'pr' && args[1] === 'view') return JSON.stringify({ url: 'https://github.com/o/r/pull/77', number: 77 });
+      throw new Error(`unexpected gh: ${args.join(' ')}`);
+    },
+    resolveTaskCwd: async () => { throw new Error('shared checkout must not be inspected for a produced artifact'); },
+    resolveRunCwd: async () => { throw new Error('artifact worktree path should avoid resolver fallback'); },
+  };
+
+  const result = await integrate(input, deps);
+
+  assert.ok(!('needsHuman' in result));
+  assert.equal(result.status, 'pushed');
+  assert.equal(result.prNumber, 77);
+  assert.equal(pushCalled, true, 'produced head must be pushed before PR creation');
+  assert.equal(createCalled, true, 'no existing PR should preserve the new-PR path');
+});
+
 // ─── REAL — replay safety (B4) ───────────────────────────────────────────────
 
 test('B4 replay: branch exists + index clean + ahead → push + PR (no second commit)', async () => {

@@ -111,6 +111,25 @@ Rules:
 - Oversized content spills by reference in `payload_ref`.
 - Code and diffs are not copied into Revisium; downstream nodes receive pointers such as branch/head/PR metadata.
 
+### `schema:change` Produced Artifact
+
+A successful live developer change producer records the agent's output with an attached `change` pointer:
+
+```ts
+type ProducedChangeArtifact = {
+  branch: string;
+  headSha: string;
+  worktreePath?: string;
+  artifactRef?: string;
+  prNumber?: number;
+};
+```
+
+The adapter captures this pointer after the role succeeds and before reviewer or integrator handoff. Integrator
+script nodes consume the latest relevant change pointer and push that exact `headSha`; they do not inspect the
+shared/base checkout when a produced change is available. A "nothing to integrate" no-op is valid only when the
+produced `headSha` already equals the open PR head.
+
 ## Static Validation
 
 `validateTemplate` includes dataflow diagnostics:

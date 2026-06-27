@@ -612,6 +612,11 @@ export class PipelineService {
       this.integratorService.runRespondThreads.bind(this.integratorService),
     );
 
+    const captureChangeFn = this.dbos.registerStep(
+      'PipelineService.captureProducedChange',
+      this.integratorService.runCaptureProducedChange.bind(this.integratorService),
+    );
+
     // Register the live preflight as a memoized DBOS step (B5/B7).
     const preflightFn = this.dbos.registerStep(
       'PipelineService.preflightLive',
@@ -663,6 +668,7 @@ export class PipelineService {
       runPollStub: this.integratorService.runPollStub,
       respondThreadsFn,
       runRespondStub: this.integratorService.runRespondStub,
+      captureChangeFn,
       preflightFn,
       createWorktreeFn,
       releaseWorktreeFn,
