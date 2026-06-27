@@ -501,9 +501,18 @@ function fetchComments(input: PrReadinessInput, prNumber: number, execGh: ExecGh
   const issueComments = parseGhJson<CommentEntry[]>(issueCommentsRaw, `issue-comments #${prNumber}`);
   const allComments = [...reviewComments, ...issueComments];
 
+  // reviews come back chronological; keep only the latest per author so a stale review never
+  // overrides a newer one. Mirror this for CodeRabbit (a Bot author, hence excluded from the human
+  // map) — otherwise a stale actionable CodeRabbit body keeps a PR stuck even after a newer clean
+  // review (#142 Finding #2).
   const latestHumanReviewByAuthor = new Map<string, ReviewEntry>();
+  const latestCodeRabbitReviewByAuthor = new Map<string, ReviewEntry>();
   for (const review of reviews) {
-    if (!review.user || isBot(review.user)) continue;
+    if (!review.user) continue;
+    if (isBot(review.user)) {
+      if (isCodeRabbit(review.user)) latestCodeRabbitReviewByAuthor.set(review.user.login, review);
+      continue;
+    }
     latestHumanReviewByAuthor.set(review.user.login, review);
   }
 
@@ -513,7 +522,7 @@ function fetchComments(input: PrReadinessInput, prNumber: number, execGh: ExecGh
     bot_comments: allComments.filter((comment) => isBot(comment.user)),
     // CodeRabbit review bodies are excluded from human_reviews above (they are Bot-authored). They
     // carry actionable findings as a top-level review body, so keep them for buildFeedback (#142).
-    coderabbit_reviews: reviews.filter((review) => isBot(review.user) && isCodeRabbit(review.user)),
+    coderabbit_reviews: [...latestCodeRabbitReviewByAuthor.values()],
   };
 }
 
@@ -600,8 +609,17 @@ function isCodeRabbitActionable(body: string): boolean {
  *  vanished (#142). Review bodies come from the `reviews` REST call independent of includeReviewThreads,
  *  so this also covers the poll path. The non-actionable provider states (provider_limit /
  *  review_in_progress / skipped / no_actionable_comments) stay with providerWait — they are excluded
- *  here so the WAIT and FIXES buckets never collapse (#144). */
-function codeRabbitActionableFeedback(reviews: ReviewEntry[], botComments: CommentEntry[]): DeveloperFix[] {
+ *  here so the WAIT and FIXES buckets never collapse (#144).
+ *
+ *  `threadLocations` carries the path:line of unresolved review threads already emitted as the
+ *  richer `review_thread` developerFix; a bot comment at the same location is the SAME inline
+ *  finding (the thread's first comment), so it is skipped to avoid emitting it twice (#142
+ *  Finding #1). Only non-empty locations dedup — a comment with no path:line is never matched. */
+function codeRabbitActionableFeedback(
+  reviews: ReviewEntry[],
+  botComments: CommentEntry[],
+  threadLocations: ReadonlySet<string> = new Set(),
+): DeveloperFix[] {
   const items: DeveloperFix[] = [];
 
   for (const review of reviews) {
@@ -618,6 +636,7 @@ function codeRabbitActionableFeedback(reviews: ReviewEntry[], botComments: Comme
   for (const comment of botComments) {
     if (!isCodeRabbit(comment.user) || !isCodeRabbitActionable(comment.body)) continue;
     const location = locationOf(comment);
+    if (location && threadLocations.has(location)) continue;
     items.push({
       source: 'coderabbit_comment',
       summary: compactBody(comment.body),
@@ -775,8 +794,14 @@ function buildFeedback(input: {
     })),
     // Actionable CodeRabbit feedback delivered as a review body / bot comment rather than a
     // resolvable review thread (#142). Appended after review_thread items so the thread-aware
-    // classification keeps producing the leading developerFix where threads are present.
-    ...codeRabbitActionableFeedback(input.coderabbitReviews ?? [], input.botComments),
+    // classification keeps producing the leading developerFix where threads are present. Pass the
+    // thread path:line locations so a bot comment for a thread already emitted above is not
+    // emitted a second time (#142 Finding #1).
+    ...codeRabbitActionableFeedback(
+      input.coderabbitReviews ?? [],
+      input.botComments,
+      new Set(input.reviewThreads.items.map((thread) => locationOf(thread)).filter((loc) => loc !== '')),
+    ),
   ];
 
   const reviewerQuestions = input.humanComments

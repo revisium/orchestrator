@@ -1308,6 +1308,149 @@ test('#142: no_actionable_comments summary review body → NOT a developerFix', 
   assert.equal(readiness.verdict, 'ready');
 });
 
+// ─── #142 Finding #2: stale CodeRabbit review bodies are deduped to latest-per-author ──────────
+
+test('#142 Finding #2: older actionable + NEWEST clean CodeRabbit review → NO developerFix (latest wins)', async () => {
+  // reviews come back chronological. An earlier CodeRabbit review found an issue, but its newest
+  // review is clean ("Actionable comments posted: 0"). Only the latest per author may produce a
+  // developerFix, so the stale actionable body must NOT keep the PR in needs_work. FAILS if the
+  // coderabbit_reviews dedup is removed.
+  const terminalView = prViewResponse([
+    checkRun('Gitar', 'COMPLETED', 'SUCCESS'),
+    statusCtx('CodeRabbit', 'SUCCESS'),
+  ], { number: 42, state: 'OPEN' });
+  const reviews = [
+    {
+      user: { login: 'coderabbitai[bot]', type: 'Bot' },
+      state: 'COMMENTED',
+      body: '**Actionable comments posted: 1**\n\n⚠️ Potential issue: missing null check in foo().',
+    },
+    {
+      user: { login: 'coderabbitai[bot]', type: 'Bot' },
+      state: 'COMMENTED',
+      body: '**Actionable comments posted: 0**\n\nAll previous findings are resolved.',
+    },
+  ];
+  const execGh = makeFullResponses(terminalView, reviews, [], []);
+
+  const readiness = await collectPrReadiness(
+    { repo: 'owner/repo', prNumber: 42, includeReviewThreads: false },
+    execGh,
+  );
+
+  assert.equal(
+    readiness.feedback.developerFixes.filter((f) => f.source?.startsWith('coderabbit')).length,
+    0,
+    'a stale actionable CodeRabbit review must not survive a newer clean review',
+  );
+  assert.notEqual(readiness.verdict, 'needs_work', 'latest clean CodeRabbit review → not needs_work');
+});
+
+test('#142 Finding #2: older clean + NEWEST actionable CodeRabbit review → developerFix present', async () => {
+  // The symmetric case: the latest CodeRabbit review found a NEW issue. The dedup keeps the latest,
+  // so the finding must surface as a developerFix even though an earlier review was clean.
+  const terminalView = prViewResponse([
+    checkRun('Gitar', 'COMPLETED', 'SUCCESS'),
+    statusCtx('CodeRabbit', 'SUCCESS'),
+  ], { number: 42, state: 'OPEN' });
+  const reviews = [
+    {
+      user: { login: 'coderabbitai[bot]', type: 'Bot' },
+      state: 'COMMENTED',
+      body: '**Actionable comments posted: 0**\n\nLooks good so far.',
+    },
+    {
+      user: { login: 'coderabbitai[bot]', type: 'Bot' },
+      state: 'COMMENTED',
+      body: '**Actionable comments posted: 2**\n\n⚠️ Potential issue introduced by the latest push.',
+    },
+  ];
+  const execGh = makeFullResponses(terminalView, reviews, [], []);
+
+  const readiness = await collectPrReadiness(
+    { repo: 'owner/repo', prNumber: 42, includeReviewThreads: false },
+    execGh,
+  );
+
+  const crFix = readiness.feedback.developerFixes.find((f) => f.source === 'coderabbit_review_body');
+  assert.ok(crFix, 'the newest actionable CodeRabbit review must surface as a developerFix');
+  assert.match(crFix?.summary ?? '', /latest push/, 'the latest review body is the one kept');
+  assert.equal(readiness.verdict, 'needs_work');
+});
+
+// ─── #142 Finding #1: same inline finding not emitted twice (review_thread vs coderabbit_comment) ───
+
+test('#142 Finding #1: finding as BOTH an unresolved thread AND a coderabbit comment at the same path:line → appears once (the review_thread)', async () => {
+  // With includeReviewThreads:true (MCP path) the same CodeRabbit inline finding is both an
+  // unresolved review THREAD and a bot review COMMENT. It must appear exactly once — keep the
+  // richer review_thread item and drop the duplicate coderabbit_comment at the same path:line.
+  const terminalView = prViewResponse([checkRun('Gitar', 'COMPLETED', 'SUCCESS')], {
+    number: 42,
+    state: 'OPEN',
+  });
+  // reviewThreadNode() defaults to path 'src/poller/pr-readiness-core.ts', line 666.
+  const botComments = [
+    {
+      user: { login: 'coderabbitai[bot]', type: 'Bot' },
+      path: 'src/poller/pr-readiness-core.ts',
+      line: 666,
+      body: '⚠️ Potential issue: please fetch review threads before returning from this path.',
+    },
+  ];
+  const execGh = makeFullResponses(
+    terminalView,
+    [],
+    botComments,
+    [],
+    null,
+    reviewThreadsResponse([reviewThreadNode()]),
+  );
+
+  const readiness = await collectPrReadiness({ repo: 'owner/repo', prNumber: 42, includeReviewThreads: true }, execGh);
+
+  const atLocation = readiness.feedback.developerFixes.filter((f) => f.location === 'src/poller/pr-readiness-core.ts:666');
+  assert.equal(atLocation.length, 1, 'the finding at that path:line appears exactly once');
+  assert.equal(atLocation[0]?.source, 'review_thread', 'the kept item is the richer review_thread');
+  assert.equal(
+    readiness.feedback.developerFixes.filter((f) => f.source === 'coderabbit_comment').length,
+    0,
+    'the duplicate coderabbit_comment at the same location is dropped',
+  );
+});
+
+test('#142 Finding #1: a coderabbit comment at a DIFFERENT line than the thread is kept (distinct finding)', async () => {
+  // Conservative dedup: only the SAME path:line is a duplicate. A bot comment at a different line is
+  // a genuinely distinct finding and must still surface as a coderabbit_comment developerFix.
+  const terminalView = prViewResponse([checkRun('Gitar', 'COMPLETED', 'SUCCESS')], {
+    number: 42,
+    state: 'OPEN',
+  });
+  const botComments = [
+    {
+      user: { login: 'coderabbitai[bot]', type: 'Bot' },
+      path: 'src/poller/pr-readiness-core.ts',
+      line: 999, // different line than the thread's 666
+      body: '⚠️ Potential issue: unrelated finding on another line.',
+    },
+  ];
+  const execGh = makeFullResponses(
+    terminalView,
+    [],
+    botComments,
+    [],
+    null,
+    reviewThreadsResponse([reviewThreadNode()]),
+  );
+
+  const readiness = await collectPrReadiness({ repo: 'owner/repo', prNumber: 42, includeReviewThreads: true }, execGh);
+
+  const crComment = readiness.feedback.developerFixes.find((f) => f.source === 'coderabbit_comment');
+  assert.ok(crComment, 'a distinct-line coderabbit comment is not deduped away');
+  assert.equal(crComment?.location, 'src/poller/pr-readiness-core.ts:999');
+  const threadFix = readiness.feedback.developerFixes.find((f) => f.source === 'review_thread');
+  assert.ok(threadFix, 'the review_thread finding is also present');
+});
+
 // ─── fetchRequiredCheckNames (PR #135 fix: required-only ci_changes) ──────────
 
 /** A statusCheckRollup.contexts GraphQL payload — `name` for CheckRun, `context` for StatusContext.
