@@ -37,7 +37,7 @@ function binding(roleId: string, resolvedRunnerId = 'script'): RouteRoleBinding 
 }
 
 /** A route binding the data-driven feature template's roleRefs/scriptRef resolve against. */
-function makeRoute(): RouteDecision {
+function makeRoute(options: { developerRunnerId?: string; integratorRunnerId?: string } = {}): RouteDecision {
   return {
     playbookId: 'pb',
     pipelineId: 'feature-development-dd',
@@ -51,10 +51,10 @@ function makeRoute(): RouteDecision {
     executionProfile: { id: 'test', runnerOverrides: {} },
     roleBindings: [
       binding('analyst'),
-      binding('developer'),
+      binding('developer', options.developerRunnerId ?? 'claude-code'),
       binding('reviewer'),
       binding('triager'),
-      binding('integrator', 'revo-integrator'), // real-integrator runner → script:integrator resolves here
+      binding('integrator', options.integratorRunnerId ?? 'revo-integrator'), // real-integrator runner → script:integrator resolves here
       binding('watcher'),
     ],
     params: {},
@@ -109,6 +109,7 @@ function buildAdapter(opts: {
   respondThreads?: (input: IntegratorInput) => RespondThreadsOutput | IntegratorBlocked | Promise<RespondThreadsOutput | IntegratorBlocked>;
   /** Exact per-node result override for invalid-result contract tests. */
   results?: Record<string, AttemptResult | AttemptResult[]>;
+  route?: RouteDecision;
   retryPolicy?: RunnerTransientRetryPolicy;
   onSleep?: (ms: number) => void | Promise<void>;
 }) {
@@ -248,7 +249,7 @@ function buildAdapter(opts: {
   const template = opts.template ?? featureDevelopment();
   return {
     run: () => fn(RUN_ID, {
-      route: makeRoute(),
+      route: opts.route ?? makeRoute(),
       template,
       runnerRetryPolicy: opts.retryPolicy ?? resolveRunnerTransientRetryPolicy(),
     }),
@@ -393,10 +394,10 @@ test('DD4: pollPr ci_changes → ciRework → re-integrate → pollPr(clean) →
   );
 });
 
-test('DD4-issue-140: code-review rework hands the latest produced change to integrator', async () => {
+test('DD4-issue-140: code-review changes_requested rework hands the latest produced change to integrator', async () => {
   const { run, rec } = buildAdapter({
     template: featureDevelopmentPrReview(),
-    verdicts: { codeReview: ['blocker', 'approved'] },
+    verdicts: { codeReview: ['changes_requested', 'approved'] },
     gate: () => ({ decision: 'approve' }),
   });
 
@@ -417,6 +418,52 @@ test('DD4-issue-140: code-review rework hands the latest produced change to inte
     (rec.inputsByStep['codeReview#2'] as { reworkChange?: unknown } | undefined)?.reworkChange,
     'the second reviewer pass receives the rework change artifact',
   );
+});
+
+test('DD4a-issue-140: non-live produced change metadata reaches the integrator without worktree capture', async () => {
+  const stubChange: ProducedChangeArtifact = {
+    branch: 'feat/stub-produced',
+    headSha: 'stub-produced-sha',
+    worktreePath: '/stub/worktree',
+  };
+  const tmpl = template('stub-change-preserved')
+    .specVersion('1.0')
+    .entry('developer')
+    .domain('approved')
+    .add(
+      node.agent('developer', 'role:developer', 'integrator', {
+        resultSchema: 'schema:change',
+        produces: { name: 'change' },
+      }),
+      node.script('integrator', 'script:integrator', 'done', {
+        resultSchema: 'schema:integration',
+        onFailure: 'route',
+        consumes: [{ node: 'developer', as: 'developerChange' }],
+        catch: [{ onError: 'revo.ScriptFailed', goto: 'failed' }],
+      }),
+      node.terminal('done', 'succeeded'),
+      node.terminal('failed', 'failed'),
+    )
+    .build();
+  const { run, rec } = buildAdapter({
+    template: tmpl,
+    route: makeRoute({ developerRunnerId: 'script', integratorRunnerId: 'script' }),
+    results: {
+      developer: {
+        output: { from: 'developer', change: stubChange },
+        verdict: 'approved',
+        nextSteps: [],
+        costs: [],
+      },
+    },
+  });
+
+  const result = await run();
+
+  assert.equal(result.status, 'succeeded');
+  assert.deepEqual(rec.integratorInputs[0]?.change, stubChange);
+  assert.deepEqual(rec.capturedChanges, [], 'script/stub change producers must not invoke worktree capture');
+  assert.ok(!rec.events.includes('worktree_create:pipeline'), 'non-live routes do not create a run worktree');
 });
 
 test('DD4b: pollPr ci_changes forever → cap → blocked terminal (ciLoop is DATA)', async () => {

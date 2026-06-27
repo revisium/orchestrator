@@ -1879,8 +1879,11 @@
                   "op": "all",
                   "of": [
                     {
-                      "op": "verdict.eq",
-                      "value": "blocker"
+                      "op": "verdict.in",
+                      "value": [
+                        "blocker",
+                        "changes_requested"
+                      ]
                     },
                     {
                       "op": "counter.lt",

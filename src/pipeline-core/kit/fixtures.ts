@@ -19,6 +19,7 @@ import {
   otherwise,
   template,
   verdictEq,
+  verdictIn,
 } from './builders.js';
 import type { Template } from '../types.js';
 
@@ -48,7 +49,7 @@ export function featureDevelopment(): Template {
       }),
       node.choice('codeReviewRouter', [
         on(verdictEq('approved'), 'integrator'),
-        on(allOf(verdictEq('blocker'), counterLt('codeReviewLoop', 3)), 'reworkDeveloper'),
+        on(allOf(verdictIn('blocker', 'changes_requested'), counterLt('codeReviewLoop', 3)), 'reworkDeveloper'),
         otherwise('blockedEnd'),
       ]),
       node.agent('reworkDeveloper', 'role:developer', 'codeReview', {
@@ -146,7 +147,7 @@ export function featureDevelopmentPrReview(): Template {
       }),
       node.choice('codeReviewRouter', [
         on(verdictEq('approved'), 'integrator'),
-        on(allOf(verdictEq('blocker'), counterLt('codeReviewLoop', 3)), 'reworkDeveloper'),
+        on(allOf(verdictIn('blocker', 'changes_requested'), counterLt('codeReviewLoop', 3)), 'reworkDeveloper'),
         otherwise('blockedEnd'),
       ]),
       node.agent('reworkDeveloper', 'role:developer', 'codeReview', {

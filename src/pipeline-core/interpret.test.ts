@@ -90,6 +90,30 @@ test('feature-development: one BLOCKER then APPROVED reworks once then integrate
   ]);
 });
 
+test('feature-development: one CHANGES_REQUESTED then APPROVED reworks once then integrates', () => {
+  const result = drive(featureDevelopment(), {
+    planGate: 'approved',
+    codeReview: ['changes_requested', 'approved'],
+    watcherPost: 'clean',
+    mergeGate: 'approved',
+  });
+  assertReachesTerminal(result, 'succeeded');
+  assertVisitCount(result, 'reworkDeveloper', 1);
+  assertCounter(result, 'codeReviewLoop', 1);
+  assertPath(result, [
+    'analyst',
+    'planGate',
+    'developer',
+    'codeReview',
+    'reworkDeveloper',
+    'codeReview',
+    'integrator',
+    'watcherPost',
+    'mergeGate',
+    'mergedEnd',
+  ]);
+});
+
 test('feature-development: plan gate changes_requested loops back to the analyst', () => {
   const result = drive(featureDevelopment(), {
     planGate: ['changes_requested', 'approved'], // first review sends back to analyst, then approve

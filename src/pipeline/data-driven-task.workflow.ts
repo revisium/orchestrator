@@ -326,6 +326,10 @@ function nodeProducesChange(node: Node): boolean {
     node.resultSchema === 'schema:change';
 }
 
+function runnerProducesWorktreeChanges(runnerId: string): boolean {
+  return runnerId === 'claude-code' || runnerId === 'codex';
+}
+
 function artifactRefFromResult(result: AttemptResult): string | undefined {
   const artifacts = result.artifacts;
   const processArtifact = isRecord(artifacts) && isRecord(artifacts.process) ? artifacts.process : artifacts;
@@ -1085,7 +1089,13 @@ export function makeDataDrivenTask(
       if (failed) return failed;
 
       let output = result.output;
-      if (ctx.live && nodeProducesChange(node)) {
+      const hasProducedChange = producedChangeArtifact(output) !== undefined;
+      const shouldCaptureChange =
+        nodeProducesChange(node) &&
+        !hasProducedChange &&
+        ctx.live &&
+        runnerProducesWorktreeChanges(binding.resolvedRunnerId);
+      if (shouldCaptureChange) {
         const artifactRef = artifactRefFromResult(result);
         const change = await captureChangeFn({
           runId,
@@ -1329,7 +1339,7 @@ export function makeDataDrivenTask(
       title: ctx.title,
       base: ctx.base,
       ...(change ? { change } : {}),
-      ...(inputs.triage !== undefined ? { triage: inputs.triage } : {}),
+      ...(inputs.triage === undefined ? {} : { triage: inputs.triage }),
     };
     // A script node whose resolved runner mechanically performs the merge uses the REAL script;
     // otherwise the pure stub (zero git/gh). Absent a binding (template-only script), default to stub.
