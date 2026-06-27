@@ -328,10 +328,13 @@ type PrChecksModel {
 
 type PrFeedbackItemModel {
   author: String
+  blocking: Boolean
   evidence: String
   location: String
+  nature: String
   provider: String
   reason: String
+  resumeAfter: String
   severity: String
   source: String
   summary: String

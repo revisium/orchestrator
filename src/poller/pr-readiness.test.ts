@@ -908,7 +908,10 @@ test('FIX5: not-found gh pr view error + head_branch → recovers to branch PR',
   assert.equal((result.nextSteps[0]?.input as PollInput).pr_number, 77, 'recovered pr_number forwarded');
 });
 
-test('MCP readiness: CodeRabbit success plus provider-limit comment is waiting/provider_limit', async () => {
+test('MCP readiness: green checks + stale rate-limit comment ⇒ ready, provider wait informational (regression for #144)', async () => {
+  // Regression for #144: a CodeRabbit rate-limit bot comment is stale relative to the current
+  // green head (checks already terminal), so it must NOT hard-force a `waiting` verdict. It is
+  // surfaced as an informational (non-blocking) providerWait and the verdict is `ready`.
   const terminalView = prViewResponse([
     checkRun('Gitar', 'COMPLETED', 'SUCCESS'),
     statusCtx('CodeRabbit', 'SUCCESS'),
@@ -926,12 +929,151 @@ test('MCP readiness: CodeRabbit success plus provider-limit comment is waiting/p
     execGh,
   );
 
-  assert.equal(readiness.verdict, 'waiting');
-  assert.equal(readiness.nextAction, 'watcher_wait');
+  assert.equal(readiness.verdict, 'ready', 'green checks + stale comment must not block readiness');
+  assert.equal(readiness.nextAction, 'ready_for_merge_gate');
+  // The rate-limit comment is still detected (informational) — it just no longer overrides.
   assert.equal(readiness.providerState.codeRabbit?.reason, 'provider_limit');
   assert.equal(readiness.providerState.codeRabbit?.state, 'waiting');
   assert.equal(readiness.feedback.providerWait[0]?.provider, 'CodeRabbit');
+  assert.equal(readiness.feedback.providerWait[0]?.blocking, false, 'comment-derived wait is informational');
+  assert.equal(readiness.feedback.providerWait[0]?.nature, 'informational');
   assert.match(readiness.evidence.join('\n'), /CodeRabbit provider\/rate limit/);
+  assert.match(readiness.evidence.join('\n'), /informational/i);
+  assert.match(readiness.evidence.join('\n'), /not blocking/i);
+});
+
+test('MCP readiness: stale review_in_progress comment ⇒ ready, provider wait informational (symmetric guard for #144)', async () => {
+  // Symmetry guard for #144: `review_in_progress` is the OTHER reason the removed override handled.
+  // With a terminal CodeRabbit SUCCESS check, the "CodeRabbit is currently reviewing" comment is
+  // stale relative to the current green head, so it must NOT hard-force a `waiting` verdict. It is
+  // surfaced as an informational (non-blocking) providerWait and the verdict is `ready` — mirroring
+  // the provider_limit test above.
+  const terminalView = prViewResponse([
+    checkRun('Gitar', 'COMPLETED', 'SUCCESS'),
+    statusCtx('CodeRabbit', 'SUCCESS'),
+  ], { number: 42, state: 'OPEN', url: 'https://github.com/owner/repo/pull/42' });
+  const issueComments = [
+    {
+      user: { login: 'coderabbitai[bot]', type: 'Bot' },
+      body: 'CodeRabbit is currently reviewing this pull request.',
+    },
+  ];
+  const execGh = makeFullResponses(terminalView, [], [], issueComments);
+
+  const readiness = await collectPrReadiness(
+    { repo: 'owner/repo', prNumber: 42, includeReviewThreads: false },
+    execGh,
+  );
+
+  assert.equal(readiness.verdict, 'ready', 'green checks + stale review_in_progress comment must not block readiness');
+  assert.equal(readiness.nextAction, 'ready_for_merge_gate');
+  assert.equal(readiness.providerState.codeRabbit?.reason, 'review_in_progress');
+  assert.equal(readiness.providerState.codeRabbit?.state, 'waiting');
+  assert.equal(readiness.feedback.providerWait[0]?.provider, 'CodeRabbit');
+  assert.equal(readiness.feedback.providerWait[0]?.blocking, false, 'comment-derived wait is informational');
+  assert.equal(readiness.feedback.providerWait[0]?.nature, 'informational');
+  assert.match(readiness.evidence.join('\n'), /informational/i);
+  assert.match(readiness.evidence.join('\n'), /not blocking/i);
+});
+
+test('MCP readiness: rate-limit warning + zero actionable comments appears in providerWait, NOT developerFixes, verdict not needs_work', async () => {
+  // A provider rate-limit comment is provider noise, not a developer fix. It must land in
+  // providerWait (informational) and never inflate developerFixes or flip the verdict to needs_work.
+  const terminalView = prViewResponse([
+    checkRun('Gitar', 'COMPLETED', 'SUCCESS'),
+    statusCtx('CodeRabbit', 'SUCCESS'),
+  ], { number: 42, state: 'OPEN' });
+  const issueComments = [
+    {
+      user: { login: 'coderabbitai[bot]', type: 'Bot' },
+      body: 'Review did not start because the provider rate limit was reached.',
+    },
+  ];
+  const execGh = makeFullResponses(terminalView, [], [], issueComments);
+
+  const readiness = await collectPrReadiness(
+    { repo: 'owner/repo', prNumber: 42, includeReviewThreads: false },
+    execGh,
+  );
+
+  assert.equal(readiness.feedback.developerFixes.length, 0, 'rate-limit comment is not a developer fix');
+  assert.ok(readiness.feedback.providerWait.length >= 1, 'rate-limit comment surfaces in providerWait');
+  assert.notEqual(readiness.verdict, 'needs_work', 'provider noise must not flip verdict to needs_work');
+  assert.equal(readiness.feedback.providerWait[0]?.blocking, false);
+});
+
+test('MCP readiness: addressed/resolved review threads + green checks + stale rate-limit comment ⇒ ready', async () => {
+  // Stale evidence — resolved and outdated review threads (both filtered out of developerFixes)
+  // plus a stale rate-limit comment — must not block a green PR. There are zero unresolved
+  // actionable threads, so developerFixes stays empty and the verdict resolves to ready.
+  const terminalView = prViewResponse([
+    checkRun('Gitar', 'COMPLETED', 'SUCCESS'),
+    statusCtx('CodeRabbit', 'SUCCESS'),
+  ], { number: 42, state: 'OPEN' });
+  const issueComments = [
+    {
+      user: { login: 'coderabbitai[bot]', type: 'Bot' },
+      body: 'Review did not start because the provider rate limit was reached.',
+    },
+  ];
+  const threads = reviewThreadsResponse([
+    reviewThreadNode({ id: 'resolved-1', isResolved: true }),   // resolved → filtered out
+    reviewThreadNode({ id: 'outdated-1', isOutdated: true }),   // outdated → filtered out
+  ]);
+  const execGh = makeFullResponses(terminalView, [], [], issueComments, null, threads);
+
+  const readiness = await collectPrReadiness(
+    { repo: 'owner/repo', prNumber: 42, includeReviewThreads: true },
+    execGh,
+  );
+
+  assert.equal(readiness.verdict, 'ready', 'resolved/outdated threads + stale comment must not block');
+  assert.equal(readiness.reviewThreads.unresolvedCount, 0, 'no actionable unresolved threads');
+  assert.equal(readiness.feedback.developerFixes.length, 0);
+  assert.equal(readiness.feedback.providerWait[0]?.blocking, false);
+  assert.equal(readiness.feedback.providerWait[0]?.nature, 'informational');
+});
+
+test('MCP readiness: genuinely-pending CodeRabbit check ⇒ waiting/blocking preserved (regression guard)', async () => {
+  // Symmetry guard: a LIVE pending CodeRabbit check is a real readiness blocker. It must keep the
+  // `waiting`/`watcher_wait` verdict AND surface a blocking providerWait entry (the informational
+  // treatment is only for stale comments on the terminal path).
+  const pendingView = prViewResponse([
+    checkRun('Gitar', 'COMPLETED', 'SUCCESS'),
+    statusCtx('CodeRabbit', 'PENDING'),
+  ], { number: 42, state: 'OPEN' });
+  const execGh = makeFullResponses(pendingView, [], [], []);
+
+  const readiness = await collectPrReadiness(
+    { repo: 'owner/repo', prNumber: 42, includeReviewThreads: false },
+    execGh,
+  );
+
+  assert.equal(readiness.verdict, 'waiting');
+  assert.equal(readiness.nextAction, 'watcher_wait');
+  const codeRabbitWait = readiness.feedback.providerWait.find((item) => item.provider === 'CodeRabbit');
+  assert.ok(codeRabbitWait, 'a pending CodeRabbit check surfaces a providerWait entry');
+  assert.equal(codeRabbitWait?.blocking, true, 'a live pending check is blocking');
+  assert.equal(codeRabbitWait?.nature, 'blocking');
+  assert.equal(codeRabbitWait?.reason, 'check_pending');
+});
+
+test('MCP readiness: pending CodeRabbit check ⇒ resumeAfter is null on the blocking entry', async () => {
+  // The synthesized blocking pending-path entry has no retry hint (it is derived from a check
+  // status, not a comment), so resumeAfter must be null. This keeps the field shape stable for
+  // #142/#143 which will read blocking/nature/resumeAfter together.
+  const pendingView = prViewResponse([
+    statusCtx('CodeRabbit', 'PENDING'),
+  ], { number: 42, state: 'OPEN' });
+  const execGh = makeFullResponses(pendingView, [], [], []);
+
+  const readiness = await collectPrReadiness(
+    { repo: 'owner/repo', prNumber: 42, includeReviewThreads: false },
+    execGh,
+  );
+
+  const codeRabbitWait = readiness.feedback.providerWait.find((item) => item.provider === 'CodeRabbit');
+  assert.equal(codeRabbitWait?.resumeAfter, null);
 });
 
 // ─── fetchRequiredCheckNames (PR #135 fix: required-only ci_changes) ──────────
