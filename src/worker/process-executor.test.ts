@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   RUNNER_IDLE_TIMEOUT_KIND,
   RUNNER_WALL_CLOCK_LIMIT_KIND,
@@ -10,6 +13,10 @@ import {
 
 // These tests run trivial cross-platform commands through the REAL spawnExecutor.
 // No `claude`, no tokens — just node subprocesses, to prove the spawn boundary works.
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 test('spawnExecutor: captures stdout and exit code 0', async () => {
   const result = await spawnExecutor({
@@ -72,6 +79,42 @@ test('spawnExecutor: reports pid and stdout/stderr chunks to callbacks', async (
   assert.ok(pid > 0, 'spawn callback receives the child pid');
   assert.equal(stdoutChunks.join(''), 'out');
   assert.equal(stderrChunks.join(''), 'err');
+});
+
+test('spawnExecutor: onSpawn failure kills the spawned child before rejecting', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'revo-spawn-setup-'));
+  const markerPath = join(root, 'leaked-child');
+  let pid = 0;
+  try {
+    await assert.rejects(
+      () =>
+        spawnExecutor({
+          command: process.execPath,
+          args: [
+            '-e',
+            [
+              "const fs = require('node:fs')",
+              `setTimeout(() => fs.writeFileSync(${JSON.stringify(markerPath)}, 'alive'), 250)`,
+              'setTimeout(() => {}, 10000)',
+            ].join(';'),
+          ],
+          cwd: process.cwd(),
+          timeoutMs: 10_000,
+          idleTimeoutMs: 10_000,
+          onSpawn: (childPid) => {
+            pid = childPid;
+            throw new Error('spawn observer failed');
+          },
+        }),
+      /spawn observer failed/,
+    );
+
+    assert.ok(pid > 0, 'onSpawn receives the child pid before failing');
+    await sleep(500);
+    assert.equal(existsSync(markerPath), false, 'child should be killed before it can keep running');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('spawnExecutor: stdout and stderr activity reset the idle deadline', async () => {

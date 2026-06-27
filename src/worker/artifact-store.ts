@@ -77,6 +77,18 @@ function writeJson(path: string, value: unknown): void {
   writeFileSync(path, JSON.stringify(value, null, 2) + '\n', 'utf8');
 }
 
+function timeoutPolicyFields(input: ProcessArtifactStart): {
+  timeoutMs: number;
+  idleTimeoutMs?: number;
+  wallClockLimitMs?: number;
+} {
+  return {
+    timeoutMs: input.timeoutMs,
+    ...(input.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: input.idleTimeoutMs }),
+    ...(input.wallClockLimitMs === undefined ? {} : { wallClockLimitMs: input.wallClockLimitMs }),
+  };
+}
+
 export function createArtifactStore(rootDir: string, opts: { tailBytes?: number } = {}): ArtifactStore {
   const root = resolve(rootDir);
   const tailBytes = opts.tailBytes ?? DEFAULT_TAIL_BYTES;
@@ -115,13 +127,19 @@ export function createArtifactStore(rootDir: string, opts: { tailBytes?: number 
         command: input.command,
         args: input.args,
         cwd: input.cwd,
-        timeoutMs: input.timeoutMs,
-        ...(input.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: input.idleTimeoutMs }),
-        ...(input.wallClockLimitMs === undefined ? {} : { wallClockLimitMs: input.wallClockLimitMs }),
+        ...timeoutPolicyFields(input),
         startedAt: startedAt.toISOString(),
         status: 'running',
       });
-      appendFileSync(eventsPath, JSON.stringify({ type: 'process_started', at: startedAt.toISOString() }) + '\n', 'utf8');
+      appendFileSync(
+        eventsPath,
+        JSON.stringify({
+          type: 'process_started',
+          at: startedAt.toISOString(),
+          ...timeoutPolicyFields(input),
+        }) + '\n',
+        'utf8',
+      );
 
       const artifactRef: ProcessArtifactRef = { ref, dirPath: dir, stdoutPath, stderrPath, metaPath, eventsPath };
       const snapshot = (): ProcessArtifactSnapshot => ({ ref, stdoutTail, stderrTail });
@@ -154,9 +172,7 @@ export function createArtifactStore(rootDir: string, opts: { tailBytes?: number 
             command: input.command,
             args: input.args,
             cwd: input.cwd,
-            timeoutMs: input.timeoutMs,
-            ...(input.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: input.idleTimeoutMs }),
-            ...(input.wallClockLimitMs === undefined ? {} : { wallClockLimitMs: input.wallClockLimitMs }),
+            ...timeoutPolicyFields(input),
             startedAt: startedAt.toISOString(),
             finishedAt: finishedAt.toISOString(),
             status,
@@ -174,6 +190,7 @@ export function createArtifactStore(rootDir: string, opts: { tailBytes?: number 
               status,
               code: info.code ?? null,
               timedOut: Boolean(info.timedOut),
+              ...timeoutPolicyFields(input),
               ...(info.timeoutKind === undefined ? {} : { timeoutKind: info.timeoutKind }),
               ...(info.timeoutEvidence === undefined ? {} : { timeoutEvidence: info.timeoutEvidence }),
               error: safeError,

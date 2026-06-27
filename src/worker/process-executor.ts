@@ -173,19 +173,33 @@ export const spawnExecutor: ProcessExecutor = (req) =>
     let timeoutEvidence: RunnerTimeoutEvidence | undefined;
     let settled = false;
 
-    if (child.pid !== undefined) req.onSpawn?.(child.pid);
-    try {
-      req.onActivityTracker?.(activity);
-    } catch (err) {
-      settled = true;
-      killGroup(child);
-      reject(err);
-      return;
-    }
-
     function clearTimers(): void {
       if (timers.idle) clearTimeout(timers.idle);
       if (timers.wallClock) clearTimeout(timers.wallClock);
+    }
+
+    function rejectFromSetup(err: unknown): void {
+      if (settled) return;
+      settled = true;
+      clearTimers();
+      killGroup(child);
+      reject(err);
+    }
+
+    // Spawn-level errors (binary missing) reject — the runner converts that to a lesson.
+    child.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimers();
+      reject(err);
+    });
+
+    try {
+      if (child.pid !== undefined) req.onSpawn?.(child.pid);
+      req.onActivityTracker?.(activity);
+    } catch (err) {
+      rejectFromSetup(err);
+      return;
     }
 
     function buildTimeoutEvidence(snapshot: RunnerActivityTrackerSnapshot): RunnerTimeoutEvidence {
@@ -257,14 +271,6 @@ export const spawnExecutor: ProcessExecutor = (req) =>
       killFor(RUNNER_WALL_CLOCK_LIMIT_KIND);
     }, policy.wallClockLimitMs);
     scheduleIdleTimer();
-
-    // Spawn-level errors (binary missing) reject — the runner converts that to a lesson.
-    child.on('error', (err) => {
-      if (settled) return;
-      settled = true;
-      clearTimers();
-      reject(err);
-    });
 
     // Never reject for a non-zero exit; return the result and let the runner decide how to map it.
     child.on('close', (code) => {

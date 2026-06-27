@@ -5,6 +5,7 @@ import type { AttemptResult } from './runner.js';
 import { RunAgentError } from './runner.js';
 import { normalizeNextSteps } from './result-envelope.js';
 import {
+  RUNNER_IDLE_TIMEOUT_KIND,
   RUNNER_WALL_CLOCK_LIMIT_KIND,
   type ExecResult,
   type RunnerTimeoutEvidence,
@@ -102,12 +103,18 @@ export function runnerFailure(
   return new RunAgentError(message, withProcessArtifact(undefined, process), metadata);
 }
 
-function fallbackTimeoutEvidence(result: ExecResult, policy: RunnerTimeoutPolicy): RunnerTimeoutEvidence {
+function fallbackTimeoutEvidence(
+  result: ExecResult,
+  policy: RunnerTimeoutPolicy,
+  failureKind: RunnerTimeoutFailureKind,
+): RunnerTimeoutEvidence {
+  const fallbackElapsedMs =
+    failureKind === RUNNER_IDLE_TIMEOUT_KIND ? policy.idleTimeoutMs : policy.wallClockLimitMs;
   return {
     idleTimeoutMs: policy.idleTimeoutMs,
     wallClockLimitMs: policy.wallClockLimitMs,
-    elapsedMs: policy.wallClockLimitMs,
-    idleMs: policy.wallClockLimitMs,
+    elapsedMs: fallbackElapsedMs,
+    idleMs: fallbackElapsedMs,
     lastActivityAt: new Date(0).toISOString(),
     inFlightOperationCount: 0,
     stdoutBytes: Buffer.byteLength(result.stdout, 'utf8'),
@@ -123,7 +130,7 @@ export function runnerTimeoutFailure(
   policy: RunnerTimeoutPolicy,
 ): RunAgentError {
   const failureKind = result.timeoutKind ?? RUNNER_WALL_CLOCK_LIMIT_KIND;
-  const timing = result.timeoutEvidence ?? fallbackTimeoutEvidence(result, policy);
+  const timing = result.timeoutEvidence ?? fallbackTimeoutEvidence(result, policy, failureKind);
   const message =
     `${runnerName} runner ${failureKind}: elapsed ${timing.elapsedMs}ms, ` +
     `idle ${timing.idleMs}ms, in-flight operations ${timing.inFlightOperationCount}`;
