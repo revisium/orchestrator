@@ -488,7 +488,7 @@ function collectReviewThreads(input: PrReadinessInput, prNumber: number, execGh:
 
 function fetchComments(input: PrReadinessInput, prNumber: number, execGh: ExecGhFn) {
   if (input.includeComments === false) {
-    return { human_reviews: [], human_comments: [], bot_comments: [] };
+    return { human_reviews: [], human_comments: [], bot_comments: [], coderabbit_reviews: [] };
   }
 
   const reviewsRaw = execGh(['api', `repos/${input.repo}/pulls/${prNumber}/reviews`]);
@@ -511,20 +511,37 @@ function fetchComments(input: PrReadinessInput, prNumber: number, execGh: ExecGh
     human_reviews: [...latestHumanReviewByAuthor.values()],
     human_comments: allComments.filter((comment) => !isBot(comment.user)),
     bot_comments: allComments.filter((comment) => isBot(comment.user)),
+    // CodeRabbit review bodies are excluded from human_reviews above (they are Bot-authored). They
+    // carry actionable findings as a top-level review body, so keep them for buildFeedback (#142).
+    coderabbit_reviews: reviews.filter((review) => isBot(review.user) && isCodeRabbit(review.user)),
   };
 }
 
-function codeRabbitCommentReason(comments: CommentEntry[]): 'provider_limit' | 'review_in_progress' | 'skipped' | 'no_actionable_comments' | '' {
+function isCodeRabbit(user: { login: string } | null | undefined): boolean {
+  return (user?.login.toLowerCase() ?? '').includes('coderabbit');
+}
+
+type CodeRabbitWaitReason = 'provider_limit' | 'review_in_progress' | 'skipped' | 'no_actionable_comments' | '';
+
+/** Classify a single CodeRabbit body into a non-actionable provider-WAIT reason (or '' for none).
+ *  Single source of truth shared by codeRabbitCommentReason (drives providerWait) and
+ *  isCodeRabbitActionable (so a provider-wait body is never ALSO emitted as a developerFix — #144). */
+function codeRabbitProviderWaitReason(rawBody: string): CodeRabbitWaitReason {
+  const body = rawBody.toLowerCase();
+  if (/rate.limit|provider.limit|quota|capacity|temporar/.test(body) && /did not start|could not start|not start|unable to start|paused/.test(body)) {
+    return 'provider_limit';
+  }
+  if (/review in progress|reviewing|processing/.test(body)) return 'review_in_progress';
+  if (/skipped|did not review|no files to review/.test(body)) return 'skipped';
+  if (/no actionable comments|no issues found|looks good/.test(body)) return 'no_actionable_comments';
+  return '';
+}
+
+function codeRabbitCommentReason(comments: CommentEntry[]): CodeRabbitWaitReason {
   for (const comment of comments) {
-    const login = comment.user?.login.toLowerCase() ?? '';
-    if (!login.includes('coderabbit')) continue;
-    const body = comment.body.toLowerCase();
-    if (/rate.limit|provider.limit|quota|capacity|temporar/.test(body) && /did not start|could not start|not start|unable to start|paused/.test(body)) {
-      return 'provider_limit';
-    }
-    if (/review in progress|reviewing|processing/.test(body)) return 'review_in_progress';
-    if (/skipped|did not review|no files to review/.test(body)) return 'skipped';
-    if (/no actionable comments|no issues found|looks good/.test(body)) return 'no_actionable_comments';
+    if (!isCodeRabbit(comment.user)) continue;
+    const reason = codeRabbitProviderWaitReason(comment.body);
+    if (reason) return reason;
   }
   return '';
 }
@@ -534,8 +551,7 @@ function codeRabbitCommentReason(comments: CommentEntry[]): 'provider_limit' | '
  *  raw evidence either way. Case-insensitive and intentionally lenient. */
 function extractResumeHint(comments: CommentEntry[]): string | null {
   for (const comment of comments) {
-    const login = comment.user?.login.toLowerCase() ?? '';
-    if (!login.includes('coderabbit')) continue;
+    if (!isCodeRabbit(comment.user)) continue;
     const match = comment.body.match(/\/retry[^.]*?(\d+)\s*(min|minute|hour|sec)/i);
     if (match) {
       const unit = match[2].toLowerCase().startsWith('min') ? 'min' : match[2].toLowerCase().startsWith('hour') ? 'hour' : 'sec';
@@ -543,6 +559,75 @@ function extractResumeHint(comments: CommentEntry[]): string | null {
     }
   }
   return null;
+}
+
+// CodeRabbit's own structured markers for a finding that still needs developer action. A review
+// body or comment carrying any of these is an actionable blocker — UNLESS it is one of the
+// non-actionable states classified by codeRabbitCommentReason (provider_limit / review_in_progress
+// / skipped / no_actionable_comments), or it has been addressed/resolved/outdated.
+const CODERABBIT_FINDING_MARKERS = [
+  /⚠️\s*potential issue/i,
+  /🛠️\s*refactor suggestion/i,
+  /⚠️\s*outside diff range/i,
+  /🧹\s*nitpick/i,
+];
+
+// "Actionable comments posted: N" — the count CodeRabbit prints atop a review summary. N>0 means
+// the review found work; N=0 (handled as no_actionable_comments) is explicitly NOT a blocker.
+const CODERABBIT_ACTIONABLE_COUNT_RE = /actionable comments posted:\s*(\d+)/i;
+
+// A finding CodeRabbit reports as already handled. Anchored to CodeRabbit's own addressed-markers
+// rather than bare words so a live finding whose prose merely mentions e.g. "remove these outdated
+// comments" or "unresolved promise" survives. Such evidence is stale and must NOT remain a blocker.
+const CODERABBIT_ADDRESSED_RE = /✅\s*addressed|\baddressed in\b|marked as resolved|now outdated|marked (?:as )?outdated/i;
+
+/** True when a CodeRabbit review-body / comment text reports a finding that still needs developer
+ *  action. Conservative — returns false (item dropped, not kept as a blocker) when the body is:
+ *  an explicit `Actionable comments posted: 0`; a non-actionable provider-WAIT state (so a wait is
+ *  never ALSO a developerFix — #144); or carries an addressed/resolved/outdated marker. */
+function isCodeRabbitActionable(body: string): boolean {
+  const countMatch = body.match(CODERABBIT_ACTIONABLE_COUNT_RE);
+  if (countMatch && Number(countMatch[1]) === 0) return false;
+  if (codeRabbitProviderWaitReason(body) !== '') return false;
+  if (CODERABBIT_ADDRESSED_RE.test(body)) return false;
+  if (countMatch && Number(countMatch[1]) > 0) return true;
+  return CODERABBIT_FINDING_MARKERS.some((marker) => marker.test(body));
+}
+
+/** Actionable CodeRabbit feedback that arrives as a top-level review body or bot comment rather
+ *  than a resolvable GraphQL review thread. `fetchComments` already retrieves this data (bot reviews
+ *  and bot comments) but buildFeedback never routed it to developerFixes; an actual finding therefore
+ *  vanished (#142). Review bodies come from the `reviews` REST call independent of includeReviewThreads,
+ *  so this also covers the poll path. The non-actionable provider states (provider_limit /
+ *  review_in_progress / skipped / no_actionable_comments) stay with providerWait — they are excluded
+ *  here so the WAIT and FIXES buckets never collapse (#144). */
+function codeRabbitActionableFeedback(reviews: ReviewEntry[], botComments: CommentEntry[]): DeveloperFix[] {
+  const items: DeveloperFix[] = [];
+
+  for (const review of reviews) {
+    if (!isCodeRabbit(review.user) || !isCodeRabbitActionable(review.body)) continue;
+    items.push({
+      source: 'coderabbit_review_body',
+      summary: compactBody(review.body),
+      author: review.user?.login ?? '',
+      location: '',
+      evidence: compactBody(review.body),
+    });
+  }
+
+  for (const comment of botComments) {
+    if (!isCodeRabbit(comment.user) || !isCodeRabbitActionable(comment.body)) continue;
+    const location = locationOf(comment);
+    items.push({
+      source: 'coderabbit_comment',
+      summary: compactBody(comment.body),
+      author: comment.user?.login ?? '',
+      location,
+      evidence: compactBody(comment.body),
+    });
+  }
+
+  return items;
 }
 
 function compactCheckLists(checks: Array<{ name: string; result: string }>) {
@@ -602,6 +687,19 @@ function locationOf(item: { component?: string; path?: string; line?: number }) 
   return item.line ? `${path}:${item.line}` : path;
 }
 
+/** A single developer-fix feedback item. Sources (ci / sonar / sonar_hotspot / human_review /
+ *  review_thread / coderabbit_review_body / coderabbit_comment) populate the optional fields they
+ *  have; the shape is a superset mirroring the generic PrFeedbackItemModel so a heterogeneous bucket
+ *  stays one coherent type. */
+export type DeveloperFix = {
+  source: string;
+  summary: string;
+  evidence: string;
+  severity?: string;
+  location?: string;
+  author?: string;
+};
+
 /** A single provider-wait feedback item. `nature` distinguishes the two cases:
  *  - 'informational': a stale comment-derived wait observed on the terminal path (NOT blocking).
  *  - 'blocking': a genuinely-pending provider check observed on the pending path (blocking). */
@@ -642,8 +740,9 @@ function buildFeedback(input: {
   humanReviews: ReviewEntry[];
   humanComments: CommentEntry[];
   botComments: CommentEntry[];
+  coderabbitReviews?: ReviewEntry[];
 }) {
-  const developerFixes = [
+  const developerFixes: DeveloperFix[] = [
     ...input.checks.fail.map((name) => ({ source: 'ci', summary: `Fix failing check: ${name}`, evidence: name })),
     ...input.sonar.issues.map((issue) => ({
       source: 'sonar',
@@ -674,6 +773,10 @@ function buildFeedback(input: {
       location: locationOf(thread),
       evidence: thread.url ?? thread.id,
     })),
+    // Actionable CodeRabbit feedback delivered as a review body / bot comment rather than a
+    // resolvable review thread (#142). Appended after review_thread items so the thread-aware
+    // classification keeps producing the leading developerFix where threads are present.
+    ...codeRabbitActionableFeedback(input.coderabbitReviews ?? [], input.botComments),
   ];
 
   const reviewerQuestions = input.humanComments
@@ -1001,6 +1104,7 @@ export async function collectPrReadiness(
     humanReviews: comments.human_reviews,
     humanComments: comments.human_comments,
     botComments: comments.bot_comments,
+    coderabbitReviews: comments.coderabbit_reviews,
   });
   const ciSummary: CiSummary = {
     ci_passed: ci.ci_passed,
