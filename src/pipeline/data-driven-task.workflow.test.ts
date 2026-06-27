@@ -10,7 +10,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { makeDataDrivenTask, resolveRunnerTransientRetryPolicy, type DataDrivenProgressCursor, type DataDrivenTaskDeps, type RunnerTransientRetryPolicy } from './data-driven-task.workflow.js';
+import { makeDataDrivenTask, resolveRunnerTransientRetryPolicy, type DataDrivenProgressCursor, type DataDrivenTaskDeps, type GateSummary, type RunnerTransientRetryPolicy } from './data-driven-task.workflow.js';
 import { templateFromExecutionPolicy } from './data-driven-template.js';
 import { featureDevelopment, featureDevelopmentPrReview, confirmMergeFlow } from '../pipeline-core/kit/fixtures.js';
 import type { Template } from '../pipeline-core/index.js';
@@ -63,6 +63,7 @@ function makeRoute(options: { developerRunnerId?: string; integratorRunnerId?: s
 
 type Recorder = {
   gates: string[];
+  gateSummaries: GateSummary[];
   completed: Array<{ verdict?: string }>;
   blocked: Array<{ reason?: string }>;
   /** Lessons carried on emitted `pipeline_blocked` events (the human-readable WHY). */
@@ -71,6 +72,7 @@ type Recorder = {
   integrateCalls: number;
   integratorInputs: IntegratorInput[];
   confirmMergeCalls: number;
+  confirmMergeInputs: IntegratorInput[];
   pollPrCalls: number;
   respondCalls: number;
   /** The triage each respondThreads call consumed (asserts the 0016 script-consumes hydration). */
@@ -115,6 +117,7 @@ function buildAdapter(opts: {
 }) {
   const rec: Recorder = {
     gates: [],
+    gateSummaries: [],
     completed: [],
     blocked: [],
     blockedLessons: [],
@@ -122,6 +125,7 @@ function buildAdapter(opts: {
     integrateCalls: 0,
     integratorInputs: [],
     confirmMergeCalls: 0,
+    confirmMergeInputs: [],
     pollPrCalls: 0,
     respondCalls: 0,
     respondTriage: [],
@@ -185,8 +189,9 @@ function buildAdapter(opts: {
       rec.retrySleeps.push(ms);
       await opts.onSleep?.(ms);
     },
-    awaitHuman: async (_runId, topic, _gateKey, _title, _summary): Promise<GateDecision> => {
+    awaitHuman: async (_runId, topic, _gateKey, _title, summary): Promise<GateDecision> => {
       rec.gates.push(topic);
+      rec.gateSummaries.push(summary as GateSummary);
       return (opts.gate ?? (() => ({ decision: 'approve' })))(topic);
     },
     completeRun: async (_runId, o) => { rec.completed.push({ verdict: o?.verdict }); return null; },
@@ -214,6 +219,7 @@ function buildAdapter(opts: {
     // confirmMerge (plan 0017 follow-up): default fake reports merged; a test can override via opts.confirmMerge.
     confirmMergeFn: async (input: IntegratorInput) => {
       rec.confirmMergeCalls++;
+      rec.confirmMergeInputs.push(input);
       if (opts.confirmMerge) return opts.confirmMerge(input);
       return { merged: true as const, prNumber: 1, prUrl: `https://example/pr/${input.taskId}/merged` };
     },
@@ -222,9 +228,23 @@ function buildAdapter(opts: {
     pollPrFn: async (input: IntegratorInput): Promise<PrFeedback | IntegratorBlocked> => {
       rec.pollPrCalls++;
       if (opts.pollPr) return opts.pollPr(input);
-      return { prNumber: 1, headSha: 'sha', verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
+      return {
+        prNumber: 1,
+        headSha: `sha-${rec.pollPrCalls}`,
+        evidence: [`pollPr call ${rec.pollPrCalls}: clean`],
+        verdict: 'clean' as const,
+        ciFailures: [],
+        reviewThreads: [],
+      };
     },
-    runPollStub: (_input: IntegratorInput): PrFeedback => ({ prNumber: 0, headSha: 'stub', verdict: 'clean', ciFailures: [], reviewThreads: [] }),
+    runPollStub: (_input: IntegratorInput): PrFeedback => ({
+      prNumber: 0,
+      headSha: 'stub',
+      evidence: ['stub pollPr readiness: clean'],
+      verdict: 'clean',
+      ciFailures: [],
+      reviewThreads: [],
+    }),
     // respondThreads (plan 0018): capture the consumed triage; default reports nothing to reply/resolve.
     respondThreadsFn: async (input: IntegratorInput): Promise<RespondThreadsOutput | IntegratorBlocked> => {
       rec.respondCalls++;
@@ -295,7 +315,7 @@ function restoreEnvVar(key: string, value: string | undefined): void {
   else process.env[key] = value;
 }
 
-test('DD1: happy path — analyst→plan→developer→review→integrate→pollPr(clean)→merge→confirmMerge → succeeded', async () => {
+test('DD1: happy path — analyst→plan→developer→review→integrate→pollPr(clean)→mergeReadiness(clean)→merge→confirmMerge → succeeded', async () => {
   const { run, rec } = buildAdapter({
     template: featureDevelopmentPrReview(),
     verdicts: { codeReview: 'approved' },
@@ -307,8 +327,27 @@ test('DD1: happy path — analyst→plan→developer→review→integrate→poll
   assert.equal(rec.completed.length, 1, 'completeRun called once');
   assert.equal(rec.integrateCalls, 1, 'the integrator script ran once (real integrator via runner-wins)');
   assert.ok(rec.events.includes('integrate_succeeded:integrator'), 'integrate_succeeded emitted at the script node');
-  assert.equal(rec.pollPrCalls, 1, 'pollPr observed the PR once (clean → merge gate)');
+  assert.equal(rec.pollPrCalls, 2, 'pollPr observed the PR, then mergeReadiness rechecked it before the merge gate');
+  const mergeSummary = rec.gateSummaries.find((summary) => summary.nodeId === 'mergeGate');
+  assert.equal(mergeSummary?.gatedArtifact?.nodeId, 'mergeReadiness', 'merge gate surfaces the fresh readiness artifact');
+  assert.deepEqual(
+    (mergeSummary?.gatedArtifact?.payload as { headSha?: string; evidence?: string[] } | undefined),
+    {
+      prNumber: 1,
+      headSha: 'sha-2',
+      evidence: ['pollPr call 2: clean'],
+      verdict: 'clean',
+      ciFailures: [],
+      reviewThreads: [],
+    },
+    'merge gate payload carries the fresh head sha and readiness evidence',
+  );
   assert.equal(rec.confirmMergeCalls, 1, 'confirmMerge ran once at the success terminal');
+  assert.deepEqual(
+    rec.confirmMergeInputs[0]?.mergeReadiness,
+    { headSha: 'sha-2' },
+    'confirmMerge consumes the fresh mergeReadiness head sha for the GitHub merge guard',
+  );
   assert.equal(rec.blocked.length, 0);
   assert.equal(rec.failed.length, 0);
 });
@@ -365,9 +404,10 @@ test('DD3: plan-gate reject maps to the rework outcome — loops back to analyst
   assert.equal(rec.gates.filter((g) => g === 'plan').length, 2, 'analyst re-ran and re-opened the plan gate');
 });
 
-test('DD4: pollPr ci_changes → ciRework → re-integrate → pollPr(clean) → merge → succeeded', async () => {
+test('DD4: pollPr ci_changes → ciRework → re-integrate → pollPr(clean) → mergeReadiness(clean) → merge → succeeded', async () => {
   // First poll reports a CI failure (ci_changes) → ciRework (developer) fixes it → integrator re-pushes →
-  // second poll is clean → merge gate → confirmMerge → succeeded. Proves the bounded CI rework loop.
+  // second poll is clean → mergeReadiness is clean → merge gate → confirmMerge → succeeded. Proves the
+  // bounded CI rework loop.
   let polls = 0;
   const { run, rec } = buildAdapter({
     template: featureDevelopmentPrReview(),
@@ -376,13 +416,13 @@ test('DD4: pollPr ci_changes → ciRework → re-integrate → pollPr(clean) →
     pollPr: () => {
       polls++;
       return polls === 1
-        ? { prNumber: 1, headSha: 's1', verdict: 'ci_changes' as const, ciFailures: [{ name: 'build', conclusion: 'FAILURE' }], reviewThreads: [] }
-        : { prNumber: 1, headSha: 's2', verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
+        ? { prNumber: 1, headSha: 's1', evidence: ['poll 1: build failed'], verdict: 'ci_changes' as const, ciFailures: [{ name: 'build', conclusion: 'FAILURE' }], reviewThreads: [] }
+        : { prNumber: 1, headSha: `s${polls}`, evidence: [`poll ${polls}: clean`], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
     },
   });
   const result = await run();
   assert.equal(result.status, 'succeeded');
-  assert.equal(rec.pollPrCalls, 2, 'polled twice (ci_changes then clean)');
+  assert.equal(rec.pollPrCalls, 3, 'polled for CI failure, then clean, then fresh merge readiness');
   assert.equal(rec.integrateCalls, 2, 'integrator ran for the initial PR + the CI re-push');
   // ciRework consumed the prFeedback (0016) — its hydrated input carries the failing-check feedback.
   const ciFeedback = (rec.inputsByStep['ciRework'] as { feedback?: { verdict?: string } } | undefined)?.feedback;
@@ -392,6 +432,83 @@ test('DD4: pollPr ci_changes → ciRework → re-integrate → pollPr(clean) →
     /^sha-ciRework-/,
     'the second integrator call consumes the CI rework produced head',
   );
+});
+
+test('DD4-issue-143: mergeReadiness review_changes routes to triage with fresh feedback before any merge gate', async () => {
+  let polls = 0;
+  const { run, rec } = buildAdapter({
+    template: featureDevelopmentPrReview(),
+    verdicts: { codeReview: 'approved', triage: 'wontfix' },
+    gate: () => ({ decision: 'approve' }),
+    pollPr: () => {
+      polls++;
+      if (polls === 1) {
+        return { prNumber: 1, headSha: 'initial-clean', evidence: ['initial poll clean'], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
+      }
+      if (polls === 2) {
+        return {
+          prNumber: 1,
+          headSha: 'fresh-review',
+          evidence: ['fresh pre-gate poll found review thread T9'],
+          verdict: 'review_changes' as const,
+          ciFailures: [],
+          reviewThreads: [{ threadId: 'T9', body: 'fix before merge' }],
+        };
+      }
+      return { prNumber: 1, headSha: `post-triage-${polls}`, evidence: [`post-triage poll ${polls} clean`], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
+    },
+  });
+
+  const result = await run();
+
+  assert.equal(result.status, 'succeeded');
+  assert.equal(rec.respondCalls, 1, 'fresh review feedback routed through triage/respondThreads before merge');
+  const triageInputs = rec.inputsByStep.triage as { feedback?: { headSha?: string }; mergeFeedback?: { headSha?: string; evidence?: string[] } };
+  assert.equal(triageInputs.feedback?.headSha, 'initial-clean', 'the original poll feedback remains available');
+  assert.equal(triageInputs.mergeFeedback?.headSha, 'fresh-review', 'triage receives the fresh pre-gate feedback');
+  assert.deepEqual(triageInputs.mergeFeedback?.evidence, ['fresh pre-gate poll found review thread T9']);
+  const mergeSummary = rec.gateSummaries.find((summary) => summary.nodeId === 'mergeGate');
+  assert.equal(
+    (mergeSummary?.gatedArtifact?.payload as { headSha?: string } | undefined)?.headSha,
+    'post-triage-4',
+    'merge gate opens only after a later clean mergeReadiness recheck',
+  );
+});
+
+test('DD4-issue-143b: mergeReadiness ci_changes routes to ciRework with fresh feedback before merge', async () => {
+  let polls = 0;
+  const { run, rec } = buildAdapter({
+    template: featureDevelopmentPrReview(),
+    verdicts: { codeReview: 'approved' },
+    gate: () => ({ decision: 'approve' }),
+    pollPr: () => {
+      polls++;
+      if (polls === 1) {
+        return { prNumber: 1, headSha: 'initial-clean', evidence: ['initial poll clean'], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
+      }
+      if (polls === 2) {
+        return {
+          prNumber: 1,
+          headSha: 'fresh-ci',
+          evidence: ['fresh pre-gate poll found required check failure'],
+          verdict: 'ci_changes' as const,
+          ciFailures: [{ name: 'Verify', conclusion: 'FAILURE' }],
+          reviewThreads: [],
+        };
+      }
+      return { prNumber: 1, headSha: `post-ci-${polls}`, evidence: [`post-ci poll ${polls} clean`], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
+    },
+  });
+
+  const result = await run();
+
+  assert.equal(result.status, 'succeeded');
+  assert.equal(rec.integrateCalls, 2, 'fresh CI feedback routes through ciRework and re-integrates before merge');
+  const ciInputs = rec.inputsByStep.ciRework as { feedback?: { headSha?: string }; mergeFeedback?: { headSha?: string; ciFailures?: unknown[]; evidence?: string[] } };
+  assert.equal(ciInputs.feedback?.headSha, 'initial-clean', 'the original poll feedback remains available');
+  assert.equal(ciInputs.mergeFeedback?.headSha, 'fresh-ci', 'ciRework receives the fresh pre-gate feedback');
+  assert.deepEqual(ciInputs.mergeFeedback?.ciFailures, [{ name: 'Verify', conclusion: 'FAILURE' }]);
+  assert.deepEqual(ciInputs.mergeFeedback?.evidence, ['fresh pre-gate poll found required check failure']);
 });
 
 test('DD4-issue-140: code-review changes_requested rework hands the latest produced change to integrator', async () => {
@@ -471,7 +588,7 @@ test('DD4b: pollPr ci_changes forever → cap → blocked terminal (ciLoop is DA
     template: featureDevelopmentPrReview(),
     verdicts: { codeReview: 'approved' },
     gate: () => ({ decision: 'approve' }),
-    pollPr: () => ({ prNumber: 1, headSha: 's', verdict: 'ci_changes' as const, ciFailures: [{ name: 'build', conclusion: 'FAILURE' }], reviewThreads: [] }),
+    pollPr: () => ({ prNumber: 1, headSha: 's', evidence: ['build failed'], verdict: 'ci_changes' as const, ciFailures: [{ name: 'build', conclusion: 'FAILURE' }], reviewThreads: [] }),
   });
   const result = await run();
   assert.equal(result.status, 'blocked', 'the CI loop blocks at its cap, not the agent');
@@ -479,7 +596,7 @@ test('DD4b: pollPr ci_changes forever → cap → blocked terminal (ciLoop is DA
   assert.equal(rec.confirmMergeCalls, 0, 'never reached the merge gate');
 });
 
-test('DD4c: pollPr review_changes → triage(fix) → reviewRework → integrate → respondThreads → pollPr(clean) → merge', async () => {
+test('DD4c: pollPr review_changes → triage(fix) → reviewRework → integrate → respondThreads → pollPr(clean) → mergeReadiness(clean) → merge', async () => {
   // A review comment routes to triage; the analyst returns `fix`; the developer reworks; the SAME PR is
   // re-pushed (reviewIntegrator) BEFORE respondThreads replies/resolves; the next poll is clean → merge.
   let polls = 0;
@@ -490,8 +607,8 @@ test('DD4c: pollPr review_changes → triage(fix) → reviewRework → integrate
     pollPr: () => {
       polls++;
       return polls === 1
-        ? { prNumber: 1, headSha: 's1', verdict: 'review_changes' as const, ciFailures: [], reviewThreads: [{ threadId: 'T1', body: 'fix this' }] }
-        : { prNumber: 1, headSha: 's2', verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
+        ? { prNumber: 1, headSha: 's1', evidence: ['poll 1: review thread T1'], verdict: 'review_changes' as const, ciFailures: [], reviewThreads: [{ threadId: 'T1', body: 'fix this' }] }
+        : { prNumber: 1, headSha: `s${polls}`, evidence: [`poll ${polls}: clean`], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
     },
   });
   const result = await run();
@@ -507,7 +624,7 @@ test('DD4c: pollPr review_changes → triage(fix) → reviewRework → integrate
   assert.ok(rec.respondTriage.length === 1 && rec.respondTriage[0] !== undefined, 'respondThreads consumed the triage');
 });
 
-test('DD4d: pollPr review_changes → triage(question) → questionGate(approve) → triage(wontfix) → respondThreads → pollPr(clean)', async () => {
+test('DD4d: pollPr review_changes → triage(question) → questionGate(approve) → triage(wontfix) → respondThreads → pollPr(clean) → mergeReadiness(clean)', async () => {
   // The analyst first marks a thread `question` → the question gate surfaces it; on approve the run loops
   // back to triage, which now returns `wontfix` → respondThreads (reply+resolve, no push) → clean → merge.
   const { run, rec } = buildAdapter({
@@ -519,8 +636,8 @@ test('DD4d: pollPr review_changes → triage(question) → questionGate(approve)
       return () => {
         polls++;
         return polls === 1
-          ? { prNumber: 1, headSha: 's1', verdict: 'review_changes' as const, ciFailures: [], reviewThreads: [{ threadId: 'T1', body: 'why?' }] }
-          : { prNumber: 1, headSha: 's2', verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
+          ? { prNumber: 1, headSha: 's1', evidence: ['poll 1: review thread T1'], verdict: 'review_changes' as const, ciFailures: [], reviewThreads: [{ threadId: 'T1', body: 'why?' }] }
+          : { prNumber: 1, headSha: `s${polls}`, evidence: [`poll ${polls}: clean`], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
       };
     })(),
   });

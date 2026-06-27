@@ -15,6 +15,7 @@ reviewer can approve it and the integrator can ship it.
 2. Follow the existing conventions of the codebase you are editing.
 3. Run the project's verification (build, lint, tests) and fix what you broke.
 4. On a rework pass (reviewer requested changes), address each reviewer finding directly.
+5. On a CI rework pass, use `mergeFeedback` when it is present; otherwise use `feedback`.
 
 ## Output
 

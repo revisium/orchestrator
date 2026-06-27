@@ -72,6 +72,8 @@ export type IntegratorInput = {
   change?: ProducedChangeArtifact;
   /** Hydrated `consumes` for a script node that needs upstream data (plan 0018: respondThreads ← triage). */
   triage?: unknown;
+  /** Fresh merge-readiness artifact consumed by confirmMerge for its GitHub head SHA guard. */
+  mergeReadiness?: { headSha: string };
 };
 
 export type IntegratorOutput = {
@@ -507,8 +509,8 @@ type PrMergeView = {
  * base — truly disposable). Idempotent + replay-safe:
  *
  *  1. `gh pr view` the run's branch. Already `merged` (a human merged it) → succeed.
- *  2. Not merged + OPEN + `mergeStateStatus === CLEAN` (CI green, no conflicts) → `gh pr merge --squash
- *     --delete-branch`, then re-view to CONFIRM merged → succeed; otherwise block.
+ *  2. Not merged + OPEN + `mergeStateStatus === CLEAN` (CI green, no conflicts) + a fresh readiness head
+ *     → `gh pr merge --squash --delete-branch --match-head-commit <sha>`, then re-view to CONFIRM merged.
  *  3. Not mergeable (not OPEN, or not CLEAN — red CI / conflicts / blocked) → block (needsHuman), which
  *     routes to a `blocked` terminal and KEEPS the worktree for rework.
  *
@@ -552,6 +554,13 @@ export async function confirmMerge(
         `conflicts, or required reviews pending; merge it manually (or fix + re-run) then cleanup`,
     };
   }
+  const expectedHeadSha = input.mergeReadiness?.headSha.trim();
+  if (!expectedHeadSha) {
+    return {
+      needsHuman: true,
+      lesson: `PR #${pr.number} merge requires a fresh merge readiness headSha guard — re-run readiness before approving merge`,
+    };
+  }
 
   // The integrator opens the PR as a DRAFT (human review at the merge gate); `gh pr merge` refuses a
   // draft, so mark it ready first (the approved merge gate IS that review). Idempotent: a no-op once ready.
@@ -560,7 +569,17 @@ export async function confirmMerge(
   }
 
   // Merge (squash) — idempotent: a replay re-views first (step 1) and short-circuits on state MERGED.
-  gh(['pr', 'merge', branch, '--repo', ownerRepo, '--squash', '--delete-branch']);
+  try {
+    gh(['pr', 'merge', branch, '--repo', ownerRepo, '--squash', '--delete-branch', '--match-head-commit', expectedHeadSha]);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return {
+      needsHuman: true,
+      lesson:
+        `PR #${pr.number} merge was blocked by the GitHub head guard ` +
+        `(expected ${expectedHeadSha}): ${message || 'merge command failed'}`,
+    };
+  }
 
   const after = view();
   if (after.state === 'MERGED') return { merged: true, prNumber: after.number, prUrl: after.url };
@@ -580,6 +599,8 @@ export type PrFeedback = {
   /** null when no PR could be identified (error paths) — never the invalid sentinel 0 (GitHub PRs start at 1). */
   prNumber: number | null;
   headSha: string;
+  /** Readiness facts captured from the live PR snapshot used for this routing decision. */
+  evidence: string[];
   /** review_changes (unresolved threads) > ci_changes (failing checks) > clean (nothing actionable). */
   verdict: 'review_changes' | 'ci_changes' | 'clean';
   ciFailures: CiFailure[];
@@ -616,6 +637,7 @@ export type PollPrReadiness = {
   pr: { number: number | null; headSha: string };
   checks: { pending: string[]; fail: string[]; list: Array<{ name: string; result: string }> };
   reviewThreads: { items: ReviewThread[] };
+  evidence: string[];
 };
 
 function defaultCollect(repo: string, branch: string, base: string, execGh: ExecGhFn): Promise<PollPrReadiness> {
@@ -628,11 +650,18 @@ function defaultCollect(repo: string, branch: string, base: string, execGh: Exec
       pr: { number: r.pr.number, headSha: r.pr.headSha },
       checks: { pending: r.checks.pending, fail: r.checks.fail, list: r.checks.list },
       reviewThreads: { items: r.reviewThreads.items },
+      evidence: r.evidence,
     }),
   );
 }
 
 const defaultSleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+function ciFailuresFrom(readiness: PollPrReadiness): CiFailure[] {
+  return readiness.checks.list
+    .filter((c) => readiness.checks.fail.includes(c.name))
+    .map((c) => ({ name: c.name, conclusion: c.result }));
+}
 
 /**
  * pollPr — REAL (live only). Polls `collectPrReadiness` until CI is terminal (no pending checks) or a
@@ -679,10 +708,7 @@ export async function pollPr(
   // `settled` is the CI-terminal readiness (defined past the guard); the review-grace loop may refresh it.
   let settled: PollPrReadiness = readiness;
 
-  // CI failures come from the CI-terminal snapshot (terminal → won't change under us).
-  const ciFailures: CiFailure[] = settled.checks.list
-    .filter((c) => settled.checks.fail.includes(c.name))
-    .map((c) => ({ name: c.name, conclusion: c.result }));
+  const initialCiFailures = ciFailuresFrom(settled);
 
   // CI green → flip the PR draft→ready so CodeRabbit / human reviewers actually engage. They SKIP
   // draft PRs, which silently bypassed the entire review loop (the PR was readied only at confirmMerge,
@@ -691,7 +717,7 @@ export async function pollPr(
   // BLOCK on a review arriving: the human merge gate is the backstop, so an absent / rate-limited
   // reviewer falls through to it rather than deadlocking the run. CI-red stays draft (don't request
   // review of broken code) and routes to ci_changes for a fix first.
-  if (ciFailures.length === 0) {
+  if (initialCiFailures.length === 0) {
     try {
       gh(['pr', 'ready', branch, '--repo', ownerRepo]);
     } catch {
@@ -704,6 +730,17 @@ export async function pollPr(
     }
   }
 
+  if (settled.checks.pending.length > 0 || settled.checks.list.length === 0) {
+    const detail = settled.checks.pending.length > 0
+      ? `pending checks: ${settled.checks.pending.join(', ')}`
+      : 'no checks registered';
+    const evidence = settled.evidence.length > 0 ? ` Evidence: ${settled.evidence.join(' | ')}` : '';
+    return {
+      needsHuman: true,
+      lesson: `pollPr found unsettled readiness after readying ${branch} - ${detail}.${evidence}`,
+    };
+  }
+
   const reviewThreads: PrReviewThread[] = settled.reviewThreads.items.map((t) => ({
     threadId: t.id,
     path: t.path,
@@ -711,6 +748,8 @@ export async function pollPr(
     author: t.author,
     body: t.body,
   }));
+
+  const ciFailures = ciFailuresFrom(settled);
 
   // Only REQUIRED-check failures drive the `ci_changes` verdict (PR #135 fix): on this repo only
   // "Verify"/"E2E"/"Required checks" gate the merge — Sonar/CodeRabbit are advisory, and a failing
@@ -736,6 +775,7 @@ export async function pollPr(
   return {
     prNumber: settled.pr.number ?? null,
     headSha: settled.pr.headSha,
+    evidence: [...settled.evidence, `PR headSha=${settled.pr.headSha}`, `pollPr verdict=${verdict}`],
     verdict,
     ciFailures,
     reviewThreads,
@@ -902,7 +942,7 @@ export class IntegratorService {
 
   /** Stub pollPr — script path; zero external effects (reports a clean PR so the loop converges to merge). */
   runPollStub = (_input: IntegratorInput): PrFeedback => {
-    return { prNumber: null, headSha: 'stub', verdict: 'clean', ciFailures: [], reviewThreads: [] };
+    return { prNumber: null, headSha: 'stub', evidence: ['stub pollPr readiness: clean'], verdict: 'clean', ciFailures: [], reviewThreads: [] };
   };
 
   /**

@@ -331,7 +331,7 @@
               }
             ],
             "gatedArtifact": {
-              "node": "pollPr",
+              "node": "mergeReadiness",
               "as": "prFeedback"
             }
           },
@@ -351,7 +351,13 @@
               }
             ],
             "onFailure": "route",
-            "resultSchema": "schema:integration"
+            "resultSchema": "schema:integration",
+            "consumes": [
+              {
+                "node": "mergeReadiness",
+                "as": "mergeReadiness"
+              }
+            ]
           },
           "mergedEnd": {
             "id": "mergedEnd",
@@ -391,6 +397,67 @@
           },
           "prRouter": {
             "id": "prRouter",
+            "kind": "choice",
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "clean"
+                },
+                "goto": "mergeReadiness"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "review_changes"
+                },
+                "goto": "triage"
+              },
+              {
+                "when": {
+                  "op": "all",
+                  "of": [
+                    {
+                      "op": "verdict.eq",
+                      "value": "ci_changes"
+                    },
+                    {
+                      "op": "counter.lt",
+                      "scope": "ciLoop",
+                      "value": 3
+                    }
+                  ]
+                },
+                "goto": "ciRework"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ]
+          },
+          "mergeReadiness": {
+            "id": "mergeReadiness",
+            "kind": "script",
+            "scriptRef": "script:pollPr",
+            "next": "mergeReadinessRouter",
+            "onFailure": "route",
+            "resultSchema": "schema:prFeedback",
+            "produces": {
+              "name": "prFeedback"
+            },
+            "catch": [
+              {
+                "onError": "revo.ScriptBlocked",
+                "goto": "blockedEnd"
+              },
+              {
+                "onError": "revo.ScriptFailed",
+                "goto": "failedEnd"
+              }
+            ]
+          },
+          "mergeReadinessRouter": {
+            "id": "mergeReadinessRouter",
             "kind": "choice",
             "branches": [
               {
@@ -446,6 +513,12 @@
               {
                 "node": "pollPr",
                 "as": "feedback"
+              },
+              {
+                "node": "mergeReadiness",
+                "as": "mergeFeedback",
+                "optional": true,
+                "staleOk": true
               }
             ]
           },
@@ -468,6 +541,12 @@
               {
                 "node": "pollPr",
                 "as": "feedback"
+              },
+              {
+                "node": "mergeReadiness",
+                "as": "mergeFeedback",
+                "optional": true,
+                "staleOk": true
               }
             ]
           },
