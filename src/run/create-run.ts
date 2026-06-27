@@ -188,6 +188,10 @@ function buildIds(input: NormalizedInput): CreateRunResult {
   };
 }
 
+export function previewCreateRunIds(input: CreateRunInput): CreateRunResult {
+  return buildIds(normalizeInput(input));
+}
+
 export async function createRunWorkflow(
   dataAccess: ControlPlaneDataAccess,
   input: CreateRunInput,

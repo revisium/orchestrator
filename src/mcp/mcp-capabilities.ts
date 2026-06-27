@@ -48,6 +48,7 @@ export const MCP_INSTRUCTIONS = `Revo is a local-first software-development task
 
 Use these tools to manage tasks end-to-end from your coding agent:
 - create and start runs;
+- resume terminal recoverable preflight blocks with resume_run after the target repo is repaired;
 - observe run state through the low-context observe_run contract;
 - inspect bounded digests, events, attempts, agent activity, and logs only when needed;
 - resolve human inbox gates and questions;
