@@ -1,6 +1,6 @@
 import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { getConfig } from '../config.js';
 import { worktreeMarkerFor, worktreePathFor } from '../control-plane/resolve-cwd.js';
@@ -119,6 +119,63 @@ test('D3: a dirty target repo blocks at preflight', { skip: e2eSkip }, async () 
     const run = await startFeature(target);
     await waitState(h.api, run.runId);
     await assertBlocked(h.api, run.runId);
+  } finally {
+    target.cleanup();
+  }
+});
+
+test('D3b: a repaired preflight block resumes through a recovery child run', { skip: e2eSkip }, async () => {
+  const target = createTargetRepo({ dirty: true });
+  try {
+    const run = await startFeature(target);
+    let state = await waitState(h.api, run.runId);
+    await assertBlocked(h.api, run.runId);
+    for (let waited = 0; waited < 8_000 && state.workflowStatus !== 'SUCCESS'; waited += 250) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      state = await h.api.waitForRun({ runId: run.runId });
+    }
+    assert.equal(state.runStatus, 'paused');
+    assert.equal(state.workflowStatus, 'SUCCESS');
+
+    const blockedEvents = await h.api.getRunEvents({ runId: run.runId, type: 'pipeline_blocked', limit: 50 });
+    const preflightEvent = blockedEvents.at(-1);
+    assert.ok(preflightEvent, 'preflight block must emit pipeline_blocked');
+    assert.equal((preflightEvent.payload as { reason?: unknown }).reason, 'preflight');
+
+    rmSync(join(target.worktree, 'dirty.txt'), { force: true });
+    const explicitStart = await h.api.startRun({ runId: run.runId });
+    assert.equal((explicitStart as { recoverable?: unknown }).recoverable, true);
+    assert.equal((explicitStart as { retryStarted?: unknown }).retryStarted, false);
+    assert.equal((explicitStart as { nextAction?: unknown }).nextAction, 'resume_run');
+
+    const resumed = await h.api.resumeRun({ runId: run.runId }) as {
+      runId: string;
+      workflowID: string;
+      recovery: { parentRunId: string; recoveryRunId: string; blockedEventId: string; reason: string };
+    };
+    const recoveryRunId = resumed.runId;
+    assert.notEqual(recoveryRunId, run.runId);
+    assert.equal(resumed.workflowID, recoveryRunId);
+    assert.equal(resumed.recovery.parentRunId, run.runId);
+    assert.equal(resumed.recovery.recoveryRunId, recoveryRunId);
+    assert.equal(resumed.recovery.blockedEventId, preflightEvent.eventId);
+    assert.equal(resumed.recovery.reason, 'preflight');
+
+    const resumedAgain = await h.api.resumeRun({ runId: run.runId }) as { runId: string };
+    assert.equal(resumedAgain.runId, recoveryRunId, 'second resume must reuse the recovery child');
+
+    h.developerWrites.set(recoveryRunId, target.worktree);
+    await waitForGate(h.api, recoveryRunId, 'plan');
+    const terminal = await approveUntilTerminal(h.api, recoveryRunId);
+    assert.equal(terminal.state, 'completed');
+
+    const parentEvents = await h.api.getRunEvents({ runId: run.runId, limit: 500 });
+    const childEvents = await h.api.getRunEvents({ runId: recoveryRunId, limit: 500 });
+    const parentLineage = parentEvents.find((event) => event.type === 'run_recovery_created');
+    const childLineage = childEvents.find((event) => event.type === 'run_recovery_parent');
+    assert.ok(parentLineage, 'parent run_recovery_created event must exist');
+    assert.ok(childLineage, 'child run_recovery_parent event must exist');
+    assert.deepEqual(parentLineage.payload, childLineage.payload);
   } finally {
     target.cleanup();
   }
