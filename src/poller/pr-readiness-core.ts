@@ -529,6 +529,22 @@ function codeRabbitCommentReason(comments: CommentEntry[]): 'provider_limit' | '
   return '';
 }
 
+/** Best-effort extraction of a "retry in N <unit>" hint from a bot comment body, e.g.
+ *  "retry in 10 min". Returns null when no hint is present — the caller must keep the
+ *  raw evidence either way. Case-insensitive and intentionally lenient. */
+function extractResumeHint(comments: CommentEntry[]): string | null {
+  for (const comment of comments) {
+    const login = comment.user?.login.toLowerCase() ?? '';
+    if (!login.includes('coderabbit')) continue;
+    const match = comment.body.match(/\/retry[^.]*?(\d+)\s*(min|minute|hour|sec)/i);
+    if (match) {
+      const unit = match[2].toLowerCase().startsWith('min') ? 'min' : match[2].toLowerCase().startsWith('hour') ? 'hour' : 'sec';
+      return `retry in ${match[1]} ${unit}`;
+    }
+  }
+  return null;
+}
+
 function compactCheckLists(checks: Array<{ name: string; result: string }>) {
   const terminal: string[] = [];
   const pending: string[] = [];
@@ -586,10 +602,35 @@ function locationOf(item: { component?: string; path?: string; line?: number }) 
   return item.line ? `${path}:${item.line}` : path;
 }
 
-function providerWaitFeedback(state: ReturnType<typeof providerState>) {
+/** A single provider-wait feedback item. `nature` distinguishes the two cases:
+ *  - 'informational': a stale comment-derived wait observed on the terminal path (NOT blocking).
+ *  - 'blocking': a genuinely-pending provider check observed on the pending path (blocking). */
+export type ProviderWaitItem = {
+  provider: string;
+  reason: string;
+  evidence: string;
+  blocking: boolean;
+  nature: 'informational' | 'blocking';
+  resumeAfter: string | null;
+};
+
+function providerWaitFeedback(state: ReturnType<typeof providerState>, botComments: CommentEntry[]): ProviderWaitItem[] {
   const codeRabbit = state.codeRabbit;
   if (codeRabbit?.state !== 'waiting') return [];
-  return [{ provider: 'CodeRabbit', reason: codeRabbit.reason, evidence: codeRabbit.evidence ?? codeRabbit.statusContext }];
+  // This function is reached on the TERMINAL path (collectPrReadiness only calls buildFeedback
+  // after the ci.pending gate). By then any CodeRabbit check is terminal, so a rate-limit /
+  // review-in-progress BOT COMMENT is necessarily stale relative to the current green head —
+  // it is informational, NOT a readiness blocker. A genuinely-pending CodeRabbit check is
+  // caught earlier by the pending gate and surfaced as a blocking providerWait (see
+  // buildWaitingReadiness), so the two cases are distinguishable via `blocking`.
+  return [{
+    provider: 'CodeRabbit',
+    reason: codeRabbit.reason,
+    evidence: codeRabbit.evidence ?? codeRabbit.statusContext,
+    blocking: false,
+    nature: 'informational',
+    resumeAfter: extractResumeHint(botComments),
+  }];
 }
 
 function buildFeedback(input: {
@@ -644,7 +685,7 @@ function buildFeedback(input: {
       location: locationOf(comment),
     }));
 
-  const providerWait = providerWaitFeedback(input.providerState);
+  const providerWait = providerWaitFeedback(input.providerState, input.botComments);
 
   const humanDecisions = [
     ...(input.reviewDecision && input.reviewDecision !== 'APPROVED'
@@ -806,9 +847,26 @@ function buildWaitingReadiness(input: {
   evidence: string[];
   isDraft?: boolean;
 }): PrReadinessResult {
+  // The pending path previously left providerState empty and built providerWait from it (also
+  // empty), so a genuinely-pending CodeRabbit check was never explained as a provider wait.
+  // Synthesize a blocking providerState/providerWait from the pending check names so the output
+  // surfaces WHY the wait is blocking — mirroring the informational entry emitted on the
+  // terminal path. This does not change the verdict (still waiting/watcher_wait).
+  const pendingCodeRabbit = input.ci.pendingNames.find((name) => name.toLowerCase().includes('coderabbit'));
+  const pendingProviderState: ReturnType<typeof providerState> = pendingCodeRabbit
+    ? {
+        codeRabbit: {
+          state: 'waiting',
+          reason: 'check_pending',
+          statusContext: 'IN_PROGRESS',
+          evidence: 'CodeRabbit check is still pending for the current head — waiting is blocking.',
+        },
+      }
+    : {};
+
   const feedback = buildFeedback({
     checks: input.checkLists,
-    providerState: {},
+    providerState: pendingProviderState,
     sonar: emptySonar(input.sonarConfigured),
     reviewDecision: input.prView.reviewDecision ?? '',
     reviewThreads: input.reviewThreads,
@@ -817,17 +875,30 @@ function buildWaitingReadiness(input: {
     botComments: [],
   });
 
+  // buildFeedback -> providerWaitFeedback classifies from providerState, but on the pending path
+  // the wait IS blocking (a live check), so emit a blocking item in place of the synthesized one.
+  const providerWait: ProviderWaitItem[] = pendingCodeRabbit
+    ? [{
+        provider: 'CodeRabbit',
+        reason: 'check_pending',
+        evidence: 'CodeRabbit check is still pending for the current head — waiting is blocking.',
+        blocking: true,
+        nature: 'blocking',
+        resumeAfter: null,
+      }]
+    : feedback.providerWait;
+
   return {
     verdict: 'waiting',
     pr: prFromView(input.prNumber, input.prView),
     checks: input.checkLists,
     reviewDecision: input.prView.reviewDecision ?? '',
     reviewThreads: input.reviewThreads,
-    providerState: {},
+    providerState: pendingProviderState,
     sonar: emptySonar(input.sonarConfigured),
     nextAction: 'watcher_wait',
     evidence: input.evidence,
-    feedback,
+    feedback: { ...feedback, providerWait },
     ciSummary: {
       ci_passed: false,
       checks: input.ci.checks,
@@ -844,11 +915,12 @@ function buildWaitingReadiness(input: {
 function readinessAction(input: {
   ci: ReturnType<typeof collectCiChecks>;
   feedback: ReturnType<typeof buildFeedback>;
-  providers: ReturnType<typeof providerState>;
 }): { verdict: PrReadinessVerdict; nextAction: PrReadinessNextAction } {
-  if (input.providers.codeRabbit?.reason === 'provider_limit' || input.providers.codeRabbit?.reason === 'review_in_progress') {
-    return { verdict: 'waiting', nextAction: 'watcher_wait' };
-  }
+  // NOTE: a CodeRabbit provider_limit / review_in_progress bot comment is intentionally NOT a
+  // `waiting` verdict here. This function is only reached after the ci.pending gate (see
+  // collectPrReadiness), so every check is already terminal — such a comment is stale relative
+  // to the current green head and is surfaced as an informational providerWait instead. A
+  // genuinely-pending CodeRabbit check is handled by the pending gate before this point.
   if (!input.ci.ci_passed || input.feedback.developerFixes.length > 0) {
     return { verdict: 'needs_work', nextAction: 'developer_fix' };
   }
@@ -944,7 +1016,8 @@ export async function collectPrReadiness(
     ...(sonar.unavailable ? { sonar_unavailable: true } : {}),
   };
 
-  const { verdict, nextAction } = readinessAction({ ci, feedback, providers });
+  const { verdict, nextAction } = readinessAction({ ci, feedback });
+  const hasInformationalProviderWait = feedback.providerWait.some((item) => item.blocking === false);
 
   return {
     verdict,
@@ -958,7 +1031,10 @@ export async function collectPrReadiness(
     evidence: [
       `PR #${prNumber} state=${prView.state ?? 'unknown'} draft=${Boolean(prView.isDraft)}`,
       `checks pass=${checkLists.pass.length} fail=${checkLists.fail.length} pending=${checkLists.pending.length}`,
-      ...(providers.codeRabbit?.reason === 'provider_limit' ? ['CodeRabbit provider/rate limit comment overrides green status.'] : []),
+      ...(providers.codeRabbit?.reason === 'provider_limit' ? ['CodeRabbit provider/rate limit comment detected.'] : []),
+      ...(verdict === 'ready' && hasInformationalProviderWait
+        ? ['Provider wait is informational (stale CodeRabbit rate-limit comment); not blocking readiness.']
+        : []),
     ],
     feedback,
     ciSummary,

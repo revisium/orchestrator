@@ -572,7 +572,7 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
   server.registerTool(
     'list_pr_feedback',
     {
-      description: 'Return the actionable PR feedback queue grouped by developer fixes, reviewer questions, provider waits, human decisions, ignored noise, and residual risks.',
+      description: 'Return the actionable PR feedback queue grouped by developer fixes, reviewer questions, provider waits, human decisions, ignored noise, and residual risks. Provider-wait items carry a `blocking` flag and a `nature` of "informational" (stale comment) or "blocking" (live pending check).',
       inputSchema: prReadinessInputSchema,
       annotations: { readOnlyHint: true },
     },
