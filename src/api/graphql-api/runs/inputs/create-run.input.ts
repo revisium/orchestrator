@@ -27,6 +27,9 @@ export class CreateRunInput {
   @Field(() => GraphQLJSON, { nullable: true })
   params?: unknown;
 
+  @Field(() => GraphQLJSON, { nullable: true })
+  issueRef?: unknown;
+
   @Field(() => Boolean, { defaultValue: false })
   start?: boolean;
 }

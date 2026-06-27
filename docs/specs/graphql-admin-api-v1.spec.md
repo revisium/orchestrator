@@ -82,6 +82,7 @@ type Run {
   createdBy: String
   title: String
   goal: String
+  issueRef: JSON
 
   progress: RunProgress!
   progressSummary: ProgressSummary!
@@ -178,6 +179,18 @@ Canceling a terminal run returns the run. Continuation after a human gate or que
 resolution; the public contract does not define a separate resume mutation.
 
 Mutation resolvers must enforce the auth/principal seam before the API can bind outside loopback.
+
+`CreateRunInput` accepts optional `issueRef: JSON` traceability metadata with shape
+`{ repo: String, number: positive Int, url: String }`. The canonical value is stored in public run params as
+`params.issueRef`; if `CreateRunInput.issueRef` and `CreateRunInput.params.issueRef` are both present and differ,
+the mutation rejects the input deterministically. `Run.issueRef`, run digest/read projections, and PR readiness
+results project only this structured metadata, not arbitrary run params.
+
+`PrReadinessInput` also accepts optional `issueRef` with the same shape. For issue-bound runs, readiness reports a
+human-decision item when branch/title linkage is missing; the link policy is reference-only and must not emit
+closing keywords such as `Closes`, `Fixes`, or `Resolves`. Issue closure remains a manual/out-of-band action; this
+API must not call issue-close endpoints. Issue-bound PR titles and commits may include a non-closing `#<number>`
+reference, and PR bodies may remain empty for compatibility with the existing publication flow.
 
 ## Subscriptions
 
@@ -288,6 +301,7 @@ where needed.
 
 ## Changelog
 
+- 2026-06-27: Added issueRef create-run, Run projection, and PR readiness linkage contract.
 - 2026-06-26: Erratum: explicitly added `runAttempts` to the legacy run-scoped root reserved/removal list,
   backfilling a previous omission without changing the accepted graph-shaped target contract.
 - 2026-06-26: Reframed the spec as the accepted graph-shaped target contract.

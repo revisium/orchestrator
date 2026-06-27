@@ -1,5 +1,6 @@
 import type { ControlPlaneChange } from '../../../control-plane/change-notifications.js';
 import type { ControlPlaneRow } from '../../../control-plane/data-access.js';
+import { issueRefFromParams } from '../../../run/issue-ref.js';
 
 function str(value: unknown): string {
   return typeof value === 'string' ? value : '';
@@ -27,6 +28,7 @@ function runStatus(value: unknown): string {
 }
 
 export function mapRunRow(row: ControlPlaneRow) {
+  const issueRef = issueRefFromParams(row.data.params);
   return {
     id: row.rowId,
     title: str(row.data.title),
@@ -35,6 +37,7 @@ export function mapRunRow(row: ControlPlaneRow) {
     description: str(row.data.description) || undefined,
     scope: str(row.data.scope) || undefined,
     repos: strArr(row.data.repos),
+    ...(issueRef ? { issueRef } : {}),
     createdAt: date(row.data.created_at ?? row.createdAt),
   };
 }

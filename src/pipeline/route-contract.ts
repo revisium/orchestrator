@@ -1,3 +1,5 @@
+import { normalizeIssueRefIntoParams } from '../run/issue-ref.js';
+
 export type ExecutionProfile = {
   id: string;
   runnerOverrides: Record<string, string>;
@@ -53,9 +55,9 @@ function asStringArray(value: unknown): string[] | undefined {
   return value.filter((item): item is string => typeof item === 'string' && item.trim() !== '');
 }
 
-export function normalizeParams(value: unknown): Record<string, unknown> {
+export function normalizeParams(value: unknown, issueRef?: unknown): Record<string, unknown> {
   const record = asRecord(value);
-  if (!record) return {};
+  if (!record) return normalizeIssueRefIntoParams({}, issueRef);
   const {
     executionProfile: _executionProfile,
     execution_profile: _executionProfileSnake,
@@ -65,7 +67,7 @@ export function normalizeParams(value: unknown): Record<string, unknown> {
     available_runners: _availableRunnersSnake,
     ...publicParams
   } = record;
-  return publicParams;
+  return normalizeIssueRefIntoParams(publicParams, issueRef);
 }
 
 export function normalizeRouteGates(value: unknown): string[] {

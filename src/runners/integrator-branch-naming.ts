@@ -5,6 +5,7 @@
  * worktree is created already checked out on the SAME branch the integrator commits/pushes on, so the
  * two must derive an identical name from (taskId, title). Lifted from integrator.ts.
  */
+import type { IssueRef } from '../run/issue-ref.js';
 
 const SLUG_MAX = 40;
 
@@ -29,9 +30,13 @@ function shortId(taskId: string): string {
 
 /** Derive deterministic feature branch name from taskId + title. Exported so the worktree manager
  *  checks out the SAME branch the integrator commits/pushes on (plan 0017). */
-export function branchName(taskId: string, title: string): string {
+export function branchName(taskId: string, title: string, issueRef?: IssueRef): string {
   const id = shortId(taskId);
   const slug = slugify(title);
+  if (issueRef) {
+    const issueSlug = `issue-${issueRef.number}`;
+    return `feat/${id}-${slug ? `${issueSlug}-${slug}` : issueSlug}`;
+  }
   return slug ? `feat/${id}-${slug}` : `feat/${id}`; // drop empty slug so no trailing '-'
 }
 

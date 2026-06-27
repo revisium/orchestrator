@@ -1848,6 +1848,53 @@ test('TaskControlPlaneApiService.createRun persists canonical pipeline id', asyn
   assert.equal(persistedPipelineId, 'local-change');
 });
 
+test('TaskControlPlaneApiService.createRun normalizes issueRef into public params', async () => {
+  const issueRef = {
+    repo: 'revisium/orchestrator',
+    number: 147,
+    url: 'https://github.com/revisium/orchestrator/issues/147',
+  };
+  let persistedParams: Record<string, unknown> = {};
+  const api = makeApi({
+    runService: {
+      async createRun(input) {
+        persistedParams = input.params ?? {};
+        return { runId: 'run-1', taskId: 'task-1', stepId: 'step-1', eventId: 'event-1', status: 'ready' };
+      },
+    },
+  });
+
+  await api.createRun({
+    title: 'MCP task',
+    repo: '.',
+    pipelineId: 'local-change',
+    params: { ticket: 'RV-147' },
+    issueRef,
+  });
+
+  assert.deepEqual(persistedParams, { ticket: 'RV-147', issueRef });
+});
+
+test('TaskControlPlaneApiService.createRun rejects conflicting top-level and params issueRef', async () => {
+  const issueRef = {
+    repo: 'revisium/orchestrator',
+    number: 147,
+    url: 'https://github.com/revisium/orchestrator/issues/147',
+  };
+  const api = makeApi();
+
+  await assert.rejects(
+    () => api.createRun({
+      title: 'MCP task',
+      repo: '.',
+      pipelineId: 'local-change',
+      params: { issueRef },
+      issueRef: { ...issueRef, number: 148 },
+    }),
+    /issueRef conflicts with params\.issueRef/,
+  );
+});
+
 test('TaskControlPlaneApiService.createRun ignores public params for runner profile selection', async () => {
   const starts: Array<{ override?: string; params: Record<string, unknown> }> = [];
   const api = makeApi({
@@ -1871,6 +1918,49 @@ test('TaskControlPlaneApiService.createRun ignores public params for runner prof
   });
 
   assert.deepEqual(starts, [{ override: undefined, params: { ticket: 'ABC-1' } }]);
+});
+
+test('TaskControlPlaneApiService.resolveRunState exposes issueRef from run params', async () => {
+  const issueRef = {
+    repo: 'revisium/orchestrator',
+    number: 147,
+    url: 'https://github.com/revisium/orchestrator/issues/147',
+  };
+  const api = makeApi({
+    runService: {
+      async showRun() {
+        return {
+          run: {
+            runId: 'run-1',
+            title: 'Run',
+            status: 'ready',
+            priority: 0,
+            createdAt: '2026-06-13T00:00:00.000Z',
+            description: '',
+            scope: '',
+            repos: [],
+            issueRef,
+          },
+          tasks: [],
+        };
+      },
+    },
+    inboxService: {
+      async listInbox() {
+        return [];
+      },
+    },
+    dbosService: {
+      async getWorkflowStatus() {
+        return null;
+      },
+    },
+  });
+
+  const state = await api.resolveRunState('run-1');
+
+  assert.equal(state.state, 'running');
+  assert.deepEqual(state.issueRef, issueRef);
 });
 
 test('TaskControlPlaneApiService.simulateRoute rejects omitted pipelineId when no trigger matches', async () => {

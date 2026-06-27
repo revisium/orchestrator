@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { ControlPlaneDataAccess } from '../control-plane/index.js';
+import { normalizeIssueRefIntoParams } from './issue-ref.js';
 
 export type CreateRunInput = {
   title: string;
@@ -14,6 +15,7 @@ export type CreateRunInput = {
   playbookId?: string;
   pipelineId?: string;
   params?: Record<string, unknown>;
+  issueRef?: unknown;
   routeDecision?: Record<string, unknown>;
   executionProfile?: Record<string, unknown>;
   now?: Date;
@@ -159,7 +161,7 @@ function normalizeInput(input: CreateRunInput): NormalizedInput {
     role,
     playbookId: input.playbookId?.trim() ?? '',
     pipelineId: input.pipelineId?.trim() ?? '',
-    params: input.params ?? {},
+    params: normalizeIssueRefIntoParams(input.params ?? {}, input.issueRef),
     routeDecision: input.routeDecision ?? {},
     executionProfile: input.executionProfile ?? {},
     now: input.now ?? new Date(),

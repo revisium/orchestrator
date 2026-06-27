@@ -173,6 +173,62 @@ test('all checks terminal + CI passed: judge step with ci_passed:true', async ()
   assert.deepEqual(result.costs, []);
 });
 
+test('issueRef readiness: missing branch/title linkage needs a human decision', async () => {
+  const issueRef = {
+    repo: 'owner/repo',
+    number: 147,
+    url: 'https://github.com/owner/repo/issues/147',
+  };
+  const terminalView = prViewResponse([checkRun('Gitar', 'COMPLETED', 'SUCCESS')], {
+    number: 42,
+    url: 'https://github.com/owner/repo/pull/42',
+    state: 'OPEN',
+    isDraft: false,
+    baseRefName: 'master',
+    headRefName: 'feat/abcd-add-feature',
+    headRefOid: 'sha',
+    title: 'Add feature',
+  });
+  const execGh = makeFullResponses(terminalView);
+
+  const readiness = await collectPrReadiness({ repo: 'owner/repo', prNumber: 42, issueRef }, execGh);
+
+  assert.equal(readiness.verdict, 'needs_human');
+  assert.equal(readiness.nextAction, 'human_decision');
+  assert.deepEqual(readiness.issueRef, issueRef);
+  const linkageDecision = readiness.feedback.humanDecisions.find((decision) => decision.source === 'issue_ref_linkage');
+  assert.ok(linkageDecision);
+  assert.ok('evidence' in linkageDecision);
+  assert.match(linkageDecision.evidence, /branch missing issue-147/);
+  assert.match(linkageDecision.evidence, /title missing #147/);
+});
+
+test('issueRef readiness: branch and title linkage keep a clean PR ready', async () => {
+  const issueRef = {
+    repo: 'owner/repo',
+    number: 147,
+    url: 'https://github.com/owner/repo/issues/147',
+  };
+  const terminalView = prViewResponse([checkRun('Gitar', 'COMPLETED', 'SUCCESS')], {
+    number: 42,
+    url: 'https://github.com/owner/repo/pull/42',
+    state: 'OPEN',
+    isDraft: false,
+    baseRefName: 'master',
+    headRefName: 'feat/abcd-issue-147-add-feature',
+    headRefOid: 'sha',
+    title: '#147 Add feature',
+  });
+  const execGh = makeFullResponses(terminalView);
+
+  const readiness = await collectPrReadiness({ repo: 'owner/repo', prNumber: 42, issueRef }, execGh);
+
+  assert.equal(readiness.verdict, 'ready');
+  assert.equal(readiness.nextAction, 'ready_for_merge_gate');
+  assert.deepEqual(readiness.issueRef, issueRef);
+  assert.deepEqual(readiness.feedback.humanDecisions, []);
+});
+
 test('all checks terminal + CI failed: judge step with ci_passed:false', async () => {
   const failedView = prViewResponse([
     checkRun('SonarCloud', 'COMPLETED', 'FAILURE'),

@@ -119,6 +119,7 @@ A successful live developer change producer records the agent's output with an a
 type ProducedChangeArtifact = {
   branch: string;
   headSha: string;
+  issueRef?: { repo: string; number: number; url: string };
   worktreePath?: string;
   artifactRef?: string;
   prNumber?: number;
@@ -129,6 +130,13 @@ The adapter captures this pointer after the role succeeds and before reviewer or
 script nodes consume the latest relevant change pointer and push that exact `headSha`; they do not inspect the
 shared/base checkout when a produced change is available. A "nothing to integrate" no-op is valid only when the
 produced `headSha` already equals the open PR head.
+
+Issue-bound runs carry their canonical issue traceability metadata through `issueRef`. It is copied from the run
+context into produced change artifacts and integrator inputs so branch, commit, PR title, and readiness checks use
+the same issue reference while preserving the produced artifact's authoritative `branch`. Publication uses
+reference-only issue linkage: branch names contain `issue-<number>`, commits and PR titles may include a non-closing
+`#<number>` reference, PR bodies may remain empty for compatibility with existing publication behavior, and issue
+closure stays manual/out-of-band.
 
 ## Static Validation
 
@@ -149,5 +157,6 @@ guards still catch dynamic skips and stale paths.
 
 ## Changelog
 
+- 2026-06-27: Added issueRef propagation to produced change artifacts and integrator handoff.
 - 2026-06-27: Clarified that produced run outputs for retried runner nodes reference the winning physical attempt.
 - 2026-06-26: Initial spec extracted from former plan 0016 and `pipeline-core` dataflow types.

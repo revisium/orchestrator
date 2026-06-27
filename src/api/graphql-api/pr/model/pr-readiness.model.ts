@@ -25,6 +25,9 @@ export class PrInfoModel {
   headSha!: string;
 
   @Field(() => String)
+  title!: string;
+
+  @Field(() => String)
   mergeState!: string;
 }
 
@@ -228,6 +231,9 @@ export class PrReadinessModel {
 
   @Field(() => PrSonarModel)
   sonar!: PrSonarModel;
+
+  @Field(() => GraphQLJSON, { nullable: true })
+  issueRef!: unknown;
 
   @Field(() => [String])
   evidence!: string[];

@@ -18,6 +18,7 @@ import { execFileSync } from 'node:child_process';
 import type { ExecGhFn } from '../poller/pr-readiness.js';
 import { collectPrReadiness, fetchRequiredCheckNames, type ReviewThread } from '../poller/pr-readiness-core.js';
 import { RunService } from '../revisium/run.service.js';
+import { issueRefTag, type IssueRef } from '../run/issue-ref.js';
 import { resolveGhAccount, resolvePinnedGh } from './gh-identity.js';
 import type { ExecFn, IntegratorBlocked } from './integrator-types.js';
 import { gitAbsPath, branchExists, countAhead } from './integrator-git.js';
@@ -46,6 +47,7 @@ export type IntegratorDeps = {
 export type ProducedChangeArtifact = {
   branch: string;
   headSha: string;
+  issueRef?: IssueRef;
   worktreePath?: string;
   artifactRef?: string;
   prNumber?: number;
@@ -58,6 +60,7 @@ export type CaptureProducedChangeInput = {
   base: string;
   nodeId: string;
   attemptId: string;
+  issueRef?: IssueRef;
   artifactRef?: string;
 };
 
@@ -68,6 +71,7 @@ export type IntegratorInput = {
   taskId: string;
   title: string;
   base: string;
+  issueRef?: IssueRef;
   /** Developer-produced git artifact consumed by the integrator when a dataflow producer is present. */
   change?: ProducedChangeArtifact;
   /** Hydrated `consumes` for a script node that needs upstream data (plan 0018: respondThreads ← triage). */
@@ -80,6 +84,7 @@ export type IntegratorOutput = {
   prUrl: string;
   branch: string;
   prNumber: number;
+  issueRef?: IssueRef;
   headSha?: string;
   status?: 'pushed' | 'noop';
   message?: string;
@@ -89,6 +94,16 @@ export type IntegratorOutput = {
 
 type PrListEntry = { number: number; url: string; baseRefName: string; headRefOid?: string };
 type PrSummary = { prUrl: string; prNumber: number; headSha?: string };
+
+function issueBoundTitle(title: string, issueRef?: IssueRef): string {
+  const tag = issueRefTag(issueRef);
+  return tag ? `${tag} ${title}` : title;
+}
+
+function commitMessage(title: string, issueRef?: IssueRef): string {
+  const tag = issueRefTag(issueRef);
+  return tag ? `feat: ${tag} ${title}` : `feat: ${title}`;
+}
 
 function parsePrList(raw: string): PrListEntry[] {
   try {
@@ -142,6 +157,7 @@ function createPr(
   branch: string,
   base: string,
   title: string,
+  issueRef: IssueRef | undefined,
   execGh: ExecGhFn,
 ): PrSummary | IntegratorBlocked {
   const createOut = execGh([
@@ -155,7 +171,7 @@ function createPr(
     '--head',
     branch,
     '--title',
-    title,
+    issueBoundTitle(title, issueRef),
     '--body',
     '',
   ]);
@@ -194,6 +210,7 @@ function findOrCreatePr(
   branch: string,
   base: string,
   title: string,
+  issueRef: IssueRef | undefined,
   execGh: ExecGhFn,
 ): { prUrl: string; prNumber: number } | IntegratorBlocked {
   const existing = matchingOpenPr(ownerRepo, branch, base, execGh, 'number,url,baseRefName');
@@ -201,7 +218,7 @@ function findOrCreatePr(
     return { prUrl: existing.prUrl, prNumber: existing.prNumber };
   }
   if (existing) return existing;
-  return createPr(ownerRepo, branch, base, title, execGh);
+  return createPr(ownerRepo, branch, base, title, issueRef, execGh);
 }
 
 function findExistingPrWithHead(
@@ -306,6 +323,7 @@ export function stubIntegrate(input: IntegratorInput): IntegratorOutput {
     prUrl: 'stub://pr/placeholder',
     branch: `feat/${input.taskId}-stub`,
     prNumber: 0,
+    ...(input.issueRef ? { issueRef: input.issueRef } : {}),
   };
 }
 
@@ -315,7 +333,7 @@ export async function captureProducedChange(
 ): Promise<ProducedChangeArtifact> {
   const { execGit: git, resolveRunCwd } = deps;
   const cwd = await resolveRunCwd(input.runId, input.taskId);
-  const branch = branchName(input.taskId, input.title);
+  const branch = branchName(input.taskId, input.title, input.issueRef);
 
   if (branchExists(git, cwd, branch)) {
     git(['switch', branch], cwd);
@@ -325,13 +343,14 @@ export async function captureProducedChange(
 
   git(['add', '-A'], cwd);
   if (stagedDiffPresent(git, cwd)) {
-    git(['commit', '-m', `feat: ${input.title}`], cwd);
+    git(['commit', '-m', commitMessage(input.title, input.issueRef)], cwd);
   }
 
   const headSha = git(['rev-parse', 'HEAD'], cwd).trim();
   return {
     branch,
     headSha,
+    ...(input.issueRef ? { issueRef: input.issueRef } : {}),
     worktreePath: cwd,
     ...(input.artifactRef ? { artifactRef: input.artifactRef } : {}),
   };
@@ -364,7 +383,7 @@ export async function integrate(
   // branchExists→switch path below is a no-op and the dirty-tree `switch -c origin/<base>` (which
   // failed when the base checkout carried prior-run changes) is never taken.
   const cwd = await resolveRunCwd(input.runId, input.taskId);
-  const branch = branchName(input.taskId, input.title);
+  const branch = branchName(input.taskId, input.title, input.issueRef);
 
   // 1. Derive owner/repo
   const ownerRepoResult = resolveOwnerRepo(git, cwd);
@@ -387,7 +406,7 @@ export async function integrate(
   // 5. Commit decision (B4 replay safety)
   if (stagedDiffPresent(git, cwd)) {
     // Commit — NO Co-Authored-By, NO summary footer (MEMORY)
-    const commitMsg = `feat: ${input.title}`;
+    const commitMsg = commitMessage(input.title, input.issueRef);
     git(['commit', '-m', commitMsg], cwd);
   } else {
     // No staged diff — check if branch is ahead of origin/<base>
@@ -418,10 +437,10 @@ export async function integrate(
   git(['push', '-u', 'origin', branch], cwd);
 
   // 7. Find-or-create PR
-  const prResult = findOrCreatePr(ownerRepo, branch, input.base, input.title, gh);
+  const prResult = findOrCreatePr(ownerRepo, branch, input.base, input.title, input.issueRef, gh);
   if ('needsHuman' in prResult) return prResult;
 
-  return { prUrl: prResult.prUrl, branch, prNumber: prResult.prNumber };
+  return { prUrl: prResult.prUrl, branch, prNumber: prResult.prNumber, ...(input.issueRef ? { issueRef: input.issueRef } : {}) };
 }
 
 async function integrateProducedChange(
@@ -432,6 +451,7 @@ async function integrateProducedChange(
   const { execGit: git, execGh: gh } = deps;
   const cwd = change.worktreePath ?? await deps.resolveRunCwd(input.runId, input.taskId);
   const branch = change.branch;
+  const issueRef = change.issueRef ?? input.issueRef;
 
   const ownerRepoResult = resolveOwnerRepo(git, cwd);
   if ('needsHuman' in ownerRepoResult) return ownerRepoResult;
@@ -446,6 +466,7 @@ async function integrateProducedChange(
       prUrl: existing.prUrl,
       branch,
       prNumber: existing.prNumber,
+      ...(issueRef ? { issueRef } : {}),
       headSha: change.headSha,
       status: 'noop',
       message: 'nothing to integrate — produced head already pushed and equals PR head',
@@ -468,17 +489,19 @@ async function integrateProducedChange(
       prUrl: existing.prUrl,
       branch,
       prNumber: existing.prNumber,
+      ...(issueRef ? { issueRef } : {}),
       headSha: change.headSha,
       status: 'pushed',
     };
   }
 
-  const created = createPr(ownerRepo, branch, input.base, input.title, gh);
+  const created = createPr(ownerRepo, branch, input.base, input.title, issueRef, gh);
   if ('needsHuman' in created) return created;
   return {
     prUrl: created.prUrl,
     branch,
     prNumber: created.prNumber,
+    ...(issueRef ? { issueRef } : {}),
     headSha: change.headSha,
     status: 'pushed',
   };
@@ -490,6 +513,7 @@ export type ConfirmMergeOutput = {
   merged: true;
   prNumber: number;
   prUrl: string;
+  issueRef?: IssueRef;
 };
 
 /** PR view shape for the merge decision. NOTE: gh has NO `merged` JSON field — `state` is the source
@@ -523,7 +547,7 @@ export async function confirmMerge(
 ): Promise<ConfirmMergeOutput | IntegratorBlocked> {
   const { execGit: git, execGh: gh, resolveRunCwd } = deps;
   const cwd = await resolveRunCwd(input.runId, input.taskId);
-  const branch = branchName(input.taskId, input.title);
+  const branch = branchName(input.taskId, input.title, input.issueRef);
 
   const ownerRepoResult = resolveOwnerRepo(git, cwd);
   if ('needsHuman' in ownerRepoResult) return ownerRepoResult;
@@ -539,7 +563,7 @@ export async function confirmMerge(
   };
 
   const pr = view();
-  if (pr.state === 'MERGED') return { merged: true, prNumber: pr.number, prUrl: pr.url };
+  if (pr.state === 'MERGED') return { merged: true, prNumber: pr.number, prUrl: pr.url, ...(input.issueRef ? { issueRef: input.issueRef } : {}) };
 
   if (pr.state !== 'OPEN') {
     return { needsHuman: true, lesson: `PR #${pr.number} is ${pr.state} (not OPEN) and not merged — resolve manually` };
@@ -582,7 +606,7 @@ export async function confirmMerge(
   }
 
   const after = view();
-  if (after.state === 'MERGED') return { merged: true, prNumber: after.number, prUrl: after.url };
+  if (after.state === 'MERGED') return { merged: true, prNumber: after.number, prUrl: after.url, ...(input.issueRef ? { issueRef: input.issueRef } : {}) };
   return { needsHuman: true, lesson: `PR #${after.number} merge did not take effect (state=${after.state}) — verify manually` };
 }
 
@@ -601,6 +625,7 @@ export type PrFeedback = {
   headSha: string;
   /** Readiness facts captured from the live PR snapshot used for this routing decision. */
   evidence: string[];
+  issueRef?: IssueRef;
   /** review_changes (unresolved threads) > ci_changes (failing checks) > clean (nothing actionable). */
   verdict: 'review_changes' | 'ci_changes' | 'clean';
   ciFailures: CiFailure[];
@@ -617,7 +642,7 @@ function envInt(name: string, fallback: number): number {
 /** Injectable timing + collector seam so the unit tests drive pollPr without real gh/sleep. */
 export type PollPrDeps = IntegratorDeps & {
   /** Resolve PR readiness (defaults to the live `collectPrReadiness`). */
-  collect?: (repo: string, branch: string, base: string, execGh: ExecGhFn) => Promise<PollPrReadiness>;
+  collect?: (repo: string, branch: string, base: string, execGh: ExecGhFn, issueRef?: IssueRef) => Promise<PollPrReadiness>;
   /** Sleep between polls (defaults to a real timer). */
   sleep?: (ms: number) => Promise<void>;
   /** Max poll attempts before a pending block (defaults to {@link POLL_PR_MAX_POLLS}). */
@@ -640,12 +665,18 @@ export type PollPrReadiness = {
   evidence: string[];
 };
 
-function defaultCollect(repo: string, branch: string, base: string, execGh: ExecGhFn): Promise<PollPrReadiness> {
+function defaultCollect(
+  repo: string,
+  branch: string,
+  base: string,
+  execGh: ExecGhFn,
+  issueRef?: IssueRef,
+): Promise<PollPrReadiness> {
   // pollPr classifies by CI checks + unresolved review THREADS only — it does not read the PR comment
   // feed, so suppress the `api repos/.../{reviews,comments}` calls (`includeComments: false`). Those
   // extra calls are pure overhead here and the review-thread query already carries the actionable
   // feedback the loop acts on.
-  return collectPrReadiness({ repo, headBranch: branch, baseBranch: base, includeReviewThreads: true, includeComments: false }, execGh).then(
+  return collectPrReadiness({ repo, headBranch: branch, baseBranch: base, issueRef, includeReviewThreads: true, includeComments: false }, execGh).then(
     (r): PollPrReadiness => ({
       pr: { number: r.pr.number, headSha: r.pr.headSha },
       checks: { pending: r.checks.pending, fail: r.checks.fail, list: r.checks.list },
@@ -683,7 +714,7 @@ export async function pollPr(
   const intervalMs = deps.pollIntervalMs ?? envInt('REVO_POLL_PR_INTERVAL_MS', 30_000);
 
   const cwd = await resolveRunCwd(input.runId, input.taskId);
-  const branch = branchName(input.taskId, input.title);
+  const branch = branchName(input.taskId, input.title, input.issueRef);
 
   const ownerRepoResult = resolveOwnerRepo(git, cwd);
   if ('needsHuman' in ownerRepoResult) return ownerRepoResult;
@@ -691,7 +722,7 @@ export async function pollPr(
 
   let readiness: PollPrReadiness | undefined;
   for (let i = 0; i < maxPolls; i++) {
-    readiness = await collect(ownerRepo, branch, input.base, gh);
+    readiness = await collect(ownerRepo, branch, input.base, gh, input.issueRef);
     // Terminal once nothing is pending and at least one check has registered (matches pr-readiness).
     if (readiness.checks.pending.length === 0 && readiness.checks.list.length > 0) break;
     readiness = undefined;
@@ -726,7 +757,7 @@ export async function pollPr(
     const reviewGracePolls = deps.reviewGracePolls ?? envInt('REVO_POLL_PR_REVIEW_GRACE_POLLS', 4);
     for (let i = 0; i < reviewGracePolls && settled.reviewThreads.items.length === 0; i++) {
       await sleep(intervalMs);
-      settled = await collect(ownerRepo, branch, input.base, gh);
+      settled = await collect(ownerRepo, branch, input.base, gh, input.issueRef);
     }
   }
 
@@ -776,6 +807,7 @@ export async function pollPr(
     prNumber: settled.pr.number ?? null,
     headSha: settled.pr.headSha,
     evidence: [...settled.evidence, `PR headSha=${settled.pr.headSha}`, `pollPr verdict=${verdict}`],
+    ...(input.issueRef ? { issueRef: input.issueRef } : {}),
     verdict,
     ciFailures,
     reviewThreads,

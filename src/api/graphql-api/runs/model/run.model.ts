@@ -1,4 +1,5 @@
 import { Field, ID, Int, ObjectType } from '@nestjs/graphql';
+import { GraphQLJSON } from 'graphql-scalars';
 
 @ObjectType()
 export class RunModel {
@@ -22,6 +23,9 @@ export class RunModel {
 
   @Field(() => [String])
   repos!: string[];
+
+  @Field(() => GraphQLJSON, { nullable: true })
+  issueRef?: unknown;
 
   @Field(() => Date)
   createdAt!: Date;

@@ -4,6 +4,7 @@ import {
   type PrReadinessInput,
   type PrReadinessResult,
 } from '../poller/pr-readiness-core.js';
+import { normalizeIssueRef } from '../run/issue-ref.js';
 
 export type GetPrReadinessInput = {
   repo: string;
@@ -11,6 +12,7 @@ export type GetPrReadinessInput = {
   headBranch?: string;
   baseBranch?: string;
   sonarProject?: string;
+  issueRef?: unknown;
   includeComments?: boolean;
   includeReviewThreads?: boolean;
 };
@@ -27,8 +29,8 @@ export type PrFeedbackQueue = Pick<
 
 @Injectable()
 export class PrReadinessService {
-  getPrReadiness(input: GetPrReadinessInput): Promise<PrReadinessResult> {
-    return collectPrReadiness(this.toCoreInput(input));
+  async getPrReadiness(input: GetPrReadinessInput): Promise<PrReadinessResult> {
+    return collectPrReadiness(normalizePrReadinessInput(input));
   }
 
   async listPrFeedback(input: GetPrReadinessInput): Promise<PrFeedbackQueue> {
@@ -36,15 +38,17 @@ export class PrReadinessService {
     return readiness.feedback;
   }
 
-  private toCoreInput(input: GetPrReadinessInput): PrReadinessInput {
-    return {
-      repo: input.repo,
-      prNumber: input.prNumber,
-      headBranch: input.headBranch,
-      baseBranch: input.baseBranch ?? 'master',
-      sonarProject: input.sonarProject,
-      includeComments: input.includeComments ?? true,
-      includeReviewThreads: input.includeReviewThreads ?? true,
-    };
-  }
+}
+
+export function normalizePrReadinessInput(input: GetPrReadinessInput): PrReadinessInput {
+  return {
+    repo: input.repo,
+    prNumber: input.prNumber,
+    headBranch: input.headBranch,
+    baseBranch: input.baseBranch ?? 'master',
+    sonarProject: input.sonarProject,
+    issueRef: normalizeIssueRef(input.issueRef, 'issueRef'),
+    includeComments: input.includeComments ?? true,
+    includeReviewThreads: input.includeReviewThreads ?? true,
+  };
 }

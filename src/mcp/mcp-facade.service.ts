@@ -109,6 +109,7 @@ export class McpFacadeService {
     playbookId?: string;
     pipelineId?: string;
     params?: Record<string, unknown>;
+    issueRef?: { repo: string; number: number; url: string };
     priority?: number;
     start?: boolean;
   }) {
@@ -275,6 +276,7 @@ export class McpFacadeService {
     headBranch?: string;
     baseBranch?: string;
     sonarProject?: string;
+    issueRef?: { repo: string; number: number; url: string };
     includeComments?: boolean;
     includeReviewThreads?: boolean;
   }) {
@@ -287,6 +289,7 @@ export class McpFacadeService {
     headBranch?: string;
     baseBranch?: string;
     sonarProject?: string;
+    issueRef?: { repo: string; number: number; url: string };
     includeComments?: boolean;
     includeReviewThreads?: boolean;
   }) {

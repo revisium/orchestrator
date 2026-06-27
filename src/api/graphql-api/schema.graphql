@@ -117,6 +117,7 @@ input AnswerQuestionInput {
 
 input CreateRunInput {
   description: String
+  issueRef: JSON
   params: JSON
   pipelineId: String
   playbookId: String
@@ -357,6 +358,7 @@ type PrInfoModel {
   mergeState: String!
   number: Int
   state: String!
+  title: String!
   url: String!
 }
 
@@ -365,6 +367,7 @@ input PrReadinessInput {
   headBranch: String
   includeComments: Boolean
   includeReviewThreads: Boolean
+  issueRef: JSON
   prNumber: Int
   repo: String!
   sonarProject: String
@@ -375,6 +378,7 @@ type PrReadinessModel {
   ciSummary: JSON!
   evidence: [String!]!
   feedback: PrFeedbackModel!
+  issueRef: JSON
   nextAction: String!
   pr: PrInfoModel!
   providerState: JSON!
@@ -641,6 +645,7 @@ type RunModel {
   digest: RunDigestModel!
   events(after: String, first: Int! = 50, type: String): RunEventConnection!
   id: ID!
+  issueRef: JSON
   priority: Int!
   progress: RunProgressModel!
   repos: [String!]!

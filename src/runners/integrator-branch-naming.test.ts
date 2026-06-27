@@ -24,6 +24,21 @@ test('shortId: extracts the segment after the last underscore', () => {
   assert.ok(result.startsWith('feat/abcd1234-'), `expected abcd1234 prefix, got: ${result}`);
 });
 
+test('issueRef: branch keeps feat/<shortId>- prefix and includes issue number', () => {
+  const result = branchName(
+    'task_20260627T000000000Z_issue-ref-traceability_abcd1234',
+    'Issue ref traceability',
+    {
+      repo: 'revisium/orchestrator',
+      number: 147,
+      url: 'https://github.com/revisium/orchestrator/issues/147',
+    },
+  );
+
+  assert.equal(result, 'feat/abcd1234-issue-147-issue-ref-traceability');
+  assert.ok(result.startsWith('feat/abcd1234-'));
+});
+
 // ─── taskBranchPrefix ─────────────────────────────────────────────────────────
 
 test('taskBranchPrefix: returns feat/<shortId>- for a canonical taskId', () => {

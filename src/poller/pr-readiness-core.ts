@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { accessSync, constants } from 'node:fs';
+import type { IssueRef } from '../run/issue-ref.js';
 
 export type PrReadinessVerdict =
   | 'ready'
@@ -24,6 +25,7 @@ export type PrReadinessInput = {
   headBranch?: string;
   baseBranch?: string;
   sonarProject?: string;
+  issueRef?: IssueRef;
   includeComments?: boolean;
   includeReviewThreads?: boolean;
 };
@@ -34,6 +36,7 @@ export type PollInput = {
   head_branch?: string;
   base_branch?: string;
   sonar_project?: string;
+  issue_ref?: IssueRef;
   poll_count: number;
   poll_interval_ms?: number;
   max_polls?: number;
@@ -97,6 +100,7 @@ export type CiSummary = {
   mergeStateStatus?: string;
   reviewDecision?: string;
   mergeable?: string;
+  issueRef?: IssueRef;
   sonar_issues: SonarIssue[];
   sonar_hotspots_to_review: SonarHotspot[];
   sonar_unavailable?: boolean;
@@ -113,6 +117,7 @@ type PrViewData = {
   baseRefName?: string;
   headRefName?: string;
   headRefOid?: string;
+  title?: string;
   statusCheckRollup: UnknownCheckNode[] | null;
   mergeStateStatus?: string;
   reviewDecision?: string;
@@ -270,7 +275,7 @@ function resolvePrByBranch(
 function fetchPrView(prNumber: number, repo: string, execGh: ExecGhFn): PrViewData {
   const raw = execGh([
     'pr', 'view', String(prNumber), '--repo', repo,
-    '--json', 'number,url,state,isDraft,baseRefName,headRefName,headRefOid,statusCheckRollup,mergeStateStatus,reviewDecision,mergeable',
+    '--json', 'number,url,state,isDraft,baseRefName,headRefName,headRefOid,title,statusCheckRollup,mergeStateStatus,reviewDecision,mergeable',
   ]);
   return parseGhJson<PrViewData>(raw, `pr view #${prNumber}`);
 }
@@ -750,6 +755,24 @@ function providerWaitFeedback(state: ReturnType<typeof providerState>, botCommen
   }];
 }
 
+function issueLinkageFeedback(
+  issueRef: IssueRef | undefined,
+  pr: { head?: string; title?: string },
+) {
+  if (!issueRef) return [];
+  const issueBranch = `issue-${issueRef.number}`;
+  const issueTag = `#${issueRef.number}`;
+  const missing: string[] = [];
+  if (!pr.head?.includes(issueBranch)) missing.push(`branch missing ${issueBranch}`);
+  if (!pr.title?.includes(issueTag)) missing.push(`title missing ${issueTag}`);
+  if (missing.length === 0) return [];
+  return [{
+    source: 'issue_ref_linkage',
+    summary: `PR is missing issueRef linkage for ${issueTag}`,
+    evidence: `${missing.join('; ')} (head=${pr.head ?? ''}, title=${pr.title ?? ''})`,
+  }];
+}
+
 function buildFeedback(input: {
   checks: ReturnType<typeof compactCheckLists>;
   providerState: ReturnType<typeof providerState>;
@@ -760,6 +783,8 @@ function buildFeedback(input: {
   humanComments: CommentEntry[];
   botComments: CommentEntry[];
   coderabbitReviews?: ReviewEntry[];
+  issueRef?: IssueRef;
+  pr?: { head?: string; title?: string };
 }) {
   const developerFixes: DeveloperFix[] = [
     ...input.checks.fail.map((name) => ({ source: 'ci', summary: `Fix failing check: ${name}`, evidence: name })),
@@ -820,6 +845,7 @@ function buildFeedback(input: {
       ? [{ source: 'github_review_decision', summary: `Review decision is ${input.reviewDecision}` }]
       : []),
     ...(input.sonar.unavailable ? [{ source: 'sonar', summary: 'Sonar was configured but unavailable.' }] : []),
+    ...issueLinkageFeedback(input.issueRef, input.pr ?? {}),
   ];
 
   const ignoredNoise = input.botComments
@@ -844,6 +870,7 @@ export type PrReadinessResult = {
     base: string;
     head: string;
     headSha: string;
+    title: string;
     mergeState: string;
   };
   checks: {
@@ -870,6 +897,7 @@ export type PrReadinessResult = {
   evidence: string[];
   feedback: ReturnType<typeof buildFeedback>;
   ciSummary: CiSummary;
+  issueRef?: IssueRef;
 };
 
 function emptyPr(prNumber?: number, state = ''): PrReadinessResult['pr'] {
@@ -881,6 +909,7 @@ function emptyPr(prNumber?: number, state = ''): PrReadinessResult['pr'] {
     base: '',
     head: '',
     headSha: '',
+    title: '',
     mergeState: '',
   };
 }
@@ -894,6 +923,7 @@ function prFromView(prNumber: number, view?: PrViewData): PrReadinessResult['pr'
     base: view?.baseRefName ?? '',
     head: view?.headRefName ?? '',
     headSha: view?.headRefOid ?? '',
+    title: view?.title ?? '',
     mergeState: view?.mergeStateStatus ?? '',
   };
 }
@@ -915,6 +945,7 @@ function buildEmptyFeedback(input: {
   includeReviewThreads: boolean;
   reviewDecision?: string;
   reviewThreads?: PrReadinessResult['reviewThreads'];
+  issueRef?: IssueRef;
 }) {
   return buildFeedback({
     checks: compactCheckLists([]),
@@ -925,6 +956,7 @@ function buildEmptyFeedback(input: {
     humanReviews: [],
     humanComments: [],
     botComments: [],
+    issueRef: input.issueRef,
   });
 }
 
@@ -942,7 +974,8 @@ function buildMergedReadiness(input: PrReadinessInput, resolved: Extract<OpenPrR
     nextAction: 'none',
     evidence: [`PR #${resolved.prNumber} is merged.`],
     feedback: buildEmptyFeedback({ sonarConfigured, includeReviewThreads }),
-    ciSummary: emptyCiSummary(true),
+    ciSummary: { ...emptyCiSummary(true), ...(input.issueRef ? { issueRef: input.issueRef } : {}) },
+    ...(input.issueRef ? { issueRef: input.issueRef } : {}),
   };
 }
 
@@ -961,7 +994,8 @@ function buildNeedsHumanReadiness(input: PrReadinessInput, resolved: Extract<Ope
     nextAction: 'human_decision',
     evidence: [resolved.lesson],
     feedback: { ...feedback, humanDecisions: [{ source: 'pr_resolution', summary: resolved.lesson }] },
-    ciSummary: emptyCiSummary(false),
+    ciSummary: { ...emptyCiSummary(false), ...(input.issueRef ? { issueRef: input.issueRef } : {}) },
+    ...(input.issueRef ? { issueRef: input.issueRef } : {}),
   };
 }
 
@@ -972,6 +1006,7 @@ function buildWaitingReadiness(input: {
   ci: ReturnType<typeof collectCiChecks>;
   reviewThreads: PrReadinessResult['reviewThreads'];
   sonarConfigured: boolean;
+  issueRef?: IssueRef;
   evidence: string[];
   isDraft?: boolean;
 }): PrReadinessResult {
@@ -1001,6 +1036,8 @@ function buildWaitingReadiness(input: {
     humanReviews: [],
     humanComments: [],
     botComments: [],
+    issueRef: input.issueRef,
+    pr: { head: input.prView.headRefName, title: input.prView.title },
   });
 
   // buildFeedback -> providerWaitFeedback classifies from providerState, but on the pending path
@@ -1031,12 +1068,14 @@ function buildWaitingReadiness(input: {
       ci_passed: false,
       checks: input.ci.checks,
       ...(input.isDraft ? { isDraft: true } : {}),
+      ...(input.issueRef ? { issueRef: input.issueRef } : {}),
       sonar_issues: [],
       sonar_hotspots_to_review: [],
       human_reviews: [],
       human_comments: [],
       bot_comments: [],
     },
+    ...(input.issueRef ? { issueRef: input.issueRef } : {}),
   };
 }
 
@@ -1092,6 +1131,7 @@ export async function collectPrReadiness(
       ci,
       reviewThreads,
       sonarConfigured,
+      issueRef: input.issueRef,
       evidence: [`PR #${prNumber} is still draft.`],
       isDraft: true,
     });
@@ -1105,6 +1145,7 @@ export async function collectPrReadiness(
       ci,
       reviewThreads,
       sonarConfigured,
+      issueRef: input.issueRef,
       evidence: ci.pendingNames.length > 0 ? [`Pending checks: ${ci.pendingNames.join(', ')}`] : ['No check rollup entries are registered yet.'],
     });
   }
@@ -1130,6 +1171,8 @@ export async function collectPrReadiness(
     humanComments: comments.human_comments,
     botComments: comments.bot_comments,
     coderabbitReviews: comments.coderabbit_reviews,
+    issueRef: input.issueRef,
+    pr: { head: prView.headRefName, title: prView.title },
   });
   const ciSummary: CiSummary = {
     ci_passed: ci.ci_passed,
@@ -1137,6 +1180,7 @@ export async function collectPrReadiness(
     mergeStateStatus: prView.mergeStateStatus,
     reviewDecision: prView.reviewDecision,
     mergeable: prView.mergeable,
+    ...(input.issueRef ? { issueRef: input.issueRef } : {}),
     sonar_issues: sonar.issues,
     sonar_hotspots_to_review: sonar.hotspots,
     human_reviews: comments.human_reviews,
@@ -1160,6 +1204,7 @@ export async function collectPrReadiness(
     evidence: [
       `PR #${prNumber} state=${prView.state ?? 'unknown'} draft=${Boolean(prView.isDraft)}`,
       `checks pass=${checkLists.pass.length} fail=${checkLists.fail.length} pending=${checkLists.pending.length}`,
+      ...(input.issueRef ? [`issueRef #${input.issueRef.number} expected in branch and title`] : []),
       ...(providers.codeRabbit?.reason === 'provider_limit' ? ['CodeRabbit provider/rate limit comment detected.'] : []),
       ...(verdict === 'ready' && hasInformationalProviderWait
         ? ['Provider wait is informational (stale CodeRabbit rate-limit comment); not blocking readiness.']
@@ -1167,6 +1212,7 @@ export async function collectPrReadiness(
     ],
     feedback,
     ciSummary,
+    ...(input.issueRef ? { issueRef: input.issueRef } : {}),
   };
 }
 
@@ -1177,6 +1223,7 @@ export function toReadinessInput(input: PollInput): PrReadinessInput {
     headBranch: input.head_branch,
     baseBranch: input.base_branch,
     sonarProject: input.sonar_project,
+    issueRef: input.issue_ref,
     includeComments: true,
     includeReviewThreads: false,
   };
