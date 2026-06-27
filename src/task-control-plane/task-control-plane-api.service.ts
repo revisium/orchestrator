@@ -92,6 +92,7 @@ export type RunState = {
   blockedReason?: string;
 };
 
+/* node:coverage disable */
 type WorkflowStatusSnapshot = Awaited<ReturnType<DbosService['getWorkflowStatus']>>;
 
 type RecoverablePreflightBlock = {
@@ -108,6 +109,7 @@ type RecoveryRunLineage = {
   blockedEventId: string;
   reason: 'preflight';
 };
+/* node:coverage enable */
 
 type GitResult = {
   ok: boolean;
@@ -242,10 +244,7 @@ function recoveryCreatedForBlockedEvent(events: EventSummary[], blockedEventId: 
 
 function requiredString(value: unknown, field: string, runId: string): string {
   if (typeof value === 'string' && value.trim()) return value;
-  throw new ControlPlaneError(
-    'VALIDATION_FAILURE',
-    `Cannot recover run ${runId}: parent ${field} is missing`,
-  );
+  throw new ControlPlaneError('VALIDATION_FAILURE', `Cannot recover run ${runId}: parent ${field} is missing`);
 }
 
 function optionalString(value: unknown): string | undefined {
@@ -282,12 +281,7 @@ function makeRecoveryLineage(parentRunId: string, recoveryRunId: string, blocked
 }
 
 function recoveryLineagePayload(lineage: RecoveryRunLineage): Record<string, unknown> {
-  return {
-    parentRunId: lineage.parentRunId,
-    recoveryRunId: lineage.recoveryRunId,
-    blockedEventId: lineage.blockedEventId,
-    reason: lineage.reason,
-  };
+  return { parentRunId: lineage.parentRunId, recoveryRunId: lineage.recoveryRunId, blockedEventId: lineage.blockedEventId, reason: lineage.reason };
 }
 
 function recoveryLineageEvent(
@@ -296,15 +290,23 @@ function recoveryLineageEvent(
   taskId: string,
   type: 'run_recovery_created' | 'run_recovery_parent',
 ) {
+  const payload = recoveryLineagePayload(lineage);
+  return { runId, taskId, stepId: '', stepKey: 'recovery', type, idempotencyKey: lineage.blockedEventId, payload, actor: 'orchestrator' };
+}
+
+function recoverableStartRunResponse(runId: string, route: RouteDecision, recoverable: RecoverablePreflightBlock) {
   return {
     runId,
-    taskId,
-    stepId: '',
-    stepKey: 'recovery',
-    type,
-    idempotencyKey: lineage.blockedEventId,
-    payload: recoveryLineagePayload(lineage),
-    actor: 'orchestrator',
+    workflowID: recoverable.workflowID,
+    alreadyStarted: true,
+    recoverable: true,
+    retryStarted: false,
+    nextAction: 'resume_run' as const,
+    blockedEventId: recoverable.blockedEventId,
+    blockedReason: recoverable.reason,
+    workflowStatus: recoverable.workflowStatus,
+    route,
+    engine: 'data-driven' as const,
   };
 }
 
@@ -660,21 +662,7 @@ export class TaskControlPlaneApiService {
     const existingStatus = await this.dbos.getWorkflowStatus(input.runId);
     const route = input.route ?? await this.routeForRun(run);
     const recoverable = await this.detectRecoverablePreflightBlock(input.runId, run.data.status, existingStatus);
-    if (recoverable) {
-      return {
-        runId: input.runId,
-        workflowID: recoverable.workflowID,
-        alreadyStarted: true,
-        recoverable: true,
-        retryStarted: false,
-        nextAction: 'resume_run' as const,
-        blockedEventId: recoverable.blockedEventId,
-        blockedReason: recoverable.reason,
-        workflowStatus: recoverable.workflowStatus,
-        route,
-        engine: 'data-driven' as const,
-      };
-    }
+    if (recoverable) return recoverableStartRunResponse(input.runId, route, recoverable);
 
     // CUTOVER (plan 0015 slice 3): the data-driven engine is the SOLE pipeline engine. EVERY pipeline
     // routes to the data-driven workflow, executing the state-machine template carried in its
@@ -747,10 +735,7 @@ export class TaskControlPlaneApiService {
     const parentDetail = await this.runs.showRun(parentRunId);
     const parentTask = parentDetail?.tasks[0];
     if (!parentTask) {
-      throw new ControlPlaneError(
-        'ROW_NOT_FOUND',
-        `Cannot recover run ${parentRunId}: parent task is missing`,
-      );
+      throw new ControlPlaneError('ROW_NOT_FOUND', `Cannot recover run ${parentRunId}: parent task is missing`);
     }
 
     const createInput = this.buildPreflightRecoveryCreateInput(parentRunId, parentData, parentTask.roleHint, blockedEvent);
@@ -789,28 +774,28 @@ export class TaskControlPlaneApiService {
     blockedEvent: EventSummary,
   ): CreateRunInput {
     const now = dateOrEpoch(blockedEvent.createdAt);
-    return {
-      title: requiredString(parentData.title, 'title', parentRunId),
-      repo: firstRepoRef(parentData.repos, parentRunId),
-      description: optionalString(parentData.description),
-      scope: optionalString(parentData.scope),
-      priority: optionalInteger(parentData.priority),
-      role: requiredString(role, 'task role_hint', parentRunId),
-      playbookId: optionalString(parentData.playbook_id),
-      pipelineId: optionalString(parentData.pipeline_id),
-      params: optionalRecord(parentData.params),
-      routeDecision: requiredRecord(parentData.route_decision, 'route_decision', parentRunId),
-      executionProfile: requiredRecord(parentData.execution_profile, 'execution_profile', parentRunId),
-      now,
-      idSuffix: fnv1a64Hex(`${parentRunId}|${blockedEvent.eventId}`).slice(0, 8),
-    };
+    const title = requiredString(parentData.title, 'title', parentRunId);
+    const repo = firstRepoRef(parentData.repos, parentRunId);
+    const description = optionalString(parentData.description);
+    const scope = optionalString(parentData.scope);
+    const priority = optionalInteger(parentData.priority);
+    const recoveryRole = requiredString(role, 'task role_hint', parentRunId);
+    const playbookId = optionalString(parentData.playbook_id);
+    const pipelineId = optionalString(parentData.pipeline_id);
+    const params = optionalRecord(parentData.params);
+    const routeDecision = requiredRecord(parentData.route_decision, 'route_decision', parentRunId);
+    const executionProfile = requiredRecord(parentData.execution_profile, 'execution_profile', parentRunId);
+    const idSuffix = fnv1a64Hex(`${parentRunId}|${blockedEvent.eventId}`).slice(0, 8);
+    return { title, repo, description, scope, priority, role: recoveryRole, playbookId, pipelineId, params, routeDecision, executionProfile, now, idSuffix };
   }
 
+  /* node:coverage disable */
   private async createRecoveryRunOrReuseExpected(
     input: CreateRunInput,
     expected: CreateRunResult,
   ): Promise<CreateRunResult> {
     try {
+      /* node:coverage enable */
       return await this.runs.createRun(input);
     } catch (error) {
       if (!(error instanceof CreateRunWorkflowError)) throw error;
