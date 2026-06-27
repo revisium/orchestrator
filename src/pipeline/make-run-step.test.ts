@@ -16,7 +16,8 @@ import assert from 'node:assert/strict';
 import { makeRunStep, type RunStepDeps } from './pipeline.service.js';
 import { stubRunAgent } from '../worker/stub-runner.js';
 import { createRunAgent } from '../worker/runner-dispatch.js';
-import type { AttemptResult, RunAgent } from '../worker/runner.js';
+import { RunAgentError, type AttemptResult, type RunAgent } from '../worker/runner.js';
+import { RUNNER_IDLE_TIMEOUT_KIND } from '../worker/process-executor.js';
 import type { Role, ModelProfile } from '../control-plane/definitions.js';
 import type { Step } from '../control-plane/steps.js';
 import type { ControlPlaneDataAccess } from '../control-plane/data-access.js';
@@ -212,6 +213,40 @@ test('runner failure → step_failed event + a fail-closed BLOCKER attempt (neve
   assert.equal(harness.appendEventArgs.at(-1)?.type, 'step_failed');
   assert.equal(harness.appendAttemptInputs.at(-1)?.status, 'failed');
   assert.equal(harness.appendAttemptInputs.at(-1)?.verdict, 'BLOCKER');
+});
+
+test('runner failure envelope carries structured timeout classification and timing evidence', async () => {
+  const runId = 'run-timeout-envelope';
+  const { deps, harness } = buildRunStepDeps();
+  const timing = {
+    idleTimeoutMs: 600_000,
+    wallClockLimitMs: 3_600_000,
+    elapsedMs: 650_000,
+    idleMs: 600_001,
+    lastActivityAt: '2026-06-26T10:00:00.000Z',
+    inFlightOperationCount: 0,
+    stdoutBytes: 10,
+    stderrBytes: 2,
+    eventCount: 3,
+  };
+  deps.runAgent = async () => {
+    throw new RunAgentError('claude-code runner runner-idle-timeout', undefined, {
+      failureKind: RUNNER_IDLE_TIMEOUT_KIND,
+      retryableCandidate: true,
+      timing,
+    });
+  };
+  const runStep = makeRunStep(deps);
+
+  const result = await runStep(runId, 'developer', 'developer', { phase: 'implement' }, 'live');
+  const output = result.output as Record<string, unknown>;
+
+  assert.equal(result.needsHuman, true);
+  assert.equal(output.error, 'runner_failed');
+  assert.equal(output.failureKind, RUNNER_IDLE_TIMEOUT_KIND);
+  assert.equal(output.retryableCandidate, true);
+  assert.deepEqual(output.timing, timing);
+  assert.deepEqual(harness.appendAttemptInputs.at(-1)?.output, output);
 });
 
 test('attempt row surfaces the verdict + iteration (from stepKey) + a deterministic attemptId', async () => {

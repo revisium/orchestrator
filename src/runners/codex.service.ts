@@ -12,11 +12,9 @@ import { getConfig } from '../config.js';
 import { RunService } from '../revisium/run.service.js';
 import { createArtifactStore } from '../worker/artifact-store.js';
 import { createCodexRunner } from '../worker/codex-runner.js';
-import type { ProcessExecutor } from '../worker/process-executor.js';
+import { DEFAULT_RUNNER_WALL_CLOCK_LIMIT_MS, type ProcessExecutor } from '../worker/process-executor.js';
 import type { RunAgent } from '../worker/runner.js';
 import { PROCESS_EXECUTOR } from './tokens.js';
-
-const DEFAULT_TIMEOUT_MS = 600_000;
 
 @Injectable()
 export class CodexService {
@@ -30,7 +28,7 @@ export class CodexService {
     this.runner = createCodexRunner({
       executor,
       resolveCwd: this.runService.makeResolveCwd(),
-      timeoutMs: DEFAULT_TIMEOUT_MS,
+      timeoutMs: DEFAULT_RUNNER_WALL_CLOCK_LIMIT_MS,
       artifactStore: createArtifactStore(join(getConfig().dataDir, 'run-artifacts')),
     });
   }

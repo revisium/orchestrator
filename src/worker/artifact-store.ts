@@ -1,6 +1,7 @@
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { redactTokens } from '../runners/gh-identity.js';
+import type { RunnerTimeoutEvidence, RunnerTimeoutFailureKind } from './process-executor.js';
 
 export type ProcessArtifactRef = {
   ref: string;
@@ -21,7 +22,14 @@ export type ProcessArtifactWriter = {
   ref: ProcessArtifactRef;
   appendStdout(chunk: string): void;
   appendStderr(chunk: string): void;
-  finish(info: { code?: number | null; timedOut?: boolean; error?: string; finishedAt?: Date }): ProcessArtifactSnapshot;
+  finish(info: {
+    code?: number | null;
+    timedOut?: boolean;
+    timeoutKind?: RunnerTimeoutFailureKind;
+    timeoutEvidence?: RunnerTimeoutEvidence;
+    error?: string;
+    finishedAt?: Date;
+  }): ProcessArtifactSnapshot;
   snapshot(): ProcessArtifactSnapshot;
 };
 
@@ -35,6 +43,8 @@ export type ProcessArtifactStart = {
   args: string[];
   cwd: string;
   timeoutMs: number;
+  idleTimeoutMs?: number;
+  wallClockLimitMs?: number;
   startedAt?: Date;
 };
 
@@ -106,6 +116,8 @@ export function createArtifactStore(rootDir: string, opts: { tailBytes?: number 
         args: input.args,
         cwd: input.cwd,
         timeoutMs: input.timeoutMs,
+        ...(input.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: input.idleTimeoutMs }),
+        ...(input.wallClockLimitMs === undefined ? {} : { wallClockLimitMs: input.wallClockLimitMs }),
         startedAt: startedAt.toISOString(),
         status: 'running',
       });
@@ -143,11 +155,15 @@ export function createArtifactStore(rootDir: string, opts: { tailBytes?: number 
             args: input.args,
             cwd: input.cwd,
             timeoutMs: input.timeoutMs,
+            ...(input.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: input.idleTimeoutMs }),
+            ...(input.wallClockLimitMs === undefined ? {} : { wallClockLimitMs: input.wallClockLimitMs }),
             startedAt: startedAt.toISOString(),
             finishedAt: finishedAt.toISOString(),
             status,
             code: info.code ?? null,
             timedOut: Boolean(info.timedOut),
+            ...(info.timeoutKind === undefined ? {} : { timeoutKind: info.timeoutKind }),
+            ...(info.timeoutEvidence === undefined ? {} : { timeoutEvidence: info.timeoutEvidence }),
             error: safeError,
           });
           appendFileSync(
@@ -158,6 +174,8 @@ export function createArtifactStore(rootDir: string, opts: { tailBytes?: number 
               status,
               code: info.code ?? null,
               timedOut: Boolean(info.timedOut),
+              ...(info.timeoutKind === undefined ? {} : { timeoutKind: info.timeoutKind }),
+              ...(info.timeoutEvidence === undefined ? {} : { timeoutEvidence: info.timeoutEvidence }),
               error: safeError,
             }) + '\n',
             'utf8',

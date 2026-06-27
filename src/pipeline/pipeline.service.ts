@@ -35,7 +35,7 @@ import { redactTokens } from '../runners/gh-identity.js';
 import { RUN_AGENT } from '../runners/tokens.js';
 import { buildContext, ContextMissingError } from '../worker/build-context.js';
 import type { RunAgent, AttemptResult } from '../worker/runner.js';
-import { artifactsFromRunAgentError } from '../worker/runner.js';
+import { artifactsFromRunAgentError, failureMetadataFromRunAgentError } from '../worker/runner.js';
 import { fnv1a64Hex } from '../control-plane/steps.js';
 import { getConfig } from '../config.js';
 import type { AppendEventInput } from '../run/append-event.js';
@@ -249,12 +249,18 @@ export function makeRunStep(deps: RunStepDeps) {
       const durationMs = Math.max(0, clock() - startedAt);
       const reason = runnerFailureReason(err);
       const artifactFields = processArtifactFields(artifactsFromRunAgentError(err));
+      const failureMetadata = failureMetadataFromRunAgentError(err);
       const output = {
         verdict: 'BLOCKER',
         error: 'runner_failed',
         role,
         stepKey,
         reason,
+        ...(failureMetadata.failureKind ? { failureKind: failureMetadata.failureKind } : {}),
+        ...(failureMetadata.retryableCandidate === undefined
+          ? {}
+          : { retryableCandidate: failureMetadata.retryableCandidate }),
+        ...(failureMetadata.timing ? { timing: failureMetadata.timing } : {}),
       };
       await appendEvent({
         runId,
