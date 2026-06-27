@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { issueRefTag, normalizeIssueRef, normalizeIssueRefIntoParams } from './issue-ref.js';
+import { issueRefsEqual, issueRefTag, normalizeIssueRef, normalizeIssueRefIntoParams } from './issue-ref.js';
 
 const ISSUE_REF = {
   repo: 'revisium/orchestrator',
@@ -88,6 +88,14 @@ test('normalizeIssueRef keeps valid GitHub repo full names and issueRefTag forma
   assert.equal(dotRepo?.repo, 'org-name/.github');
 });
 
+test('issueRefsEqual treats repo casing as equivalent while number and url remain exact', () => {
+  const mixedCaseRepo = { ...ISSUE_REF, repo: 'Revisium/Orchestrator' };
+
+  assert.equal(issueRefsEqual(mixedCaseRepo, ISSUE_REF), true);
+  assert.equal(issueRefsEqual(mixedCaseRepo, { ...ISSUE_REF, number: 148 }), false);
+  assert.equal(issueRefsEqual(mixedCaseRepo, { ...ISSUE_REF, url: `${ISSUE_REF.url}?from=test` }), false);
+});
+
 test('normalizeIssueRefIntoParams stores top-level issueRef under public params', () => {
   assert.deepEqual(
     normalizeIssueRefIntoParams({ ticket: 'RV-147' }, ISSUE_REF),
@@ -98,6 +106,10 @@ test('normalizeIssueRefIntoParams stores top-level issueRef under public params'
 test('normalizeIssueRefIntoParams accepts matching params.issueRef and rejects conflicts', () => {
   assert.deepEqual(
     normalizeIssueRefIntoParams({ issueRef: ISSUE_REF }, { ...ISSUE_REF }),
+    { issueRef: ISSUE_REF },
+  );
+  assert.deepEqual(
+    normalizeIssueRefIntoParams({ issueRef: { ...ISSUE_REF, repo: 'Revisium/Orchestrator' } }, ISSUE_REF),
     { issueRef: ISSUE_REF },
   );
 

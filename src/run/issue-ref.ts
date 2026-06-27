@@ -68,7 +68,11 @@ export function normalizeIssueRef(value: unknown, source: IssueRefSource = 'issu
 }
 
 export function issueRefsEqual(left: IssueRef, right: IssueRef): boolean {
-  return left.repo === right.repo && left.number === right.number && left.url === right.url;
+  return (
+    left.repo.toLowerCase() === right.repo.toLowerCase() &&
+    left.number === right.number &&
+    left.url === right.url
+  );
 }
 
 export function normalizeIssueRefIntoParams(
