@@ -7,12 +7,26 @@ import {
   type DataDrivenTaskOpts,
   type RunnerTransientRetryPolicy,
 } from './data-driven-task.workflow.js';
-import { PipelineService } from './pipeline.service.js';
+import { PipelineService, resolveDevTasksConcurrency } from './pipeline.service.js';
 
 function restoreEnvVar(key: string, value: string | undefined): void {
   if (value === undefined) delete process.env[key];
   else process.env[key] = value;
 }
+
+test('resolveDevTasksConcurrency defaults to twenty concurrent dev-task workflows', () => {
+  assert.equal(resolveDevTasksConcurrency({}), 20);
+});
+
+test('resolveDevTasksConcurrency accepts positive integer overrides', () => {
+  assert.equal(resolveDevTasksConcurrency({ REVO_DEV_TASKS_CONCURRENCY: '8' }), 8);
+});
+
+test('resolveDevTasksConcurrency falls back to default for invalid overrides', () => {
+  for (const value of ['', ' ', '0', '-1', '1.5', '8workers', 'Infinity', 'not-a-number']) {
+    assert.equal(resolveDevTasksConcurrency({ REVO_DEV_TASKS_CONCURRENCY: value }), 20);
+  }
+});
 
 function buildStartDataDrivenTaskSubject() {
   let capturedOpts: DataDrivenTaskOpts | undefined;

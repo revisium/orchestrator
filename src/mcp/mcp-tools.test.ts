@@ -77,6 +77,26 @@ test('create_run schema accepts issueRef traceability metadata', async () => {
   assert.equal(schema.safeParse({ title: 'Task', repo: '.', start: false, issueRef: { ...issueRef, number: 0 } }).success, false);
 });
 
+test('pipeline MCP tools expose compact defaults with explicit detail opt-in', async () => {
+  const { z } = await import('zod');
+  const { server, tools } = makeServer();
+
+  registerRevoMcpTools(server as never, {} as McpFacadeService);
+
+  const listTool = tools.find((registered) => registered.name === 'list_pipelines');
+  const getTool = tools.find((registered) => registered.name === 'get_pipeline');
+  assert.ok(listTool);
+  assert.ok(getTool);
+  const listSchema = z.object(listTool.config.inputSchema as Record<string, never>);
+  const getSchema = z.object(getTool.config.inputSchema as Record<string, never>);
+  assert.equal(listSchema.safeParse({}).success, true);
+  assert.equal(listSchema.safeParse({ includeDetails: true }).success, true);
+  assert.equal(getSchema.safeParse({ pipelineId: 'pipe-1' }).success, true);
+  assert.equal(getSchema.safeParse({ pipelineId: 'pipe-1', includeDetails: true }).success, true);
+  assert.equal(listTool.config.description?.includes('Compact by default'), true);
+  assert.equal(getTool.config.description?.includes('Compact by default'), true);
+});
+
 test('observe_run handler forwards the request abort signal to the facade', async () => {
   const { server, tools } = makeServer();
   let received: { runId?: string; signal?: AbortSignal } | undefined;

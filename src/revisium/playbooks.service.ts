@@ -6,6 +6,9 @@ import { PlaybookInstaller, type PlaybookInstallOptions, type PlaybookInstallRes
 import { normalizeRouteGates } from '../pipeline/route-contract.js';
 import { REVISIUM_TRANSPORT_HEAD } from './tokens.js';
 
+const DEFAULT_PLAYBOOK_ID = 'revisium-default';
+const DEFAULT_PLAYBOOK_PACKAGE = '@revisium/orchestrator-default-playbook';
+
 export type PlaybookSummary = {
   id: string;
   name: string;
@@ -157,6 +160,10 @@ export class PlaybooksService {
     if (playbooks.length === 0) {
       throw new ControlPlaneError('ROW_NOT_FOUND', 'no installed playbook found');
     }
+    const defaultPlaybook = playbooks.find(
+      (playbook) => playbook.id === DEFAULT_PLAYBOOK_ID || playbook.packageName === DEFAULT_PLAYBOOK_PACKAGE,
+    );
+    if (defaultPlaybook) return defaultPlaybook;
     playbooks.sort((left, right) => left.id.localeCompare(right.id));
     return playbooks[0];
   }

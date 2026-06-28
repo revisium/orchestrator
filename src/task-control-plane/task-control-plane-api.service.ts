@@ -84,7 +84,7 @@ export type RunProgress = {
  */
 export type RunState = {
   runId: string;
-  state: 'pending_gate' | 'question' | 'running' | 'blocked' | 'failed' | 'completed' | 'retrying';
+  state: 'ready' | 'pending_gate' | 'question' | 'running' | 'blocked' | 'failed' | 'completed' | 'retrying';
   nextAction: string;
   runStatus: string;
   workflowStatus: string;
@@ -92,6 +92,8 @@ export type RunState = {
   latestBlockingEvent?: unknown;
   blockedReason?: string;
   issueRef?: IssueRef;
+  latestEventAt?: string;
+  latestEventType?: string;
 };
 
 /* node:coverage disable */
@@ -205,6 +207,40 @@ function summarizeAttempts(attempts: Array<{ inputTokens: number; outputTokens: 
 
 function normalizedRunStatus(status: string): string {
   return status === 'paused' ? 'blocked' : status;
+}
+
+function hasWorkflowProgress(events: EventSummary[]): boolean {
+  return events.some((event) => (
+    event.type.startsWith('step_')
+    || event.type.startsWith('attempt_')
+    || event.type.startsWith('gate_')
+    || event.type === 'pipeline_blocked'
+    || event.type === 'pr_polled'
+    || event.type === 'integrate_succeeded'
+  ));
+}
+
+function observedRunStatus(rowStatus: string, workflowStatus: string, events: EventSummary[]): string {
+  if (rowStatus !== 'ready') return rowStatus;
+  if (workflowStatus === 'SUCCESS') return 'completed';
+  if (workflowStatus === 'ERROR') return 'failed';
+  if (workflowStatus && workflowStatus !== 'NOT_STARTED') return 'running';
+  if (hasWorkflowProgress(events)) return 'running';
+  return rowStatus;
+}
+
+function observedTaskStatus(rowStatus: string, runStatus: string): string {
+  if (rowStatus !== 'ready') return rowStatus;
+  if (runStatus === 'running' || runStatus === 'completed' || runStatus === 'failed' || runStatus === 'cancelled') {
+    return runStatus;
+  }
+  return rowStatus;
+}
+
+function latestEventPulse(events: EventSummary[]): Pick<RunState, 'latestEventAt' | 'latestEventType'> {
+  const latest = [...events]
+    .sort((left, right) => dateOrEpoch(right.createdAt).getTime() - dateOrEpoch(left.createdAt).getTime())[0];
+  return latest ? { latestEventAt: latest.createdAt, latestEventType: latest.type } : {};
 }
 
 function payloadRecord(event: EventSummary): Record<string, unknown> | null {
@@ -1003,16 +1039,18 @@ export class TaskControlPlaneApiService {
   async getRunDigest(runId: string) {
     const detail = await this.runs.showRun(runId);
     if (!detail) throw new ControlPlaneError('ROW_NOT_FOUND', `run not found: ${runId}`);
-    const [events, attempts, inbox] = await Promise.all([
+    const [events, attempts, inbox, workflow] = await Promise.all([
       this.runs.listRunEvents(runId, { limit: 20 }),
       this.runs.listRunAttempts(runId, { limit: 100 }),
       this.inbox.listInbox({ runId, status: 'pending', limit: 50 }),
+      this.dbos.getWorkflowStatus(runId).catch(() => null),
     ]);
     const latestBlockingEvent = latestPipelineBlockedEvent(events);
     const blockedReason = latestBlockingEvent ? blockedReasonFromEvent(latestBlockingEvent) : undefined;
+    const runStatus = observedRunStatus(detail.run.status, workflow?.status ?? '', events);
     return {
-      run: detail.run,
-      tasks: detail.tasks,
+      run: { ...detail.run, status: runStatus },
+      tasks: detail.tasks.map((task) => ({ ...task, status: observedTaskStatus(task.status, runStatus) })),
       pendingInbox: inbox,
       latestEvents: events.slice(-10),
       usage: summarizeAttempts(attempts),
@@ -1046,16 +1084,20 @@ export class TaskControlPlaneApiService {
       this.runs.listRunEvents(runId, { limit: 20 }),
       this.dbos.getWorkflowStatus(runId),
     ]);
+    const workflowStatus = workflow?.status ?? '';
+    const runStatus = observedRunStatus(detail.run.status, workflowStatus, events);
+    const eventPulsePart = latestEventPulse(events);
     const gate = inbox.find((item) => item.kind === 'approval');
     if (gate) {
       return {
         runId,
         state: 'pending_gate',
         nextAction: 'resolve approval with approve_gate or reject_gate',
-        runStatus: detail.run.status,
-        workflowStatus: workflow?.status ?? '',
+        runStatus,
+        workflowStatus,
         inbox: gate,
         ...issueRefPart,
+        ...eventPulsePart,
       };
     }
     const question = inbox.find((item) => item.kind === 'question');
@@ -1064,20 +1106,21 @@ export class TaskControlPlaneApiService {
         runId,
         state: 'question',
         nextAction: 'answer question with answer_question',
-        runStatus: detail.run.status,
-        workflowStatus: workflow?.status ?? '',
+        runStatus,
+        workflowStatus,
         inbox: question,
         ...issueRefPart,
+        ...eventPulsePart,
       };
     }
     if (detail.run.status === 'completed') {
-      return { runId, state: 'completed', nextAction: 'none', runStatus: detail.run.status, workflowStatus: workflow?.status ?? '', ...issueRefPart };
+      return { runId, state: 'completed', nextAction: 'none', runStatus, workflowStatus, ...issueRefPart, ...eventPulsePart };
     }
     if (detail.run.status === 'failed') {
-      return { runId, state: 'failed', nextAction: 'inspect get_run_events/get_run_log', runStatus: detail.run.status, workflowStatus: workflow?.status ?? '', ...issueRefPart };
+      return { runId, state: 'failed', nextAction: 'inspect get_run_events/get_run_log', runStatus, workflowStatus, ...issueRefPart, ...eventPulsePart };
     }
     if (detail.run.status === 'cancelled') {
-      return { runId, state: 'blocked', nextAction: 'run was cancelled; create or resume a different run', runStatus: detail.run.status, workflowStatus: workflow?.status ?? '', ...issueRefPart };
+      return { runId, state: 'blocked', nextAction: 'run was cancelled; create or resume a different run', runStatus, workflowStatus, ...issueRefPart, ...eventPulsePart };
     }
     const blockingEvent = latestPipelineBlockedEvent(events);
     const blockedReason = blockingEvent ? blockedReasonFromEvent(blockingEvent) : undefined;
@@ -1086,10 +1129,11 @@ export class TaskControlPlaneApiService {
         runId,
         state: 'blocked',
         nextAction: 'inspect blocking event and decide whether to create a follow-up run',
-        runStatus: detail.run.status,
-        workflowStatus: workflow?.status ?? '',
+        runStatus,
+        workflowStatus,
         ...(blockedReason !== undefined ? { blockedReason } : {}),
         ...issueRefPart,
+        ...eventPulsePart,
       };
     }
     if (blockingEvent) {
@@ -1097,26 +1141,31 @@ export class TaskControlPlaneApiService {
         runId,
         state: 'blocked',
         nextAction: 'inspect blocking event and decide whether to create a follow-up run',
-        runStatus: detail.run.status,
-        workflowStatus: workflow?.status ?? '',
+        runStatus,
+        workflowStatus,
         latestBlockingEvent: blockingEvent,
         ...(blockedReason !== undefined ? { blockedReason } : {}),
         ...issueRefPart,
+        ...eventPulsePart,
       };
     }
     if (workflow?.status === 'ERROR') {
-      return { runId, state: 'failed', nextAction: 'inspect get_run_events/get_run_log', runStatus: detail.run.status, workflowStatus: workflow.status, ...issueRefPart };
+      return { runId, state: 'failed', nextAction: 'inspect get_run_events/get_run_log', runStatus, workflowStatus, ...issueRefPart, ...eventPulsePart };
     }
     if (workflow?.status === 'SUCCESS') {
-      return { runId, state: 'completed', nextAction: 'none', runStatus: detail.run.status, workflowStatus: workflow.status, ...issueRefPart };
+      return { runId, state: 'completed', nextAction: 'none', runStatus, workflowStatus, ...issueRefPart, ...eventPulsePart };
+    }
+    if (runStatus === 'ready') {
+      return { runId, state: 'ready', nextAction: 'start_run', runStatus, workflowStatus, ...issueRefPart, ...eventPulsePart };
     }
     return {
       runId,
       state: 'running',
       nextAction: 'wait_for_run again or inspect get_run_digest',
-      runStatus: detail.run.status,
-      workflowStatus: workflow?.status ?? '',
+      runStatus,
+      workflowStatus,
       ...issueRefPart,
+      ...eventPulsePart,
     };
   }
 

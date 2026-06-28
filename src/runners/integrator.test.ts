@@ -1566,6 +1566,22 @@ test('pollPr: all green, no threads → clean', async () => {
   if (!('needsHuman' in r)) assert.equal(r.verdict, 'clean');
 });
 
+test('pollPr: readiness human decision is not classified as clean', async () => {
+  const collect = async (): Promise<PollPrReadiness> => ({
+    ...readiness({ evidence: ['Review decision is CHANGES_REQUESTED'] }),
+    readinessVerdict: 'needs_human',
+    nextAction: 'human_decision',
+  } as PollPrReadiness);
+
+  const r = await pollPr(POLL_INPUT, pollDeps(collect, { reviewGracePolls: 0 }));
+
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) {
+    assert.equal(r.verdict, 'review_changes', 'human review decisions must route away from the merge gate');
+    assert.ok(r.evidence.some((item) => item.includes('readiness nextAction=human_decision')));
+  }
+});
+
 test('pollPr: checks pending until terminal → polls then classifies', async () => {
   let calls = 0;
   const collect = async (): Promise<PollPrReadiness> => {

@@ -63,14 +63,21 @@ import {
 const DEV_TASKS_QUEUE = 'dev-tasks';
 
 /**
- * Concurrency limit for the dev-tasks queue. Default 2; overridable via `REVO_DEV_TASKS_CONCURRENCY`
- * (a deployment throughput knob, and what lets the e2e crash-recovery suite hold several PENDING
- * runs at once — each parked run occupies a slot until recovered).
+ * Concurrency limit for the dev-tasks queue. Default 20; overridable via `REVO_DEV_TASKS_CONCURRENCY`.
+ * This is a workflow-slot limit, not a runner subprocess limit: parked human gates and long waits also
+ * occupy slots, so the default needs enough headroom for several long-lived runs while still bounding
+ * the worst-case burst of live agent/script effects until a separate runner semaphore exists.
  */
-const DEV_TASKS_CONCURRENCY = ((): number => {
-  const raw = Number.parseInt(process.env['REVO_DEV_TASKS_CONCURRENCY'] ?? '', 10);
-  return Number.isFinite(raw) && raw > 0 ? raw : 2;
-})();
+export function resolveDevTasksConcurrency(
+  env: Record<string, string | undefined> = process.env,
+): number {
+  const value = env['REVO_DEV_TASKS_CONCURRENCY']?.trim();
+  if (!value) return 20;
+  const raw = Number(value);
+  return Number.isSafeInteger(raw) && raw > 0 ? raw : 20;
+}
+
+const DEV_TASKS_CONCURRENCY = resolveDevTasksConcurrency();
 
 const RUNNER_FAILURE_REASON_MAX = 2_000;
 
