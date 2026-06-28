@@ -4,6 +4,7 @@ export const DEFAULT_PLAYBOOK_POLICY_DIAGNOSTIC_CODES = [
   'DEFAULT_POLICY_WRONG_PIPELINE',
   'DEFAULT_POLICY_CHANGE_HANDOFF_MISSING',
   'DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING',
+  'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
   'DEFAULT_POLICY_REVIEW_CHANGES_ROUTE_MISSING',
   'DEFAULT_POLICY_CI_CHANGES_ROUTE_MISSING',
   'DEFAULT_POLICY_BLOCKED_TERMINAL_MISSING',
@@ -64,6 +65,7 @@ export function validateDefaultFeatureDevelopmentPolicy(
   checkBlockedTerminal(template, sink);
   checkProducedChangeHandoff(template, sink);
   checkPrFreshnessWiring(template, sink);
+  checkMergeGateRecheckRouting(template, sink);
   checkReviewFeedbackLoop(template, sink);
   checkLoopExhaustionEscalation(template, sink);
 
@@ -180,6 +182,69 @@ function checkPrFreshnessWiring(template: Template, sink: PolicySink): void {
     consumerId: 'confirmMerge',
     producerId: 'mergeReadiness',
     as: 'mergeReadiness',
+  });
+}
+
+function checkMergeGateRecheckRouting(template: Template, sink: PolicySink): void {
+  expectGateOutcomes(template, sink, {
+    code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
+    nodeId: 'mergeGate',
+    outcomes: ['approved', 'recheck'],
+  });
+  expectRoute(template, sink, {
+    code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
+    nodeId: 'mergeGate',
+    verdict: 'recheck',
+    target: 'mergeRecheck',
+  });
+  expectScript(template, sink, {
+    code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
+    nodeId: 'mergeRecheck',
+    scriptRef: 'script:pollPr',
+    next: 'mergeRecheckRouter',
+    resultSchema: 'schema:prFeedback',
+    produces: 'prFeedback',
+  });
+  expectRoute(template, sink, {
+    code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
+    nodeId: 'mergeRecheckRouter',
+    verdict: 'clean',
+    target: 'blockedEnd',
+  });
+  expectRoute(template, sink, {
+    code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
+    nodeId: 'mergeRecheckRouter',
+    verdict: 'review_changes',
+    target: 'triage',
+  });
+  expectBoundedRoute(template, sink, {
+    code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
+    nodeId: 'mergeRecheckRouter',
+    verdict: 'ci_changes',
+    target: 'ciRework',
+    scope: 'ciLoop',
+    value: 3,
+  });
+  expectDefaultRoute(template, sink, {
+    code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
+    nodeId: 'mergeRecheckRouter',
+    target: 'blockedEnd',
+  });
+  expectConsume(template, sink, {
+    code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
+    consumerId: 'triage',
+    producerId: 'mergeRecheck',
+    as: 'recheckFeedback',
+    optional: true,
+    staleOk: true,
+  });
+  expectConsume(template, sink, {
+    code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
+    consumerId: 'ciRework',
+    producerId: 'mergeRecheck',
+    as: 'recheckFeedback',
+    optional: true,
+    staleOk: true,
   });
 }
 
@@ -372,6 +437,36 @@ function expectScript(
   });
 }
 
+function expectGateOutcomes(
+  template: Template,
+  sink: PolicySink,
+  rule: {
+    code: DefaultPlaybookPolicyDiagnosticCode;
+    nodeId: string;
+    outcomes: string[];
+  },
+): void {
+  const node = template.nodes[rule.nodeId];
+  if (
+    node?.kind === 'humanGate' &&
+    node.outcomes.length === rule.outcomes.length &&
+    node.outcomes.every((outcome, index) => outcome === rule.outcomes[index])
+  ) {
+    return;
+  }
+
+  sink.error(
+    rule.code,
+    `gate ${rule.nodeId} must map approve to ${rule.outcomes[0]} and reject to ${rule.outcomes.at(-1)}`,
+    {
+      nodeId: rule.nodeId,
+      path: 'outcomes',
+      expected: rule.outcomes.join(','),
+      actual: node?.kind === 'humanGate' ? node.outcomes.join(',') : describeNode(node),
+    },
+  );
+}
+
 function expectConsume(
   template: Template,
   sink: PolicySink,
@@ -420,6 +515,23 @@ function expectNodeNext(
     path: 'next',
     expected: rule.target,
     actual: node?.next ?? describeNode(template.nodes[rule.nodeId]),
+  });
+}
+
+function expectDefaultRoute(
+  template: Template,
+  sink: PolicySink,
+  rule: { code: DefaultPlaybookPolicyDiagnosticCode; nodeId: string; target: string },
+): void {
+  const node = routingNode(template, rule.nodeId);
+  const actual = node ? defaultBranchTarget(node) : undefined;
+  if (actual === rule.target) return;
+
+  sink.error(rule.code, `node ${rule.nodeId} must route default to ${rule.target}`, {
+    nodeId: rule.nodeId,
+    path: 'branches.default',
+    expected: `default -> ${rule.target}`,
+    actual: actual ?? (node ? 'missing default route' : 'missing routing node'),
   });
 }
 

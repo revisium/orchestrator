@@ -15,7 +15,7 @@ archive of superseded plans.
 | [pipeline-state-machine-v1.spec.md](./pipeline-state-machine-v1.spec.md) | Data-driven pipeline template grammar, reducer contract, validation, versioning, and diff classification |
 | [run-dataflow-v1.spec.md](./run-dataflow-v1.spec.md) | Step output production/consumption, prompt hydration, runtime output storage, and validation |
 | [human-gates-v1.spec.md](./human-gates-v1.spec.md) | Inbox-backed human gates, gate resolution, question gates, watch tools, and PR review-feedback gates |
-| [default-playbook-policy.spec.md](./default-playbook-policy.spec.md) | Bundled `feature-development` policy rules, static verifier scope, and #141-deferred behavior |
+| [default-playbook-policy.spec.md](./default-playbook-policy.spec.md) | Bundled `feature-development` policy rules, static verifier scope, and merge-gate recheck behavior |
 
 ## Authoring rules
 
