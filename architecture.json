@@ -1,0 +1,88 @@
+{
+  "perspectives": [
+    {
+      "label": "Runtime layers",
+      "description": "Revo runtime stack as documented in docs/architecture-overview.md (CLI -> host -> engine/DBOS -> Revisium data-access -> execution) and the boundaries in docs/repo-layer-contract.md.",
+      "groups": [
+        {
+          "label": "Front doors (transport)",
+          "description": "MCP (agent front door) and GraphQL/HTTP (UI/script front door). Must stay thin: no raw control-plane table access, no DBOS access.",
+          "patterns": ["src/mcp/**", "src/api/**", "src/http/**"]
+        },
+        {
+          "label": "Host & product services",
+          "description": "NestJS host daemon, product services, run lifecycle, pipeline wiring, pollers, task control-plane, observability.",
+          "patterns": [
+            "src/host/**",
+            "src/run/**",
+            "src/features/**",
+            "src/playbook/**",
+            "src/pipeline/**",
+            "src/poller/**",
+            "src/task-control-plane/**",
+            "src/observability/**",
+            "src/infrastructure/**",
+            "src/types/**",
+            "src/config.ts",
+            "src/package-info.ts"
+          ]
+        },
+        {
+          "label": "Engine (durable)",
+          "description": "DBOS adapter and the engine-agnostic pipeline interpreter. The engine boundary is thin (architecture-overview invariant 2).",
+          "patterns": ["src/engine/**", "src/pipeline-core/**"]
+        },
+        {
+          "label": "Revisium data-access",
+          "description": "The only layer that knows control-plane table shapes (repo-layer-contract). Shared contracts (errors, change-notifications) are allowed for transport; the data-access internals are not.",
+          "patterns": ["src/control-plane/**", "src/revisium/**"]
+        },
+        {
+          "label": "Execution (runners)",
+          "description": "Short-lived Claude/Codex/script/integrator processes and worktree/process plumbing run against target repos.",
+          "patterns": ["src/runners/**", "src/worker/**"]
+        },
+        {
+          "label": "CLI lifecycle",
+          "description": "Daemon lifecycle only: start/stop/status/doctor/logs/mcp bridge.",
+          "patterns": ["src/cli/**"]
+        }
+      ]
+    }
+  ],
+  "constraints": [
+    {
+      "from": ["src/mcp/**", "src/api/**", "src/http/**"],
+      "to": [
+        "src/control-plane/data-access.ts",
+        "src/control-plane/tables.ts",
+        "src/control-plane/definitions.ts",
+        "src/control-plane/versioned-meaning.ts",
+        "src/control-plane/steps.ts",
+        "src/control-plane/inbox.ts",
+        "src/control-plane/json-fields.ts",
+        "src/control-plane/index.ts"
+      ],
+      "relation": "deny",
+      "message": "Transport (MCP/GraphQL) must stay thin: no raw control-plane data-access. Use product services; shared contracts (control-plane/errors.ts, control-plane/change-notifications.ts) are allowed. See docs/repo-layer-contract.md."
+    },
+    {
+      "from": ["src/mcp/**", "src/api/**", "src/http/**"],
+      "to": ["src/engine/**"],
+      "relation": "deny",
+      "message": "Transport must not access DBOS directly; it calls product services. See docs/repo-layer-contract.md."
+    },
+    {
+      "from": ["src/runners/**", "src/worker/**"],
+      "to": ["src/engine/**"],
+      "relation": "deny",
+      "message": "The engine boundary is thin: runners do not depend on DBOS internals. See docs/architecture-overview.md invariant 2."
+    },
+    {
+      "from": ["src/control-plane/**", "src/revisium/**"],
+      "to": ["src/engine/**"],
+      "relation": "deny",
+      "message": "Data-access does not depend on DBOS internals; DBOS progress is reached through the engine adapter from the host. See docs/architecture-overview.md invariants 2 and 5."
+    }
+  ]
+}
