@@ -156,6 +156,7 @@ test('H4: simulate_route strips runner-override smuggling from public params', {
     {
       title: 'E2E MCP route safety',
       pipeline: 'local-change',
+      includeDetails: true,
       params: {
         executionProfile: { runnerOverrides: { 'claude-code': 'must-not-leak' } },
         runnerOverrides: { 'claude-code': 'must-not-leak' },

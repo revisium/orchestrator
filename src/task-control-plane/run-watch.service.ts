@@ -37,6 +37,8 @@ export type RunTransition = {
   inbox?: RunState['inbox'];
   latestBlockingEvent?: unknown;
   blockedReason?: string;
+  latestEventAt?: string;
+  latestEventType?: string;
 };
 
 export type WatchResult = {
@@ -53,7 +55,7 @@ export type WatchInput = {
 };
 
 export type ObserveRunMode = 'actionable' | 'heartbeat' | 'diagnostic';
-export type ObserveRunNextAction = 'wait' | 'ask_human' | 'inspect_digest' | 'inspect_log' | 'done';
+export type ObserveRunNextAction = 'start_run' | 'wait' | 'ask_human' | 'inspect_digest' | 'inspect_log' | 'done';
 
 export type ObserveRunInput = {
   runId: string;
@@ -93,6 +95,12 @@ export type ObserveRunActivitySignal = {
 
 export type ObserveRunHeartbeat = {
   observedAt: string;
+  workflow: {
+    runStatus: string;
+    workflowStatus: string;
+    latestEventAt?: string;
+    latestEventType?: string;
+  };
   activity?: ObserveRunActivitySignal;
 };
 
@@ -141,6 +149,7 @@ export const MAX_SERVER_HOLD_MS = 45_000;
 export const DEFAULT_SERVER_HOLD_MS = 28_000;
 const WAKEUP_DEBOUNCE_MS = 75;
 const POLL_INTERVAL_MS = 500;
+const ACTIVITY_READ_TIMEOUT_MS = 250;
 
 const GATE_STATES: ReadonlySet<RunState['state']> = new Set(['pending_gate', 'question']);
 const WATCH_STATES: ReadonlySet<RunState['state']> = new Set([
@@ -151,6 +160,7 @@ const WATCH_STATES: ReadonlySet<RunState['state']> = new Set([
   'blocked',
 ]);
 const OBSERVE_TRANSITION_STATES: ReadonlySet<RunState['state']> = new Set([
+  'ready',
   'pending_gate',
   'question',
   'completed',
@@ -188,6 +198,8 @@ export function clampHeartbeatEvery(heartbeatEveryMs?: number): number {
  */
 function markerFor(state: RunState): string | null {
   switch (state.state) {
+    case 'ready':
+      return 'ready';
     case 'pending_gate':
     case 'question':
       return `g:${state.inbox?.id ?? ''}`;
@@ -249,6 +261,7 @@ export class RunWatchService {
 
   async observeRun(input: ObserveRunInput): Promise<ObserveRunResult> {
     const mode = input.mode ?? 'actionable';
+    const activityRead = this.startActivitySignalRead(input.runId);
     const timeoutMs = mode === 'heartbeat'
       ? Math.min(clampServerHold(input.timeoutMs), clampHeartbeatEvery(input.heartbeatEveryMs))
       : clampServerHold(input.timeoutMs);
@@ -263,10 +276,12 @@ export class RunWatchService {
     );
     const transition = watched.transitions[0];
     const state = transition ?? await this.resolveRunState(input.runId);
-    const activity = await this.readActivitySignal(input.runId);
+    const rawActivity = await activityRead.readIfSettled();
+    const activity = shouldExposeActivitySignal(state, rawActivity) ? rawActivity : undefined;
     const nextAction = observeNextAction(state, activity);
+    const activeAttempt = shouldExposeActiveAttempt(state, activity) ? activity?.attempt : undefined;
     const heartbeat = mode === 'heartbeat' || mode === 'diagnostic'
-      ? observeHeartbeat(activity, this.now)
+      ? observeHeartbeat(state, activity, this.now)
       : undefined;
 
     return {
@@ -276,7 +291,7 @@ export class RunWatchService {
       timedOut: watched.timedOut,
       ...(state.issueRef ? { issueRef: state.issueRef } : {}),
       ...(transition ? { transition: observeTransition(transition, activity) } : {}),
-      ...(activity?.attempt ? { activeAttempt: activity.attempt } : {}),
+      ...(activeAttempt ? { activeAttempt } : {}),
       ...(heartbeat ? { heartbeat } : {}),
       nextAction,
       ...(mode === 'diagnostic' ? { diagnostic: observeDiagnostic(state, activity) } : {}),
@@ -435,10 +450,46 @@ export class RunWatchService {
   private async readActivitySignal(runId: string): Promise<CanonicalActivitySignal | undefined> {
     if (!this.api.getAgentActivity) return undefined;
     try {
-      return deriveCanonicalActivitySignal(await this.api.getAgentActivity(runId));
+      return deriveCanonicalActivitySignal(
+        await withDeadline(this.api.getAgentActivity(runId), ACTIVITY_READ_TIMEOUT_MS),
+      );
     } catch {
       return undefined;
     }
+  }
+
+  private startActivitySignalRead(runId: string): {
+    readIfSettled: () => Promise<CanonicalActivitySignal | undefined>;
+  } {
+    let settled = false;
+    const read = this.readActivitySignal(runId).then(
+      (activity) => {
+        settled = true;
+        return activity;
+      },
+      () => {
+        settled = true;
+        return undefined;
+      },
+    );
+    return {
+      readIfSettled: async () => settled ? read : undefined,
+    };
+  }
+}
+
+async function withDeadline<T>(promise: Promise<T>, timeoutMs: number): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), timeoutMs);
+        (timer as ReturnType<typeof setTimeout> & { unref?: () => void }).unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -462,6 +513,8 @@ function collectNew(
       inbox: state.inbox,
       latestBlockingEvent: state.latestBlockingEvent,
       blockedReason: state.blockedReason,
+      latestEventAt: state.latestEventAt,
+      latestEventType: state.latestEventType,
     });
   }
   return out;
@@ -501,11 +554,29 @@ function shouldInspectLog(activity: CanonicalActivitySignal | undefined): boolea
   return status === 'failed' || status === 'timed_out' || status === 'permission_blocked';
 }
 
-function observeNextAction(
+function shouldExposeActiveAttempt(
   state: Pick<RunState, 'state'>,
+  activity: CanonicalActivitySignal | undefined,
+): boolean {
+  if (!activity?.attempt) return false;
+  return state.state !== 'completed';
+}
+
+function shouldExposeActivitySignal(
+  state: Pick<RunState, 'state'>,
+  activity: CanonicalActivitySignal | undefined,
+): boolean {
+  if (!activity) return false;
+  return state.state !== 'completed';
+}
+
+function observeNextAction(
+  state: Pick<RunState, 'state' | 'runStatus'>,
   activity: CanonicalActivitySignal | undefined,
 ): ObserveRunNextAction {
   switch (state.state) {
+    case 'ready':
+      return 'start_run';
     case 'pending_gate':
     case 'question':
       return 'ask_human';
@@ -514,6 +585,7 @@ function observeNextAction(
     case 'failed':
       return shouldInspectLog(activity) ? 'inspect_log' : 'inspect_digest';
     case 'blocked':
+      if (state.runStatus === 'cancelled') return 'done';
       return 'inspect_digest';
     case 'retrying':
     case 'running':
@@ -537,12 +609,19 @@ function observeTransition(
 }
 
 function observeHeartbeat(
+  state: Pick<RunState, 'runStatus' | 'workflowStatus' | 'latestEventAt' | 'latestEventType'>,
   activity: CanonicalActivitySignal | undefined,
   now: () => number,
 ): ObserveRunHeartbeat {
   const compact = compactActivity(activity);
   return {
     observedAt: new Date(now()).toISOString(),
+    workflow: {
+      runStatus: state.runStatus,
+      workflowStatus: state.workflowStatus,
+      ...(state.latestEventAt ? { latestEventAt: state.latestEventAt } : {}),
+      ...(state.latestEventType ? { latestEventType: state.latestEventType } : {}),
+    },
     ...(compact ? { activity: compact } : {}),
   };
 }
@@ -574,11 +653,12 @@ function compactActivity(activity: CanonicalActivitySignal | undefined): Observe
   };
 }
 
-function suggestedTools(state: Pick<RunState, 'state'>, activity: CanonicalActivitySignal | undefined): string[] {
+function suggestedTools(state: Pick<RunState, 'state' | 'runStatus'>, activity: CanonicalActivitySignal | undefined): string[] {
   const nextAction = observeNextAction(state, activity);
   if (nextAction === 'inspect_log') return ['get_agent_log'];
   if (nextAction === 'inspect_digest') return ['get_run_digest'];
   if (nextAction === 'ask_human') return ['get_inbox_item', 'approve_gate', 'reject_gate', 'answer_question'];
+  if (nextAction === 'start_run') return ['start_run'];
   return [];
 }
 

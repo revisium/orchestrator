@@ -1959,8 +1959,176 @@ test('TaskControlPlaneApiService.resolveRunState exposes issueRef from run param
 
   const state = await api.resolveRunState('run-1');
 
-  assert.equal(state.state, 'running');
+  assert.equal(state.state, 'ready');
   assert.deepEqual(state.issueRef, issueRef);
+});
+
+test('TaskControlPlaneApiService.resolveRunState reports ready when a run has not started', async () => {
+  const api = makeApi({
+    runService: {
+      async showRun() {
+        return {
+          run: {
+            runId: 'run-1',
+            title: 'Run',
+            status: 'ready',
+            priority: 0,
+            createdAt: '2026-06-13T00:00:00.000Z',
+            description: '',
+            scope: '',
+            repos: [],
+          },
+          tasks: [{ taskId: 'task-1', title: 'Task', status: 'ready', roleHint: 'developer' }],
+        };
+      },
+    },
+    inboxService: {
+      async listInbox() {
+        return [];
+      },
+    },
+    dbosService: {
+      async getWorkflowStatus() {
+        return null;
+      },
+    },
+  });
+
+  const state = await api.resolveRunState('run-1');
+
+  assert.equal(state.state, 'ready');
+  assert.equal(state.runStatus, 'ready');
+  assert.equal(state.workflowStatus, '');
+  assert.equal(state.nextAction, 'start_run');
+});
+
+test('TaskControlPlaneApiService.resolveRunState reports running when workflow progressed but row stayed ready', async () => {
+  const api = makeApi({
+    runService: {
+      async showRun() {
+        return {
+          run: {
+            runId: 'run-1',
+            title: 'Run',
+            status: 'ready',
+            priority: 0,
+            createdAt: '2026-06-13T00:00:00.000Z',
+            description: '',
+            scope: '',
+            repos: [],
+          },
+          tasks: [{ taskId: 'task-1', title: 'Task', status: 'ready', roleHint: 'developer' }],
+        };
+      },
+      async listRunEvents() {
+        return [
+          {
+            eventId: 'event-step',
+            type: 'step_succeeded',
+            actor: 'orchestrator',
+            createdAt: '2026-06-28T07:36:41.803Z',
+            taskId: 'task-1',
+            stepId: 'pstep-1',
+            payload: { stepKey: 'developer', attemptId: 'attempt-1' },
+          },
+        ];
+      },
+    },
+    inboxService: {
+      async listInbox() {
+        return [];
+      },
+    },
+    dbosService: {
+      async getWorkflowStatus() {
+        return {
+          workflowID: 'run-1',
+          status: 'PENDING',
+          workflowName: 'dataDrivenTask',
+          workflowClassName: 'PipelineService',
+          createdAt: Date.parse('2026-06-28T07:33:58.483Z'),
+          updatedAt: Date.parse('2026-06-28T07:36:41.803Z'),
+          priority: 0,
+          applicationID: 'test',
+        } as Awaited<ReturnType<DbosService['getWorkflowStatus']>>;
+      },
+    },
+  });
+
+  const state = await api.resolveRunState('run-1');
+
+  assert.equal(state.state, 'running');
+  assert.equal(state.runStatus, 'running');
+  assert.equal(state.workflowStatus, 'PENDING');
+});
+
+test('TaskControlPlaneApiService.resolveRunState exposes the latest workflow event pulse', async () => {
+  const api = makeApi({
+    runService: {
+      async showRun() {
+        return {
+          run: {
+            runId: 'run-1',
+            title: 'Run',
+            status: 'ready',
+            priority: 0,
+            createdAt: '2026-06-13T00:00:00.000Z',
+            description: '',
+            scope: '',
+            repos: [],
+          },
+          tasks: [{ taskId: 'task-1', title: 'Task', status: 'ready', roleHint: 'developer' }],
+        };
+      },
+      async listRunEvents() {
+        return [
+          {
+            eventId: 'event-old',
+            type: 'integrate_succeeded',
+            actor: 'orchestrator',
+            createdAt: '2026-06-28T09:36:56.844Z',
+            taskId: 'task-1',
+            stepId: '',
+            payload: {},
+          },
+          {
+            eventId: 'event-new',
+            type: 'pr_polled',
+            actor: 'orchestrator',
+            createdAt: '2026-06-28T09:40:19.802Z',
+            taskId: 'task-1',
+            stepId: '',
+            payload: { verdict: 'clean' },
+          },
+        ];
+      },
+    },
+    inboxService: {
+      async listInbox() {
+        return [];
+      },
+    },
+    dbosService: {
+      async getWorkflowStatus() {
+        return {
+          workflowID: 'run-1',
+          status: 'PENDING',
+          workflowName: 'dataDrivenTask',
+          workflowClassName: 'PipelineService',
+          createdAt: Date.parse('2026-06-28T09:34:06.403Z'),
+          updatedAt: Date.parse('2026-06-28T09:40:19.802Z'),
+          priority: 0,
+          applicationID: 'test',
+        } as Awaited<ReturnType<DbosService['getWorkflowStatus']>>;
+      },
+    },
+  });
+
+  const state = await api.resolveRunState('run-1');
+
+  assert.equal(state.state, 'running');
+  assert.equal(state.latestEventAt, '2026-06-28T09:40:19.802Z');
+  assert.equal(state.latestEventType, 'pr_polled');
 });
 
 test('TaskControlPlaneApiService.simulateRoute rejects omitted pipelineId when no trigger matches', async () => {
@@ -2599,4 +2767,45 @@ test('getRunDigest: blockedReason absent when no pipeline_blocked event', async 
   const digest = await api.getRunDigest('run-1');
 
   assert.equal(digest.blockedReason, undefined);
+});
+
+test('getRunDigest: normalizes stale ready row status when workflow is running', async () => {
+  const api = makeApi({
+    runService: {
+      async showRun() {
+        return {
+          run: { runId: 'run-1', title: 'R', status: 'ready', priority: 0, createdAt: '', description: '', scope: '', repos: [] },
+          tasks: [{ taskId: 'task-1', title: 'T', status: 'ready', roleHint: 'developer' }],
+        };
+      },
+      async listRunEvents() {
+        return [
+          { eventId: 'e1', type: 'step_succeeded', actor: 'engine', createdAt: '', taskId: 'task-1', stepId: 'step-1', payload: { stepKey: 'developer' } },
+        ];
+      },
+      async listRunAttempts() { return []; },
+    },
+    inboxService: {
+      async listInbox() { return []; },
+    },
+    dbosService: {
+      async getWorkflowStatus() {
+        return {
+          workflowID: 'run-1',
+          status: 'PENDING',
+          workflowName: 'dataDrivenTask',
+          workflowClassName: 'PipelineService',
+          createdAt: Date.parse('2026-06-28T09:34:06.403Z'),
+          updatedAt: Date.parse('2026-06-28T09:36:16.078Z'),
+          priority: 0,
+          applicationID: 'test',
+        } as Awaited<ReturnType<DbosService['getWorkflowStatus']>>;
+      },
+    },
+  });
+
+  const digest = await api.getRunDigest('run-1');
+
+  assert.equal(digest.run.status, 'running');
+  assert.equal(digest.tasks[0]?.status, 'running');
 });

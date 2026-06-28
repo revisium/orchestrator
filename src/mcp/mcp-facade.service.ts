@@ -18,6 +18,26 @@ import { MCP_TOOL_NAMES } from './mcp-capabilities.js';
 
 export type { RepositoryContext, RepositoryValidation };
 
+const MCP_ACTIVITY_TIMEOUT_MS = 500;
+const COMPACT_TEXT_LIMIT = 240;
+
+type JsonRecord = Record<string, unknown>;
+type SimulateRouteMcpInput = {
+  title: string;
+  repo?: string;
+  pipeline?: string;
+  playbookId?: string;
+  params?: unknown;
+  includeDetails?: boolean;
+};
+type ListPipelinesMcpInput = {
+  includeDetails?: boolean;
+};
+type GetPipelineMcpInput = {
+  pipelineId: string;
+  includeDetails?: boolean;
+};
+
 function formatCause(error: unknown): string {
   if (error instanceof ControlPlaneError) {
     const status = error.status === undefined ? '' : ` status=${error.status}`;
@@ -33,6 +53,280 @@ function exposeApplicationError<T>(promise: Promise<T>): Promise<T> {
       throw new Error(`${error.code}: ${error.message}`);
     }
     throw error;
+  });
+}
+
+function asRecord(value: unknown): JsonRecord | null {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
+  return value as JsonRecord;
+}
+
+function asString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function asNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function compactText(value: unknown, limit = COMPACT_TEXT_LIMIT): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  if (!normalized) return undefined;
+  return normalized.length > limit ? `${normalized.slice(0, limit - 3)}...` : normalized;
+}
+
+function compactStringArray(value: unknown, limit = COMPACT_TEXT_LIMIT): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => compactText(item, limit)).filter((item): item is string => Boolean(item));
+}
+
+function compactRecordArray(value: unknown): JsonRecord[] {
+  if (!Array.isArray(value)) return [];
+  return value.map(asRecord).filter((item): item is JsonRecord => item !== null);
+}
+
+function withDeadline<T>(promise: Promise<T>, timeoutMs: number): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), timeoutMs);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+function definedEntries(record: JsonRecord): JsonRecord {
+  return Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined));
+}
+
+function compactRouteSummary(result: JsonRecord): JsonRecord | undefined {
+  const workflow = asRecord(result.workflow);
+  const route = asRecord(workflow?.route) ?? asRecord(result.route) ?? result;
+  if (!route) return undefined;
+  const routeGates = compactStringArray(route.routeGates);
+  const roles = Array.isArray(route.roles)
+    ? route.roles
+      .map((role) => {
+        if (typeof role === 'string') return role;
+        const roleRecord = asRecord(role);
+        return asString(roleRecord?.role) ?? asString(roleRecord?.roleId) ?? asString(roleRecord?.id);
+      })
+      .filter((role): role is string => Boolean(role))
+    : [];
+  const summary = definedEntries({
+    playbookId: asString(route.playbookId),
+    pipelineId: asString(route.pipelineId),
+    engine: asString(workflow?.engine) ?? asString(route.engine),
+    routeGates: routeGates.length > 0 ? routeGates : undefined,
+    roles: roles.length > 0 ? roles : undefined,
+  });
+  return Object.keys(summary).length > 0 ? summary : undefined;
+}
+
+function compactExecutionProfile(value: unknown): JsonRecord | undefined {
+  const profile = asRecord(value);
+  if (!profile) return undefined;
+  return definedEntries({
+    id: asString(profile.id),
+  });
+}
+
+function compactRouteDecision(value: unknown): unknown {
+  const route = asRecord(value);
+  if (!route) return value;
+  const roleBindings = compactRecordArray(route.roleBindings);
+  const summary = compactRouteSummary(route) ?? {};
+  return definedEntries({
+    ...summary,
+    source: asString(route.source),
+    executionProfile: compactExecutionProfile(route.executionProfile),
+    roleBindingCount: roleBindings.length > 0 ? roleBindings.length : undefined,
+  });
+}
+
+function compactExecutionPolicySummary(value: unknown): JsonRecord {
+  const policy = asRecord(value);
+  const template = asRecord(policy?.template_json) ?? asRecord(policy?.templateJson);
+  const nodes = asRecord(template?.nodes);
+  return definedEntries({
+    hasTemplate: Boolean(template),
+    specVersion: asString(template?.specVersion),
+    pipelineId: asString(template?.pipelineId),
+    nodeCount: nodes ? Object.keys(nodes).length : undefined,
+  });
+}
+
+function compactPipeline(value: unknown): unknown {
+  const pipeline = asRecord(value);
+  if (!pipeline) return value;
+  return definedEntries({
+    id: asString(pipeline.id),
+    playbookId: asString(pipeline.playbookId),
+    pipelineId: asString(pipeline.pipelineId),
+    path: asString(pipeline.path),
+    triggers: compactStringArray(pipeline.triggers),
+    requiredRoles: compactStringArray(pipeline.requiredRoles),
+    alternativeRoles: compactRecordArray(pipeline.alternativeRoles),
+    optionalRoles: compactStringArray(pipeline.optionalRoles),
+    routeGates: compactStringArray(pipeline.routeGates),
+    executionPolicySummary: compactExecutionPolicySummary(pipeline.executionPolicy),
+  });
+}
+
+function compactCreateRunResult(value: unknown): unknown {
+  const result = asRecord(value);
+  if (!result) return value;
+  const workflow = asRecord(result.workflow);
+  return definedEntries({
+    runId: asString(result.runId),
+    taskId: asString(result.taskId),
+    eventId: asString(result.eventId),
+    status: asString(result.status),
+    started: typeof result.started === 'boolean' ? result.started : undefined,
+    workflow: workflow
+      ? definedEntries({
+        runId: asString(workflow.runId),
+        workflowID: asString(workflow.workflowID),
+        alreadyStarted: typeof workflow.alreadyStarted === 'boolean' ? workflow.alreadyStarted : undefined,
+        engine: asString(workflow.engine),
+      })
+      : undefined,
+    routeSummary: compactRouteSummary(result),
+  });
+}
+
+function compactInboxItem(value: unknown): JsonRecord | unknown {
+  const item = asRecord(value);
+  if (!item) return value;
+  const context = asRecord(item.context);
+  const options = Array.isArray(context?.options) ? context.options.length : undefined;
+  return definedEntries({
+    id: asString(item.id),
+    kind: asString(item.kind),
+    status: asString(item.status),
+    title: compactText(item.title),
+    runId: asString(item.runId),
+    stepId: asString(item.stepId),
+    topic: asString(context?.topic),
+    optionCount: options,
+  });
+}
+
+function compactEventSummary(event: JsonRecord): string {
+  const payload = asRecord(event.payload);
+  const parts = [payload?.role, payload?.stepKey, payload?.attemptId]
+    .filter((part): part is string => typeof part === 'string' && part.length > 0);
+  if (parts.length > 0) return parts.join(' ');
+  return compactText(payload?.reason) ?? compactText(payload?.verdict) ?? compactText(payload?.lesson) ?? asString(event.type) ?? 'event';
+}
+
+function compactRunEvent(value: unknown): JsonRecord | unknown {
+  const event = asRecord(value);
+  if (!event) return value;
+  return definedEntries({
+    eventId: asString(event.eventId),
+    type: asString(event.type),
+    actor: asString(event.actor),
+    createdAt: event.createdAt,
+    taskId: asString(event.taskId),
+    stepId: asString(event.stepId),
+    summary: compactEventSummary(event),
+  });
+}
+
+function compactRunDigest(value: unknown): unknown {
+  const digest = asRecord(value);
+  if (!digest) return value;
+  return definedEntries({
+    run: digest.run,
+    tasks: digest.tasks,
+    pendingInbox: Array.isArray(digest.pendingInbox) ? digest.pendingInbox.map(compactInboxItem) : digest.pendingInbox,
+    latestEvents: Array.isArray(digest.latestEvents) ? digest.latestEvents.map(compactRunEvent) : digest.latestEvents,
+    usage: digest.usage,
+    blockedReason: compactText(digest.blockedReason),
+  });
+}
+
+function compactFeedbackItems(value: unknown): JsonRecord[] {
+  return compactRecordArray(value).map((item) => definedEntries({
+    source: asString(item.source),
+    summary: compactText(item.summary),
+    severity: asString(item.severity),
+    path: asString(item.path),
+    line: asNumber(item.line),
+    author: asString(item.author),
+    provider: asString(item.provider),
+    reason: compactText(item.reason),
+    blocking: typeof item.blocking === 'boolean' ? item.blocking : undefined,
+    evidence: compactStringArray(item.evidence),
+    resumeAfter: asString(item.resumeAfter),
+  }));
+}
+
+function compactFeedback(value: unknown): unknown {
+  const feedback = asRecord(value);
+  if (!feedback) return value;
+  return definedEntries({
+    developerFixes: compactFeedbackItems(feedback.developerFixes),
+    humanDecisions: compactFeedbackItems(feedback.humanDecisions),
+    providerWait: compactFeedbackItems(feedback.providerWait),
+    ignoredNoise: compactFeedbackItems(feedback.ignoredNoise),
+  });
+}
+
+function compactReviewThreads(value: unknown): unknown {
+  const reviewThreads = asRecord(value);
+  if (!reviewThreads) return value;
+  return definedEntries({
+    totalCount: asNumber(reviewThreads.totalCount),
+    items: compactRecordArray(reviewThreads.items).map((thread) => definedEntries({
+      id: asString(thread.id),
+      path: asString(thread.path),
+      line: asNumber(thread.line),
+      author: asString(thread.author),
+      body: compactText(thread.body),
+      url: asString(thread.url),
+    })),
+  });
+}
+
+function compactCiSummary(value: unknown): unknown {
+  const summary = asRecord(value);
+  if (!summary) return value;
+  return definedEntries({
+    ci_passed: typeof summary.ci_passed === 'boolean' ? summary.ci_passed : undefined,
+    checks: summary.checks,
+    isDraft: typeof summary.isDraft === 'boolean' ? summary.isDraft : undefined,
+    mergeStateStatus: asString(summary.mergeStateStatus),
+    reviewDecision: asString(summary.reviewDecision),
+    mergeable: asString(summary.mergeable),
+    issueRef: summary.issueRef,
+    sonar_issues: asNumber(summary.sonar_issues),
+    sonar_hotspots_to_review: asNumber(summary.sonar_hotspots_to_review),
+    sonar_unavailable: summary.sonar_unavailable,
+    humanReviewCount: compactRecordArray(summary.human_reviews).length,
+    humanCommentCount: compactRecordArray(summary.human_comments).length,
+    botCommentCount: compactRecordArray(summary.bot_comments).length,
+  });
+}
+
+function compactPrReadiness(value: unknown): unknown {
+  const readiness = asRecord(value);
+  if (!readiness) return value;
+  const evidence = compactStringArray(readiness.evidence);
+  return definedEntries({
+    verdict: asString(readiness.verdict),
+    pr: readiness.pr,
+    checks: readiness.checks,
+    reviewDecision: asString(readiness.reviewDecision),
+    reviewThreads: compactReviewThreads(readiness.reviewThreads),
+    providerState: readiness.providerState,
+    sonar: readiness.sonar,
+    nextAction: asString(readiness.nextAction),
+    evidence: evidence.length > 0 ? evidence : undefined,
+    feedback: compactFeedback(readiness.feedback),
+    ciSummary: compactCiSummary(readiness.ciSummary),
   });
 }
 
@@ -113,7 +407,7 @@ export class McpFacadeService {
     priority?: number;
     start?: boolean;
   }) {
-    return this.api.createRun(input).catch((error: unknown) => {
+    return this.api.createRun(input).then((result) => compactCreateRunResult(result) as JsonRecord).catch((error: unknown) => {
       if (error instanceof CreateRunWorkflowError) {
         const created = Object.keys(error.createdIds).length > 0
           ? `; createdBeforeFailure=${JSON.stringify(error.createdIds)}`
@@ -153,7 +447,10 @@ export class McpFacadeService {
   }
 
   getAgentActivity(runId: string) {
-    return exposeApplicationError(this.api.getAgentActivity(runId));
+    return withDeadline(exposeApplicationError(this.api.getAgentActivity(runId)), MCP_ACTIVITY_TIMEOUT_MS)
+      .then((activity) => activity === undefined
+        ? { runId, activity: null, unavailable: true, reason: 'timeout' }
+        : activity);
   }
 
   getAgentAttempts(runId: string) {
@@ -180,7 +477,7 @@ export class McpFacadeService {
   }
 
   getRunDigest(runId: string) {
-    return this.api.getRunDigest(runId);
+    return this.api.getRunDigest(runId).then((digest) => compactRunDigest(digest) as JsonRecord);
   }
 
   waitForRun(input: { runId: string; timeoutMs?: number; intervalMs?: number }) {
@@ -258,16 +555,20 @@ export class McpFacadeService {
     return this.api.getRole(roleId);
   }
 
-  listPipelines() {
-    return this.api.listPipelines();
+  async listPipelines(input: ListPipelinesMcpInput = {}) {
+    const pipelines = await this.api.listPipelines();
+    return input.includeDetails ? pipelines : pipelines.map(compactPipeline);
   }
 
-  getPipeline(pipelineId: string) {
-    return this.api.getPipeline(pipelineId);
+  async getPipeline(input: GetPipelineMcpInput) {
+    const pipeline = await this.api.getPipeline(input.pipelineId);
+    return input.includeDetails ? pipeline : compactPipeline(pipeline);
   }
 
-  simulateRoute(input: { title: string; repo?: string; pipeline?: string; playbookId?: string; params?: unknown }) {
-    return this.api.simulateRoute(input);
+  async simulateRoute(input: SimulateRouteMcpInput) {
+    const { includeDetails, ...routeInput } = input;
+    const route = await this.api.simulateRoute(routeInput);
+    return includeDetails ? route : compactRouteDecision(route);
   }
 
   getPrReadiness(input: {
@@ -280,7 +581,7 @@ export class McpFacadeService {
     includeComments?: boolean;
     includeReviewThreads?: boolean;
   }) {
-    return this.api.getPrReadiness(input);
+    return this.api.getPrReadiness(input).then((readiness) => compactPrReadiness(readiness) as JsonRecord);
   }
 
   listPrFeedback(input: {

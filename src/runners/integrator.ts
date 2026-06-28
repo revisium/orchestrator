@@ -16,7 +16,13 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { execFileSync } from 'node:child_process';
 import type { ExecGhFn } from '../poller/pr-readiness.js';
-import { collectPrReadiness, fetchRequiredCheckNames, type ReviewThread } from '../poller/pr-readiness-core.js';
+import {
+  collectPrReadiness,
+  fetchRequiredCheckNames,
+  type PrReadinessNextAction,
+  type PrReadinessVerdict,
+  type ReviewThread,
+} from '../poller/pr-readiness-core.js';
 import { RunService } from '../revisium/run.service.js';
 import { issueRefTag, type IssueRef } from '../run/issue-ref.js';
 import { resolveGhAccount, resolvePinnedGh } from './gh-identity.js';
@@ -664,6 +670,8 @@ export type PollPrReadiness = {
   pr: { number: number | null; headSha: string };
   checks: { pending: string[]; fail: string[]; list: Array<{ name: string; result: string }> };
   reviewThreads: { items: ReviewThread[] };
+  readinessVerdict?: PrReadinessVerdict;
+  nextAction?: PrReadinessNextAction;
   evidence: string[];
 };
 
@@ -683,6 +691,8 @@ function defaultCollect(
       pr: { number: r.pr.number, headSha: r.pr.headSha },
       checks: { pending: r.checks.pending, fail: r.checks.fail, list: r.checks.list },
       reviewThreads: { items: r.reviewThreads.items },
+      readinessVerdict: r.verdict,
+      nextAction: r.nextAction,
       evidence: r.evidence,
     }),
   );
@@ -694,6 +704,21 @@ function ciFailuresFrom(readiness: PollPrReadiness): CiFailure[] {
   return readiness.checks.list
     .filter((c) => readiness.checks.fail.includes(c.name))
     .map((c) => ({ name: c.name, conclusion: c.result }));
+}
+
+function readinessRequiresReview(readiness: PollPrReadiness): boolean {
+  return readiness.readinessVerdict === 'needs_human'
+    || readiness.readinessVerdict === 'needs_work'
+    || readiness.nextAction === 'human_decision'
+    || readiness.nextAction === 'reviewer_triage'
+    || readiness.nextAction === 'developer_fix';
+}
+
+function readinessEvidence(readiness: PollPrReadiness): string[] {
+  return [
+    readiness.readinessVerdict ? `readiness verdict=${readiness.readinessVerdict}` : undefined,
+    readiness.nextAction ? `readiness nextAction=${readiness.nextAction}` : undefined,
+  ].filter((item): item is string => item !== undefined);
 }
 
 /**
@@ -803,12 +828,14 @@ export async function pollPr(
 
   // Decision order (plan 0018): review threads first, then CI (required-only), else clean.
   const verdict: PrFeedback['verdict'] =
-    reviewThreads.length > 0 ? 'review_changes' : ciVerdictFailures.length > 0 ? 'ci_changes' : 'clean';
+    reviewThreads.length > 0 || readinessRequiresReview(settled)
+      ? 'review_changes'
+      : ciVerdictFailures.length > 0 ? 'ci_changes' : 'clean';
 
   return {
     prNumber: settled.pr.number ?? null,
     headSha: settled.pr.headSha,
-    evidence: [...settled.evidence, `PR headSha=${settled.pr.headSha}`, `pollPr verdict=${verdict}`],
+    evidence: [...settled.evidence, ...readinessEvidence(settled), `PR headSha=${settled.pr.headSha}`, `pollPr verdict=${verdict}`],
     ...(input.issueRef ? { issueRef: input.issueRef } : {}),
     verdict,
     ciFailures,

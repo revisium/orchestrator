@@ -6,6 +6,7 @@ import {
   createRunHarness,
   type RunHarness,
   givenInstalledPlaybook,
+  PLAYBOOK_ID,
   createTargetRepo,
   type TargetRepo,
   startDataDrivenRun,
@@ -51,7 +52,7 @@ after(async () => {
 });
 
 test('L0: the data-driven pipeline is routed (carries a state-machine template; engine=data-driven)', { skip: e2eSkip }, async () => {
-  const route = (await h.api.simulateRoute({ title: 'route', pipeline: DATA_DRIVEN_PIPELINE })) as unknown as {
+  const route = (await h.api.simulateRoute({ title: 'route', playbookId: PLAYBOOK_ID, pipeline: DATA_DRIVEN_PIPELINE })) as unknown as {
     pipelineId: string;
     roles: string[];
     executionPolicy: { template_json?: { specVersion?: string; nodes?: Record<string, unknown> } };

@@ -9,16 +9,18 @@ function makeRow(id: string, data: Record<string, unknown>): TransportRow {
   return { id, data };
 }
 
-function fakeHeadTransport(rows: TransportRow[]): ControlPlaneTransport {
+function fakeHeadTransport(rows: TransportRow[], playbookRows: TransportRow[] = []): ControlPlaneTransport {
   return {
     mode: 'head',
     async assertReady() {},
     async listRows(table): Promise<TransportList> {
+      if (table === 'playbooks') return { edges: playbookRows.map((node) => ({ node })) };
       if (table !== 'pipelines') return { edges: [] };
       return { edges: rows.map((node) => ({ node })) };
     },
-    async getRow(_table, rowId) {
-      const row = rows.find((item) => item.id === rowId);
+    async getRow(table, rowId) {
+      const source = table === 'playbooks' ? playbookRows : rows;
+      const row = source.find((item) => item.id === rowId);
       if (!row) throw new ControlPlaneError('ROW_NOT_FOUND', `not found: ${rowId}`, { status: 404 });
       return row;
     },
@@ -49,6 +51,29 @@ test('PlaybooksService.listPipelines tolerates malformed JSON fields', async () 
   assert.equal(pipelines[0]?.pipelineId, 'feature-development');
   assert.deepEqual(pipelines[0]?.alternativeRoles, []);
   assert.deepEqual(pipelines[0]?.executionPolicy, {});
+});
+
+test('PlaybooksService.resolvePlaybook prefers revisium-default when multiple playbooks are installed', async () => {
+  const svc = new PlaybooksService(fakeHeadTransport([], [
+    makeRow('revisium-agent-playbook', {
+      name: 'Revisium Agent Playbook (e2e fixture)',
+      package_name: '@revisium/agent-playbook-e2e-fixture',
+      version: '0.0.0',
+      source: 'local:@revisium/agent-playbook-e2e-fixture@0.0.0',
+      schema_version: 2,
+    }),
+    makeRow('revisium-default', {
+      name: 'Revisium Default Playbook',
+      package_name: '@revisium/orchestrator-default-playbook',
+      version: '0.1.1',
+      source: 'local:@revisium/orchestrator-default-playbook@0.1.1',
+      schema_version: 2,
+    }),
+  ]));
+
+  const playbook = await svc.resolvePlaybook();
+
+  assert.equal(playbook.id, 'revisium-default');
 });
 
 // --- slice 144 B2: a committed install must invalidate the cached HEAD read-scope -----------------

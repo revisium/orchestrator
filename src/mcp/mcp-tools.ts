@@ -533,35 +533,39 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
   server.registerTool(
     'list_pipelines',
     {
-      description: 'List installed pipeline summaries.',
-      inputSchema: {},
+      description: 'List installed pipeline summaries. Compact by default; pass includeDetails:true only for execution policy graph/debugging.',
+      inputSchema: {
+        includeDetails: z.boolean().optional(),
+      },
       annotations: { readOnlyHint: true },
     },
-    async () => json(await facade.listPipelines()),
+    async (input) => json(await facade.listPipelines(input)),
   );
 
   server.registerTool(
     'get_pipeline',
     {
-      description: 'Load an installed pipeline by row ID.',
+      description: 'Load an installed pipeline by row ID. Compact by default; pass includeDetails:true only for execution policy graph/debugging.',
       inputSchema: {
         pipelineId: z.string().min(1),
+        includeDetails: z.boolean().optional(),
       },
       annotations: { readOnlyHint: true },
     },
-    async ({ pipelineId }) => json(await facade.getPipeline(pipelineId)),
+    async (input) => json(await facade.getPipeline(input)),
   );
 
   server.registerTool(
     'simulate_route',
     {
-      description: 'Return the current advisory route for a task without creating a run.',
+      description: 'Return the current advisory route for a task without creating a run. Compact by default; pass includeDetails:true only for route graph/debugging.',
       inputSchema: {
         title: z.string().min(1),
         repo: z.string().optional(),
         pipeline: z.string().optional(),
         playbookId: z.string().optional(),
         params: paramsSchema,
+        includeDetails: z.boolean().optional(),
       },
       annotations: { readOnlyHint: true },
     },
