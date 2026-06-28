@@ -10,6 +10,7 @@ import {
   givenFeatureRunAtMergeGate,
   createTargetRepo,
   waitState,
+  assertBlocked,
   approveUntilTerminal,
   executedRoles,
 } from './kit/index.js';
@@ -81,14 +82,10 @@ test('B4: merge-gate reject re-polls fresh readiness; a still-clean re-poll is a
     assert.equal(res.topic, 'merge');
 
     await waitState(h.api, runId); // workflow returns after the recheck routes to the blocked terminal
-    // waitForRun reports `blocked` as soon as the pipeline_blocked event is visible; the run-row status patch
-    // lags it, so poll briefly for the run row to settle off `running` rather than reading once (B3 pattern).
-    let detail = await h.api.getRun({ runId });
-    for (let waited = 0; waited < 5_000 && detail.run.status === 'running'; waited += 250) {
-      await new Promise((resolve) => setTimeout(resolve, 250));
-      detail = await h.api.getRun({ runId });
-    }
-    assert.equal(detail.run.status, 'blocked', 'a still-clean re-poll on merge reject is an explicit abort → blocked');
+    // A blocked terminal settles the run-row to `paused` (+ a `pipeline_blocked` event), NOT status==='blocked'
+    // — see integrator-failures D3b / data-driven D20. `assertBlocked` is the canonical check: it asserts the
+    // `pipeline_blocked` event exists and the run did not complete (mirrors D20's waitState→assertBlocked).
+    await assertBlocked(h.api, runId);
   } finally {
     target.cleanup();
   }
