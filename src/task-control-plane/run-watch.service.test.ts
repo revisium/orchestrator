@@ -19,6 +19,21 @@ import type { RunState } from './task-control-plane-api.service.js';
 import type { AgentRunActivity } from '../observability/types.js';
 
 const tick = (ms = 12) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+const neverActivity = () => new Promise<AgentRunActivity | null>(() => undefined);
+
+async function resultBeforeDeadline<T>(promise: Promise<T>, ms = 350): Promise<T | 'deadline'> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<'deadline'>((resolve) => {
+        timer = setTimeout(() => resolve('deadline'), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 function gate(runId: string, inboxId = 'i1'): RunState {
   return {
@@ -64,6 +79,13 @@ const running = (runId: string): RunState => ({
   nextAction: 'wait_for_run again',
   runStatus: 'running',
   workflowStatus: 'PENDING',
+});
+const ready = (runId: string): RunState => ({
+  runId,
+  state: 'ready',
+  nextAction: 'start_run',
+  runStatus: 'ready',
+  workflowStatus: '',
 });
 const completed = (runId: string): RunState => ({
   runId,
@@ -130,7 +152,7 @@ function activity(status: AgentRunActivity['aggregateStatus'] = 'running'): Agen
 function fakeApi(opts: {
   states?: Record<string, RunState | RunState[]>;
   runs?: Array<{ runId: string; status: string }>;
-  activity?: AgentRunActivity | null;
+  activity?: AgentRunActivity | null | (() => Promise<AgentRunActivity | null>);
 }): RunStateSource & { calls: string[] } {
   const calls: string[] = [];
   const idx: Record<string, number> = {};
@@ -151,6 +173,7 @@ function fakeApi(opts: {
       return opts.runs ?? [];
     },
     async getAgentActivity() {
+      if (typeof opts.activity === 'function') return opts.activity();
       return opts.activity ?? null;
     },
   };
@@ -571,6 +594,71 @@ test('observeRun reports a compact gate transition once under its cursor', async
   assert.equal(second.nextAction, 'ask_human');
 });
 
+test('observeRun returns an actionable transition even when activity enrichment stalls', async () => {
+  const svc = new RunWatchService(fakeApi({ states: { r1: gate('r1', 'gate-1') }, activity: neverActivity }));
+
+  const observed = await resultBeforeDeadline(svc.observeRun({ runId: 'r1', timeoutMs: 0 }));
+  assert.notEqual(observed, 'deadline', 'observe_run transition must not wait indefinitely for activity');
+  if (observed === 'deadline') return;
+
+  assert.equal(observed.state, 'pending_gate');
+  assert.equal(observed.transition?.state, 'pending_gate');
+  assert.equal(observed.transition?.nextAction, 'ask_human');
+  assert.equal(observed.activeAttempt, undefined);
+  assert.equal(observed.nextAction, 'ask_human');
+});
+
+test('observeRun does not wait for a slow activity enrichment that eventually settles', async () => {
+  const slowActivity = () => new Promise<AgentRunActivity | null>((resolve) => {
+    const timer = setTimeout(() => resolve(activity()), 500);
+    (timer as ReturnType<typeof setTimeout> & { unref?: () => void }).unref?.();
+  });
+  const svc = new RunWatchService(fakeApi({ states: { r1: gate('r1', 'gate-1') }, activity: slowActivity }));
+  const startedAt = Date.now();
+
+  const observed = await svc.observeRun({ runId: 'r1', timeoutMs: 0 });
+
+  assert.ok(Date.now() - startedAt < 175, 'lifecycle response must not wait for best-effort activity');
+  assert.equal(observed.state, 'pending_gate');
+  assert.equal(observed.transition?.nextAction, 'ask_human');
+  assert.equal(observed.activeAttempt, undefined);
+});
+
+test('observeRun keeps actionable timeout bounded when activity enrichment stalls', async () => {
+  const svc = new RunWatchService(fakeApi({ states: { r1: running('r1') }, activity: neverActivity }));
+
+  const observed = await resultBeforeDeadline(svc.observeRun({ runId: 'r1', timeoutMs: 1 }), 700);
+  assert.notEqual(observed, 'deadline', 'observe_run timeout path must not wait indefinitely for activity');
+  if (observed === 'deadline') return;
+
+  assert.equal(observed.state, 'running');
+  assert.equal(observed.timedOut, true);
+  assert.equal(observed.transition, undefined);
+  assert.equal(observed.activeAttempt, undefined);
+  assert.equal(observed.nextAction, 'wait');
+});
+
+test('observeRun heartbeat mode returns a heartbeat even when activity enrichment stalls', async () => {
+  const svc = new RunWatchService(
+    fakeApi({ states: { r1: running('r1') }, activity: neverActivity }),
+    undefined,
+    () => Date.parse('2026-06-26T10:00:04.000Z'),
+  );
+
+  const observed = await resultBeforeDeadline(
+    svc.observeRun({ runId: 'r1', mode: 'heartbeat', timeoutMs: 1_000, heartbeatEveryMs: 25 }),
+    700,
+  );
+  assert.notEqual(observed, 'deadline', 'heartbeat must be emitted even when activity is unavailable');
+  if (observed === 'deadline') return;
+
+  assert.equal(observed.state, 'running');
+  assert.equal(observed.timedOut, true);
+  assert.equal(observed.heartbeat?.observedAt, '2026-06-26T10:00:04.000Z');
+  assert.equal(observed.heartbeat?.activity, undefined);
+  assert.equal(observed.nextAction, 'wait');
+});
+
 test('observeRun maps actionable states to canonical next actions', async () => {
   const cases: Array<{
     name: string;
@@ -579,10 +667,12 @@ test('observeRun maps actionable states to canonical next actions', async () => 
     nextAction: string;
     transitionState: RunState['state'];
   }> = [
+    { name: 'ready', state: ready('r1'), nextAction: 'start_run', transitionState: 'ready' },
     { name: 'question', state: question('r1'), nextAction: 'ask_human', transitionState: 'question' },
     { name: 'blocked', state: blocked('r1'), nextAction: 'inspect_digest', transitionState: 'blocked' },
     { name: 'failed', state: failed('r1'), activity: activity('failed'), nextAction: 'inspect_log', transitionState: 'failed' },
     { name: 'completed', state: completed('r1'), nextAction: 'done', transitionState: 'completed' },
+    { name: 'cancelled', state: { ...blocked('r1'), runStatus: 'cancelled' }, nextAction: 'done', transitionState: 'blocked' },
     { name: 'retrying', state: retrying('r1'), nextAction: 'wait', transitionState: 'retrying' },
   ];
 
@@ -594,6 +684,32 @@ test('observeRun maps actionable states to canonical next actions', async () => 
     assert.equal(result.nextAction, item.nextAction, item.name);
     assert.equal(result.transition?.nextAction, item.nextAction, item.name);
   }
+});
+
+test('observeRun omits stale activeAttempt on completed terminal states', async () => {
+  const svc = new RunWatchService(fakeApi({ states: { r1: completed('r1') }, activity: activity('permission_blocked') }));
+
+  const result = await svc.observeRun({ runId: 'r1', timeoutMs: 0 });
+
+  assert.equal(result.state, 'completed');
+  assert.equal(result.nextAction, 'done');
+  assert.equal(result.transition?.state, 'completed');
+  assert.equal(result.activeAttempt, undefined);
+});
+
+test('observeRun heartbeat suppresses stale agent activity on completed terminal states', async () => {
+  const svc = new RunWatchService(
+    fakeApi({ states: { r1: completed('r1') }, activity: activity('permission_blocked') }),
+    undefined,
+    () => Date.parse('2026-06-26T10:00:04.000Z'),
+  );
+
+  const result = await svc.observeRun({ runId: 'r1', mode: 'heartbeat', timeoutMs: 0 });
+
+  assert.equal(result.state, 'completed');
+  assert.equal(result.nextAction, 'done');
+  assert.equal(result.heartbeat?.workflow.runStatus, 'completed');
+  assert.equal(result.heartbeat?.activity, undefined);
 });
 
 test('observeRun heartbeat mode returns on heartbeat cadence with the canonical activity signal', async () => {
@@ -618,6 +734,39 @@ test('observeRun heartbeat mode returns on heartbeat cadence with the canonical 
   assert.equal(result.heartbeat?.observedAt, '2026-06-26T10:00:04.000Z');
   assert.equal(result.heartbeat?.activity?.latestActivityAt, '2026-06-26T10:00:03.000Z');
   assert.ok(Date.now() - startedAt < 500, 'heartbeat cadence, not timeoutMs, bounds the hold');
+});
+
+test('observeRun heartbeat mode includes workflow pulse without agent activity', async () => {
+  const svc = new RunWatchService(
+    fakeApi({
+      states: {
+        r1: {
+          ...running('r1'),
+          latestEventAt: '2026-06-26T10:00:05.000Z',
+          latestEventType: 'pr_polled',
+        },
+      },
+      activity: null,
+    }),
+    undefined,
+    () => Date.parse('2026-06-26T10:00:06.000Z'),
+  );
+
+  const result = await svc.observeRun({
+    runId: 'r1',
+    mode: 'heartbeat',
+    timeoutMs: 1_000,
+    heartbeatEveryMs: 25,
+  });
+
+  assert.equal(result.state, 'running');
+  assert.equal(result.heartbeat?.activity, undefined);
+  assert.deepEqual(result.heartbeat?.workflow, {
+    runStatus: 'running',
+    workflowStatus: 'PENDING',
+    latestEventAt: '2026-06-26T10:00:05.000Z',
+    latestEventType: 'pr_polled',
+  });
 });
 
 test('observeRun diagnostic mode stays bounded and omits raw event payloads', async () => {

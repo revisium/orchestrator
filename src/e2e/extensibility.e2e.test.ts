@@ -62,7 +62,7 @@ async function startRun(pipelineId: string, spec?: AgentSpec): Promise<{ runId: 
 
 /** Run `simulateRoute` and narrow to the routing projection the extensibility assertions need. */
 async function route(pipelineId: string) {
-  return (await h.api.simulateRoute({ title: 'route', pipeline: pipelineId })) as unknown as {
+  return (await h.api.simulateRoute({ title: 'route', playbookId: PLAYBOOK_ID, pipeline: pipelineId })) as unknown as {
     pipelineId: string;
     roles: string[];
     roleBindings: Array<{ roleId: string } & Record<string, unknown>>;

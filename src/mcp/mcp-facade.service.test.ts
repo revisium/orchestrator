@@ -8,6 +8,22 @@ import { AgentObservabilityError } from '../observability/types.js';
 import { CreateRunWorkflowError } from '../run/create-run.js';
 import { RunWatchService } from '../task-control-plane/run-watch.service.js';
 
+const never = <T>() => new Promise<T>(() => undefined);
+
+async function resultBeforeDeadline<T>(promise: Promise<T>, ms = 500): Promise<T | 'deadline'> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<'deadline'>((resolve) => {
+        timer = setTimeout(() => resolve('deadline'), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 test('McpFacadeService.getCapabilities exposes the MCP transport surface', () => {
   const facade = new McpFacadeService({} as TaskControlPlaneApiService);
   const capabilities = facade.getCapabilities();
@@ -105,6 +121,206 @@ test('McpFacadeService delegates product operations to TaskControlPlaneApiServic
   assert.deepEqual(result, { runId: 'run-1', started: false });
 });
 
+test('McpFacadeService.createRun returns a compact default response without the full route graph', async () => {
+  const api = {
+    async createRun() {
+      return {
+        runId: 'run-1',
+        taskId: 'task-1',
+        eventId: 'event-1',
+        status: 'ready',
+        started: true,
+        workflow: {
+          runId: 'run-1',
+          workflowID: 'run-1',
+          alreadyStarted: false,
+          engine: 'data-driven',
+          route: {
+            playbookId: 'pb',
+            pipelineId: 'feature-development',
+            routeGates: ['plan', 'merge'],
+            roles: ['analyst', 'developer', 'reviewer'],
+            executionPolicy: {
+              raw: ['large'],
+              template_json: {
+                nodes: {
+                  analyst: { id: 'analyst', kind: 'agent', next: 'reviewer' },
+                  reviewer: { id: 'reviewer', kind: 'agent', next: 'gate' },
+                },
+              },
+            },
+          },
+        },
+        route: {
+          playbookId: 'pb',
+          pipelineId: 'feature-development',
+          executionPolicy: { template_json: { nodes: { too: 'large' } } },
+        },
+      };
+    },
+  } as unknown as TaskControlPlaneApiService;
+  const facade = new McpFacadeService(api);
+
+  const result = await facade.createRun({ title: 'Task', repo: '.', start: true });
+  const serialized = JSON.stringify(result);
+
+  assert.equal(result.runId, 'run-1');
+  assert.equal(result.started, true);
+  assert.deepEqual(result.routeSummary, {
+    playbookId: 'pb',
+    pipelineId: 'feature-development',
+    engine: 'data-driven',
+    routeGates: ['plan', 'merge'],
+    roles: ['analyst', 'developer', 'reviewer'],
+  });
+  assert.equal(serialized.includes('template_json'), false);
+  assert.equal(serialized.includes('executionPolicy'), false);
+  assert.ok(Buffer.byteLength(serialized, 'utf8') < 1_200, 'create_run MCP response stays compact by default');
+});
+
+test('McpFacadeService pipeline tools return compact defaults without execution policy graphs', async () => {
+  const pipeline = {
+    id: 'pb-feature-development',
+    playbookId: 'pb',
+    pipelineId: 'feature-development',
+    path: 'pipelines/feature-development.json',
+    triggers: ['feature', 'implementation'],
+    requiredRoles: ['analyst', 'developer'],
+    alternativeRoles: [],
+    optionalRoles: ['watcher'],
+    routeGates: ['plan', 'merge'],
+    executionPolicy: {
+      raw: ['large'],
+      template_json: {
+        specVersion: '1.0',
+        nodes: {
+          analyst: { id: 'analyst', kind: 'agent', next: 'developer' },
+          developer: { id: 'developer', kind: 'agent', next: 'done' },
+        },
+      },
+    },
+  };
+  const api = {
+    async listPipelines() {
+      return [pipeline];
+    },
+    async getPipeline() {
+      return pipeline;
+    },
+  } as unknown as TaskControlPlaneApiService;
+  const facade = new McpFacadeService(api);
+
+  const listResult = await facade.listPipelines({});
+  const getResult = await facade.getPipeline({ pipelineId: 'pb-feature-development' });
+  const serialized = JSON.stringify({ listResult, getResult });
+
+  assert.deepEqual(listResult, [{
+    id: 'pb-feature-development',
+    playbookId: 'pb',
+    pipelineId: 'feature-development',
+    path: 'pipelines/feature-development.json',
+    triggers: ['feature', 'implementation'],
+    requiredRoles: ['analyst', 'developer'],
+    alternativeRoles: [],
+    optionalRoles: ['watcher'],
+    routeGates: ['plan', 'merge'],
+    executionPolicySummary: {
+      hasTemplate: true,
+      specVersion: '1.0',
+      nodeCount: 2,
+    },
+  }]);
+  assert.deepEqual(getResult, listResult[0]);
+  assert.equal(serialized.includes('template_json'), false);
+  assert.equal(serialized.includes('executionPolicy":'), false);
+  assert.ok(Buffer.byteLength(serialized, 'utf8') < 1_200, 'pipeline MCP responses stay compact by default');
+});
+
+test('McpFacadeService pipeline tools can include execution policy details when explicitly requested', async () => {
+  const pipeline = {
+    id: 'pb-feature-development',
+    pipelineId: 'feature-development',
+    executionPolicy: { template_json: { nodes: { analyst: { id: 'analyst' } } } },
+  };
+  const api = {
+    async listPipelines() {
+      return [pipeline];
+    },
+    async getPipeline() {
+      return pipeline;
+    },
+  } as unknown as TaskControlPlaneApiService;
+  const facade = new McpFacadeService(api);
+
+  assert.deepEqual(await facade.listPipelines({ includeDetails: true }), [pipeline]);
+  assert.equal(await facade.getPipeline({ pipelineId: 'pb-feature-development', includeDetails: true }), pipeline);
+});
+
+test('McpFacadeService.simulateRoute returns a compact default response without the full route graph', async () => {
+  const route = {
+    playbookId: 'pb',
+    pipelineId: 'feature-development',
+    source: 'explicit',
+    routeGates: ['plan', 'merge'],
+    roles: ['analyst', 'developer', 'reviewer'],
+    executionPolicy: {
+      raw: ['large'],
+      template_json: {
+        nodes: {
+          analyst: { id: 'analyst', kind: 'agent', next: 'reviewer' },
+          reviewer: { id: 'reviewer', kind: 'agent', next: 'gate' },
+        },
+      },
+    },
+    executionProfile: { id: 'default', runnerOverrides: {} },
+    roleBindings: [
+      { roleId: 'analyst', runnerId: 'claude-code', resolvedRunnerId: 'claude-code' },
+      { roleId: 'developer', runnerId: 'claude-code', resolvedRunnerId: 'claude-code' },
+    ],
+    params: {},
+  };
+  const api = {
+    async simulateRoute() {
+      return route;
+    },
+  } as unknown as TaskControlPlaneApiService;
+  const facade = new McpFacadeService(api);
+
+  const result = await facade.simulateRoute({ title: 'Task', repo: '.', pipeline: 'feature-development' });
+  const serialized = JSON.stringify(result);
+
+  assert.deepEqual(result, {
+    playbookId: 'pb',
+    pipelineId: 'feature-development',
+    source: 'explicit',
+    routeGates: ['plan', 'merge'],
+    roles: ['analyst', 'developer', 'reviewer'],
+    executionProfile: { id: 'default' },
+    roleBindingCount: 2,
+  });
+  assert.equal(serialized.includes('template_json'), false);
+  assert.equal(serialized.includes('executionPolicy'), false);
+  assert.ok(Buffer.byteLength(serialized, 'utf8') < 800, 'simulate_route MCP response stays compact by default');
+});
+
+test('McpFacadeService.simulateRoute can include route details when explicitly requested', async () => {
+  const route = {
+    playbookId: 'pb',
+    pipelineId: 'feature-development',
+    executionPolicy: { template_json: { nodes: { analyst: { id: 'analyst' } } } },
+  };
+  const api = {
+    async simulateRoute() {
+      return route;
+    },
+  } as unknown as TaskControlPlaneApiService;
+  const facade = new McpFacadeService(api);
+
+  const result = await facade.simulateRoute({ title: 'Task', includeDetails: true });
+
+  assert.equal(result, route);
+});
+
 test('McpFacadeService.createRun exposes workflow row failure cause for MCP debugging', async () => {
   const api = {
     async createRun() {
@@ -184,6 +400,142 @@ test('McpFacadeService delegates agent observability tools to TaskControlPlaneAp
     { name: 'readAgentOutputEvents', input: { runId: 'run-1', limit: 100, timeoutMs: 250 } },
     { name: 'readAgentOutputEvents', input: { runId: 'run-1', cursor: 'c1', limit: 1 } },
   ]);
+});
+
+test('McpFacadeService.getAgentActivity is bounded when the activity projection stalls', async () => {
+  const api = {
+    async getAgentActivity() {
+      return never();
+    },
+  } as unknown as TaskControlPlaneApiService;
+  const facade = new McpFacadeService(api);
+
+  const result = await resultBeforeDeadline(facade.getAgentActivity('run-1'), 800);
+
+  assert.notEqual(result, 'deadline', 'get_agent_activity must return before the outer MCP timeout');
+  if (result === 'deadline') return;
+  assert.deepEqual(result, {
+    runId: 'run-1',
+    activity: null,
+    unavailable: true,
+    reason: 'timeout',
+  });
+});
+
+test('McpFacadeService.getAgentActivity preserves a legitimate no-activity null result', async () => {
+  const api = {
+    async getAgentActivity() {
+      return null;
+    },
+  } as unknown as TaskControlPlaneApiService;
+  const facade = new McpFacadeService(api);
+
+  assert.equal(await facade.getAgentActivity('run-1'), null);
+});
+
+test('McpFacadeService.getRunDigest strips raw event payloads from MCP digest output', async () => {
+  const api = {
+    async getRunDigest() {
+      return {
+        run: { runId: 'run-1', title: 'Run', status: 'running' },
+        tasks: [{ taskId: 'task-1', title: 'Task', status: 'running', roleHint: 'developer' }],
+        pendingInbox: [],
+        latestEvents: [{
+          eventId: 'event-1',
+          type: 'step_succeeded',
+          actor: 'orchestrator',
+          createdAt: '2026-06-28T00:00:00.000Z',
+          taskId: 'task-1',
+          stepId: 'step-1',
+          payload: {
+            output: 'x'.repeat(10_000),
+            role: 'developer',
+            stepKey: 'developer',
+            attemptId: 'attempt-1',
+          },
+        }],
+        usage: { inputTokens: 1, outputTokens: 2, costAmount: 0.1 },
+      };
+    },
+  } as unknown as TaskControlPlaneApiService;
+  const facade = new McpFacadeService(api);
+
+  const digest = await facade.getRunDigest('run-1');
+  const serialized = JSON.stringify(digest);
+
+  assert.equal(serialized.includes('"payload"'), false);
+  assert.equal(serialized.includes('x'.repeat(100)), false);
+  assert.deepEqual(digest.latestEvents, [{
+    eventId: 'event-1',
+    type: 'step_succeeded',
+    actor: 'orchestrator',
+    createdAt: '2026-06-28T00:00:00.000Z',
+    taskId: 'task-1',
+    stepId: 'step-1',
+    summary: 'developer developer attempt-1',
+  }]);
+  assert.ok(Buffer.byteLength(serialized, 'utf8') < 2_000, 'MCP digest response stays compact');
+});
+
+test('McpFacadeService.getPrReadiness strips raw GitHub comment metadata while preserving actionable summaries', async () => {
+  const api = {
+    async getPrReadiness() {
+      return {
+        verdict: 'needs_human',
+        pr: { number: 10, url: 'https://github.com/o/r/pull/10', state: 'OPEN', draft: false, base: 'master', head: 'h', headSha: 'sha', title: 'T', mergeState: 'CLEAN' },
+        checks: { terminal: ['CodeRabbit'], pending: [], pass: ['CodeRabbit'], fail: [], list: [{ name: 'CodeRabbit', result: 'SUCCESS' }] },
+        reviewDecision: 'CHANGES_REQUESTED',
+        reviewThreads: { included: true, unresolvedCount: 0, items: [] },
+        providerState: {},
+        sonar: { configured: false, issues: [], hotspots: [], unavailable: false },
+        nextAction: 'human_decision',
+        evidence: ['checks pass=1 fail=0 pending=0'],
+        feedback: {
+          developerFixes: [],
+          reviewerQuestions: [],
+          providerWait: [],
+          humanDecisions: [{ source: 'github_review_decision', summary: 'Review decision is CHANGES_REQUESTED' }],
+          ignoredNoise: [{
+            source: 'sonarqubecloud[bot]',
+            summary: '## Quality Gate passed ' + 'noise '.repeat(500),
+          }],
+          residualRisks: [],
+        },
+        ciSummary: {
+          ci_passed: true,
+          checks: [{ name: 'CodeRabbit', result: 'SUCCESS' }],
+          reviewDecision: 'CHANGES_REQUESTED',
+          human_reviews: [],
+          human_comments: [],
+          bot_comments: [{
+            url: 'https://api.github.com/raw',
+            user: { login: 'coderabbitai[bot]', avatar_url: 'https://avatar' },
+            body: 'full raw bot body ' + 'y'.repeat(10_000),
+            performed_via_github_app: { permissions: { contents: 'write' } },
+            reactions: { total_count: 0 },
+          }],
+          sonar_issues: [],
+          sonar_hotspots_to_review: [],
+        },
+      };
+    },
+  } as unknown as TaskControlPlaneApiService;
+  const facade = new McpFacadeService(api);
+
+  const readiness = await facade.getPrReadiness({ repo: 'o/r', prNumber: 10, includeComments: true });
+  const feedback = readiness.feedback as {
+    humanDecisions: Array<{ summary?: string }>;
+    ignoredNoise: Array<{ summary?: string }>;
+  };
+  const serialized = JSON.stringify(readiness);
+
+  assert.equal(serialized.includes('performed_via_github_app'), false);
+  assert.equal(serialized.includes('avatar_url'), false);
+  assert.equal(serialized.includes('full raw bot body'), false);
+  assert.equal(serialized.includes('permissions'), false);
+  assert.equal(feedback.humanDecisions[0]?.summary, 'Review decision is CHANGES_REQUESTED');
+  assert.ok((feedback.ignoredNoise[0]?.summary?.length ?? 0) <= 240);
+  assert.ok(Buffer.byteLength(serialized, 'utf8') < 5_000, 'MCP readiness response stays compact');
 });
 
 test('McpFacadeService exposes agent observability application error codes', async () => {

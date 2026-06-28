@@ -115,7 +115,7 @@ Result:
 type ObserveRunResult = {
   runId: string;
   cursor: string;
-  state: 'running' | 'pending_gate' | 'question' | 'blocked' | 'failed' | 'completed' | 'retrying';
+  state: 'ready' | 'running' | 'pending_gate' | 'question' | 'blocked' | 'failed' | 'completed' | 'retrying';
   timedOut: boolean;
   transition?: {
     runId: string;
@@ -140,6 +140,12 @@ type ObserveRunResult = {
   };
   heartbeat?: {
     observedAt: string;
+    workflow: {
+      runStatus: string;
+      workflowStatus: string;
+      latestEventAt?: string;
+      latestEventType?: string;
+    };
     activity?: {
       aggregateStatus: string;
       latestActivityAt: string;
@@ -168,7 +174,7 @@ type ObserveRunResult = {
     };
     suggestedTools: string[];
   };
-  nextAction: 'wait' | 'ask_human' | 'inspect_digest' | 'inspect_log' | 'done';
+  nextAction: 'start_run' | 'wait' | 'ask_human' | 'inspect_digest' | 'inspect_log' | 'done';
 };
 ```
 
@@ -187,6 +193,9 @@ Rules:
   idle-timeout policy uses the same activity vocabulary plus generic in-flight operation state at the process
   executor boundary. `observe_run` keeps its existing result shape and does not expose in-flight-operation fields
   in v1.
+- Activity is best-effort bounded enrichment. A slow, unavailable, or wedged activity projection must not delay
+  delivery of lifecycle transitions, timeout responses, or heartbeat responses; clients should treat missing
+  activity/`activeAttempt` as "not available from this observation call", not as proof that no work is running.
 - Normal observation must not require `get_run(includeEvents: true)`, full logs, raw log text, full event history,
   or unbounded payloads.
 - `nextAction: 'ask_human'` means resolve the inbox item through gate/question tools. `inspect_digest` means call
