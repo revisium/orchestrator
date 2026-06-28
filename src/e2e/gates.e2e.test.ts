@@ -10,6 +10,7 @@ import {
   givenFeatureRunAtMergeGate,
   createTargetRepo,
   waitState,
+  assertBlocked,
   approveUntilTerminal,
   executedRoles,
 } from './kit/index.js';
@@ -67,16 +68,24 @@ test('B3: plan-gate reject blocks the run (data-routed terminal); developer neve
   }
 });
 
-test('B4: merge-gate reject completes the run (does not cancel)', { skip: e2eSkip }, async () => {
+test('B4: merge-gate reject re-polls fresh readiness; a still-clean re-poll is an explicit abort → blocked (#141)', { skip: e2eSkip }, async () => {
+  // #141: a merge-gate reject is now EVIDENCE-DRIVEN. The reject maps (via gateVerdict's reject→last-outcome
+  // rule) to the `recheck` outcome, which routes to a dedicated `mergeRecheck` script (`script:pollPr`) that
+  // re-observes the PR; `mergeRecheckRouter` then routes on the FRESH verdict. The e2e gh emulator is
+  // deterministically clean here, so the re-poll returns `clean` → clean→blockedEnd: "nothing changed since
+  // the gate opened ⇒ the reject was a genuine abort". (review_changes→triage / ci_changes→ciRework reroutes
+  // are covered deterministically at the workflow-unit level — DD-issue-141 in data-driven-task.workflow.test.ts.)
   const target = createTargetRepo();
   try {
     const { runId, inboxId } = await givenFeatureRunAtMergeGate(h, target);
     const res = await h.api.rejectGate({ inboxId, resolvedBy: 'e2e' });
     assert.equal(res.topic, 'merge');
 
-    await waitState(h.api, runId);
-    const detail = await h.api.getRun({ runId });
-    assert.equal(detail.run.status, 'completed', 'merge reject completes the run (see fix #53)');
+    await waitState(h.api, runId); // workflow returns after the recheck routes to the blocked terminal
+    // A blocked terminal settles the run-row to `paused` (+ a `pipeline_blocked` event), NOT status==='blocked'
+    // — see integrator-failures D3b / data-driven D20. `assertBlocked` is the canonical check: it asserts the
+    // `pipeline_blocked` event exists and the run did not complete (mirrors D20's waitState→assertBlocked).
+    await assertBlocked(h.api, runId);
   } finally {
     target.cleanup();
   }
