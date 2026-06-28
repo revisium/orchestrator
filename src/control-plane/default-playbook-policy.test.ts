@@ -69,6 +69,14 @@ function guardedBranchContaining(
   return branch;
 }
 
+function defaultBranch(template: MutableTemplate, nodeId: string): { default?: string; goto?: string; when?: unknown } {
+  const router = template.nodes[nodeId];
+  const branches = router['branches'] as Array<{ default?: string; goto?: string; when?: unknown }>;
+  const branch = branches.find((candidate) => candidate.default !== undefined);
+  assert.ok(branch, `${nodeId} default branch exists`);
+  return branch;
+}
+
 test('default playbook policy: bundled feature-development passes the scoped static verifier', () => {
   assert.deepEqual(diagnosticsFor(bundledFeatureDevelopment()), []);
 });
@@ -140,6 +148,106 @@ test('default playbook policy: missing ci_changes routes from both PR routers ar
   assert.ok(
     diagnostics.every((diagnostic) => /ci_changes \+ ciLoop<3 -> ciRework/.test(diagnostic.expected ?? '')),
     'diagnostics describe the bounded ciLoop route',
+  );
+});
+
+test('default playbook policy: missing merge-gate reject recheck outcome is diagnostic', () => {
+  const diagnostic = assertDiagnostic(
+    mutateTemplate((template) => {
+      template.nodes['mergeGate']['outcomes'] = ['approved'];
+    }),
+    'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
+  );
+
+  assert.equal(diagnostic.nodeId, 'mergeGate');
+  assert.equal(diagnostic.path, 'outcomes');
+  assert.match(diagnostic.expected ?? '', /approved,recheck/);
+});
+
+test('default playbook policy: merge-gate reject must re-poll PR feedback', () => {
+  const diagnostic = assertDiagnostic(
+    mutateTemplate((template) => {
+      template.nodes['mergeRecheck']['scriptRef'] = 'script:confirmMerge';
+    }),
+    'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
+  );
+
+  assert.equal(diagnostic.nodeId, 'mergeRecheck');
+  assert.match(diagnostic.expected ?? '', /script:pollPr/);
+  assert.match(diagnostic.expected ?? '', /schema:prFeedback/);
+});
+
+test('default playbook policy: merge recheck recovery routes are diagnostic when missing', () => {
+  const diagnostics = diagnosticsFor(
+    mutateTemplate((template) => {
+      guardedBranchContaining(template, 'mergeRecheckRouter', 'review_changes').goto = 'blockedEnd';
+      guardedBranchContaining(template, 'mergeRecheckRouter', 'ci_changes').when = {
+        op: 'verdict.eq',
+        value: 'ci_changes',
+      };
+    }),
+  ).filter((diagnostic) => diagnostic.code === 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING');
+
+  assert.ok(
+    diagnostics.some((diagnostic) =>
+      diagnostic.nodeId === 'mergeRecheckRouter' &&
+      /review_changes -> triage/.test(diagnostic.expected ?? ''),
+    ),
+    'review_changes recheck route must recover through triage',
+  );
+  assert.ok(
+    diagnostics.some((diagnostic) =>
+      diagnostic.nodeId === 'mergeRecheckRouter' &&
+      /ci_changes \+ ciLoop<3 -> ciRework/.test(diagnostic.expected ?? '') &&
+      /conjunctiveBound=false/.test(diagnostic.actual ?? ''),
+    ),
+    'ci_changes recheck route must recover through bounded ciRework',
+  );
+});
+
+test('default playbook policy: merge recheck clean/default abort path is diagnostic when missing', () => {
+  const diagnostics = diagnosticsFor(
+    mutateTemplate((template) => {
+      guardedBranchContaining(template, 'mergeRecheckRouter', 'clean').goto = 'mergeGate';
+      defaultBranch(template, 'mergeRecheckRouter').default = 'mergeGate';
+    }),
+  ).filter((diagnostic) => diagnostic.code === 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING');
+
+  assert.ok(
+    diagnostics.some((diagnostic) =>
+      diagnostic.nodeId === 'mergeRecheckRouter' &&
+      /clean -> blockedEnd/.test(diagnostic.expected ?? ''),
+    ),
+    'clean recheck result must remain an explicit abort',
+  );
+  assert.ok(
+    diagnostics.some((diagnostic) =>
+      diagnostic.nodeId === 'mergeRecheckRouter' &&
+      /default -> blockedEnd/.test(diagnostic.expected ?? ''),
+    ),
+    'default recheck result must remain an explicit abort',
+  );
+});
+
+test('default playbook policy: merge recheck evidence handoff is diagnostic when missing', () => {
+  const diagnostics = diagnosticsFor(
+    mutateTemplate((template) => {
+      for (const nodeId of ['triage', 'ciRework']) {
+        const node = template.nodes[nodeId];
+        node['consumes'] = (node['consumes'] as unknown[]).filter((ref) =>
+          (ref as { node?: string }).node !== 'mergeRecheck',
+        );
+      }
+    }),
+  ).filter((diagnostic) => diagnostic.code === 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING');
+
+  assert.deepEqual(
+    diagnostics.map((diagnostic) => diagnostic.nodeId).sort(),
+    ['ciRework', 'triage'],
+  );
+  assert.ok(
+    diagnostics.every((diagnostic) => /node=mergeRecheck/.test(diagnostic.expected ?? '')),
+    'triage and ciRework must receive mergeRecheck evidence',
   );
 });
 
@@ -241,11 +349,4 @@ test('default playbook policy: loop exhaustion must not dead-end directly at blo
 
   assert.equal(diagnostic.nodeId, 'codeReviewRouter');
   assert.match(diagnostic.expected ?? '', /codeStuckGate/);
-});
-
-test('default playbook policy: #141 merge-gate rejection reroute remains deferred', () => {
-  const template = bundledFeatureDevelopment();
-  const diagnostics = diagnosticsFor(template);
-
-  assert.deepEqual(diagnostics, [], 'current mergeGate default -> blockedEnd is allowed while #141 is open');
 });
