@@ -8,9 +8,6 @@ import {
   structuralEdges,
 } from './validate-graph.js';
 
-// Rule 14 is STATIC only: the adapter persists/hydrates at runtime; the core neither
-// stores content nor reads it. Dominance proves a producer ran (presence); the runtime `revo.InputMissing`
-// guard + the freshness rule cover what static analysis cannot.
 
 type EffectNode = Extract<Node, { kind: 'agent' | 'script' }>;
 
@@ -31,12 +28,10 @@ export function ruleDataflow(template: Template, ids: Set<string>, d: DiagSink):
   }
 }
 
-/**
- * D3 — a humanGate's informational `gatedArtifact`/`verdictFrom` refs must point at real nodes (catch
- * typos at seed/validate time); a gatedArtifact node must declare `produces` (else it yields nothing).
- * Resolution at runtime is best-effort (a missing artifact just omits it), so dominance is NOT required —
- * unlike a consumer's required input. Routing is unaffected (the gate still routes on its verdict).
- */
+
+
+
+
 function checkGateRefs(node: HumanGateNode, ctx: DataflowCtx, d: DiagSink): void {
   const { gatedArtifact, verdictFrom } = node;
   if (gatedArtifact) {
@@ -72,7 +67,7 @@ function analyse(template: Template, ids: Set<string>): DataflowCtx {
   };
 }
 
-/** PRODUCES_NAME_DUP — a clarity guard: the grammar keys consumes by NODE, so a duplicate name isn't a resolution bug. */
+
 function flagDuplicateProduces(template: Template, d: DiagSink): void {
   const producedNames = new Map<string, string>();
   for (const node of Object.values(template.nodes)) {
@@ -131,7 +126,7 @@ function isEffectProducer(node: Node): node is EffectNode {
   return (node.kind === 'agent' || node.kind === 'script') && !!node.produces;
 }
 
-/** Dominance: the producer must run before the consumer on EVERY path (entry can never be dominated → a consuming entry node is always flagged). */
+
 function checkDominance(node: EffectNode, ref: ConsumesRef, path: string, ctx: DataflowCtx, d: DiagSink): void {
   const dominated = ctx.hasEntry && ref.node !== node.id && ctx.dom.get(node.id)?.has(ref.node) === true;
   if (dominated) return;
@@ -140,7 +135,7 @@ function checkDominance(node: EffectNode, ref: ConsumesRef, path: string, ctx: D
   else d.error('CONSUMES_NOT_DOMINATED', msg, { nodeId: node.id, path });
 }
 
-/** Freshness: a consumer inside a loop the producer is NOT on can silently reuse a stale output. */
+
 function checkFreshness(node: EffectNode, ref: ConsumesRef, path: string, ctx: DataflowCtx, d: DiagSink): void {
   const iteration = ref.iteration ?? 'latest';
   if (iteration !== 'latest' || ref.staleOk === true) return;
@@ -154,7 +149,7 @@ function checkFreshness(node: EffectNode, ref: ConsumesRef, path: string, ctx: D
   }
 }
 
-/** Cross-parallel: consuming a sibling branch's output is unsafe (the branch may be cancelled). */
+
 function checkCrossParallel(node: EffectNode, ref: ConsumesRef, path: string, ctx: DataflowCtx, d: DiagSink): void {
   const consumerBranches = ctx.membership.get(node.id) ?? [];
   const producerBranches = ctx.membership.get(ref.node) ?? [];
@@ -169,11 +164,9 @@ function checkCrossParallel(node: EffectNode, ref: ConsumesRef, path: string, ct
   }
 }
 
-/**
- * Standard iterative dominator sets over STRUCTURAL edges from `entry` (dom(entry) = {entry}). Both the node-set
- * and the predecessor graph use the structural edge model — a catch/escalate route is a failure path where the
- * producer did not successfully run, so it is excluded from "ran before the consumer on every path".
- */
+
+
+
 function dominators(template: Template, entry: string): Map<string, Set<string>> {
   const reachable = [...forwardReach(template, entry)].filter((id) => template.nodes[id]);
   const preds = new Map<string, string[]>();
@@ -211,7 +204,7 @@ function dominators(template: Template, entry: string): Map<string, Set<string>>
   return dom;
 }
 
-/** For each node, the cycles (node-sets) it sits on — feeds the loop-freshness check (CONSUMES_STALE_RISK). */
+
 function consumerStaleCycles(template: Template): Map<string, Array<Set<string>>> {
   const out = new Map<string, Array<Set<string>>>();
   for (const { from, to } of findBackEdges(template)) {
@@ -225,7 +218,7 @@ function consumerStaleCycles(template: Template): Map<string, Array<Set<string>>
   return out;
 }
 
-/** Map each node to ALL its (parallel, branch) memberships — a node in nested parallels belongs to each. */
+
 function branchMembership(template: Template): Map<string, Array<{ parallel: string; branch: string }>> {
   const out = new Map<string, Array<{ parallel: string; branch: string }>>();
   for (const par of Object.values(template.nodes)) {

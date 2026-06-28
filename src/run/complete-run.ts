@@ -1,10 +1,8 @@
-/**
- * complete-run.ts — patch task_runs to `completed` + write a run_completed event.
- *
- * The DBOS workflow can finish successfully while the Revisium run row still says `ready`.
- * This verb mirrors cancel-run.ts/fail-run.ts so Revisium's meaning layer reflects successful
- * terminal workflow progress without weakening replay safety.
- */
+
+
+
+
+
 import type { ControlPlaneDataAccess } from '../control-plane/index.js';
 import { recordTerminalRunStatus } from './terminal-run-status.js';
 

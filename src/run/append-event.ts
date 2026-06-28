@@ -1,15 +1,13 @@
-/**
- * appendRunEvent / appendRunCost — idempotent meaning writes to the Revisium DRAFT.
- *
- * Design rules (from architecture-overview + TASK 0003):
- *   - Events go to DRAFT, never committed (high-frequency runtime data).
- *   - Row ids are DETERMINISTIC and BOUNDED via fnv1a64Hex (not crypto, no weak-hash hotspot).
- *     event id = "event_" + 16 hex = 22 chars (<64 Revisium limit).
- *     cost  id = "cost_"  + 16 hex = 21 chars (<64 Revisium limit).
- *   - Idempotent: a DBOS replay that re-runs the step body re-derives the same id;
- *     createRow throws ROW_CONFLICT (ControlPlaneError code:'ROW_CONFLICT') which we catch
- *     and skip — exactly the pattern createSteps uses (steps.ts:351).
- */
+
+
+
+
+
+
+
+
+
+
 import type { ControlPlaneDataAccess } from '../control-plane/data-access.js';
 import { ControlPlaneError } from '../control-plane/errors.js';
 import { fnv1a64Hex } from '../control-plane/steps.js';
@@ -23,10 +21,8 @@ export type AppendEventInput = {
   stepKey: string;
   type: string;
   payload: unknown;
-  /**
-   * Optional physical-effect scope for event types that can repeat for the same logical stepKey
-   * (for example retry attempts). Omitted legacy callers keep the historic `(runId,stepKey,type)` key.
-   */
+
+
   idempotencyKey?: string;
   actor?: string;
   createdAt?: Date;
@@ -48,13 +44,11 @@ export type AppendCostInput = {
   recordedAt?: Date;
 };
 
-/**
- * Deep-redact GitHub token shapes from every string leaf of an event payload before it is persisted
- * to the Revisium draft. The attempts row redacts `lesson`/`error` explicitly (appendRunAttempt); an
- * event payload carries the same free text (e.g. an integrator `pipeline_blocked` lesson) and must
- * not leak a raw token. Redacting at this persist boundary covers every payload field, including ones
- * added by future event types.
- */
+
+
+
+
+
 export function redactEventPayload(value: unknown): unknown {
   if (typeof value === 'string') return redactTokens(value);
   if (Array.isArray(value)) return value.map(redactEventPayload);
@@ -64,13 +58,11 @@ export function redactEventPayload(value: unknown): unknown {
   return value;
 }
 
-/**
- * Write a single event row to the `events` table.
- *
- * eventId = `event_` + fnv1a64Hex(runId/stepKey/type/idempotencyKey scope) → 22 chars ≤ 64
- *
- * Idempotent: catches ROW_CONFLICT and returns (no-op on replay).
- */
+
+
+
+
+
 export async function appendRunEvent(
   da: ControlPlaneDataAccess,
   input: AppendEventInput,
@@ -100,7 +92,7 @@ export async function appendRunEvent(
 export type AppendAttemptInput = {
   runId: string;
   stepId: string;
-  /** Deterministic attempt id minted by the step (e.g. `attempt_<hash>`); used as the row id. */
+
   attemptId: string;
   attemptNo: number;
   iteration: number;
@@ -112,7 +104,7 @@ export type AppendAttemptInput = {
   costAmount: number;
   currency?: string;
   durationMs: number;
-  /** Raw agent output — secret-redacted + capped here before persisting (never raw). */
+
   output: unknown;
   lesson?: string;
   error?: string;
@@ -123,21 +115,19 @@ export type AppendAttemptInput = {
   finishedAt?: Date;
 };
 
-/** Cap the serialized output summary so a giant agent payload can't bloat the attempts row. */
+
 const OUTPUT_SUMMARY_MAX = 4_000;
 
-/**
- * Write a single per-attempt observability row to the `attempts` table (0008 #4).
- *
- * Populates the previously-unused `attempts` table so `revo run log` can show output summary,
- * verdict, model, tokens, cost, duration, and iteration per attempt — the dogfood's observability
- * gap (agent output was only recoverable indirectly via plan files / commit diffs).
- *
- * SECRET BOUNDARY: the output summary, lesson, and error are secret-redacted (object keys via
- * redactSecrets, token shapes via redactTokens) before persisting — attempts live in Revisium.
- *
- * Idempotent: the row id IS the deterministic attemptId; ROW_CONFLICT is a no-op on replay.
- */
+
+
+
+
+
+
+
+
+
+
 export async function appendRunAttempt(
   da: ControlPlaneDataAccess,
   input: AppendAttemptInput,
@@ -179,13 +169,11 @@ export async function appendRunAttempt(
   }
 }
 
-/**
- * Write a single cost row to the `cost_ledger` table.
- *
- * costId = `cost_` + fnv1a64Hex(runId/stepKey/attemptId/index scope) → 21 chars ≤ 64
- *
- * Idempotent: catches ROW_CONFLICT and returns (no-op on replay).
- */
+
+
+
+
+
 export async function appendRunCost(
   da: ControlPlaneDataAccess,
   input: AppendCostInput,

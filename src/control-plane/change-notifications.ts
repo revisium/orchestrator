@@ -44,6 +44,5 @@ export async function notifyControlPlaneChange(change: Omit<ControlPlaneChange, 
   try {
     await getPool(url).query('SELECT pg_notify($1, $2)', [CONTROL_PLANE_CHANGE_CHANNEL, payload]);
   } catch {
-    // Subscriptions are an access-layer feed. A notification failure must not break the sealed write verb.
   }
 }

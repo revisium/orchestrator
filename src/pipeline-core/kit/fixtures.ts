@@ -1,11 +1,9 @@
-/**
- * pipeline-core/kit/fixtures.ts — typed Template fixtures (the e2e-style "real pipelines" + targeted).
- *
- * `featureDevelopment` is the canonical example, transcribed faithfully to a typed `Template`.
- * `localChange` is its no-gate sibling. The rest are small, single-purpose fixtures:
- * nested-scope loops, a parallel/join, and one INVALID template per validation rule (each named for the rule
- * + diagnostic it is designed to trip), so validation tests read as a rule catalogue.
- */
+
+
+
+
+
+
 
 import {
   allOf,
@@ -74,12 +72,10 @@ export function featureDevelopment(): Template {
     .build();
 }
 
-/**
- * confirmMergeFlow — minimal fixture exercising the `script:confirmMerge` node:
- * entry → confirmMerge → mergedEnd, with catch routing a block to `blockedEnd` and a throw to `failedEnd`.
- * Used to assert the adapter routes a merged result to a SUCCEEDED terminal (worktree released) and a
- * not-merged block to a BLOCKED terminal (worktree kept).
- */
+
+
+
+
 export function confirmMergeFlow(): Template {
   return template('confirm-merge-flow')
     .title('confirmMerge → merged (succeeded) / not-merged (blocked) — plan 0017 test fixture')
@@ -138,14 +134,12 @@ function prFeedbackConsumes(): ConsumesRef[] {
   ];
 }
 
-/**
- * featureDevelopmentPrReview — the PR review-feedback loop, transcribed to a typed Template.
- * Mirrors the seeded `feature-development` tail: after the integrator opens the PR, `pollPr` observes +
- * classifies (review_changes > ci_changes > clean); review comments go through analyst `triage`
- * (fix/wontfix/question) with a separate question gate; CI failures loop the developer; fixes are
- * re-pushed BEFORE `respondThreads` replies + resolves (so the reply carries the fix sha). Used by the
- * data-driven adapter unit tests; the live JSON template (default + e2e fixture) carries the same tail.
- */
+
+
+
+
+
+
 export function featureDevelopmentPrReview(): Template {
   return template('feature-development-pr-review')
     .title('Feature development with a PR review-feedback loop (plan 0018)')
@@ -197,7 +191,6 @@ export function featureDevelopmentPrReview(): Template {
         ],
         catch: [{ onError: 'revo.ScriptFailed', goto: 'failedEnd' }],
       }),
-      // observe the PR, then re-check readiness immediately before the merge gate
       prReadinessScript('pollPr', 'prRouter'),
       node.choice('prRouter', prReadinessBranches('mergeReadiness')),
       prReadinessScript('mergeReadiness', 'mergeReadinessRouter'),
@@ -267,10 +260,8 @@ export function localChange(): Template {
     .build();
 }
 
-/**
- * outer (cap 2) ⊃ inner (cap 2). `outerWork` increments `outer` (and resets `inner`); `innerWork`
- * increments `inner`. The inner cap routes back to the outer loop; the outer cap routes to blocked.
- */
+
+
 export function nestedScopeLoop(): Template {
   return template('nested-scope-loop')
     .entry('start')
@@ -297,14 +288,14 @@ export function nestedScopeLoop(): Template {
     .build();
 }
 
-/** Map a join-mode kind to its `JoinMode` (quorum fixed at 2 for this fan-out shape). */
+
 function joinModeFromKind(kind: 'all' | 'any' | 'quorum') {
   if (kind === 'all') return joinAll();
   if (kind === 'any') return joinAny();
   return joinQuorum(2);
 }
 
-/** `joinModeKind` selects `all` (default), `any`, or `quorum{2}` on the same fan-out shape. */
+
 export function parallelReview(joinModeKind: 'all' | 'any' | 'quorum' = 'all'): Template {
   const mode = joinModeFromKind(joinModeKind);
   return template('parallel-review')
@@ -317,7 +308,6 @@ export function parallelReview(joinModeKind: 'all' | 'any' | 'quorum' = 'all'): 
       ], 'reviewJoin'),
       node.agent('secReview', 'role:reviewer', 'reviewJoin'),
       node.agent('perfReview', 'role:reviewer', 'reviewJoin'),
-      // `merge` declared so the 2-writer fan-out is well-formed under all modes.
       node.join('reviewJoin', mode, 'joinRouter', { merge: { findings: 'appendByBranchOrder' } }),
       node.choice('joinRouter', [on(verdictEq('clean'), 'doneEnd'), otherwise('blockedEnd')]),
       node.terminal('doneEnd', 'succeeded'),
@@ -341,26 +331,26 @@ export function gateWithTimeout(): Template {
     .build();
 }
 
-/** rule 1 — entry points at a node that does not exist (ENTRY_UNRESOLVED). */
+
 export const invalidEntryUnresolved = (): Template =>
   template('inv').entry('ghost').domain('approved').add(node.terminal('end', 'succeeded')).build();
 
-/** rule 2 — an edge points at a non-existent node (REF_UNRESOLVED). */
+
 export const invalidRefUnresolved = (): Template =>
   template('inv').entry('a').domain('approved').add(node.agent('a', 'role:x', 'nowhere')).build();
 
-/** rule 3 — a non-terminal with no exit (NONTERMINAL_NO_EXIT) — forced via a choice with no branches. */
+
 export const invalidNonterminalNoExit = (): Template =>
   template('inv').entry('a').domain('approved').add(node.choice('a', [])).build();
 
-/** rule 3 — a terminal with a bad status (TERMINAL_BAD_STATUS). */
+
 export const invalidTerminalBadStatus = (): Template => {
   const t = template('inv').entry('a').domain('approved').add(node.terminal('a', 'succeeded')).build();
-  (t.nodes['a'] as { status: string }).status = 'done'; // not in {succeeded,failed,blocked}
+  (t.nodes['a'] as { status: string }).status = 'done';
   return t;
 };
 
-/** rule 4 — a choice with no default (ROUTING_NO_DEFAULT). */
+
 export const invalidNoDefault = (): Template =>
   template('inv')
     .entry('a')
@@ -368,7 +358,7 @@ export const invalidNoDefault = (): Template =>
     .add(node.choice('a', [on(verdictEq('approved'), 'end')]), node.terminal('end', 'succeeded'))
     .build();
 
-/** rule 4 — a guard placed AFTER the default (ROUTING_GUARD_AFTER_DEFAULT). */
+
 export const invalidGuardAfterDefault = (): Template =>
   template('inv')
     .entry('a')
@@ -379,7 +369,7 @@ export const invalidGuardAfterDefault = (): Template =>
     )
     .build();
 
-/** rule 5 — a node unreachable from entry (UNREACHABLE_NODE). */
+
 export const invalidUnreachable = (): Template =>
   template('inv')
     .entry('a')
@@ -391,7 +381,7 @@ export const invalidUnreachable = (): Template =>
     )
     .build();
 
-/** rule 6 — an unbounded back-edge (LOOP_UNBOUNDED): a choice loops back with no counter.gte cap. */
+
 export const invalidUnboundedLoop = (): Template =>
   template('inv')
     .entry('a')
@@ -403,7 +393,7 @@ export const invalidUnboundedLoop = (): Template =>
     )
     .build();
 
-/** rule 7 — a guard references an undeclared scope (SCOPE_UNDECLARED). */
+
 export const invalidScopeUndeclared = (): Template =>
   template('inv')
     .entry('a')
@@ -415,8 +405,6 @@ export const invalidScopeUndeclared = (): Template =>
     )
     .build();
 
-/** rule 7 — a scope whose parent does not resolve (SCOPE_PARENT_UNRESOLVED). The scope is otherwise
- *  well-formed (incremented on its own loop) so the parent-unresolved finding stands alone. */
 export const invalidScopeParent = (): Template =>
   template('inv')
     .entry('a')
@@ -429,7 +417,7 @@ export const invalidScopeParent = (): Template =>
     )
     .build();
 
-/** rule 8 — quorum K > N (QUORUM_K_GT_N). */
+
 export const invalidQuorumKgtN = (): Template =>
   template('inv')
     .entry('fanout')
@@ -443,21 +431,21 @@ export const invalidQuorumKgtN = (): Template =>
     )
     .build();
 
-/** rule 8 — a cross-branch goto (BRANCH_CROSS_GOTO): branch a's node jumps into branch b. */
+
 export const invalidCrossBranchGoto = (): Template =>
   template('inv')
     .entry('fanout')
     .domain('clean')
     .add(
       node.parallel('fanout', [{ id: 'a', entry: 'aWork' }, { id: 'b', entry: 'bWork' }], 'j'),
-      node.agent('aWork', 'role:x', 'bWork'), // crosses into branch b
+      node.agent('aWork', 'role:x', 'bWork'),
       node.agent('bWork', 'role:y', 'j'),
-      node.join('j', joinAll(), 'end', { merge: { f: 'overwrite' } }), // merge present → only BRANCH_CROSS_GOTO trips
+      node.join('j', joinAll(), 'end', { merge: { f: 'overwrite' } }),
       node.terminal('end', 'succeeded'),
     )
     .build();
 
-/** rule 8 — a multi-writer fan-out with no merge reducer (MERGE_MISSING). */
+
 export const invalidMissingMerge = (): Template =>
   template('inv')
     .entry('fanout')
@@ -466,12 +454,12 @@ export const invalidMissingMerge = (): Template =>
       node.parallel('fanout', [{ id: 'a', entry: 'aWork' }, { id: 'b', entry: 'bWork' }], 'j'),
       node.agent('aWork', 'role:x', 'j'),
       node.agent('bWork', 'role:y', 'j'),
-      node.join('j', joinAll(), 'end'), // no merge declared, 2 effect writers
+      node.join('j', joinAll(), 'end'),
       node.terminal('end', 'succeeded'),
     )
     .build();
 
-/** rule 9 — a guard uses an undeclared verdict (VERDICT_UNDECLARED). */
+
 export const invalidVerdictUndeclared = (): Template =>
   template('inv')
     .entry('a')
@@ -483,7 +471,7 @@ export const invalidVerdictUndeclared = (): Template =>
     )
     .build();
 
-/** rule 9 — a guard uses a CORE verdict, which must route structurally (VERDICT_CORE_IN_GUARD). */
+
 export const invalidCoreVerdictInGuard = (): Template =>
   template('inv')
     .entry('a')
@@ -495,7 +483,7 @@ export const invalidCoreVerdictInGuard = (): Template =>
     )
     .build();
 
-/** rule 9 — a domain label shadows a core verdict (VERDICT_DOMAIN_SHADOWS_CORE). */
+
 export const invalidDomainShadowsCore = (): Template =>
   template('inv')
     .entry('a')
@@ -503,7 +491,7 @@ export const invalidDomainShadowsCore = (): Template =>
     .add(node.agent('a', 'role:x', 'end'), node.terminal('end', 'succeeded'))
     .build();
 
-/** rule 9 — a gate outcome not in domain (GATE_OUTCOME_NOT_SUBSET). */
+
 export const invalidGateOutcomeNotSubset = (): Template =>
   template('inv')
     .entry('g')
@@ -514,10 +502,9 @@ export const invalidGateOutcomeNotSubset = (): Template =>
     )
     .build();
 
-/** rule 11 — a node id that breaks the id pattern (ID_BAD_PATTERN). */
+
 export const invalidBadId = (): Template => {
   const t = template('inv').entry('a').domain('approved').add(node.agent('a', 'role:x', 'end'), node.terminal('end', 'succeeded')).build();
-  // Re-key 'a' to an illegal id and re-point entry.
   const a = t.nodes['a'];
   delete t.nodes['a'];
   (a as { id: string }).id = '1bad';
@@ -526,7 +513,7 @@ export const invalidBadId = (): Template => {
   return t;
 };
 
-/** rule 12 — a malformed capability ref (CAPABILITY_REF_SHAPE). */
+
 export const invalidCapabilityRef = (): Template =>
   template('inv')
     .entry('a')
@@ -534,7 +521,7 @@ export const invalidCapabilityRef = (): Template =>
     .add(node.agent('a', 'not-a-role-handle', 'end'), node.terminal('end', 'succeeded'))
     .build();
 
-/** rule 6 — onFailure=route with NO catch (FAILURE_ROUTE_NO_CATCH). */
+
 export const invalidRouteNoCatch = (): Template =>
   template('inv')
     .entry('a')
@@ -542,7 +529,7 @@ export const invalidRouteNoCatch = (): Template =>
     .add(node.script('a', 'script:x', 'end', { onFailure: 'route' }), node.terminal('end', 'succeeded'))
     .build();
 
-/** rule 6 — onFailure=escalate with NO escalateTo (FAILURE_ESCALATE_NO_TARGET). */
+
 export const invalidEscalateNoTarget = (): Template =>
   template('inv')
     .entry('a')

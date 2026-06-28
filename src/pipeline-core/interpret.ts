@@ -1,29 +1,27 @@
-/**
- * pipeline-core/interpret.ts — the pure deterministic reducer.
- *
- * Spec: docs/specs/pipeline-state-machine-v1.spec.md (§10 Decision/RunState, §7 counter mutations,
- * §3 guards, §4 join arrivals, §6 failure precedence).
- *
- *   step(template, state, lastResult) -> { state, decision }
- *
- * One call advances the run by exactly one OBSERVABLE step. Given the current cursor and the RECORDED
- * result of the previously-emitted Decision, it computes the NEXT cursor (updated/reset scoped
- * counters + activeNodeIds + status) AND the next effect `decision`. Total + deterministic: no clocks,
- * no randomness, no live reads — every external fact arrives as recorded data on `lastResult`.
- *
- * The adapter loop: `{state, decision} = step(t, state, lastResult)` → execute `decision` as a
- * durable step → record its result → feed that back as the next `lastResult` → repeat until
- * `decision.type === 'complete'`.
- *
- * Model. The active node is the one whose Decision was last emitted (or the entry on the first call).
- * `step` first RESOLVES that node against `lastResult` (route a gate/choice by its branches; route an
- * agent/script by its core outcome via failure precedence; aggregate a join's recorded arrivals), walking
- * through pure routing nodes (`choice`/`join`) until it reaches a node that emits an effect
- * (`agent`/`script`/`humanGate`/`wait`/`parallel`/`terminal`). Loop-entry counter mutations are
- * applied as each node is entered, BEFORE its guards are evaluated, so a cap-guard sees the
- * post-increment value. Core verdicts route STRUCTURALLY (catch/onFailure/terminal/timeout) and NEVER
- * via branch guards.
- */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 import type {
   Condition,
@@ -38,7 +36,7 @@ import type {
   TerminalStatus,
 } from './types.js';
 
-/** Thrown when the interpreter hits a state a VALID template can never produce (a caller/data bug). */
+
 export class InterpretError extends Error {
   constructor(message: string) {
     super(message);
@@ -52,7 +50,7 @@ const STATUS_BY_TERMINAL: Record<TerminalStatus, RunStatus> = {
   blocked: 'blocked',
 };
 
-/** Kinds that SUSPEND: they emit a Decision and stay active until their result is fed back. */
+
 function suspends(node: Node): boolean {
   return (
     node.kind === 'agent' ||
@@ -64,24 +62,20 @@ function suspends(node: Node): boolean {
   );
 }
 
-/**
- * Build the initial cursor: the entry node active, every declared scope at 0, no recorded result.
- * The first `step(t, initialState(t), undefined)` emits the entry node's first Decision.
- */
+
+
 export function initialState(template: Template): RunState {
   const scopedCounters: Record<string, number> = {};
   for (const scopeId of Object.keys(template.scopes ?? {})) scopedCounters[scopeId] = 0;
   return { activeNodeIds: new Set([template.entry]), scopedCounters, status: 'running' };
 }
 
-/**
- * Advance one observable step. Resolves the active node against `lastResult`, walks any pure routing
- * nodes, and returns the next suspending node's Decision plus the next cursor.
- *
- * On the FIRST call (entry just activated, no Decision emitted yet) the active node has not run, so
- * `lastResult` describes nothing for it: we emit its Decision directly. On every later call the active
- * node is a suspended one whose recorded result is in `lastResult`: we route PAST it.
- */
+
+
+
+
+
+
 export function step(
   template: Template,
   state: RunState,
@@ -89,18 +83,13 @@ export function step(
 ): { state: RunState; decision: Decision } {
   const active = resolveNode(template, soleActiveNodeId(state));
 
-  // First emission of a freshly-entered suspending node: no result to consume yet — emit its Decision.
   if (lastResult === undefined && suspends(active)) {
     return emit(template, active, state);
   }
 
-  // Otherwise consume the active node's recorded result and route onward.
   return routeFrom(template, active, state, lastResult);
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Routing — consume the active node's result, compute the successor id, then enter it.
-// ─────────────────────────────────────────────────────────────────────────────
 
 function routeFrom(
   template: Template,
@@ -110,9 +99,6 @@ function routeFrom(
 ): { state: RunState; decision: Decision } {
   switch (node.kind) {
     case 'terminal':
-      // A terminal has no successor; re-resolving it just re-asserts completion (idempotent). The
-      // cursor SITS on the terminal (activeNodeIds = {terminal}); the adapter detects done via
-      // status/decision, not an empty active set.
       return {
         state: { ...state, activeNodeIds: new Set([node.id]), status: STATUS_BY_TERMINAL[node.status] },
         decision: { type: 'complete', status: node.status },
@@ -123,7 +109,6 @@ function routeFrom(
       return routeEffect(template, node, state, lastResult);
 
     case 'humanGate': {
-      // A gate's recorded timeout firing routes via timeout.goto, NOT a branch guard.
       if (lastResult?.outcome === 'timed_out') {
         if (!node.timeout) {
           throw new InterpretError(`gate ${node.id} timed_out but has no timeout edge (invalid)`);
@@ -150,13 +135,11 @@ function routeFrom(
     }
 
     case 'parallel':
-      // A parallel's "result" is the join's arrivals; routing past a parallel is meaningless —
-      // the join consumes the arrivals. Reaching here means the loop mis-fed a result.
       throw new InterpretError(`routeFrom called on parallel ${node.id} (feed the join, not the fork)`);
   }
 }
 
-/** Failure-precedence routing for an `agent`/`script` node from its RECORDED outcome. */
+
 function routeEffect(
   template: Template,
   node: Extract<Node, { kind: 'agent' | 'script' }>,
@@ -169,14 +152,12 @@ function routeEffect(
     return enter(template, node.next, state, carryVerdict(lastResult));
   }
 
-  // Failure (`failed`/`errored`). Precedence: matching catch → onFailure (abort/route/escalate).
   const code = lastResult?.errorCode;
   const matched = code ? node.catch?.find((c) => c.onError === code) : undefined;
   if (matched) return enter(template, matched.goto, state, undefined);
 
   const policy = node.onFailure ?? 'abort';
   if (policy === 'abort') {
-    // The run fails AT the aborting node; the cursor stays on it (no terminal node to route to).
     return {
       state: { ...state, activeNodeIds: new Set([node.id]), status: 'failed' },
       decision: { type: 'complete', status: 'failed' },
@@ -188,17 +169,14 @@ function routeEffect(
     }
     return enter(template, node.escalateTo, state, undefined);
   }
-  // 'route' with no matching catch — a VALID template forbids this (FAILURE_ROUTE_NO_CATCH).
   throw new InterpretError(
     `node ${node.id} onFailure=route but no catch matched ${code ?? '<no code>'} (invalid)`,
   );
 }
 
-/**
- * ENTER a node: apply its loop-entry counter mutations, make it the sole active node, then
- * either emit its Decision (suspending kinds) or recursively route through it (pure `choice`/`join`).
- * `incoming` is the verdict/arrivals context the entered node's guards may read.
- */
+
+
+
 function enter(
   template: Template,
   nodeId: string,
@@ -210,11 +188,10 @@ function enter(
   const entered: RunState = { ...state, scopedCounters, activeNodeIds: new Set([nodeId]) };
 
   if (suspends(node)) return emit(template, node, entered);
-  // Pure routing node — resolve it immediately against the incoming context.
   return routeFrom(template, node, entered, incoming);
 }
 
-/** Emit the Decision of a freshly-entered SUSPENDING node and set the matching run status. */
+
 function emit(
   template: Template,
   node: Node,
@@ -266,7 +243,6 @@ function emit(
         decision: { type: 'complete', status: node.status },
       };
     default:
-      // choice/join never suspend — emit() is only called on suspending kinds.
       throw new InterpretError(`emit() called on non-suspending node ${node.id} (${node.kind})`);
   }
 }
@@ -275,14 +251,11 @@ function activate(state: RunState, nodeId: string, status: RunStatus): RunState 
   return { ...state, activeNodeIds: new Set([nodeId]), status };
 }
 
-/** Forward only a domain verdict (core outcomes are consumed structurally, never carried forward). */
+
 function carryVerdict(lastResult: LastResult | undefined): LastResult | undefined {
   return lastResult?.verdict === undefined ? undefined : { verdict: lastResult.verdict };
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Guard evaluation — total, first-true-wins, mandatory default.
-// ─────────────────────────────────────────────────────────────────────────────
 
 function evalBranches(
   template: Template,
@@ -305,10 +278,8 @@ function evalBranches(
   return fallback;
 }
 
-/**
- * Evaluate a v1 Condition. Reads ONLY the recorded DOMAIN verdict (`lastResult.verdict`) and the
- * scoped counters in `state` — never a core verdict (those route structurally).
- */
+
+
 export function evalCondition(
   cond: Condition,
   state: RunState,
@@ -336,14 +307,9 @@ function counterValue(state: RunState, scope: string): number {
   return state.scopedCounters[scope] ?? 0;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Counter mutation — increment + descendant reset, deterministic & pure.
-// ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Apply a node's `incrementCounters` to a counter map: +1 each named scope and RESET every
- * descendant scope of each (entering a scope resets its descendants). Returns a fresh map.
- */
+
+
 export function applyCounterMutations(
   template: Template,
   current: Readonly<Record<string, number>>,
@@ -363,7 +329,7 @@ export function applyCounterMutations(
   return next;
 }
 
-/** True when `candidate`'s ancestor chain (via `parent`) passes through `ancestor`. */
+
 function isDescendantScope(
   scopes: Record<string, { parent: string | null }>,
   candidate: string,
@@ -373,7 +339,7 @@ function isDescendantScope(
   const seen = new Set<string>();
   while (cursor !== null) {
     if (cursor === ancestor) return true;
-    if (seen.has(cursor)) break; // defensive against a malformed cycle (validation rejects these)
+    if (seen.has(cursor)) break;
     seen.add(cursor);
     cursor = scopes[cursor]?.parent ?? null;
   }
@@ -384,18 +350,13 @@ function incrementCountersOf(node: Node): readonly string[] {
   return 'incrementCounters' in node ? (node.incrementCounters ?? []) : [];
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Join — consume recorded arrivals; pick a deterministic winner.
-// ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Select the join winner from durably-recorded arrivals, in the canonical recorded order
- * (`seq` asc, branchId tie-break):
- *  - `all`    → the barrier; the winner is the last arrival (its verdict is forwarded);
- *  - `any`    → the first arrival;
- *  - `quorum` → the K-th arrival.
- * The core never sees the live race; the adapter supplies the recorded order + cancelled set.
- */
+
+
+
+
+
+
 export function selectJoinWinner(
   mode: JoinMode,
   arrivals: readonly JoinArrival[],
@@ -411,7 +372,7 @@ export function selectJoinWinner(
     }
     return ordered[mode.count - 1];
   }
-  return ordered.at(-1); // 'all'
+  return ordered.at(-1);
 }
 
 function cmp(a: string, b: string): number {
@@ -428,9 +389,6 @@ function joinModeOf(template: Template, joinId: string): JoinMode {
   return join.joinMode;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers.
-// ─────────────────────────────────────────────────────────────────────────────
 
 function resolveNode(template: Template, id: string): Node {
   const node = template.nodes[id];

@@ -1,11 +1,9 @@
-/**
- * pipeline-core/kit/builders.ts — fluent helpers for writing templates in tests.
- *
- * Mirrors the readability of the e2e kit: a test builds a `Template` declaratively instead of hand-
- * writing the verbose discriminated-union literals. Builders apply NO semantics — they only assemble
- * data; `validateTemplate` is the single source of truth. Intentionally permissive so INVALID
- * fixtures can be expressed (e.g. omit a default, point an edge nowhere).
- */
+
+
+
+
+
+
 
 import type {
   AgentNode,
@@ -164,7 +162,6 @@ export class TemplateBuilder {
     return this;
   }
   build(): Template {
-    // Return a deep-ish clone so a fixture can be mutated by a diff test without leaking.
     return structuredClone(this.t);
   }
 }

@@ -6,18 +6,16 @@ import { RunService } from './run.service.js';
 import { InboxService } from './inbox.service.js';
 import { PlaybooksService } from './playbooks.service.js';
 
-/**
- * RevisiumModule — provides draft + head transport tokens, RolesService, RunService, InboxService.
- *
- * HOST-FREE: this module MUST NOT import EngineModule, HostLifecycle, or anything that
- * triggers DBOS.launch(). Its providers only need the Revisium transport. It may later be
- * imported by AppModule, but never the reverse.
- *
- * Transport factories are sync/lazy (client-transport.ts:114-119); no network at module
- * construction — RevisiumModule.compile() succeeds without a live daemon.
- *
- * Follows EngineModule (src/engine/dbos.module.ts) as the structural template.
- */
+
+
+
+
+
+
+
+
+
+
 @Module({
   providers: [
     {

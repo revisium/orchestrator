@@ -1,13 +1,11 @@
-/**
- * ensureHost() — attach-or-spawn the long-lived Revo host daemon (ADR 0006), mirroring the
- * three-state model of ensureRevisium:
- *   1. HEALTHY            → attach, return alreadyRunning=true.
- *   2. ALIVE BUT UNHEALTHY → wait for it to finish booting; never spawn a duplicate (the GraphQL
- *      port would collide), then throw if it stays unhealthy.
- *   3. NO LIVE DAEMON     → spawn detached + unref, wait for GraphQL health.
- *
- * The daemon is the single DBOS owner; this helper is the ONLY way the stack acquires a host.
- */
+
+
+
+
+
+
+
+
 import { spawn } from 'node:child_process';
 import { closeSync, openSync } from 'node:fs';
 import { getConfig, isAlive, resolveDefaultGraphqlPort } from '../config.js';
@@ -21,7 +19,7 @@ import {
 import { dbosEnvPin } from './dbos-identity.js';
 
 const DEFAULT_TIMEOUT_MS = 120_000;
-/** Budget to let an alive-but-not-yet-healthy daemon finish booting before giving up. */
+
 const DEFAULT_RECHECK_MS = 20_000;
 const POLL_INTERVAL_MS = 300;
 
@@ -30,14 +28,14 @@ export type EnsureHostResult = {
   alreadyRunning: boolean;
 };
 
-/** The GraphQL port the daemon listens on — must match startGraphqlHost's resolution. */
+
 export function expectedGraphqlPort(): number {
   const env = process.env['REVO_GRAPHQL_PORT'];
   if (env && /^\d+$/.test(env.trim())) return Number(env.trim());
   return resolveDefaultGraphqlPort();
 }
 
-/** GraphQL liveness probe: the daemon answers a trivial query on its port. */
+
 export async function isGraphqlHealthy(port: number): Promise<boolean> {
   try {
     const res = await fetch(`http://127.0.0.1:${port}/graphql`, {
@@ -52,11 +50,9 @@ export async function isGraphqlHealthy(port: number): Promise<boolean> {
   }
 }
 
-/**
- * Ready = `host.json` present with a LIVE pid AND GraphQL answering. The daemon writes host.json
- * last (after the control-plane bootstrap), so readiness implies the whole stack is usable — not
- * merely that the GraphQL socket is open.
- */
+
+
+
 async function waitForReady(timeoutMs: number): Promise<HostRuntimeState | null> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
@@ -67,11 +63,9 @@ async function waitForReady(timeoutMs: number): Promise<HostRuntimeState | null>
   }
 }
 
-/**
- * Build the argv to re-invoke THIS CLI as the detached daemon. Handles dev (tsx running the `.ts`
- * source — node needs the tsx loader) vs prod (node running the compiled `.js` entry directly).
- * `entry` defaults to this process's script; it is a parameter so the dev/prod split is unit-testable.
- */
+
+
+
 export function daemonSpawnArgv(entry: string = process.argv[1]): [string, string[]] {
   const daemonArgs = ['__daemon'];
   if (entry.endsWith('.ts')) {
@@ -83,19 +77,16 @@ export function daemonSpawnArgv(entry: string = process.argv[1]): [string, strin
 function spawnDaemon(): void {
   const out = openSync(getConfig().hostLogFile, 'a');
   const [cmd, args] = daemonSpawnArgv();
-  // env inheritance carries the resolved profile (REVO_PROFILE / REVO_* knobs) to the daemon, PLUS the
-  // pinned DBOS identity (DBOS__VMID/DBOS__APPVERSION). dbos-sdk reads those at IMPORT time, so they
-  // must be in the child's env from the start — set here, never mutated after launch.
   const env = { ...process.env, ...dbosEnvPin(getConfig().profile, process.env) };
   const child = spawn(cmd, args, { detached: true, stdio: ['ignore', out, out], env });
   closeSync(out);
   if (!child.pid) throw new Error('Failed to spawn Revo host daemon: spawn returned no pid');
-  child.unref(); // detached — the daemon outlives this CLI process
+  child.unref();
 }
 
 export type EnsureHostOptions = { timeoutMs?: number; recheckMs?: number };
 
-/** Attach to the running host daemon, or spawn one if absent — the only way the stack acquires a host. */
+
 export async function ensureHost(options: EnsureHostOptions = {}): Promise<EnsureHostResult> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const recheckMs = options.recheckMs ?? DEFAULT_RECHECK_MS;
@@ -103,9 +94,6 @@ export async function ensureHost(options: EnsureHostOptions = {}): Promise<Ensur
 
   if (existing && isHostRunning()) {
     if (await isGraphqlHealthy(existing.graphqlPort)) {
-      // Version-check: surface a daemon running a DIFFERENT build than this install so it
-      // can't silently serve stale behavior. We warn (not auto-kill) to avoid disrupting in-flight runs;
-      // `revo restart` (or `doctor`) replaces it. A 0.0.0 dev checkout doesn't change version → no warn.
       if (existing.version !== undefined && existing.version !== hostCodeVersion()) {
         console.warn(
           `[host] attached to a daemon running version ${existing.version}, but this build is ` +
@@ -114,7 +102,6 @@ export async function ensureHost(options: EnsureHostOptions = {}): Promise<Ensur
       }
       return { runtime: existing, alreadyRunning: true };
     }
-    // Alive but not ready — likely mid-boot/bootstrap. Wait; never spawn a duplicate (port collision).
     const ready = await waitForReady(recheckMs);
     if (ready) return { runtime: ready, alreadyRunning: true };
     throw new Error(
@@ -123,11 +110,6 @@ export async function ensureHost(options: EnsureHostOptions = {}): Promise<Ensur
     );
   }
 
-  // No live daemon — clear a stale host.json (dead pid), then spawn a fresh detached one.
-  // The check-then-spawn is not atomic, but the daemon's advisory-lock singleton (queue-ownership.ts)
-  // makes a concurrent cold-start safe: if two ensureHost() callers both spawn
-  // `__daemon`, only one wins the per-profile lock and lives; the loser exits before DBOS/queue, and
-  // every waiter observes the winner's host.json via waitForReady.
   if (existing) removeHostRuntime();
   spawnDaemon();
   const ready = await waitForReady(timeoutMs);

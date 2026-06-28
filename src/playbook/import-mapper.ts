@@ -118,10 +118,7 @@ function mapRole(root: string, playbookId: string, role: RoleCatalogRecord, now:
       effort: role.defaultModelLevel === 'cheap' ? 'low' : 'high',
       runner: role.runnerId,
       runner_id: role.runnerId,
-      // allowedTools is passed through verbatim from the catalog (a role declares its tools as data;
-      // there is no rights→tools table in code).
       allowed_tools: [...role.allowedTools],
-      // A playbook role's id IS its runtime id (identity passthrough; no name-translation table in code).
       scope_rules: JSON.stringify({
         surface: role.surface,
         rights: role.rights,
@@ -168,11 +165,6 @@ export function mapPlaybookRows(options: MapPlaybookRowsOptions): PlaybookImport
   const now = options.now ?? new Date().toISOString();
   const playbookId = options.nameOverride ?? options.manifest.id;
   const version = options.versionOverride ?? options.source.version;
-  // Map role rows first so each role's source_hash (compiled prompt hash) is available to fold into
-  // the content fingerprint. Prompt bodies are not in RoleCatalogRecord (only the path is), so a
-  // prompt-only edit would otherwise leave catalog_hash unchanged and silently skip re-seed.
-  // playbook_role_id + source_hash are both name/version/now-independent, so the hash computed here
-  // equals the one recomputed by the seed's bundledCatalogHash helper.
   const roleRows = options.catalogs.roles.map((role) => mapRole(options.root, playbookId, role, now));
   const catalogHash = hash({
     manifest: options.manifest,

@@ -27,16 +27,13 @@ import {
 import { isWorktreeDir } from '../control-plane/resolve-cwd.js';
 import type { RunnerActivityTracker } from '../observability/activity-signal.js';
 
-// The ONE place Claude Code CLI specifics live. The runner hides the protocol entirely: the loop sees
-// only the RunAgent interface. Process spawning goes through an injected ProcessExecutor (the
-// testability seam), so unit tests run a fake — no real `claude`, no tokens.
 
 export type ClaudeCodeRunnerDeps = {
   executor: ProcessExecutor;
-  resolveCwd: (step: Step) => Promise<string>; // worktree-aware: the run's isolated worktree for live runs
-  timeoutMs?: number; // configured wall-clock safety cap default
+  resolveCwd: (step: Step) => Promise<string>;
+  timeoutMs?: number;
   idleTimeoutMs?: number;
-  command?: string; // default 'claude'
+  command?: string;
   artifactStore?: ArtifactStore;
 };
 
@@ -88,7 +85,7 @@ function reportTransportMetadata(reporter: AgentActivityReporter | undefined, tr
   }
 }
 
-/** Read a positive number from a parsed model_profiles.params object, trying camel + snake keys. */
+
 function readParamNum(params: unknown, ...keys: string[]): number | undefined {
   if (!params || typeof params !== 'object' || Array.isArray(params)) return undefined;
   const rec = params as Record<string, unknown>;
@@ -100,8 +97,6 @@ function readParamNum(params: unknown, ...keys: string[]): number | undefined {
   return undefined;
 }
 
-// Summarize one stream-json event into a short, redaction-safe preview for the observability feed.
-// Assistant turns surface their text + tool names; tool results are marked; anything else by type.
 function streamEventPreview(evt: Record<string, unknown>): string | undefined {
   const message = evt.message as Record<string, unknown> | undefined;
   const content = message?.content;
@@ -143,21 +138,9 @@ function recordClaudeOperationBlocks(evt: Record<string, unknown>, activity: Run
   }
 }
 
-// CLI invocation — the only place flags are assembled. EXACT flag set is confirmed by the manual
-// Step-6 smoke before --runner defaults to auto. The permission mode keeps the headless run
-// non-interactive: a tool not in allowedTools is auto-denied (no TTY can prompt in -p mode).
-// 0008 #5: permissionMode is now per-role DATA (was hardcoded 'default'); model_profiles.params
-// (previously unused "{}") is threaded in — a configured maxTurns maps to claude's --max-turns.
 function buildArgs(modelId: string, allowedTools: string[], permissionMode: string, params: unknown): string[] {
-  // stream-json (NOT json): claude emits a JSONL transcript — one event per turn (assistant text,
-  // tool_use, tool_result) plus a terminal `result` line — so the runner can stream live per-turn
-  // observability AND still extract the final structured result. `--verbose` is required by claude
-  // for stream-json in `-p` mode. Confirmed by experiment before this change.
   const args = ['-p', '--model', modelId, '--output-format', 'stream-json', '--verbose', '--permission-mode', permissionMode];
-  // Constrain the final message to the agent-result schema -> a reliable `verdict` in structured_output.
-  // No prose fallback is accepted.
   args.push('--json-schema', AGENT_RESULT_SCHEMA);
-  // Empty list → pass NO tools (most restrictive; text/plan-only). Never widen beyond role.allowedTools.
   if (allowedTools.length > 0) {
     args.push('--allowedTools', allowedTools.join(','));
   }
@@ -168,8 +151,6 @@ function buildArgs(modelId: string, allowedTools: string[], permissionMode: stri
   return args;
 }
 
-// Prompt order (design decision 6): context → [worktree note] → attemptId line → structured-result note.
-// Appending the output instruction here keeps the result contract transport-owned, not buried in role prompts.
 function buildPrompt(context: string, attemptId: string, worktreePath?: string): string {
   const idempotencyLine =
     `Attempt-Id: ${attemptId} — idempotency key. Reference it on any external effect you create.`;
@@ -193,10 +174,6 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
   const command = deps.command ?? DEFAULT_COMMAND;
 
   return async ({ role, profile, context, attemptId, step, reporter }) => {
-    // attemptId is already minted by startAttempt (loop) — consumed here, never re-minted.
-    // cwd is worktree-aware: for a live run, resolveCwd returns the run's isolated worktree
-    // (keyed by step.runId); per-run worktree lifecycle is owned by the workflow, NOT the runner.
-    // 0008 #5: per-role timeout is a wall-clock cap unless an env override supplies the effective cap.
     const timeoutPolicy = resolveEffectiveRunnerTimeoutPolicy({
       idleTimeoutMs: defaultTimeoutPolicy.idleTimeoutMs,
       wallClockLimitMs: defaultTimeoutPolicy.wallClockLimitMs,
@@ -207,9 +184,6 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
     let processActivity: RunnerActivityTracker | undefined;
     try {
       const cwd = await deps.resolveCwd(step);
-      // Belt-and-suspenders: detect if we are running inside a git worktree (linked worktree's .git is a
-      // FILE, not a dir) and export REVO_WORKTREE_PATH + a prompt note so agents that read env rather
-      // than the Repo: context line still write to the correct tree.
       const liveWorktree = isWorktreeDir(cwd);
       const args = buildArgs(profile.modelId, role.allowedTools, permissionMode, profile.params);
       processArtifact = deps.artifactStore?.startProcess({
@@ -226,9 +200,6 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
         wallClockLimitMs: timeoutPolicy.wallClockLimitMs,
       });
       reporter?.started();
-      // stream-json arrives as JSONL; buffer partial chunks and report ONE observability event per
-      // COMPLETE line — this is the live per-turn transcript. The terminal `result` line is skipped
-      // here and reported below via reportTransportMetadata (after extraction), to avoid duplication.
       let stdoutLineBuffer = '';
       const reportStreamLine = (line: string): void => {
         const trimmed = line.trim();
@@ -237,7 +208,7 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
         try {
           evt = JSON.parse(trimmed) as Record<string, unknown>;
         } catch {
-          return; // a partial or non-JSON line — ignore
+          return;
         }
         const type = typeof evt.type === 'string' ? evt.type : 'event';
         processActivity?.markActivity(type === 'heartbeat' ? 'heartbeat' : 'event');
@@ -273,7 +244,6 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
       };
 
       const result = await deps.executor(req);
-      // Flush a trailing partial line (the result line normally ends in \n, so this is usually empty).
       if (stdoutLineBuffer.trim() !== '') reportStreamLine(stdoutLineBuffer);
       const processSnapshot = processArtifact?.finish({
         code: result.code,
@@ -282,8 +252,6 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
         timeoutEvidence: result.timeoutEvidence,
       });
 
-      // Timeout / process failure → throw; the loop's catch → failStep returns the step to ready
-      // (backoff) or dead at the attempt cap. No loop change needed.
       if (result.timedOut) {
         const err = runnerTimeoutFailure('claude-code', result, processSnapshot, timeoutPolicy);
         reporter?.failed(err.message, { timedOut: true, exitCode: result.code });
@@ -322,6 +290,3 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
   };
 }
 
-// Idempotency seam (this slice does NO external create): attemptId is minted before the run and
-// threaded into the prompt so artifacts/effects can reference it. The "create-only-if-key-unused"
-// guard for real commits/PRs is Plan 0011 — the runner itself performs no external write.

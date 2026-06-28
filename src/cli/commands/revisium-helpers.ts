@@ -1,7 +1,5 @@
-/**
- * Process + log helpers shared by the lifecycle CLI (`lifecycle.ts`: stop/logs) and the daemon
- * bring-up path (`ensure-revisium.ts`). Extracted to avoid duplication (F9).
- */
+
+
 import { existsSync, readFileSync } from 'node:fs';
 import { isAlive } from '../config.js';
 
@@ -21,7 +19,6 @@ export async function waitHealthy(url: string, timeoutMs = 120_000): Promise<boo
       const res = await fetch(url, { signal: AbortSignal.timeout(3000) });
       if (res.status >= 200 && res.status < 400) return true;
     } catch {
-      // Not ready yet.
     }
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
@@ -42,7 +39,6 @@ export function killTree(pid: number, signal: NodeJS.Signals): void {
     try {
       process.kill(pid, signal);
     } catch {
-      // Already gone.
     }
   }
 }

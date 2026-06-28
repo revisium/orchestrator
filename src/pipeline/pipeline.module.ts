@@ -4,18 +4,16 @@ import { RevisiumModule } from '../revisium/revisium.module.js';
 import { RunnerModule } from '../runners/runner.module.js';
 import { PipelineService } from './pipeline.service.js';
 
-/**
- * PipelineModule — registers PipelineService, which registers the data-driven pipeline
- * workflow + runStep step + dev-tasks queue with DBOS in its constructor.
- *
- * Imports RunnerModule so RUN_AGENT + IntegratorService are injectable.
- *
- * Registration happens at Nest provider-construction time, which precedes
- * HostLifecycle.onApplicationBootstrap() where DBOS.launch() is called — same
- * ordering proven for dev:ping (OQ-4).
- *
- * HOST-ONLY: this module is imported by AppModule (never by the host-free path).
- */
+
+
+
+
+
+
+
+
+
+
 @Module({
   imports: [EngineModule, RevisiumModule, RunnerModule],
   providers: [PipelineService],

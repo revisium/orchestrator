@@ -15,17 +15,15 @@ export type Role = {
   sourceHash?: string;
   surface?: string;
   rights?: string;
-  /** Per-role agent timeout (0008 #5 — data, not a hardcoded const). undefined → runner default. */
+
   timeoutMs?: number;
-  /** Per-role claude `--permission-mode` (0008 #5). undefined → 'default'. */
+
   permissionMode?: string;
 };
 
-/**
- * PipelinePolicy — pipeline limits as DATA (0008 #5), home = the `routing_policy` table.
- * Replaces the hardcoded MAX_REVIEW_ITERATIONS const + the implicit max_attempts=3 and adds a
- * run-level cost/token BUDGET hard-stop. budgetUsd/budgetTokens of 0 mean "unlimited".
- */
+
+
+
 export type PipelinePolicy = {
   maxReviewIterations: number;
   maxAttempts: number;
@@ -33,7 +31,7 @@ export type PipelinePolicy = {
   budgetTokens: number;
 };
 
-/** Fail-safe defaults — preserve pre-0008 behavior when the routing_policy row is absent. */
+
 export const DEFAULT_PIPELINE_POLICY: PipelinePolicy = {
   maxReviewIterations: 3,
   maxAttempts: 3,
@@ -75,25 +73,25 @@ function parseJsonField(value: unknown): unknown {
   return JSON.parse(value) as unknown;
 }
 
-/** Coerce to a positive integer, else the fallback (for policy/role numeric fields). */
+
 function toPosInt(value: unknown, fallback: number): number {
   const n = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(n) && Number.isInteger(n) && n > 0 ? n : fallback;
 }
 
-/** Coerce to a non-negative number, else the fallback (for budgets — 0 = unlimited). */
+
 function toNonNegNum(value: unknown, fallback: number): number {
   const n = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(n) && n >= 0 ? n : fallback;
 }
 
-/** Optional positive-integer field — undefined when absent/invalid (role timeout). */
+
 function toOptPosInt(value: unknown): number | undefined {
   const n = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(n) && Number.isInteger(n) && n > 0 ? n : undefined;
 }
 
-/** True for a "row not found" error — ControlPlaneError ROW_NOT_FOUND or any 404-shaped error. */
+
 function isRowNotFound(err: unknown): boolean {
   if (err instanceof ControlPlaneError) return err.code === 'ROW_NOT_FOUND';
   const status = (err as { statusCode?: number } | null)?.statusCode;
@@ -123,22 +121,17 @@ export async function loadRole(name: string, transport?: ControlPlaneTransport):
   };
 }
 
-/**
- * loadPipelinePolicy — read pipeline limits from the routing_policy table (0008 #5).
- *
- * Reads row `rowId` (default 'pipeline'); parses its `rule` JSON for max_review_iterations,
- * max_attempts, budget_usd, budget_tokens. Falls back to DEFAULT_PIPELINE_POLICY when the row
- * is absent (routing_policy starts EMPTY) so the pipeline keeps working before the seed lands.
- */
+
+
+
+
+
 export async function loadPipelinePolicy(
   transport?: ControlPlaneTransport,
   rowId = 'pipeline',
 ): Promise<PipelinePolicy> {
   const t = transport ?? createClientTransport('head');
 
-  // Default ONLY when the policy row is absent (routing_policy starts EMPTY). A transport failure
-  // or MALFORMED rule JSON must NOT silently disable the budget/limits — rethrow those so a typo in
-  // the budget config surfaces loudly instead of falling back to "unlimited" (codex 0008 finding).
   let row: { data?: Record<string, unknown> };
   try {
     row = await t.getRow('routing_policy', rowId);
@@ -147,7 +140,6 @@ export async function loadPipelinePolicy(
     throw err;
   }
 
-  // parseJsonField may throw on malformed JSON — intentionally NOT caught (see above).
   const parsed = parseJsonField(row.data?.rule);
   const rule: Record<string, unknown> =
     parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : {};

@@ -143,10 +143,8 @@ export function createRunnerActivityTracker(
   };
 }
 
-/**
- * Canonical low-context activity signal shared by observe_run and future idle-timeout policy work.
- * This normalizes timestamps and counters only; it intentionally does not decide whether a run is idle.
- */
+
+
 export function deriveCanonicalActivitySignal(
   activity: AgentRunActivity | null | undefined,
 ): CanonicalActivitySignal | undefined {

@@ -1,9 +1,7 @@
-/**
- * RunnerModule — provides RUN_AGENT and IntegratorService.
- *
- * Default PROCESS_EXECUTOR = spawnExecutor (real). Tests override with a fake.
- * DBOS-SEALED: zero @dbos-inc imports.
- */
+
+
+
+
 import { Module } from '@nestjs/common';
 import { RevisiumModule } from '../revisium/revisium.module.js';
 import { ClaudeCodeService } from './claude-code.service.js';

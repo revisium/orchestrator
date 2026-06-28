@@ -52,7 +52,7 @@ git history for old task text.
   first.
 - `revo-plans` is read-only source material for this cleanup.
 - Follow the comment policy in [VERIFICATION.md](./VERIFICATION.md) when editing `src/**/*.ts`. Run
-  `pnpm verify` before every merge; `lint:comments` is part of that gate.
+  `pnpm verify` before every merge; the `local/no-dead-pointers` eslint rule (part of `lint:ci`) is part of that gate.
 
 ## e2e performance contract
 

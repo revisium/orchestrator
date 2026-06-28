@@ -78,10 +78,8 @@ export type RunProgress = {
   updatedAt: Date;
 };
 
-/**
- * The resolved, actionable state of a single run — the tagged union `resolveRunState` returns.
- * Reused by `waitForRun` (single run) and the `RunWatchService` watch primitives (fan-out).
- */
+
+
 export type RunState = {
   runId: string;
   state: 'ready' | 'pending_gate' | 'question' | 'running' | 'blocked' | 'failed' | 'completed' | 'retrying';
@@ -96,7 +94,7 @@ export type RunState = {
   latestEventType?: string;
 };
 
-/* node:coverage disable */
+
 type WorkflowStatusSnapshot = Awaited<ReturnType<DbosService['getWorkflowStatus']>>;
 
 type RecoverablePreflightBlock = {
@@ -113,7 +111,7 @@ type RecoveryRunLineage = {
   blockedEventId: string;
   reason: 'preflight';
 };
-/* node:coverage enable */
+
 
 type GitResult = {
   ok: boolean;
@@ -657,11 +655,11 @@ export class TaskControlPlaneApiService {
     pipelineId?: string;
     params?: unknown;
     issueRef?: unknown;
-    /** Private test/service seam; public MCP/CLI do not expose runner profile selection. */
+
     executionProfile?: unknown;
     role?: string;
     start?: boolean;
-    /** Deprecated private shim for route-less compatibility tests. */
+
     runnerMode?: RunnerModeInput;
   }) {
     const route = await this.resolveRouteDecision({
@@ -707,11 +705,6 @@ export class TaskControlPlaneApiService {
     const recoverable = await this.detectRecoverablePreflightBlock(input.runId, run.data.status, existingStatus);
     if (recoverable) return recoverableStartRunResponse(input.runId, route, recoverable);
 
-    // CUTOVER: the data-driven engine is the SOLE pipeline engine. EVERY pipeline
-    // routes to the data-driven workflow, executing the state-machine template carried in its
-    // execution_policy (template_json). A pipeline lacking a valid template FAILS LOUD here
-    // (PIPELINE_NOT_DATA_DRIVEN) rather than silently no-op-ing — there is no hardcoded fallback engine.
-    // A present-but-malformed/invalid template likewise throws (templateFromExecutionPolicy).
     const template = templateFromExecutionPolicy(route.executionPolicy);
     if (!template) {
       throw new ControlPlaneError(
@@ -838,13 +831,13 @@ export class TaskControlPlaneApiService {
     return { title, repo, description, scope, priority, role: recoveryRole, playbookId, pipelineId, params, routeDecision, executionProfile, now, idSuffix };
   }
 
-  /* node:coverage disable */
+
   private async createRecoveryRunOrReuseExpected(
     input: CreateRunInput,
     expected: CreateRunResult,
   ): Promise<CreateRunResult> {
     try {
-      /* node:coverage enable */
+
       return await this.runs.createRun(input);
     } catch (error) {
       if (!(error instanceof CreateRunWorkflowError)) throw error;
@@ -1069,11 +1062,9 @@ export class TaskControlPlaneApiService {
     }
   }
 
-  /**
-   * Resolve a single run to its actionable state. Public so `RunWatchService` can
-   * fan it out across many runs; it is a point-in-time level read (gate = `inbox.find(approval)`),
-   * not an event cursor — the watch primitive layers at-least-once + idempotent delivery on top.
-   */
+
+
+
   async resolveRunState(runId: string): Promise<RunState> {
     const detail = await this.runs.showRun(runId);
     if (!detail) throw new ControlPlaneError('ROW_NOT_FOUND', `run not found: ${runId}`);
@@ -1403,10 +1394,6 @@ export class TaskControlPlaneApiService {
   ): Promise<RouteRoleBinding[]> {
     const roles = (await this.roles.listRoles()).filter((role) => role.playbookId === playbookId);
     const byPlaybookRole = new Map(roles.map((role) => [role.playbookRoleId || role.name, role]));
-    // The route selects WHICH roles a pipeline binds (capability handles the data-driven engine
-    // resolves). Order is no longer load-bearing — the data-driven template owns node sequencing — so
-    // alternative-group selections simply append (the old `insertBeforeFirstDeveloperRole` phase-order
-    // hardcode is removed with the rest of the hardcoded engine).
     const selected = [...pipeline.requiredRoles];
     for (const group of pipeline.alternativeRoles) {
       const match = group.roles.find((roleId) => byPlaybookRole.has(roleId));

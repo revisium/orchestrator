@@ -49,11 +49,10 @@
     "test:cov": "mkdir -p coverage && node --import tsx --test --experimental-test-coverage --test-reporter=spec --test-reporter=lcov --test-reporter-destination=stdout --test-reporter-destination=coverage/lcov.info $(find src -name '*.test.ts' | sort)",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint:ci": "eslint . --max-warnings 0",
-    "lint:comments": "node scripts/check-comments.mjs",
     "sonar:local": "bash scripts/sonar-local.sh",
     "sonar:issues:local": "bash scripts/sonar-issues-local.sh",
     "ci:local:sonar": "bash scripts/ci-local-sonar.sh",
-    "verify": "pnpm run typecheck && pnpm run lint:ci && pnpm run test:cov && pnpm run lint:comments"
+    "verify": "pnpm run typecheck && pnpm run lint:ci && pnpm run test:cov"
   },
   "dependencies": {
     "@dbos-inc/dbos-sdk": "4.19.8",

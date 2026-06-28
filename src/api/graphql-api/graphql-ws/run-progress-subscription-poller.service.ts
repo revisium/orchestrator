@@ -49,7 +49,6 @@ export class RunProgressSubscriptionPoller implements OnModuleInit, OnModuleDest
         await this.pollRun(run);
       }
     } catch {
-      // The poller is an access-layer feed; host startup and CLI/MCP paths must not depend on it.
     } finally {
       this.running = false;
     }

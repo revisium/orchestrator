@@ -24,11 +24,9 @@ function str(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
-/**
- * RolesService — thin DI wrapper over loadRole / loadModelProfile.
- * Injects the HEAD transport (versioned tables, read-only).
- * Propagates ControlPlaneError (ROW_NOT_FOUND, VALIDATION_FAILURE) unchanged.
- */
+
+
+
 @Injectable()
 export class RolesService {
   constructor(
@@ -76,7 +74,7 @@ export class RolesService {
     });
   }
 
-  /** Load pipeline limits (max iterations/attempts, budget) from routing_policy (0008 #5). */
+
   loadPipelinePolicy(): Promise<PipelinePolicy> {
     return loadPipelinePolicy(this.head);
   }

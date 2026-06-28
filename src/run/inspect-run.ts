@@ -30,7 +30,7 @@ export type EventSummary = {
   createdAt: string;
   taskId: string;
   stepId: string;
-  /** Deserialized event payload (output/verdict/reason/…). Surfaced by `run events --verbose`. */
+
   payload: unknown;
 };
 
@@ -102,14 +102,12 @@ function toTaskSummary(row: ControlPlaneRow): TaskSummary {
 
 const EVENT_DESCRIPTION_MAX = 280;
 
-/**
- * Compact a `run_created` event payload for the event/digest read surfaces. That payload
- * embeds the ENTIRE pipeline graph (`route_decision.executionPolicy.template_json`) + `execution_profile`
- * + the full run description, so a single `get_run_events` page that includes it was ~57KB — bloat an
- * operator polls constantly. The graph is a RUN property, retrievable from the run's route (the
- * create/start return, deliberately untouched) — the audit event only needs the human-facing summary.
- * Every other event type passes through verbatim.
- */
+
+
+
+
+
+
 export function compactEventPayload(type: string, payload: unknown): unknown {
   if (type !== 'run_created' || payload === null || typeof payload !== 'object') return payload ?? null;
   const { route_decision: _rd, execution_profile: _ep, description, ...rest } = payload as Record<string, unknown>;
@@ -157,7 +155,6 @@ function toAttemptSummary(row: ControlPlaneRow): AttemptSummary {
   };
 }
 
-// Prisma path+equals accepts scalar values; the SDK types equals as an object due to generated types.
 function runIdWhere(runId: string): RowWhereInputDto {
   return { data: { path: 'run_id', equals: runId as unknown as Record<string, unknown> } };
 }
@@ -217,7 +214,7 @@ export async function listRunEvents(
   return events;
 }
 
-/** List per-attempt observability rows for a run, oldest-first (0008 #4 — `run log`). */
+
 export async function listRunAttempts(
   da: ControlPlaneDataAccess,
   runId: string,
@@ -234,12 +231,10 @@ export async function listRunAttempts(
   return attempts;
 }
 
-/**
- * getRunFailure — read the run-row status + the persisted run_failed reason (0008 #2).
- *
- * Used by `run start --wait` so a FAILURE terminal DBOS status surfaces WHY the run failed
- * instead of a bare "status: ERROR". Returns null when the run does not exist.
- */
+
+
+
+
 export async function getRunFailure(
   da: ControlPlaneDataAccess,
   runId: string,
@@ -263,7 +258,6 @@ export async function getRunFailure(
   return { runStatus, reason: typeof reason === 'string' && reason.length > 0 ? reason : undefined };
 }
 
-// ─────────────────────── formatters ───────────────────────
 
 function pad(s: string, width: number): string {
   return s.length >= width ? s : s + ' '.repeat(width - s.length);
@@ -338,10 +332,8 @@ export function formatEventList(events: EventSummary[]): string {
   return [header, ...lines, summary].join('\n');
 }
 
-/**
- * formatEventListVerbose — like formatRunEvents but expands each event's payload (0008 #4).
- * Surfaces the agent output / verdict / reason that the compact table drops.
- */
+
+
 export function formatEventListVerbose(events: EventSummary[]): string {
   const blocks = events.map((e) => {
     const ts = e.createdAt ? e.createdAt.slice(0, 19) + 'Z' : '';
@@ -356,15 +348,13 @@ export function formatEventListVerbose(events: EventSummary[]): string {
   return [...blocks, summary].join('\n');
 }
 
-/** Two-decimal USD; '$0.0000' is overly noisy, so show 4 dp only when sub-cent. */
+
 function fmtUsd(amount: number): string {
   return amount > 0 && amount < 0.01 ? `$${amount.toFixed(4)}` : `$${amount.toFixed(2)}`;
 }
 
-/**
- * formatAttemptList — per-attempt observability dump for `run log <runId>` (0008 #4).
- * Shows verdict, model, tokens, cost, duration, iteration, status, and the output summary.
- */
+
+
 export function formatAttemptList(attempts: AttemptSummary[]): string {
   if (attempts.length === 0) return '(0 attempts)';
   const blocks = attempts.map((a) => {

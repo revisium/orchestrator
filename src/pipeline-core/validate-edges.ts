@@ -1,13 +1,11 @@
-/**
- * validate-edges — the single model of a node's outgoing edges, shared by the refs (rule 2), topology
- * (rule 3), reachability (rule 5), loop (rule 6), and diff (rule 13) rules. One edge model so those
- * rules cannot disagree about what a node points at.
- */
+
+
+
 
 import { isDefaultBranch } from './types.js';
 import type { Branch, Node } from './types.js';
 
-/** Every outgoing edge of a node as `[path, targetId]` pairs. */
+
 export function outgoingEdges(node: Node): Array<[string, string]> {
   const edges: Array<[string, string]> = [];
   switch (node.kind) {

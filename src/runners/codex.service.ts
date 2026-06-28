@@ -1,11 +1,9 @@
-/**
- * CodexService — Nest provider wrapping createCodexRunner.
- *
- * Injects PROCESS_EXECUTOR so tests can use a fake executor without spawning real `codex`.
- * resolveCwd comes from RunService.makeResolveCwd().
- *
- * DBOS-SEALED: zero @dbos-inc imports.
- */
+
+
+
+
+
+
 import { Inject, Injectable } from '@nestjs/common';
 import { join } from 'node:path';
 import { getConfig } from '../config.js';
@@ -33,6 +31,6 @@ export class CodexService {
     });
   }
 
-  /** Arrow property — safe to pass unbound as a RunAgent. */
+
   run: RunAgent = (args) => this.runner(args);
 }

@@ -6,7 +6,7 @@
 pnpm verify
 ```
 
-Runs in order: `typecheck` → `lint:ci` → `test:cov` → `lint:comments`. All must pass before merging.
+Runs in order: `typecheck` → `lint:ci` → `test:cov`. All must pass before merging.
 
 ## Other gates
 
@@ -37,8 +37,9 @@ DELETE BY DEFAULT. A comment is justified only when it carries information the c
 - Security or hot-path performance constraints.
 
 **When keeping a comment, also:**
-- Strip dead pointer tokens: `§N`, `§N Qn`, `plan NNNN`, bare plan numbers 0015–0018, `slice N`, `consensus MN`, `audit §X`.
-- Do NOT strip `§N` when it appears alongside a valid in-repo doc path (e.g. `docs/specs/`).
+- Strip dead-pointer / crypto-tag tokens: `§N` (unless it sits next to a valid in-repo doc path like `docs/specs/`), crypto rule tags (`G9`, `B5`, `CR-C`, `C2`, …), `NNNN #N` plan-refs, `plan NNNN`, `slice N`, `consensus MN`, `audit §X`. Keep ADR refs (`ADR 0006`).
 - Fix punctuation minimally. Do NOT reword the explanation.
 
-**Enforcement:** `pnpm run lint:comments` (wired into `pnpm verify`) scans `src/**/*.ts` (excluding `*.test.ts` and `src/e2e/**`) and exits 1 on any surviving banned token.
+**Enforcement:** the `local/no-dead-pointers` eslint rule (see `eslint-local-rules/no-dead-pointers.js`, wired into `eslint.config.mjs`) scans comments in `src/**/*.ts` (excluding `*.test.ts` and `src/e2e/**`) and fails `pnpm lint:ci` on any banned token. The no-restating judgment above is enforced in review.
+
+> Note: the tree is intentionally comment-free by this policy. Historical comments (including load-bearing WHY) are recoverable via `git log` / `git blame`.

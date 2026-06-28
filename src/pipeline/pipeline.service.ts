@@ -1,28 +1,26 @@
-/**
- * PipelineService — the DBOS registration hub for the data-driven pipeline engine (ADR-0002).
- *
- * (Renamed from `develop-task.workflow.ts`: the hardcoded `developTask` workflow that file was named for was
- * removed in the data-driven cutover, so the old name described code that no longer exists.)
- *
- * INVARIANT: `src/pipeline/*` imports NO `@dbos-inc/dbos-sdk` (M1 — DBOS sealed).
- * All DBOS interaction goes through the generic DbosService verbs.
- *
- * Registration happens in the constructor, BEFORE DBOS.launch() (mirroring dev:ping).
- *
- * The data-driven engine (`makeDataDrivenTask`, executing a `pipeline-core` graph) is the SOLE pipeline engine:
- * selection routes EVERY pipeline to it (TaskControlPlaneApiService.startRun), and a pipeline lacking a valid
- * data-driven template FAILS LOUD there (PIPELINE_NOT_DATA_DRIVEN). The former hardcoded role→phase classifiers
- * (`planRouteExecution`, `validatePostIntegratorBindings`, …) were removed in that cutover.
- *
- * KEPT here (the shared seams the data-driven adapter reuses):
- *  - `makeRunStep` — the generic per-step runner (role→runner dispatch, attempt/cost/event bookkeeping).
- *  - the run lifecycle verbs (complete/fail/block) + `awaitHuman` (gate park/resume) + the integrator
- *    (real + stub) + the live preflight, wired as DataDrivenTaskDeps.
- *
- * C1 architecture: the step and workflow bodies are extracted as DBOS-free builder functions
- * (`makeRunStep` / `makeDataDrivenTask`). PipelineService registers exactly those builders via
- * the engine seam, so tests can import and exercise the SAME production logic directly.
- */
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 import { Injectable, Inject } from '@nestjs/common';
 import type { WorkflowHandle } from '../engine/types.js';
 import { DbosService } from '../engine/dbos.service.js';
@@ -59,15 +57,13 @@ import {
   type ExecutionProfile,
 } from './route-contract.js';
 
-/** Queue name for the dev-tasks WorkflowQueue. */
+
 const DEV_TASKS_QUEUE = 'dev-tasks';
 
-/**
- * Concurrency limit for the dev-tasks queue. Default 20; overridable via `REVO_DEV_TASKS_CONCURRENCY`.
- * This is a workflow-slot limit, not a runner subprocess limit: parked human gates and long waits also
- * occupy slots, so the default needs enough headroom for several long-lived runs while still bounding
- * the worst-case burst of live agent/script effects until a separate runner semaphore exists.
- */
+
+
+
+
 export function resolveDevTasksConcurrency(
   env: Record<string, string | undefined> = process.env,
 ): number {
@@ -103,13 +99,11 @@ function pinRunnerTransientRetryPolicy(
   return validateRunnerTransientRetryPolicy(policy ?? resolveRunnerTransientRetryPolicy());
 }
 
-/**
- * Durable mode controlling whether real or stub runners + integrator are used.
- *
- * Retained as a harmless public type on the API surface (TaskControlPlaneApiService.startRun still
- * accepts an optional `runnerMode` for route-less compatibility callers); the data-driven engine
- * resolves runner dispatch from the route's role bindings, so the value is a no-op for selection.
- */
+
+
+
+
+
 export type RunnerMode = 'script' | 'live';
 
 export type RunStepPhysicalAttempt = {
@@ -121,37 +115,34 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-// ── Dep shapes (C1 — used by makeRunStep builder) ─────────────────────────────
 
-/** Dependencies for the runStep builder. */
+
 export type RunStepDeps = {
   loadRole: RolesService['loadRole'];
   loadModelProfile: RolesService['loadModelProfile'];
   loadPipelineContext: RunService['loadPipelineContext'];
   appendEvent: (input: AppendEventInput) => Promise<void>;
   appendCost: RunService['appendCost'];
-  /** Persist a per-attempt observability row (0008 #4). */
+
   appendAttempt: RunService['appendAttempt'];
   runAgent: RunAgent;
   writeAgentOutputEvent?: (event: AgentOutputEvent) => Promise<void>;
-  /** Monotonic clock for attempt duration (injectable for deterministic tests). Defaults to Date.now. */
+
   now?: () => number;
 };
 
-/**
- * verdictForAttemptRow — best-effort verdict label for the observability attempts row.
- *
- * The data-driven engine routes on a node's DOMAIN verdict (resolved in the adapter) and never
- * consults this. This is purely the human-readable verdict surfaced on the per-attempt log row: read
- * only the explicit top-level AttemptResult.verdict, else mark it `unknown` for observability. No
- * engine semantics are derived from it.
- */
+
+
+
+
+
+
 function verdictForAttemptRow(result: AttemptResult): string {
   if (typeof result.verdict === 'string' && result.verdict.trim().length > 0) return result.verdict;
   return 'unknown';
 }
 
-/** Parse the rework iteration from a stepKey (`developer#2` → 2; `developer` → 0). */
+
 function iterationOf(stepKey: string): number {
   const hashIdx = stepKey.lastIndexOf('#');
   if (hashIdx < 0) return 0;
@@ -392,13 +383,11 @@ async function appendSuccessfulAttempt(
   }
 }
 
-/**
- * makeRunStep — DBOS-free factory for the runStep async function.
- *
- * Returns a plain async function with the same signature as the DBOS step.
- * PipelineService passes this to `dbos.registerStep(...)` so tests can import
- * and call it directly — exercising the SAME code path as production (C1).
- */
+
+
+
+
+
 export function makeRunStep(deps: RunStepDeps) {
   const {
     loadRole,
@@ -421,13 +410,10 @@ export function makeRunStep(deps: RunStepDeps) {
     executionProfile?: ExecutionProfile,
     physicalAttempt?: RunStepPhysicalAttempt,
   ): Promise<AttemptResult> {
-    // 1. Load the canonical role (B1: role is NEVER mutated with #k).
     const loadedRole = await loadRole(role);
 
-    // 2. Load the model profile from the role's modelLevel (B7: not hardcoded 'standard').
     const profile = await loadModelProfile(loadedRole.modelLevel);
 
-    // 3. Build pipeline context: synthesize in-memory Step with real taskId (M3, B6).
     const { da, step, runContext } = await loadPipelineContext(
       runId,
       role,
@@ -436,11 +422,8 @@ export function makeRunStep(deps: RunStepDeps) {
       profile.level,
     );
 
-    // 4. Resolve the physical attempt before context construction so even pre-launch failures are
-    // scoped to the concrete attempt that invoked runStep.
     const { attemptId, attemptNo } = resolvePhysicalAttempt(runId, stepKey, physicalAttempt);
 
-    // 5. Build the agent context string.
     let context: string;
     try {
       context = await buildContext(da, step, loadedRole, runContext, getConfig().dataDir);
@@ -465,8 +448,6 @@ export function makeRunStep(deps: RunStepDeps) {
       throw err;
     }
 
-    // 6. Dispatch through the resolved per-role runner binding. Legacy direct callers may still
-    //    pass runnerMode ('script'|'live') without a route; that fallback is intentionally private.
     const effectiveRunner = dispatchRunnerId(resolveStepRunner(loadedRole.runner, resolvedRunnerId, executionProfile));
     const dispatchRole = { ...loadedRole, runner: effectiveRunner };
     const reporter = writeAgentOutputEvent
@@ -483,9 +464,6 @@ export function makeRunStep(deps: RunStepDeps) {
         )
       : undefined;
 
-    // 7. Run the agent (timed for the attempt-row duration). Runner-process failures are domain
-    // failures, not DBOS step failures: convert them to a blocking attempt so the workflow can
-    // park/fail the run row instead of leaving DBOS=ERROR with task_runs.status='ready'.
     const startedAt = clock();
     let result: AttemptResult;
     try {
@@ -498,7 +476,6 @@ export function makeRunStep(deps: RunStepDeps) {
     const attemptContext = { runId, role, stepKey, attemptId, attemptNo, step, durationMs };
     const artifactFields = processArtifactFields(result.artifacts);
 
-    // 8. Persist event to Revisium draft (idempotent — ROW_CONFLICT = no-op on replay).
     await appendEvent({
       runId,
       taskId: step.taskId,
@@ -509,14 +486,8 @@ export function makeRunStep(deps: RunStepDeps) {
       payload: { output: result.output, role, stepKey, attemptId, attemptNo },
     });
 
-    // 9. Persist cost rows (idempotent by index).
     await appendAttemptCosts(appendCost, runId, step, stepKey, attemptId, result.costs);
 
-    // 10. Persist the per-attempt observability row (0008 #4). Aggregate tokens/cost from the
-    //     cost records; surface the verdict; redact secrets on store. Idempotent by attemptId.
-    //     NON-FATAL: the attempts row is pure observability — a write failure (e.g. a control-plane
-    //     whose attempts schema predates 0008's fields, additionalProperties:false → VALIDATION_FAILURE)
-    //     must NEVER fail an otherwise-successful agent step. Log and continue.
     await appendSuccessfulAttempt(appendAttempt, attemptContext, result, artifactFields);
 
     return result;
@@ -536,7 +507,7 @@ function resolveStepRunner(
 
 @Injectable()
 export class PipelineService {
-  /** Registered DBOS-wrapped function types. */
+
   private readonly runStepFn: (
     runId: string,
     role: string,
@@ -547,17 +518,15 @@ export class PipelineService {
     physicalAttempt?: RunStepPhysicalAttempt,
   ) => Promise<AttemptResult>;
 
-  /**
-   * The DATA-DRIVEN workflow — the SOLE pipeline engine. Selection routes EVERY pipeline
-   * here (TaskControlPlaneApiService); the engine executes the pinned `pipeline-core` graph on real
-   * DBOS, reusing the SAME runStep DBOS step + awaitHuman + integrator + live preflight.
-   */
+
+
+
   private readonly dataDrivenTaskFn: (
     runId: string,
     opts: DataDrivenTaskOpts,
   ) => Promise<DataDrivenResult>;
 
-  /** The single run-agent used by all steps. */
+
   private readonly runAgent: RunAgent;
 
   constructor(
@@ -577,7 +546,6 @@ export class PipelineService {
   ) {
     this.runAgent = runAgentToken;
 
-    // Capture bound dep methods (S7740: no `this`-aliasing in closures).
     const stepDeps: RunStepDeps = {
       loadRole: this.rolesService.loadRole.bind(this.rolesService),
       loadModelProfile: this.rolesService.loadModelProfile.bind(this.rolesService),
@@ -589,27 +557,21 @@ export class PipelineService {
       writeAgentOutputEvent: (event) => this.dbos.writeStream(AGENT_OUTPUT_STREAM_KEY, event),
     };
 
-    // Register the step using the production builder (must happen BEFORE DBOS.launch()).
     this.runStepFn = this.dbos.registerStep(
       'PipelineService.runStep',
       makeRunStep(stepDeps),
     );
 
-    // Register the REAL integrator as a DBOS step (M6/B7: .bind so `this` survives registration).
     const integrateFn = this.dbos.registerStep(
       'PipelineService.integrate',
       this.integratorService.runIntegrate.bind(this.integratorService),
     );
 
-    // Register the REAL confirm-merge as a DBOS step (gate worktree cleanup on a
-    // real merge). Idempotent (re-views before merging) → replay-safe.
     const confirmMergeFn = this.dbos.registerStep(
       'PipelineService.confirmMerge',
       this.integratorService.runConfirmMerge.bind(this.integratorService),
     );
 
-    // Register the REAL pollPr + respondThreads as DBOS steps (the PR review-feedback loop).
-    // pollPr observes + classifies; respondThreads replies + resolves. Both gh-pinned + idempotent.
     const pollPrFn = this.dbos.registerStep(
       'PipelineService.pollPr',
       this.integratorService.runPollPr.bind(this.integratorService),
@@ -624,14 +586,11 @@ export class PipelineService {
       this.integratorService.runCaptureProducedChange.bind(this.integratorService),
     );
 
-    // Register the live preflight as a memoized DBOS step (B5/B7).
     const preflightFn = this.dbos.registerStep(
       'PipelineService.preflightLive',
       this.integratorService.runPreflight.bind(this.integratorService),
     );
 
-    // Register the per-run worktree lifecycle as memoized DBOS steps. `ensure` is
-    // create-if-absent (idempotent on replay); `release` is best-effort + idempotent.
     const createWorktreeFn = this.dbos.registerStep(
       'PipelineService.worktreeCreate',
       this.worktreeService.ensure,
@@ -641,16 +600,12 @@ export class PipelineService {
       this.worktreeService.release,
     );
 
-    // Build the awaitHuman factory — DBOS-free, depends on injected service verbs.
     const awaitHuman = makeAwaitHuman({
       pushInbox: (item, id) => this.inboxService.pushInbox(item, { id }),
       awaitDecision: (topic) => this.dbos.awaitDecision(topic),
       appendEvent: stepDeps.appendEvent,
     });
 
-    // Register the DATA-DRIVEN workflow using the production builder with the DBOS-wrapped
-    // step. Reuses the SAME runStep + awaitHuman + integrator + preflight so capabilities resolve
-    // through the existing runner machinery (no duplicate dispatch logic, no role-ids in the engine).
     const dataDrivenDeps: DataDrivenTaskDeps = {
       appendEvent: stepDeps.appendEvent,
       appendRunOutput: this.runService.appendRunOutput.bind(this.runService),
@@ -685,19 +640,16 @@ export class PipelineService {
       makeDataDrivenTask(this.runStepFn, dataDrivenDeps),
     );
 
-    // Register the WorkflowQueue (idempotent — Map-guarded in DbosService).
     this.dbos.registerQueue(DEV_TASKS_QUEUE, { concurrency: DEV_TASKS_CONCURRENCY });
   }
 
-  /**
-   * Enqueue the DATA-DRIVEN workflow for the given runId.
-   *
-   * Idempotent by workflowID=runId: re-starting the same runId returns the existing handle. The pinned,
-   * validated template is passed as a DBOS workflow ARGUMENT, so it is durable and replayed verbatim on
-   * recovery (the MVP pin — a Revisium-revision pin is a later upgrade). Route role
-   * bindings and the resolved runner retry policy are also persisted in the DBOS workflow input row and
-   * are authoritative for replay; recovery must not branch on changed process env.
-   */
+
+
+
+
+
+
+
   startDataDrivenTask(
     runId: string,
     opts: StartDataDrivenTaskOpts,

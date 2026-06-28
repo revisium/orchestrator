@@ -2,12 +2,12 @@ import { isGuardedBranch } from './types.js';
 import type { Condition, Node, Template } from './types.js';
 import { outgoingEdges } from './validate-edges.js';
 
-/** Forward (non-catch, non-escalate) edges — `catch`/`escalateTo` are failure routes, not loop edges. */
+
 export function structuralEdges(node: Node): Array<[string, string]> {
   return outgoingEdges(node).filter(([p]) => !p.startsWith('catch') && p !== 'escalateTo');
 }
 
-/** Nodes reachable from `entry` over EVERY outgoing edge (catch/escalate included). */
+
 export function reachableFrom(template: Template, entry: string): Set<string> {
   const seen = new Set<string>();
   const stack = [entry];
@@ -22,7 +22,7 @@ export function reachableFrom(template: Template, entry: string): Set<string> {
   return seen;
 }
 
-/** Nodes structurally reachable from `start` (catch/escalate excluded — failure routes are not flow). */
+
 export function forwardReach(template: Template, start: string): Set<string> {
   const seen = new Set<string>();
   const stack = [start];
@@ -36,7 +36,7 @@ export function forwardReach(template: Template, start: string): Set<string> {
   return seen;
 }
 
-/** Nodes that can structurally reach `target` (predecessor walk over structural edges). */
+
 export function backwardReach(template: Template, target: string): Set<string> {
   const preds = new Map<string, string[]>();
   for (const node of Object.values(template.nodes)) {
@@ -53,7 +53,7 @@ export function backwardReach(template: Template, target: string): Set<string> {
   return seen;
 }
 
-/** Back-edges = forward edges whose target is an ancestor on the DFS stack (a cycle re-entry). */
+
 export function findBackEdges(template: Template): Array<{ from: string; to: string }> {
   const back: Array<{ from: string; to: string }> = [];
   const onStack = new Set<string>();
@@ -74,11 +74,8 @@ export function findBackEdges(template: Template): Array<{ from: string; to: str
   return back;
 }
 
-/** Nodes on a cycle that re-enters `to` via the back-edge from `from` (path to→…→from + from). */
+
 export function cycleNodes(template: Template, to: string, from: string): Set<string> {
-  // Forward-reachable from `to` (staying inside the SCC reaching `from`) — a simple over-approx is the
-  // set of nodes on some path to→…→from. We collect nodes that can both reach `from` and are reached
-  // from `to`, which is exactly the cycle's SCC member set for these structural edges.
   const fromTo = forwardReach(template, to);
   const canReachFrom = backwardReach(template, from);
   const cycle = new Set<string>();
@@ -88,7 +85,7 @@ export function cycleNodes(template: Template, to: string, from: string): Set<st
   return cycle;
 }
 
-/** Nodes reachable from a branch `entry`, stopping AT the join (the join itself is not a member). */
+
 export function branchSubgraph(template: Template, entry: string, joinId: string): Set<string> {
   const seen = new Set<string>();
   const stack = [entry];
@@ -102,7 +99,7 @@ export function branchSubgraph(template: Template, entry: string, joinId: string
   return seen;
 }
 
-/** Every guard Condition on a node (choice/humanGate branches that carry a `when`). */
+
 export function guardConditionsOf(node: Node): Condition[] {
   if (node.kind !== 'choice' && node.kind !== 'humanGate') return [];
   return node.branches.filter(isGuardedBranch).map((b) => b.when);

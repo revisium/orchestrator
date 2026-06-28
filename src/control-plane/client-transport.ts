@@ -28,9 +28,7 @@ export type ControlPlaneTransport = {
   createRow(table: string, rowId: string, data: object): Promise<TransportRow>;
   updateRow(table: string, rowId: string, data: object): Promise<TransportRow>;
   patchRow(table: string, rowId: string, patches: PatchOperation[]): Promise<TransportRow>;
-  /** Drop the cached read-scope so the next call re-resolves the current revision (a committed
-   *  install_playbook must be visible to HEAD reads in the same daemon lifecycle, no restart).
-   *  Optional so existing transport doubles/mocks need not provide it; callers guard with `canInvalidate`. */
+
   invalidate?(): void;
 };
 
@@ -45,15 +43,13 @@ type RowData = NonNullable<Awaited<ReturnType<typeof sdk.row>>['data']>;
 type CreateRowData = NonNullable<Awaited<ReturnType<typeof sdk.createRow>>['data']>;
 type MutationRowData = NonNullable<Awaited<ReturnType<typeof sdk.updateRow>>['data']>;
 
-/**
- * Per-request timeout for Revisium HTTP calls. Without it, an unresponsive daemon makes a single
- * fetch hang until the OS resets the socket (~minutes), stalling the host/CLI/MCP and making
- * `waitForRun` blow past its own deadline (which is only checked *between* calls, not during a hung
- * one). 15s sits well above any healthy call yet fails a hung daemon fast.
- */
+
+
+
+
 const REQUEST_TIMEOUT_MS = 15_000;
 
-/** Wrap a fetch so every request aborts after `timeoutMs`, preserving any caller-supplied signal. */
+
 export function withRequestTimeout(baseFetch: typeof fetch, timeoutMs: number): typeof fetch {
   return (input, init) => {
     const timeout = AbortSignal.timeout(timeoutMs);
@@ -147,12 +143,8 @@ async function getScope(mode: RevisionMode): Promise<ScopeContext> {
   const { org, project, branch } = getConfig();
   const revisiumClient = new RevisiumClient({ baseUrl: baseUrl(runtime.httpPort) });
   const clientInstance = revisiumClient.client;
-  // Bound every request so an unresponsive daemon fails fast instead of hanging for minutes.
   clientInstance.setConfig({ fetch: withRequestTimeout(globalThis.fetch, REQUEST_TIMEOUT_MS) });
 
-  // Use sdk.draftRevision / sdk.headRevision directly (not revisiumClient.revision()) so that
-  // result.error retains statusCode. revisiumClient.revision() routes through unwrap() which throws
-  // a plain Error(message) and discards statusCode, making 404 indistinguishable from other errors.
   const result =
     mode === 'draft'
       ? await sdk.draftRevision({ client: clientInstance, path: { organizationId: org, projectName: project, branchName: branch } })

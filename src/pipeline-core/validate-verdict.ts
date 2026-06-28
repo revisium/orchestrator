@@ -8,7 +8,6 @@ export function ruleVerdictClosure(template: Template, d: DiagSink): void {
   const domainSet = new Set(domain);
   const core = new Set<string>(CORE_VERDICTS);
 
-  // 9a no domain label shadows a core label.
   for (const label of domain) {
     if (core.has(label)) {
       d.error('VERDICT_DOMAIN_SHADOWS_CORE', `domain verdict "${label}" shadows a core verdict`);
@@ -17,17 +16,16 @@ export function ruleVerdictClosure(template: Template, d: DiagSink): void {
 
   const used = new Set<string>();
   for (const node of Object.values(template.nodes)) {
-    checkGuardVerdictLabels(node, core, domainSet, used, d); //  9b verdict.* guard labels ∈ domain
-    checkGateOutcomesSubset(node, domainSet, used, d); //        9c humanGate.outcomes ⊆ domain
+    checkGuardVerdictLabels(node, core, domainSet, used, d);
+    checkGateOutcomesSubset(node, domainSet, used, d);
   }
 
-  // 9d declared-but-unused (warning).
   for (const label of domain) {
     if (!used.has(label)) d.warn('VERDICT_DECLARED_UNUSED', `domain verdict "${label}" is declared but never used`);
   }
 }
 
-/** 9b — every verdict.* guard label on a node is a declared domain label (a core label is a hard error). */
+
 function checkGuardVerdictLabels(
   node: Node,
   core: Set<string>,
@@ -51,7 +49,7 @@ function checkGuardVerdictLabels(
   }
 }
 
-/** 9c — a humanGate's declared outcomes must all be declared domain labels. */
+
 function checkGateOutcomesSubset(node: Node, domainSet: Set<string>, used: Set<string>, d: DiagSink): void {
   if (node.kind !== 'humanGate') return;
   for (const o of node.outcomes) {
