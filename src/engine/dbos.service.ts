@@ -55,6 +55,23 @@ export const GATE_DEADLINE_EPOCH_MS = 4102444800000; // 2100-01-01T00:00:00Z
  */
 export const SHUTDOWN_DRAIN_TIMEOUT_MS = 8_000;
 
+/**
+ * Drain bound in ms, overridable via `REVO_SHUTDOWN_DRAIN_TIMEOUT_MS` (default
+ * {@link SHUTDOWN_DRAIN_TIMEOUT_MS}). The throwaway e2e home sets this low so a teardown that finds a
+ * workflow parked at a gate (whose drain can never complete) detaches fast instead of blocking the
+ * full 8 s. Durable state is recovered on the next launch(), so a short e2e bound loses nothing.
+ * Production leaves the var unset → 8 s. Must be a positive ms; any other value falls back to the
+ * default (use an explicit `shutdown(0)` call, not the env, to disable the bound).
+ */
+export function resolveShutdownDrainTimeoutMs(
+  env: Record<string, string | undefined> = process.env,
+): number {
+  const value = env['REVO_SHUTDOWN_DRAIN_TIMEOUT_MS']?.trim();
+  if (!value) return SHUTDOWN_DRAIN_TIMEOUT_MS;
+  const raw = Number(value);
+  return Number.isFinite(raw) && raw > 0 ? raw : SHUTDOWN_DRAIN_TIMEOUT_MS;
+}
+
 /** Return shape of the dev:ping workflow. */
 export type PingResult = {
   workflowID: string;
@@ -340,9 +357,10 @@ export class DbosService {
    * host detach. Durability is preserved — the parked workflow's state is checkpointed in
    * Postgres and is recovered on the next launch(); abandoning the in-memory drain loses nothing.
    *
-   * @param timeoutMs - drain bound (default SHUTDOWN_DRAIN_TIMEOUT_MS); pass 0/Infinity to disable.
+   * @param timeoutMs - drain bound; defaults to {@link resolveShutdownDrainTimeoutMs}
+   *   (REVO_SHUTDOWN_DRAIN_TIMEOUT_MS, else SHUTDOWN_DRAIN_TIMEOUT_MS). Pass 0/Infinity to disable.
    */
-  async shutdown(timeoutMs: number = SHUTDOWN_DRAIN_TIMEOUT_MS): Promise<void> {
+  async shutdown(timeoutMs: number = resolveShutdownDrainTimeoutMs()): Promise<void> {
     if (!DbosService.launched) return;
     // Mark not-launched up front so a timed-out drain cannot leave a re-entrant launch confused.
     DbosService.launched = false;

@@ -5,6 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { DBOS } from '@dbos-inc/dbos-sdk';
+import { resolveShutdownDrainTimeoutMs, SHUTDOWN_DRAIN_TIMEOUT_MS } from './dbos.service.js';
 
 // Store original methods for restoration.
 const origSetConfig = DBOS.setConfig.bind(DBOS);
@@ -277,6 +278,28 @@ test('DbosService: shutdown() is a no-op on the second call after a detach (0008
     assert.equal(shutdownCallCount, 1, 'DBOS.shutdown() must be called exactly once');
   } finally {
     restoreDbos();
+  }
+});
+
+test('resolveShutdownDrainTimeoutMs: unset/blank keeps the 8 s production default', () => {
+  assert.equal(resolveShutdownDrainTimeoutMs({}), SHUTDOWN_DRAIN_TIMEOUT_MS);
+  assert.equal(resolveShutdownDrainTimeoutMs({ REVO_SHUTDOWN_DRAIN_TIMEOUT_MS: '' }), SHUTDOWN_DRAIN_TIMEOUT_MS);
+  assert.equal(resolveShutdownDrainTimeoutMs({ REVO_SHUTDOWN_DRAIN_TIMEOUT_MS: '  ' }), SHUTDOWN_DRAIN_TIMEOUT_MS);
+});
+
+test('resolveShutdownDrainTimeoutMs: a positive value overrides the default (e2e fast path)', () => {
+  assert.equal(resolveShutdownDrainTimeoutMs({ REVO_SHUTDOWN_DRAIN_TIMEOUT_MS: '100' }), 100);
+});
+
+test('resolveShutdownDrainTimeoutMs: non-positive or non-numeric falls back to the default (no footgun)', () => {
+  // shutdown() reads <=0 as "disable the bound" (await the full drain), so the env knob must never
+  // resolve to 0/negative — those fall back to the safe 8 s default instead of hanging teardown.
+  for (const bad of ['0', '-5', 'abc', 'NaN', 'Infinity']) {
+    assert.equal(
+      resolveShutdownDrainTimeoutMs({ REVO_SHUTDOWN_DRAIN_TIMEOUT_MS: bad }),
+      SHUTDOWN_DRAIN_TIMEOUT_MS,
+      `${bad} must fall back to the default`,
+    );
   }
 });
 

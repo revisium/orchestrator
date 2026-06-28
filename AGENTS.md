@@ -50,3 +50,26 @@ git history for old task text.
 - Do not edit source code for a docs cleanup unless a generated docs link truly requires it; stop and report
   first.
 - `revo-plans` is read-only source material for this cleanup.
+
+## e2e performance contract
+
+The e2e suite must stay **wait-bounded** (poll-based test waits), never **teardown-bounded**. Each
+`*.e2e.test.ts` runs in its own process that boots a real host; two things otherwise make per-file teardown
+expensive (~9 s/file, ~125 s across the suite):
+
+- **Process exit.** `harness.close()` shuts down DBOS but not the Revisium/control-plane client handles, so the
+  test process would sit waiting for the event loop to drain before exiting. `test:e2e` passes
+  `--test-force-exit` so the runner exits as soon as tests finish — a throwaway process's open handles are the
+  OS's problem, and durable state lives in Postgres. This reclaims the bulk of the per-file overhead.
+- **DBOS shutdown drain.** A workflow parked at a human gate can never drain, so the drain blocks up to
+  `SHUTDOWN_DRAIN_TIMEOUT_MS` (8 s in production). `test:e2e` sets `REVO_SHUTDOWN_DRAIN_TIMEOUT_MS=100` to cap
+  it; durable state is recovered on the next `launch()`, so skipping the drain loses nothing (recovery does
+  NOT depend on the in-memory drain). On a clean home only a couple of files park at teardown, but on a reused
+  home with a backlog of parked runs every file pays the full 8 s — so the cap matters most there.
+
+Production leaves `REVO_SHUTDOWN_DRAIN_TIMEOUT_MS` unset → the 8 s default stays in force; `--test-force-exit`
+is test-only. Never set the knob to `0` (that means "await the full drain", i.e. hang on a parked gate).
+
+Target wall-clock: `pnpm test:e2e` ≤ ~200 s. If it regresses toward ~300 s, suspect teardown (a dropped flag)
+before blaming test bodies. `src/e2e/teardown-drain.e2e.test.ts` guards the drain cap: teardown with a parked
+gate must return < 500 ms.
