@@ -521,6 +521,111 @@ test('DD4-issue-143b: mergeReadiness ci_changes routes to ciRework with fresh fe
   assert.deepEqual(ciInputs.mergeFeedback?.evidence, ['fresh pre-gate poll found required check failure']);
 });
 
+/**
+ * #141 — make the `feature-development-pr-review` fixture EVIDENCE-DRIVEN on a merge-gate reject, mirroring
+ * the data-only JSON edit (default + e2e fixture catalogs): the merge gate gains a `recheck` outcome that
+ * routes a REJECT (via gateVerdict's reject→last-outcome rule) to a dedicated `mergeRecheck` re-poll, whose
+ * router routes on the FRESH verdict — clean→blockedEnd (explicit abort), review_changes→triage, ci_changes
+ * (<ciLoop)→ciRework. No runtime code changes; the routing lives entirely in the template (§8).
+ */
+function featureDevelopmentPrReviewWithMergeRecheck(): Template {
+  const t = featureDevelopmentPrReview();
+  if (!t.verdicts.domain.includes('recheck')) t.verdicts.domain = [...t.verdicts.domain, 'recheck'];
+  const mergeGate = t.nodes['mergeGate'];
+  assert.equal(mergeGate?.kind, 'humanGate', 'fixture mergeGate is a humanGate');
+  if (mergeGate.kind === 'humanGate') {
+    mergeGate.outcomes = ['approved', 'recheck'];
+    mergeGate.branches = [
+      on(verdictEq('approved'), 'confirmMerge'),
+      on(verdictEq('recheck'), 'mergeRecheck'),
+      otherwise('blockedEnd'),
+    ];
+  }
+  t.nodes['mergeRecheck'] = node.script('mergeRecheck', 'script:pollPr', 'mergeRecheckRouter', {
+    resultSchema: 'schema:prFeedback',
+    onFailure: 'route',
+    produces: { name: 'prFeedback' },
+    catch: [
+      { onError: 'revo.ScriptBlocked', goto: 'blockedEnd' },
+      { onError: 'revo.ScriptFailed', goto: 'failedEnd' },
+    ],
+  });
+  t.nodes['mergeRecheckRouter'] = node.choice('mergeRecheckRouter', [
+    on(verdictEq('clean'), 'blockedEnd'),
+    on(verdictEq('review_changes'), 'triage'),
+    on(allOf(verdictEq('ci_changes'), counterLt('ciLoop', 3)), 'ciRework'),
+    otherwise('blockedEnd'),
+  ]);
+  return t;
+}
+
+test('DD-issue-141 (abort): merge reject + a still-clean re-poll routes to blockedEnd (explicit abort, NOT a silent terminal)', async () => {
+  // The merge gate opens after pollPr(clean)→mergeReadiness(clean). A human REJECT now maps to the `recheck`
+  // outcome → mergeRecheck re-polls; the gh state is unchanged (clean) → mergeRecheckRouter clean→blockedEnd.
+  // "Nothing changed since the gate opened ⇒ the reject was a genuine abort." Proves the reject re-checks
+  // evidence instead of always terminal-blocking, and that a clean re-poll still settles `blocked`.
+  const { run, rec } = buildAdapter({
+    template: featureDevelopmentPrReviewWithMergeRecheck(),
+    verdicts: { codeReview: 'approved' },
+    gate: (topic) => (topic === 'merge' ? { decision: 'reject' } : { decision: 'approve' }),
+    // every pollPr (pollPr, mergeReadiness, mergeRecheck) is clean — the default fake already returns clean.
+  });
+
+  const result = await run();
+
+  assert.equal(result.status, 'blocked', 'a still-clean re-poll on merge reject is an explicit abort → blocked');
+  assert.equal(rec.completed.length, 0, 'an aborted merge does not complete the run');
+  assert.equal(rec.confirmMergeCalls, 0, 'confirmMerge never ran (the reject aborted instead of merging)');
+  assert.equal(rec.pollPrCalls, 3, 'pollPr → mergeReadiness → mergeRecheck (the reject re-polled fresh readiness)');
+  assert.deepEqual(rec.gates, ['plan', 'merge'], 'the merge gate opened once, then the reject re-polled rather than re-gating');
+});
+
+test('DD-issue-141 (reroute): merge reject + a review_changes re-poll reroutes to triage (recoverable), NOT blocked', async () => {
+  // The merge gate opens after pollPr(clean)→mergeReadiness(clean). A human REJECT re-polls; this time the
+  // re-poll finds a fresh review thread (review_changes) → mergeRecheckRouter review_changes→triage. The run
+  // RECOVERS through the existing review loop (triage wontfix→respondThreads→clean→merge) and is NOT blocked.
+  let polls = 0;
+  let mergeSeen = 0;
+  const { run, rec } = buildAdapter({
+    template: featureDevelopmentPrReviewWithMergeRecheck(),
+    verdicts: { codeReview: 'approved', triage: 'wontfix' },
+    gate: (topic) => {
+      if (topic !== 'merge') return { decision: 'approve' };
+      mergeSeen++;
+      // reject the FIRST merge gate (drives the re-poll reroute); approve the SECOND (after recovery).
+      return mergeSeen === 1 ? { decision: 'reject' } : { decision: 'approve' };
+    },
+    pollPr: () => {
+      polls++;
+      // poll 1 = pollPr, poll 2 = mergeReadiness (both clean → reach the merge gate);
+      // poll 3 = mergeRecheck after the reject → review_changes (reroute to triage); then clean to recover.
+      if (polls === 3) {
+        return {
+          prNumber: 1,
+          headSha: 'recheck-review',
+          evidence: ['merge-reject re-poll found a fresh review thread T141'],
+          verdict: 'review_changes' as const,
+          ciFailures: [],
+          reviewThreads: [{ threadId: 'T141', body: 'address before merge' }],
+        };
+      }
+      return { prNumber: 1, headSha: `poll-${polls}`, evidence: [`poll ${polls}: clean`], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
+    },
+  });
+
+  const result = await run();
+
+  assert.notEqual(result.status, 'blocked', 'a review_changes re-poll is recoverable — the reject must NOT block');
+  assert.equal(result.status, 'succeeded', 'the run recovers through triage/respondThreads, then a clean re-poll merges');
+  // The reject's re-poll (poll 3) returned review_changes → mergeRecheckRouter routed it to triage, which the
+  // analyst handled (wontfix) → respondThreads. respondThreads only runs on the triage recovery path, so a
+  // single call proves the reject rerouted to triage rather than terminal-blocking.
+  assert.equal(rec.respondCalls, 1, 'the rerouted review thread went through triage/respondThreads (the recovery path)');
+  assert.ok(rec.inputsByStep['triage'] !== undefined, 'triage executed (the merge reject rerouted to triage, not blockedEnd)');
+  assert.equal(rec.blocked.length, 0, 'the run never hit blockRun — the reject was rerouted, not aborted');
+  assert.equal(mergeSeen, 2, 'the merge gate opened twice (reject→reroute→recover→re-gate→approve)');
+});
+
 test('DD4-issue-140: code-review changes_requested rework hands the latest produced change to integrator', async () => {
   const { run, rec } = buildAdapter({
     template: featureDevelopmentPrReview(),

@@ -42,7 +42,8 @@
             "ci_changes",
             "fix",
             "wontfix",
-            "question"
+            "question",
+            "recheck"
           ]
         },
         "nodes": {
@@ -316,7 +317,8 @@
             "kind": "humanGate",
             "reason": "merge-review",
             "outcomes": [
-              "approved"
+              "approved",
+              "recheck"
             ],
             "branches": [
               {
@@ -327,6 +329,13 @@
                 "goto": "confirmMerge"
               },
               {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "recheck"
+                },
+                "goto": "mergeRecheck"
+              },
+              {
                 "default": "blockedEnd"
               }
             ],
@@ -334,6 +343,67 @@
               "node": "mergeReadiness",
               "as": "prFeedback"
             }
+          },
+          "mergeRecheck": {
+            "id": "mergeRecheck",
+            "kind": "script",
+            "scriptRef": "script:pollPr",
+            "next": "mergeRecheckRouter",
+            "onFailure": "route",
+            "resultSchema": "schema:prFeedback",
+            "produces": {
+              "name": "prFeedback"
+            },
+            "catch": [
+              {
+                "onError": "revo.ScriptBlocked",
+                "goto": "blockedEnd"
+              },
+              {
+                "onError": "revo.ScriptFailed",
+                "goto": "failedEnd"
+              }
+            ]
+          },
+          "mergeRecheckRouter": {
+            "id": "mergeRecheckRouter",
+            "kind": "choice",
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "clean"
+                },
+                "goto": "blockedEnd"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "review_changes"
+                },
+                "goto": "triage"
+              },
+              {
+                "when": {
+                  "op": "all",
+                  "of": [
+                    {
+                      "op": "verdict.eq",
+                      "value": "ci_changes"
+                    },
+                    {
+                      "op": "counter.lt",
+                      "scope": "ciLoop",
+                      "value": 3
+                    }
+                  ]
+                },
+                "goto": "ciRework"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ]
           },
           "confirmMerge": {
             "id": "confirmMerge",

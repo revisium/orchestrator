@@ -67,16 +67,28 @@ test('B3: plan-gate reject blocks the run (data-routed terminal); developer neve
   }
 });
 
-test('B4: merge-gate reject completes the run (does not cancel)', { skip: e2eSkip }, async () => {
+test('B4: merge-gate reject re-polls fresh readiness; a still-clean re-poll is an explicit abort → blocked (#141)', { skip: e2eSkip }, async () => {
+  // #141: a merge-gate reject is now EVIDENCE-DRIVEN. The reject maps (via gateVerdict's reject→last-outcome
+  // rule) to the `recheck` outcome, which routes to a dedicated `mergeRecheck` script (`script:pollPr`) that
+  // re-observes the PR; `mergeRecheckRouter` then routes on the FRESH verdict. The e2e gh emulator is
+  // deterministically clean here, so the re-poll returns `clean` → clean→blockedEnd: "nothing changed since
+  // the gate opened ⇒ the reject was a genuine abort". (review_changes→triage / ci_changes→ciRework reroutes
+  // are covered deterministically at the workflow-unit level — DD-issue-141 in data-driven-task.workflow.test.ts.)
   const target = createTargetRepo();
   try {
     const { runId, inboxId } = await givenFeatureRunAtMergeGate(h, target);
     const res = await h.api.rejectGate({ inboxId, resolvedBy: 'e2e' });
     assert.equal(res.topic, 'merge');
 
-    await waitState(h.api, runId);
-    const detail = await h.api.getRun({ runId });
-    assert.equal(detail.run.status, 'completed', 'merge reject completes the run (see fix #53)');
+    await waitState(h.api, runId); // workflow returns after the recheck routes to the blocked terminal
+    // waitForRun reports `blocked` as soon as the pipeline_blocked event is visible; the run-row status patch
+    // lags it, so poll briefly for the run row to settle off `running` rather than reading once (B3 pattern).
+    let detail = await h.api.getRun({ runId });
+    for (let waited = 0; waited < 5_000 && detail.run.status === 'running'; waited += 250) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      detail = await h.api.getRun({ runId });
+    }
+    assert.equal(detail.run.status, 'blocked', 'a still-clean re-poll on merge reject is an explicit abort → blocked');
   } finally {
     target.cleanup();
   }
