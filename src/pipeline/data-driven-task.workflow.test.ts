@@ -556,6 +556,18 @@ function featureDevelopmentPrReviewWithMergeRecheck(): Template {
     on(allOf(verdictEq('ci_changes'), counterLt('ciLoop', 3)), 'ciRework'),
     otherwise('blockedEnd'),
   ]);
+  // Mirror the JSON catalogs: the recovery nodes also consume the FRESH mergeRecheck feedback (optional +
+  // staleOk, since mergeRecheck only runs on the reject path) so a reject-routed triage/ciRework acts on the
+  // re-poll evidence, not the stale pre-gate readiness.
+  for (const nodeId of ['triage', 'ciRework']) {
+    const recovery = t.nodes[nodeId];
+    if (recovery.kind === 'agent') {
+      recovery.consumes = [
+        ...(recovery.consumes ?? []),
+        { node: 'mergeRecheck', as: 'recheckFeedback', optional: true, staleOk: true },
+      ];
+    }
+  }
   return t;
 }
 
@@ -621,7 +633,16 @@ test('DD-issue-141 (reroute): merge reject + a review_changes re-poll reroutes t
   // analyst handled (wontfix) → respondThreads. respondThreads only runs on the triage recovery path, so a
   // single call proves the reject rerouted to triage rather than terminal-blocking.
   assert.equal(rec.respondCalls, 1, 'the rerouted review thread went through triage/respondThreads (the recovery path)');
-  assert.ok(rec.inputsByStep['triage'] !== undefined, 'triage executed (the merge reject rerouted to triage, not blockedEnd)');
+  // The evidence handoff (not just the route): the reject-routed triage was hydrated with the FRESH
+  // mergeRecheck feedback (poll 3, headSha `recheck-review`) via its new `recheckFeedback` consume — so the
+  // analyst triages the re-poll evidence, not the stale pre-gate readiness (poll 2).
+  const triageInputs = rec.inputsByStep['triage'] as { recheckFeedback?: { headSha?: string; reviewThreads?: Array<{ threadId?: string }> } } | undefined;
+  assert.equal(triageInputs?.recheckFeedback?.headSha, 'recheck-review', 'triage received the fresh merge-recheck feedback');
+  assert.deepEqual(
+    triageInputs?.recheckFeedback?.reviewThreads,
+    [{ threadId: 'T141', body: 'address before merge' }],
+    'the fresh review thread the re-poll surfaced reached triage',
+  );
   assert.equal(rec.blocked.length, 0, 'the run never hit blockRun — the reject was rerouted, not aborted');
   assert.equal(mergeSeen, 2, 'the merge gate opened twice (reject→reroute→recover→re-gate→approve)');
 });

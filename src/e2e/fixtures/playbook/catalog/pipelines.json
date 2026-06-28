@@ -583,7 +583,7 @@
                 "goto": "mergeRecheck"
               },
               {
-                "default": "mergedEnd"
+                "default": "blockedEnd"
               }
             ],
             "gatedArtifact": {
@@ -836,6 +836,12 @@
                 "as": "mergeFeedback",
                 "optional": true,
                 "staleOk": true
+              },
+              {
+                "node": "mergeRecheck",
+                "as": "recheckFeedback",
+                "optional": true,
+                "staleOk": true
               }
             ]
           },
@@ -862,6 +868,12 @@
               {
                 "node": "mergeReadiness",
                 "as": "mergeFeedback",
+                "optional": true,
+                "staleOk": true
+              },
+              {
+                "node": "mergeRecheck",
+                "as": "recheckFeedback",
                 "optional": true,
                 "staleOk": true
               }
