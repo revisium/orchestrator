@@ -33,7 +33,7 @@ import type { RunnerActivityTracker } from '../observability/activity-signal.js'
 
 export type ClaudeCodeRunnerDeps = {
   executor: ProcessExecutor;
-  resolveCwd: (step: Step) => Promise<string>; // worktree-aware (plan 0017): the run's isolated worktree for live runs
+  resolveCwd: (step: Step) => Promise<string>; // worktree-aware: the run's isolated worktree for live runs
   timeoutMs?: number; // configured wall-clock safety cap default
   idleTimeoutMs?: number;
   command?: string; // default 'claude'
@@ -152,7 +152,7 @@ function buildArgs(modelId: string, allowedTools: string[], permissionMode: stri
   // stream-json (NOT json): claude emits a JSONL transcript — one event per turn (assistant text,
   // tool_use, tool_result) plus a terminal `result` line — so the runner can stream live per-turn
   // observability AND still extract the final structured result. `--verbose` is required by claude
-  // for stream-json in `-p` mode. Confirmed by experiment before this change (slice 128).
+  // for stream-json in `-p` mode. Confirmed by experiment before this change.
   const args = ['-p', '--model', modelId, '--output-format', 'stream-json', '--verbose', '--permission-mode', permissionMode];
   // Constrain the final message to the agent-result schema -> a reliable `verdict` in structured_output.
   // No prose fallback is accepted.
@@ -194,7 +194,7 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
 
   return async ({ role, profile, context, attemptId, step, reporter }) => {
     // attemptId is already minted by startAttempt (loop) — consumed here, never re-minted.
-    // cwd is worktree-aware (plan 0017): for a live run, resolveCwd returns the run's isolated worktree
+    // cwd is worktree-aware: for a live run, resolveCwd returns the run's isolated worktree
     // (keyed by step.runId); per-run worktree lifecycle is owned by the workflow, NOT the runner.
     // 0008 #5: per-role timeout is a wall-clock cap unless an env override supplies the effective cap.
     const timeoutPolicy = resolveEffectiveRunnerTimeoutPolicy({
@@ -209,7 +209,7 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
       const cwd = await deps.resolveCwd(step);
       // Belt-and-suspenders: detect if we are running inside a git worktree (linked worktree's .git is a
       // FILE, not a dir) and export REVO_WORKTREE_PATH + a prompt note so agents that read env rather
-      // than the Repo: context line still write to the correct tree (slice 143 follow-up).
+      // than the Repo: context line still write to the correct tree.
       const liveWorktree = isWorktreeDir(cwd);
       const args = buildArgs(profile.modelId, role.allowedTools, permissionMode, profile.params);
       processArtifact = deps.artifactStore?.startProcess({

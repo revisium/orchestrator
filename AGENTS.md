@@ -37,6 +37,7 @@ Read [docs/architecture-overview.md](./docs/architecture-overview.md) and the sp
 - [docs/adr/](./docs/adr/) - high-level decision records.
 - [docs/specs/](./docs/specs/) - exact durable contracts.
 - [docs/getting-started.md](./docs/getting-started.md) - local operator flow.
+- [VERIFICATION.md](./VERIFICATION.md) - repo gates and the comment policy (HARD RULE).
 
 There is no canonical docs archive of obsolete work orders. Work orders belong in GitHub Issues or Revo runs; use
 git history for old task text.
@@ -50,6 +51,8 @@ git history for old task text.
 - Do not edit source code for a docs cleanup unless a generated docs link truly requires it; stop and report
   first.
 - `revo-plans` is read-only source material for this cleanup.
+- Follow the comment policy in [VERIFICATION.md](./VERIFICATION.md) when editing `src/**/*.ts`. Run
+  `pnpm verify` before every merge; `lint:comments` is part of that gate.
 
 ## e2e performance contract
 

@@ -1,5 +1,5 @@
 /**
- * Rogue-reaper (slice 140 Phase 2, pure core). `revo doctor --fix` / `revo stop --all` actively EVICT
+ * Rogue-reaper (pure core). `revo doctor --fix` / `revo stop --all` actively EVICT
  * a legacy/duplicate daemon that polls the `dev-tasks` queue but the advisory lock can't coordinate and
  * the port-based stop can't see (it's an outbound poller with no inbound listener). Two mechanisms:
  *

@@ -48,7 +48,7 @@ export async function runHostDaemon(): Promise<void> {
   // service layer (startGraphqlHost) caches its read scope, so same-boot reads see a ready control-plane.
   const { runtime } = await ensureRevisium();
 
-  // Singleton gate (slice 139): exactly ONE host daemon per profile may own + poll the dev-tasks
+  // Singleton gate: exactly ONE host daemon per profile may own + poll the dev-tasks
   // queue. Acquired here — BEFORE DBOS.launch()/queue polling (startGraphqlHost) — so a daemon that
   // lost a concurrent cold-start race exits cleanly without ever touching the queue; ensureHost then
   // attaches to the winner via host.json. Crash-safe: the connection-scoped advisory lock frees itself
@@ -78,7 +78,7 @@ export async function runHostDaemon(): Promise<void> {
     // resolvers use): resolving McpFacadeService itself via app.get left its injected `api` undefined.
     const mcpPort = resolveMcpPort(started.port);
     const api = started.app.get(TaskControlPlaneApiService, { strict: false });
-    // Option A (slice 141 D2): give the watch primitive APP_PUB_SUB so a gate/terminal wakes a held
+    // Give the watch primitive APP_PUB_SUB so a gate/terminal wakes a held
     // long-poll instead of polling. PubSubModule is @Global, so it resolves off the started handle; if
     // it can't, RunWatchService degrades to its internal poll (option B) — same correctness.
     let watchPubSub: WatchPubSub | undefined;

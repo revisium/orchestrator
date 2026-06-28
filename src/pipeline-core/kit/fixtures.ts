@@ -1,9 +1,9 @@
 /**
  * pipeline-core/kit/fixtures.ts — typed Template fixtures (the e2e-style "real pipelines" + targeted).
  *
- * `featureDevelopment` is the §13 canonical example, transcribed faithfully to a typed `Template`.
- * `localChange` is its no-gate sibling (§13 footnote). The rest are small, single-purpose fixtures:
- * nested-scope loops, a parallel/join, and one INVALID template per §12 rule (each named for the rule
+ * `featureDevelopment` is the canonical example, transcribed faithfully to a typed `Template`.
+ * `localChange` is its no-gate sibling. The rest are small, single-purpose fixtures:
+ * nested-scope loops, a parallel/join, and one INVALID template per validation rule (each named for the rule
  * + diagnostic it is designed to trip), so validation tests read as a rule catalogue.
  */
 
@@ -22,10 +22,6 @@ import {
   verdictIn,
 } from './builders.js';
 import type { Branch, CatchEntry, ConsumesRef, Template } from '../types.js';
-
-// ─────────────────────────────────────────────────────────────────────────────
-// §13 — feature-development (the canonical example).
-// ─────────────────────────────────────────────────────────────────────────────
 
 export function featureDevelopment(): Template {
   return template('feature-development')
@@ -79,7 +75,7 @@ export function featureDevelopment(): Template {
 }
 
 /**
- * confirmMergeFlow — minimal fixture exercising the `script:confirmMerge` node (plan 0017 follow-up):
+ * confirmMergeFlow — minimal fixture exercising the `script:confirmMerge` node:
  * entry → confirmMerge → mergedEnd, with catch routing a block to `blockedEnd` and a throw to `failedEnd`.
  * Used to assert the adapter routes a merged result to a SUCCEEDED terminal (worktree released) and a
  * not-merged block to a BLOCKED terminal (worktree kept).
@@ -143,7 +139,7 @@ function prFeedbackConsumes(): ConsumesRef[] {
 }
 
 /**
- * featureDevelopmentPrReview — the plan 0018 PR review-feedback loop, transcribed to a typed Template.
+ * featureDevelopmentPrReview — the PR review-feedback loop, transcribed to a typed Template.
  * Mirrors the seeded `feature-development` tail: after the integrator opens the PR, `pollPr` observes +
  * classifies (review_changes > ci_changes > clean); review comments go through analyst `triage`
  * (fix/wontfix/question) with a separate question gate; CI failures loop the developer; fixes are
@@ -201,7 +197,7 @@ export function featureDevelopmentPrReview(): Template {
         ],
         catch: [{ onError: 'revo.ScriptFailed', goto: 'failedEnd' }],
       }),
-      // ── plan 0018/issue 143 — observe the PR, then re-check readiness immediately before the merge gate ──
+      // observe the PR, then re-check readiness immediately before the merge gate
       prReadinessScript('pollPr', 'prRouter'),
       node.choice('prRouter', prReadinessBranches('mergeReadiness')),
       prReadinessScript('mergeReadiness', 'mergeReadinessRouter'),
@@ -258,10 +254,6 @@ export function featureDevelopmentPrReview(): Template {
     .build();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// §13 footnote — local-change (orchestrator + developer, NO humanGate).
-// ─────────────────────────────────────────────────────────────────────────────
-
 export function localChange(): Template {
   return template('local-change')
     .title('Local change — orchestrator + developer, no gate')
@@ -274,10 +266,6 @@ export function localChange(): Template {
     )
     .build();
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Targeted — a nested-scope rework loop (inner loop resets on outer re-entry, §7).
-// ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * outer (cap 2) ⊃ inner (cap 2). `outerWork` increments `outer` (and resets `inner`); `innerWork`
@@ -309,10 +297,6 @@ export function nestedScopeLoop(): Template {
     .build();
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Targeted — a parallel/join (two review branches → join → terminal).
-// ─────────────────────────────────────────────────────────────────────────────
-
 /** Map a join-mode kind to its `JoinMode` (quorum fixed at 2 for this fan-out shape). */
 function joinModeFromKind(kind: 'all' | 'any' | 'quorum') {
   if (kind === 'all') return joinAll();
@@ -333,7 +317,7 @@ export function parallelReview(joinModeKind: 'all' | 'any' | 'quorum' = 'all'): 
       ], 'reviewJoin'),
       node.agent('secReview', 'role:reviewer', 'reviewJoin'),
       node.agent('perfReview', 'role:reviewer', 'reviewJoin'),
-      // `merge` declared so the 2-writer fan-out is well-formed under all modes (§12.8).
+      // `merge` declared so the 2-writer fan-out is well-formed under all modes.
       node.join('reviewJoin', mode, 'joinRouter', { merge: { findings: 'appendByBranchOrder' } }),
       node.choice('joinRouter', [on(verdictEq('clean'), 'doneEnd'), otherwise('blockedEnd')]),
       node.terminal('doneEnd', 'succeeded'),
@@ -341,10 +325,6 @@ export function parallelReview(joinModeKind: 'all' | 'any' | 'quorum' = 'all'): 
     )
     .build();
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Targeted — a gate with a timeout edge (§6) + a node with onFailure=route+catch (§6).
-// ─────────────────────────────────────────────────────────────────────────────
 
 export function gateWithTimeout(): Template {
   return template('gate-with-timeout')
@@ -360,10 +340,6 @@ export function gateWithTimeout(): Template {
     )
     .build();
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// INVALID fixtures — one per §12 rule. Each is the minimal shape that trips its rule.
-// ─────────────────────────────────────────────────────────────────────────────
 
 /** rule 1 — entry points at a node that does not exist (ENTRY_UNRESOLVED). */
 export const invalidEntryUnresolved = (): Template =>

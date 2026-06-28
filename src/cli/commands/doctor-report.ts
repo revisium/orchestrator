@@ -27,15 +27,15 @@ export type DoctorObservation = {
   /**
    * Processes listening on the profile's ports whose pid does NOT match the tracked daemon/standalone
    * — an untracked or duplicate daemon (the "daemon zoo" signal that lets stale daemons silently serve
-   * runs). slice 139.
+   * runs).
    */
   unexpectedPortOwners?: Array<{ label: string; port: number; pid: number }>;
-  /** The running daemon's code version differs from this build/installation (stale daemon). slice 139. */
+  /** The running daemon's code version differs from this build/installation (stale daemon). */
   versionMismatch?: { running: string; current: string };
   /**
    * Foreign DBOS connections on the profile's `dbos` database whose executor id is not this profile's
    * pinned owner — a legacy/duplicate daemon polling `dev-tasks` that the advisory lock cannot stop and
-   * the port-based reap cannot see (it has no inbound listener). slice 140.
+   * the port-based reap cannot see (it has no inbound listener).
    */
   queuePollerRogues?: Array<{ pid: number; executorId: string; applicationName: string }>;
   /**
@@ -51,7 +51,7 @@ export function buildDoctorReport(o: DoctorObservation): DoctorReport {
   const issues: string[] = [];
 
   // Daemon-zoo signal: a process not tracked by host.json/runtime.json holds a profile port. The
-  // advisory-lock singleton (slice 139) stops new duplicates, but pre-existing/orphan ones must be seen.
+  // advisory-lock singleton stops new duplicates, but pre-existing/orphan ones must be seen.
   for (const owner of o.unexpectedPortOwners ?? []) {
     issues.push(
       `Unexpected process (pid ${owner.pid}) on the ${owner.label} port ${owner.port} — an untracked or ` +

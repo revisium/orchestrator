@@ -66,7 +66,7 @@ export function drive(template: Template, script: DriveScript = {}): DriveResult
     }
 
     if (decision.type === 'fork') {
-      // The adapter runs the branches concurrently and records arrivals (§4); the core never sees the
+      // The adapter runs the branches concurrently and records arrivals; the core never sees the
       // live race. We model that by jumping the cursor to the JOIN and feeding the arrivals scripted
       // on the join node, so the next step aggregates a recorded result. A missing join script with
       // mode `all` synthesizes one arrival per branch (verdict undefined) so the barrier is satisfied.

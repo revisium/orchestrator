@@ -45,7 +45,7 @@ export type IntegratorDeps = {
   execGh: ExecGhFn;
   /** BASE checkout resolver (keyed by taskId) — used by the live preflight (runs before the worktree). */
   resolveTaskCwd: (taskId: string) => Promise<string>;
-  /** RUN worktree resolver (keyed by runId, plan 0017) — used by integrate() so the commit/push happen
+  /** RUN worktree resolver (keyed by runId) — used by integrate() so the commit/push happen
    *  in the run's isolated worktree, never the shared base checkout. */
   resolveRunCwd: (runId: string, taskId: string) => Promise<string>;
 };
@@ -80,7 +80,7 @@ export type IntegratorInput = {
   issueRef?: IssueRef;
   /** Developer-produced git artifact consumed by the integrator when a dataflow producer is present. */
   change?: ProducedChangeArtifact;
-  /** Hydrated `consumes` for a script node that needs upstream data (plan 0018: respondThreads ← triage). */
+  /** Hydrated `consumes` for a script node that needs upstream data (respondThreads ← triage). */
   triage?: unknown;
   /** Fresh merge-readiness artifact consumed by confirmMerge for its GitHub head SHA guard. */
   mergeReadiness?: { headSha: string };
@@ -96,7 +96,7 @@ export type IntegratorOutput = {
   message?: string;
 };
 
-// ─── PR find-or-create (M4 — own idempotent list→filter→create, public seam) ──
+// PR find-or-create — own idempotent list→filter→create, public seam
 
 type PrListEntry = { number: number; url: string; baseRefName: string; headRefOid?: string };
 type PrSummary = { prUrl: string; prNumber: number; headSha?: string };
@@ -387,7 +387,7 @@ export async function integrate(
   if (input.change) return integrateProducedChange(input, deps, input.change);
 
   const { execGit: git, execGh: gh, resolveRunCwd } = deps;
-  // Resolve the run's ISOLATED worktree (plan 0017) — it is already checked out on `branch`, so the
+  // Resolve the run's ISOLATED worktree — it is already checked out on `branch`, so the
   // branchExists→switch path below is a no-op and the dirty-tree `switch -c origin/<base>` (which
   // failed when the base checkout carried prior-run changes) is never taken.
   const cwd = await resolveRunCwd(input.runId, input.taskId);
@@ -618,7 +618,7 @@ export async function confirmMerge(
   return { needsHuman: true, lesson: `PR #${after.number} merge did not take effect (state=${after.state}) — verify manually` };
 }
 
-// ─── pollPr (script:pollPr) — observe + classify PR feedback (plan 0018) ──────
+// pollPr (script:pollPr) — observe + classify PR feedback
 
 /** One failing CI check carried in prFeedback (name + conclusion + the run details link). */
 export type CiFailure = { name: string; conclusion: string; detailsUrl?: string };
@@ -626,7 +626,7 @@ export type CiFailure = { name: string; conclusion: string; detailsUrl?: string 
 /** One unresolved review thread carried in prFeedback (the GraphQL node id is the resolve handle). */
 export type PrReviewThread = { threadId: string; path?: string; line?: number; author?: string; body: string };
 
-/** The classified feedback `pollPr` produces (the 0016 dataflow output consumed downstream). */
+/** The classified feedback `pollPr` produces (the dataflow output consumed downstream). */
 export type PrFeedback = {
   /** null when no PR could be identified (error paths) — never the invalid sentinel 0 (GitHub PRs start at 1). */
   prNumber: number | null;
@@ -658,7 +658,7 @@ export type PollPrDeps = IntegratorDeps & {
   /** Inter-poll interval in ms (defaults to {@link POLL_PR_INTERVAL_MS}). */
   pollIntervalMs?: number;
   /** Bounded grace polls, AFTER CI goes green + the PR is readied, to let review threads surface
-   *  before declaring clean (slice 142). 0 disables the wait. Defaults to REVO_POLL_PR_REVIEW_GRACE_POLLS. */
+   *  before declaring clean. 0 disables the wait. Defaults to REVO_POLL_PR_REVIEW_GRACE_POLLS. */
   reviewGracePolls?: number;
   /** Resolve the SET of branch-protection-REQUIRED check names for the PR (defaults to the live
    *  `fetchRequiredCheckNames`). Injectable so unit tests drive required-ness without real gh. */
@@ -723,7 +723,7 @@ function readinessEvidence(readiness: PollPrReadiness): string[] {
 
 /**
  * pollPr — REAL (live only). Polls `collectPrReadiness` until CI is terminal (no pending checks) or a
- * timeout, then classifies the feedback by TYPE (plan 0018): unresolved review threads → review_changes;
+ * timeout, then classifies the feedback by TYPE: unresolved review threads → review_changes;
  * else failing checks → ci_changes; else clean. A timeout with checks still pending → block (human).
  * Replay-safe at the DBOS-step boundary (memoized result), idempotent (read-only gh).
  */
@@ -770,7 +770,7 @@ export async function pollPr(
 
   // CI green → flip the PR draft→ready so CodeRabbit / human reviewers actually engage. They SKIP
   // draft PRs, which silently bypassed the entire review loop (the PR was readied only at confirmMerge,
-  // i.e. after the merge gate) — slice 142. Then wait a BOUNDED grace for review threads to surface
+  // i.e. after the merge gate). Then wait a BOUNDED grace for review threads to surface
   // before declaring clean, so we don't merge-gate a millisecond before CodeRabbit posts. We never
   // BLOCK on a review arriving: the human merge gate is the backstop, so an absent / rate-limited
   // reviewer falls through to it rather than deadlocking the run. CI-red stays draft (don't request
@@ -826,7 +826,7 @@ export async function pollPr(
     }
   }
 
-  // Decision order (plan 0018): review threads first, then CI (required-only), else clean.
+  // Decision order: review threads first, then CI (required-only), else clean.
   const verdict: PrFeedback['verdict'] =
     reviewThreads.length > 0 || readinessRequiresReview(settled)
       ? 'review_changes'
@@ -843,7 +843,7 @@ export async function pollPr(
   };
 }
 
-// ─── respondThreads (script:respondThreads) — reply + resolve (plan 0018) ─────
+// respondThreads (script:respondThreads) — reply + resolve
 
 /** One triage item the analyst produced — the per-thread decision + the reply to post. */
 export type TriageItem = {
@@ -853,7 +853,7 @@ export type TriageItem = {
   replyText?: string;
 };
 
-/** The triage object consumed by respondThreads (the analyst's `triage` output, 0016 dataflow). */
+/** The triage object consumed by respondThreads (the analyst's `triage` output). */
 export type Triage = { items: TriageItem[]; ciGuidance?: string; needsHuman?: boolean };
 
 export type RespondThreadsOutput = { replied: number; resolved: number };
@@ -879,7 +879,7 @@ export function asTriage(value: unknown): Triage {
 
 /**
  * respondThreads — REAL (live only). For each triaged thread we acted on (decision fix OR wontfix —
- * plan 0018 decision #2), reply in the thread then resolve it, via the gh-pinned GraphQL API
+ * decision #2), reply in the thread then resolve it, via the gh-pinned GraphQL API
  * (`addPullRequestReviewThreadReply` then `resolveReviewThread`). Question items are skipped (they go to
  * the question gate, not auto-resolved). Idempotent: resolving an already-resolved thread is a no-op for
  * the loop (a reopened/new comment is caught by the next pollPr).

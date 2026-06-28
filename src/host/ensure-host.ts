@@ -85,7 +85,7 @@ function spawnDaemon(): void {
   const [cmd, args] = daemonSpawnArgv();
   // env inheritance carries the resolved profile (REVO_PROFILE / REVO_* knobs) to the daemon, PLUS the
   // pinned DBOS identity (DBOS__VMID/DBOS__APPVERSION). dbos-sdk reads those at IMPORT time, so they
-  // must be in the child's env from the start — set here, never mutated after launch (slice 140).
+  // must be in the child's env from the start — set here, never mutated after launch.
   const env = { ...process.env, ...dbosEnvPin(getConfig().profile, process.env) };
   const child = spawn(cmd, args, { detached: true, stdio: ['ignore', out, out], env });
   closeSync(out);
@@ -103,7 +103,7 @@ export async function ensureHost(options: EnsureHostOptions = {}): Promise<Ensur
 
   if (existing && isHostRunning()) {
     if (await isGraphqlHealthy(existing.graphqlPort)) {
-      // Version-check (slice 139): surface a daemon running a DIFFERENT build than this install so it
+      // Version-check: surface a daemon running a DIFFERENT build than this install so it
       // can't silently serve stale behavior. We warn (not auto-kill) to avoid disrupting in-flight runs;
       // `revo restart` (or `doctor`) replaces it. A 0.0.0 dev checkout doesn't change version → no warn.
       if (existing.version !== undefined && existing.version !== hostCodeVersion()) {
@@ -124,8 +124,8 @@ export async function ensureHost(options: EnsureHostOptions = {}): Promise<Ensur
   }
 
   // No live daemon — clear a stale host.json (dead pid), then spawn a fresh detached one.
-  // The check-then-spawn is not atomic, but the daemon's advisory-lock singleton (slice 139,
-  // queue-ownership.ts) makes a concurrent cold-start safe: if two ensureHost() callers both spawn
+  // The check-then-spawn is not atomic, but the daemon's advisory-lock singleton (queue-ownership.ts)
+  // makes a concurrent cold-start safe: if two ensureHost() callers both spawn
   // `__daemon`, only one wins the per-profile lock and lives; the loser exits before DBOS/queue, and
   // every waiter observes the winner's host.json via waitForReady.
   if (existing) removeHostRuntime();

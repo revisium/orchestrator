@@ -156,7 +156,7 @@ function checkMergeReducers(
 ): void {
   // v1 cannot statically know a node's written fields without a resultSchema model, so we use a
   // conservative proxy: a parallel fanning out ≥2 effect (agent/script) branches writes results from
-  // >1 branch; absent a `merge` reducer those fields are unguarded (§4/§12.8). A real per-field model
+  // >1 branch; absent a `merge` reducer those fields are unguarded. A real per-field model
   // lands with native Revisium typing; until then the entry-kind heuristic surfaces the hazard.
   if (par.branches.length < 2) return;
   if (Object.keys(join.merge ?? {}).length > 0) return;

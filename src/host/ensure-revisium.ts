@@ -18,7 +18,7 @@
  *   AND the spawn-timeout cleanup (F19), so neither path can accidentally delete a runtime
  *   that belongs to a concurrently-started daemon.
  *
- * Known limitation — concurrent cold-start (deferred per ТЗ §3.3.5, slice 0001):
+ * Known limitation — concurrent cold-start (deferred):
  *   Two host processes starting with no live daemon in the same narrow window can still
  *   race to spawn — the compare-and-delete re-check narrows the orphan window but does
  *   NOT serialize spawns. Full cross-process file-locking is intentionally deferred to a

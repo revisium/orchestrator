@@ -1,10 +1,10 @@
 /**
- * run-outputs.ts — step-output dataflow rows (plan 0016).
+ * run-outputs.ts — step-output dataflow rows.
  *
  * Each node EXECUTION appends one immutable `run_outputs` row keyed by (runId, nodeId, ordinal). The
  * rows are APPEND-ONLY → full history for retro/audit; the adapter reads `latest`/`all` to hydrate a
- * consumer's prompt (0016 §2/§4). The `ordinal` is the adapter-owned per-(run,node) execution count
- * (0016 §4.1) — NOT a row-scan, NOT the routing loop counter.
+ * consumer's prompt. The `ordinal` is the adapter-owned per-(run,node) execution count
+ * — NOT a row-scan, NOT the routing loop counter.
  *
  * Mirrors append-event.ts: a DETERMINISTIC + bounded row id (fnv1a64Hex), a secret-redacted +
  * size-capped payload, and a ROW_CONFLICT no-op so a DBOS replay re-writing the same id is idempotent.
@@ -27,7 +27,7 @@ export type RunOutputRow = {
   producedAt?: string;
 };
 
-/** Cap the serialized payload so a giant agent output can't bloat the row (0016 §8; cf. attempts 4k). */
+/** Cap the serialized payload so a giant agent output can't bloat the row (cf. attempts 4k). */
 const PAYLOAD_MAX = 16_000;
 
 /**
@@ -58,8 +58,8 @@ function rowToOutput(data: Record<string, unknown>): RunOutputRow {
  *
  * id = `out_${fnv1a64Hex(`${runId}|${nodeId}|${ordinal}`)}` → 20 chars ≤ 64.
  *
- * Idempotent: a DBOS replay re-derives the same id (the ordinal is adapter-owned + replay-deterministic,
- * 0016 §4.1); ROW_CONFLICT is a no-op. The payload is a JSON field — secrets are redacted on every
+ * Idempotent: a DBOS replay re-derives the same id (the ordinal is adapter-owned + replay-deterministic);
+ * ROW_CONFLICT is a no-op. The payload is a JSON field — secrets are redacted on every
  * string leaf before persist; an over-cap payload is replaced by a marker + a `payload_ref`.
  */
 export async function appendRunOutput(da: ControlPlaneDataAccess, input: RunOutputRow): Promise<void> {
@@ -85,7 +85,7 @@ export async function appendRunOutput(da: ControlPlaneDataAccess, input: RunOutp
   }
 }
 
-/** Every output row for a (runId, nodeId), ordinal-ascending (loop history; 0016 §4). */
+/** Every output row for a (runId, nodeId), ordinal-ascending (loop history). */
 export async function allRunOutputs(
   da: ControlPlaneDataAccess,
   runId: string,
@@ -111,7 +111,7 @@ export async function latestRunOutput(
   return rows.length ? rows[rows.length - 1] : null;
 }
 
-/** Every output row for a run, produced_at-ascending — the retro/audit view (0016 §4). */
+/** Every output row for a run, produced_at-ascending — the retro/audit view. */
 export async function outputsForRun(da: ControlPlaneDataAccess, runId: string): Promise<RunOutputRow[]> {
   const rows = await da.listRows('run_outputs', {
     first: 1000,

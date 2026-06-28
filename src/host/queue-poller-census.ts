@@ -1,5 +1,5 @@
 /**
- * Queue-poller census (slice 140, Part A Layer 3 — detection half, pure).
+ * Queue-poller census (detection half, pure).
  *
  * The advisory lock (queue-ownership.ts) only coordinates daemons that CALL it. A legacy/old-version
  * host that predates the lock — or a `revo mcp` from before the thin-bridge era that is itself a full

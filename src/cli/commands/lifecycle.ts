@@ -122,7 +122,7 @@ async function stopStack(options: ProfileOptions & { all?: boolean }): Promise<v
   const ports = profilePortList(host, standalone);
   let stopped = false;
 
-  // `--all`: evict rogue queue CONNECTIONS while the standalone Postgres is still up (slice 140) —
+  // `--all`: evict rogue queue CONNECTIONS while the standalone Postgres is still up —
   // must happen BEFORE we stop the standalone below, or there is no DB to evict against.
   if (options.all && standalone && isAlive(standalone.pid)) {
     await evictQueuePollers(getConfig().profile, standalone.pgPort);
@@ -141,7 +141,7 @@ async function stopStack(options: ProfileOptions & { all?: boolean }): Promise<v
   }
   removeRuntime();
 
-  // Reap any orphan/duplicate still holding a profile port (slice 139) — a daemon/standalone NOT
+  // Reap any orphan/duplicate still holding a profile port — a daemon/standalone NOT
   // tracked by host.json/runtime.json. Without this, `revo stop` leaves a zoo that can silently serve
   // runs off the shared DBOS queue.
   let reaped = 0;
@@ -199,7 +199,7 @@ async function restartStack(options: ProfileOptions): Promise<void> {
 type QueuePollerRogue = { pid: number; executorId: string; applicationName: string };
 
 /**
- * Census the profile's `dbos` database for FOREIGN DBOS queue pollers (slice 140) — a legacy/duplicate
+ * Census the profile's `dbos` database for FOREIGN DBOS queue pollers — a legacy/duplicate
  * daemon polling `dev-tasks` under an executor id that is not this profile's pinned owner. Connects to
  * the maintenance `postgres` db (pg_stat_activity is cluster-wide) and inspects `dbos_transact_%`
  * connections on the dbos db. Best-effort: returns `unavailable:true` when the DB is unreachable or the
@@ -240,7 +240,7 @@ async function censusQueuePollers(
 type EvictResult = EvictionOutcome & { unavailable: boolean; cannotEvict: boolean };
 
 /**
- * EVICT rogue queue connections (slice 140 Phase 2): `pg_terminate_backend` every foreign DBOS poller
+ * EVICT rogue queue connections: `pg_terminate_backend` every foreign DBOS poller
  * on this profile's `dbos` DB, in a TOCTOU loop (a rogue can dequeue a fresh row between census and
  * kill). Profile-scoped by `datname` → never touches another profile. Needs BOTH `pg_read_all_stats`
  * (to SEE foreign backends) and `pg_signal_backend` (to terminate); lacking either is reported, never
@@ -328,7 +328,7 @@ async function doctorStack(options: ProfileOptions & { fix?: boolean }): Promise
   const standaloneAlive = standalone !== null && isAlive(standalone.pid);
   const standaloneHealthy = standalone !== null && standaloneAlive && (await isHealthy(standalone.httpPort));
 
-  // Detect untracked/duplicate daemons on the profile ports + a stale-version daemon (slice 139): a
+  // Detect untracked/duplicate daemons on the profile ports + a stale-version daemon: a
   // listener whose pid isn't the tracked host/standalone is an orphan or a second daemon (the zoo).
   const gql = host?.graphqlPort ?? expectedGraphqlPort();
   const portChecks: Array<{ label: string; port: number; expected: number | null }> = [
@@ -355,7 +355,7 @@ async function doctorStack(options: ProfileOptions & { fix?: boolean }): Promise
     host?.version !== undefined ? { running: host.version, current: hostCodeVersion() } : undefined;
 
   // Rogue queue-poller census — only when the standalone (and thus its Postgres) is alive; a foreign
-  // executor connected to the dbos DB is a legacy/duplicate daemon the lock can't stop (slice 140).
+  // executor connected to the dbos DB is a legacy/duplicate daemon the lock can't stop.
   let queuePollerRogues: QueuePollerRogue[] | undefined;
   let rogueCensusUnavailable: boolean | undefined;
   if (standalone && standaloneAlive) {
@@ -394,7 +394,7 @@ async function doctorStack(options: ProfileOptions & { fix?: boolean }): Promise
   }
 
   // `--fix`: actively evict the rogues `doctor` reports — terminate their queue connections, then
-  // reap the untracked process (durable, cross-profile-safe). slice 140 Phase 2.
+  // reap the untracked process (durable, cross-profile-safe).
   if (options.fix) {
     console.log('— fix: evicting rogue queue pollers —');
     if (standalone && standaloneAlive) {

@@ -80,7 +80,7 @@ export type RunProgress = {
 
 /**
  * The resolved, actionable state of a single run — the tagged union `resolveRunState` returns.
- * Reused by `waitForRun` (single run) and the `RunWatchService` watch primitives (fan-out, slice 141 D2).
+ * Reused by `waitForRun` (single run) and the `RunWatchService` watch primitives (fan-out).
  */
 export type RunState = {
   runId: string;
@@ -707,7 +707,7 @@ export class TaskControlPlaneApiService {
     const recoverable = await this.detectRecoverablePreflightBlock(input.runId, run.data.status, existingStatus);
     if (recoverable) return recoverableStartRunResponse(input.runId, route, recoverable);
 
-    // CUTOVER (plan 0015 slice 3): the data-driven engine is the SOLE pipeline engine. EVERY pipeline
+    // CUTOVER: the data-driven engine is the SOLE pipeline engine. EVERY pipeline
     // routes to the data-driven workflow, executing the state-machine template carried in its
     // execution_policy (template_json). A pipeline lacking a valid template FAILS LOUD here
     // (PIPELINE_NOT_DATA_DRIVEN) rather than silently no-op-ing — there is no hardcoded fallback engine.
@@ -1070,7 +1070,7 @@ export class TaskControlPlaneApiService {
   }
 
   /**
-   * Resolve a single run to its actionable state. Public so `RunWatchService` (slice 141 D2) can
+   * Resolve a single run to its actionable state. Public so `RunWatchService` can
    * fan it out across many runs; it is a point-in-time level read (gate = `inbox.find(approval)`),
    * not an event cursor — the watch primitive layers at-least-once + idempotent delivery on top.
    */
@@ -1406,7 +1406,7 @@ export class TaskControlPlaneApiService {
     // The route selects WHICH roles a pipeline binds (capability handles the data-driven engine
     // resolves). Order is no longer load-bearing — the data-driven template owns node sequencing — so
     // alternative-group selections simply append (the old `insertBeforeFirstDeveloperRole` phase-order
-    // hardcode is removed with the rest of the hardcoded engine, plan 0015 slice 3).
+    // hardcode is removed with the rest of the hardcoded engine).
     const selected = [...pipeline.requiredRoles];
     for (const group of pipeline.alternativeRoles) {
       const match = group.roles.find((roleId) => byPlaybookRole.has(roleId));

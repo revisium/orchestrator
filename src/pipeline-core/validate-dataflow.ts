@@ -8,7 +8,7 @@ import {
   structuralEdges,
 } from './validate-graph.js';
 
-// §12 rule 14 is STATIC only: the adapter persists/hydrates at runtime (0016 §5/§6); the core neither
+// Rule 14 is STATIC only: the adapter persists/hydrates at runtime; the core neither
 // stores content nor reads it. Dominance proves a producer ran (presence); the runtime `revo.InputMissing`
 // guard + the freshness rule cover what static analysis cannot.
 

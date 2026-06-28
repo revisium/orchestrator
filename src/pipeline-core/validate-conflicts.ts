@@ -1,5 +1,5 @@
 /**
- * validate-conflicts — §12 rule 10 (policy.conflicts well-formedness). Lifted from validate.ts.
+ * validate-conflicts — validation rule 10 (policy.conflicts well-formedness). Lifted from validate.ts.
  */
 
 import type { Template } from './types.js';

@@ -1,25 +1,28 @@
 /**
- * pipeline-core/interpret.ts — the pure deterministic reducer (§10).
+ * pipeline-core/interpret.ts — the pure deterministic reducer.
+ *
+ * Spec: docs/specs/pipeline-state-machine-v1.spec.md (§10 Decision/RunState, §7 counter mutations,
+ * §3 guards, §4 join arrivals, §6 failure precedence).
  *
  *   step(template, state, lastResult) -> { state, decision }
  *
  * One call advances the run by exactly one OBSERVABLE step. Given the current cursor and the RECORDED
  * result of the previously-emitted Decision, it computes the NEXT cursor (updated/reset scoped
  * counters + activeNodeIds + status) AND the next effect `decision`. Total + deterministic: no clocks,
- * no randomness, no live reads — every external fact arrives as recorded data on `lastResult` (§10).
+ * no randomness, no live reads — every external fact arrives as recorded data on `lastResult`.
  *
- * The adapter loop (§10): `{state, decision} = step(t, state, lastResult)` → execute `decision` as a
+ * The adapter loop: `{state, decision} = step(t, state, lastResult)` → execute `decision` as a
  * durable step → record its result → feed that back as the next `lastResult` → repeat until
  * `decision.type === 'complete'`.
  *
  * Model. The active node is the one whose Decision was last emitted (or the entry on the first call).
  * `step` first RESOLVES that node against `lastResult` (route a gate/choice by its branches; route an
- * agent/script by its core outcome via §6 precedence; aggregate a join's recorded arrivals), walking
+ * agent/script by its core outcome via failure precedence; aggregate a join's recorded arrivals), walking
  * through pure routing nodes (`choice`/`join`) until it reaches a node that emits an effect
- * (`agent`/`script`/`humanGate`/`wait`/`parallel`/`terminal`). Loop-entry counter mutations (§7) are
+ * (`agent`/`script`/`humanGate`/`wait`/`parallel`/`terminal`). Loop-entry counter mutations are
  * applied as each node is entered, BEFORE its guards are evaluated, so a cap-guard sees the
  * post-increment value. Core verdicts route STRUCTURALLY (catch/onFailure/terminal/timeout) and NEVER
- * via branch guards (§3/§6).
+ * via branch guards.
  */
 
 import type {
@@ -120,7 +123,7 @@ function routeFrom(
       return routeEffect(template, node, state, lastResult);
 
     case 'humanGate': {
-      // A gate's recorded timeout firing routes via timeout.goto (§6), NOT a branch guard.
+      // A gate's recorded timeout firing routes via timeout.goto, NOT a branch guard.
       if (lastResult?.outcome === 'timed_out') {
         if (!node.timeout) {
           throw new InterpretError(`gate ${node.id} timed_out but has no timeout edge (invalid)`);
@@ -153,7 +156,7 @@ function routeFrom(
   }
 }
 
-/** §6 failure-precedence routing for an `agent`/`script` node from its RECORDED outcome. */
+/** Failure-precedence routing for an `agent`/`script` node from its RECORDED outcome. */
 function routeEffect(
   template: Template,
   node: Extract<Node, { kind: 'agent' | 'script' }>,
@@ -185,14 +188,14 @@ function routeEffect(
     }
     return enter(template, node.escalateTo, state, undefined);
   }
-  // 'route' with no matching catch — a VALID template forbids this (§6 / §12 FAILURE_ROUTE_NO_CATCH).
+  // 'route' with no matching catch — a VALID template forbids this (FAILURE_ROUTE_NO_CATCH).
   throw new InterpretError(
     `node ${node.id} onFailure=route but no catch matched ${code ?? '<no code>'} (invalid)`,
   );
 }
 
 /**
- * ENTER a node: apply its loop-entry counter mutations (§7), make it the sole active node, then
+ * ENTER a node: apply its loop-entry counter mutations, make it the sole active node, then
  * either emit its Decision (suspending kinds) or recursively route through it (pure `choice`/`join`).
  * `incoming` is the verdict/arrivals context the entered node's guards may read.
  */
@@ -278,7 +281,7 @@ function carryVerdict(lastResult: LastResult | undefined): LastResult | undefine
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Guard evaluation (§3) — total, first-true-wins, mandatory default.
+// Guard evaluation — total, first-true-wins, mandatory default.
 // ─────────────────────────────────────────────────────────────────────────────
 
 function evalBranches(
@@ -303,8 +306,8 @@ function evalBranches(
 }
 
 /**
- * Evaluate a v1 Condition (§3). Reads ONLY the recorded DOMAIN verdict (`lastResult.verdict`) and the
- * scoped counters in `state` — never a core verdict (those route structurally, §3/§6).
+ * Evaluate a v1 Condition. Reads ONLY the recorded DOMAIN verdict (`lastResult.verdict`) and the
+ * scoped counters in `state` — never a core verdict (those route structurally).
  */
 export function evalCondition(
   cond: Condition,
@@ -334,12 +337,12 @@ function counterValue(state: RunState, scope: string): number {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §7 Counter mutation — increment + descendant reset, deterministic & pure.
+// Counter mutation — increment + descendant reset, deterministic & pure.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
  * Apply a node's `incrementCounters` to a counter map: +1 each named scope and RESET every
- * descendant scope of each (entering a scope resets its descendants, §7). Returns a fresh map.
+ * descendant scope of each (entering a scope resets its descendants). Returns a fresh map.
  */
 export function applyCounterMutations(
   template: Template,
@@ -382,11 +385,11 @@ function incrementCountersOf(node: Node): readonly string[] {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// §4 Join — consume recorded arrivals; pick a deterministic winner.
+// Join — consume recorded arrivals; pick a deterministic winner.
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * Select the join winner from durably-recorded arrivals (§4), in the canonical recorded order
+ * Select the join winner from durably-recorded arrivals, in the canonical recorded order
  * (`seq` asc, branchId tie-break):
  *  - `all`    → the barrier; the winner is the last arrival (its verdict is forwarded);
  *  - `any`    → the first arrival;

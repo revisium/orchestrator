@@ -3,7 +3,7 @@
  *
  * NOTE: the legacy step-lifecycle verbs (`claimNextStep`/`startAttempt`/`writeResult`/`failStep`/
  * `recoverInFlight`/`createSteps`) were the pre-pivot dumb-loop step queue. They are superseded by the
- * DBOS-driven data-driven engine and were removed (audit §2.1). What remains here is the `Step` shape the
+ * DBOS-driven data-driven engine and were removed. What remains here is the `Step` shape the
  * runner machinery still consumes (synthesized in-memory by the engine — `RunService.loadPipelineContext` —
  * not read from a `steps` row) plus a few pure id / format helpers reused across the run / inbox / pipeline
  * layers.

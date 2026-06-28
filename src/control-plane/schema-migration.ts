@@ -76,7 +76,7 @@ export async function applyAdditiveSchemaMigration(
     try {
       currentSchema = await draft.getTableSchema(table.id);
     } catch {
-      // Table absent on an upgraded control-plane (e.g. `run_outputs`, added in 0016). The previous
+      // Table absent on an upgraded control-plane (e.g. `run_outputs`, added later). The previous
       // code only PATCHED existing tables, so a brand-new table would never land on an already-
       // bootstrapped control-plane. Create it from the bootstrap schema (fresh bootstrap already
       // creates every config table; this covers the upgrade path).

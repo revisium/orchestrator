@@ -1,5 +1,5 @@
 /**
- * validate-diff — §12 rule 13, the template diff classifier. Classifies the change from one template
+ * validate-diff — validation rule 13, the template diff classifier. Classifies the change from one template
  * to another (it does not validate a single template — that is validateTemplate's job). Lifted from
  * validate.ts as a separate public-API surface; validate.ts re-exports it so callers are unaffected.
  */
@@ -11,7 +11,7 @@ export type DiffKind = 'safe' | 'breaking' | 'invalid';
 export type TemplateDiff = { kind: DiffKind; diagnostics: Diagnostic[] };
 
 /**
- * Classify the change from `old` → `next` (§12.13). The enabler for a FUTURE in-flight migration; v1
+ * Classify the change from `old` → `next`. The enabler for a FUTURE in-flight migration; v1
  * only reports.
  *  - node-id delete / rename / kind-change            → breaking
  *  - changing the outgoing topology of an existing node → breaking
@@ -68,7 +68,7 @@ function newDiffAccumulator(): DiffAccumulator {
 function classifyExistingNodeChange(id: string, before: Node, after: Node, acc: DiffAccumulator): void {
   // kind change → breaking; an incompatible kind/resultSchema reuse → invalid.
   if (before.kind !== after.kind) {
-    acc.escalate('invalid'); // a reused id with a different kind is invalid (§12.13)
+    acc.escalate('invalid'); // a reused id with a different kind is invalid
     acc.diagnostics.push({
       code: 'DIFF_ID_REUSED_INCOMPATIBLE',
       severity: 'error',

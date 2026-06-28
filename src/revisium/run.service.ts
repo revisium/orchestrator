@@ -165,7 +165,7 @@ export class RunService {
   }
 
   /**
-   * makeResolveCwd — STEP-level cwd resolver (M3, worktree-aware as of plan 0017).
+   * makeResolveCwd — STEP-level cwd resolver.
    * Returns (step: Step) => Promise<string>; resolves the run's isolated worktree (keyed by step.runId)
    * for live runs, else the shared base checkout (tasks.repo_ref). Used by ClaudeCodeService.
    */
@@ -174,7 +174,7 @@ export class RunService {
   }
 
   /**
-   * makeResolveRunCwd — RUN-level worktree-aware resolver (plan 0017).
+   * makeResolveRunCwd — RUN-level worktree-aware resolver.
    * Returns (runId, taskId) => Promise<string>; resolves the run's isolated worktree, FAILS LOUD for a
    * live run whose worktree is missing, else the base checkout. Used by the integrator (run-keyed).
    */
@@ -251,7 +251,7 @@ export class RunService {
 
   /**
    * appendRunOutput — write an idempotent step-output dataflow row to the draft run_outputs table.
-   * Wraps the run-outputs module over the service's draft da (0016 §5).
+   * Wraps the run-outputs module over the service's draft da.
    */
   appendRunOutput(input: RunOutputRow): Promise<void> {
     return appendRunOutputRow(this.da, input);

@@ -200,7 +200,7 @@ export async function pushInbox(
   }
 
   // No `steps` row is parked: the data-driven engine carries no inbox stepId (await-human sets ''),
-  // so the legacy step-park is dead (audit §3.1). The DBOS workflow is parked by `DBOS.recv`, not a step row.
+  // so the legacy step-park is dead. The DBOS workflow is parked by `DBOS.recv`, not a step row.
   return id;
 }
 
@@ -309,6 +309,6 @@ export async function resolveInbox(
 
   // (4) The inbox flip is the WHOLE resolve. The data-driven engine carries no inbox stepId, so there
   // is no originating `steps` row to unblock — the parked DBOS workflow resumes via `DBOS.send` on the
-  // signalled topic (the legacy step-unblock was retired — audit §3.1).
+  // signalled topic (the legacy step-unblock was retired).
   return { status, answer: effectiveAnswer };
 }

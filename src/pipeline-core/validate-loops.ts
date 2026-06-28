@@ -3,21 +3,16 @@ import type { Condition, Node, Scope, Template } from './types.js';
 import { DiagSink } from './validate-sink.js';
 import { backwardReach, cycleNodes, findBackEdges, forwardReach, guardConditionsOf } from './validate-graph.js';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Rule 6b — loop-cap presence.
-//
-// Spec note (two ambiguities resolved against the canonical §13 example, which §13 declares
-// internally-consistent and the task names as THE fixture):
-//  1. §12.6 says "a terminating cap-guard (counter.gte)", but §13 expresses the SAME bound as
+// Spec note (two ambiguities resolved against the canonical example):
+//  1. The spec says "a terminating cap-guard (counter.gte)", but the canonical example expresses the SAME bound as
 //     `counter.lt K` on the CONTINUE edge with the default routing OUT (once the counter reaches K the
 //     guard fails and control falls through to blockedEnd). Both make the loop finite, so we accept
 //     EITHER: a cycle is counter-bounded iff some `choice` on it has a guard referencing a `counter.*`
 //     over a scope INCREMENTED on the cycle.
-//  2. §13's analyst↔planGate `changes_requested` loop carries NO counter — it is bounded only by human
-//     judgment. §6 makes a human-driven loop legitimately unbounded ("durable wait is free … for
+//  2. The analyst↔planGate `changes_requested` loop carries NO counter — it is bounded only by human
+//     judgment. The spec makes a human-driven loop legitimately unbounded ("durable wait is free … for
 //     human-driven runs"). So a cycle that passes through a `humanGate` is also accepted.
 // An AUTOMATED loop (agents/scripts/choices only) with no counter is rejected (LOOP_UNBOUNDED).
-// ─────────────────────────────────────────────────────────────────────────────
 
 export function ruleLoopCap(template: Template, d: DiagSink): void {
   if (!template.entry || !template.nodes[template.entry]) return;
@@ -67,10 +62,6 @@ function conditionGatesOnScopes(cond: Condition, scopes: Set<string>): boolean {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Rule 7 — counter-scope well-formedness.
-// ─────────────────────────────────────────────────────────────────────────────
-
 export function ruleCounterScopes(template: Template, d: DiagSink): void {
   const scopes = template.scopes ?? {};
   const scopeIds = new Set(Object.keys(scopes));
@@ -116,7 +107,7 @@ function checkScopesDeclared(template: Template, scopeIds: Set<string>, d: DiagS
 }
 
 /**
- * 7c — a reset scope is a STRICT ancestor of every node that reads/increments it (§7/§12.7). The scope's
+ * 7c — a reset scope is a STRICT ancestor of every node that reads/increments it. The scope's
  * region is its loop sub-graph: the node(s) that increment it + the guard node(s) that read it. A
  * well-formed reader sits inside that loop — i.e. it shares a cycle with an increment site, or is
  * forward-reachable from one (the cap-guard reads after a rework hop). A reader disconnected from

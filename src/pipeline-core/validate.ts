@@ -1,9 +1,9 @@
 /**
- * pipeline-core/validate.ts — the authoritative install-time validator (§12). Runs rules 1–12 + 14
+ * pipeline-core/validate.ts — the authoritative install-time validator. Runs rules 1–12 + 14
  * (each imported from its sibling module) and re-exports the diff classifier (rule 13) from
  * validate-diff.ts, so the public surface (`validateTemplate`, `classifyTemplateDiff`) is unchanged.
  *
- * Pure: zero I/O, no clocks. Each §12 rule is its own collector; `validateTemplate` returns every
+ * Pure: zero I/O, no clocks. Each rule is its own collector; `validateTemplate` returns every
  * finding (it does not stop at the first error). Codes are stable (tested against).
  */
 
@@ -30,11 +30,7 @@ export type { DiffKind, TemplateDiff } from './validate-diff.js';
 
 const NODE_ID_PATTERN = /^[A-Za-z]\w*$/;
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Public entry.
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** Run all §12 rules. Returns every diagnostic; empty ⇒ the template is valid. */
+/** Run all validation rules. Returns every diagnostic; empty ⇒ the template is valid. */
 export function validateTemplate(template: Template): Diagnostic[] {
   const d = new DiagSink();
   const nodes = template.nodes ?? {};
@@ -57,14 +53,10 @@ export function validateTemplate(template: Template): Diagnostic[] {
   ruleVerdictClosure(normalized, d);
   ruleConflictMatrix(normalized, d);
   ruleCapabilityRefs(normalized, d);
-  ruleDataflow(normalized, ids, d); // produces/consumes — 0016 §7
+  ruleDataflow(normalized, ids, d); // produces/consumes
 
   return d.items;
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Rule 11 — id/namespace hygiene.
-// ─────────────────────────────────────────────────────────────────────────────
 
 function ruleIdHygiene(template: Template, d: DiagSink): void {
   const seen = new Set<string>();
@@ -87,7 +79,7 @@ function checkNodeKeyHygiene(key: string, node: Node | undefined, seen: Set<stri
   if (seen.has(key)) d.error('ID_DUPLICATE', `duplicate node id "${key}"`, { nodeId: key });
 }
 
-/** revo.* error codes must never collide with a declared verdict label (disjoint namespaces, §3/§6). */
+/** revo.* error codes must never collide with a declared verdict label (disjoint namespaces). */
 function checkCatchCodeVerdictCollisions(template: Template, d: DiagSink): void {
   const domain = new Set(template.verdicts?.domain ?? []);
   for (const node of Object.values(template.nodes ?? {})) {
@@ -102,17 +94,13 @@ function checkCatchCodeVerdictCollisions(template: Template, d: DiagSink): void 
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Rule 6a — per-node failure policy well-formedness.
-// ─────────────────────────────────────────────────────────────────────────────
-
 function ruleFailurePolicy(template: Template, d: DiagSink): void {
   for (const node of Object.values(template.nodes)) {
     if (node.kind === 'agent' || node.kind === 'script') checkNodeFailurePolicy(node, d);
   }
 }
 
-/** Per effect-node §6 failure-policy well-formedness: known policy, valid catch codes, route/escalate. */
+/** Per effect-node failure-policy well-formedness: known policy, valid catch codes, route/escalate. */
 function checkNodeFailurePolicy(node: Extract<Node, { kind: 'agent' | 'script' }>, d: DiagSink): void {
   const policy = node.onFailure ?? 'abort';
   if (!FAILURE_POLICIES.includes(policy)) {

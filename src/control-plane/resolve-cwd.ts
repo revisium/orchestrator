@@ -70,7 +70,7 @@ async function readRepoRef(da: ControlPlaneDataAccess, taskId: string): Promise<
   return toStr(task.data.repo_ref);
 }
 
-// ─── Per-run worktree isolation (plan 0017) ────────────────────────────────────
+// Per-run worktree isolation
 
 /**
  * Deterministic per-run worktree path: `<dataDir>/worktrees/<runId>`. COMPUTED, never stored —
@@ -117,7 +117,7 @@ export function isWorktreeDir(path: string): boolean {
 }
 
 /**
- * RUN-level resolver (plan 0017) — the cwd for every repo-touching LIVE effect (developer/rework steps
+ * RUN-level resolver — the cwd for every repo-touching LIVE effect (developer/rework steps
  * + the integrator). Prefers the run's isolated worktree; FAILS LOUD for a live run whose worktree is
  * missing (marker present, worktree gone); falls back to the shared base checkout ONLY for non-live
  * runs (script/stub do no real git, so no worktree/marker is ever created for them).
@@ -141,7 +141,7 @@ export async function resolveRunCwd(
 }
 
 /**
- * STEP-level resolver (M3, plan 0017) — shape expected by the claude runner: (step) => Promise<string>.
+ * STEP-level resolver — shape expected by the claude runner: (step) => Promise<string>.
  * Now WORKTREE-AWARE: resolves to the run's isolated worktree (keyed by step.runId) for live runs,
  * else the shared base checkout. Reads tasks.repo_ref via the data-access layer for the fallback.
  */

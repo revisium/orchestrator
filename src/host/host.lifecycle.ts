@@ -1,7 +1,7 @@
 /**
  * HostLifecycle — OnApplicationBootstrap / OnApplicationShutdown.
  *
- * Boot order (§2 of the ТЗ):
+ * Boot order:
  *   1. ensureRevisium() — auto-start if no live daemon; three-state (F7).
  *   2. Pid-proven pg port from the returned runtime (never resolvePorts() — F3).
  *   3. Optional postmaster.pid cross-check (F8).

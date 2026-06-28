@@ -1,5 +1,5 @@
 /**
- * git-worktree-manager.ts — per-RUN git worktree lifecycle (plan 0017).
+ * git-worktree-manager.ts — per-RUN git worktree lifecycle.
  *
  * DBOS-SEALED: zero @dbos-inc imports. Create/release are registered as memoized DBOS steps in
  * PipelineService; this module is pure git side effects + deterministic paths.

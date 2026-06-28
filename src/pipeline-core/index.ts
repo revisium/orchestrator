@@ -1,10 +1,10 @@
 /**
- * pipeline-core — the pure, framework-free pipeline state machine (plan 0015, slice 1).
+ * pipeline-core — the pure, framework-free pipeline state machine.
  *
  * ZERO imports from NestJS / DBOS / Revisium / runners / any I/O; deterministic (no clocks/randomness).
- * The DBOS effect-adapter (slice 2) consumes this surface:
- *   - `validateTemplate` / `classifyTemplateDiff` — install-time validation (§12).
- *   - `step` — the pure reducer `(template, state, lastResult) -> { state, decision }` (§10).
+ * The DBOS effect-adapter consumes this surface:
+ *   - `validateTemplate` / `classifyTemplateDiff` — install-time validation.
+ *   - `step` — the pure reducer `(template, state, lastResult) -> { state, decision }`.
  *   - `initialState` — build the entry cursor.
  *
  * The `kit/` sub-path is a TEST helper (builders/fixtures/drive/assertions) and is intentionally NOT

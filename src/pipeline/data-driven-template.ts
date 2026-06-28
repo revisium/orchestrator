@@ -1,11 +1,11 @@
 /**
- * data-driven-template.ts — read + validate the PINNED state-machine template for a run (0015 §9/§11).
+ * data-driven-template.ts — read + validate the PINNED state-machine template for a run.
  *
- * MVP STORAGE (resolves §14 Q4 for now): the data-driven template is carried inside the pipeline row's
+ * MVP STORAGE: the data-driven template is carried inside the pipeline row's
  * `execution_policy` under a `template_json` key — the only free-form slot that round-trips through
  * playbook install with NO control-plane schema migration. A pipeline is DATA-DRIVEN iff that template
  * parses, declares `specVersion` + `nodes`, and validates clean via `pipeline-core.validateTemplate`
- * (the authoritative validator, §9). Native Revisium typing / a dedicated `template_json` column is a
+ * (the authoritative validator). Native Revisium typing / a dedicated `template_json` column is a
  * strictly-additive later upgrade (the Desktop handoff tracks it).
  *
  * Pure + I/O-free: it inspects already-loaded `executionPolicy` data. The adapter pins the returned
@@ -20,7 +20,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 /**
  * A loose structural pre-check before handing to the authoritative validator: a `specVersion` string
- * and a `nodes` object. (validateTemplate then does the full §12 closure.)
+ * and a `nodes` object. (validateTemplate then does the full validation closure.)
  */
 function looksLikeTemplate(value: unknown): value is Template {
   return isRecord(value) && typeof value.specVersion === 'string' && isRecord(value.nodes);

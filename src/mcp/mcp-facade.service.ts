@@ -333,9 +333,9 @@ function compactPrReadiness(value: unknown): unknown {
 @Injectable()
 export class McpFacadeService {
   /**
-   * `runWatch` is injected by the daemon with a pubSub-backed instance (slice 141 D2, option A). When
-   * absent (e2e/stdio/tests construct the facade with only the api), we lazily build a poll-fallback
-   * watch (option B) — equivalent correctness, slightly higher latency.
+   * `runWatch` is injected by the daemon with a pubSub-backed instance. When absent (e2e/stdio/tests
+   * construct the facade with only the api), we lazily build a poll-fallback watch — equivalent
+   * correctness, slightly higher latency.
    */
   private runWatchInstance?: RunWatchService;
 

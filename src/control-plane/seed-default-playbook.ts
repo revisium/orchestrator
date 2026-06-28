@@ -1,6 +1,5 @@
 /**
- * seed-default-playbook.ts — install the BUILT-IN DEFAULT playbook during `revo bootstrap` (slice 5,
- * plan 0015).
+ * seed-default-playbook.ts — install the BUILT-IN DEFAULT playbook during `revo bootstrap`.
  *
  * The default is DATA, not engine code: a committed playbook source under
  * `control-plane/default-playbook/` (manifest + roles/pipelines catalogs carrying data-driven

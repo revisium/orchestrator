@@ -243,7 +243,7 @@ export async function createRunWorkflow(
 
     // No `steps` row is written: the data-driven engine owns progress in DBOS and synthesizes the
     // per-step `Step` in-memory (RunService.loadPipelineContext). The pre-pivot phantom `plan_run`
-    // step row (stuck at `ready` forever, never advanced) was retired here (audit §3.1).
+    // step row (stuck at `ready` forever, never advanced) was retired here.
     await dataAccess.createRow('events', ids.eventId, {
       id: ids.eventId,
       run_id: ids.runId,

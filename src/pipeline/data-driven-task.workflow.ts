@@ -1,7 +1,7 @@
 /**
- * data-driven-task.workflow.ts — the DBOS effect-adapter for a DATA-DRIVEN pipeline (plan 0015 §10).
+ * data-driven-task.workflow.ts — the DBOS effect-adapter for a DATA-DRIVEN pipeline.
  *
- * Runs the pure `pipeline-core` graph on REAL DBOS. As of slice 3 this is the SOLE pipeline engine:
+ * Runs the pure `pipeline-core` graph on REAL DBOS. This is the SOLE pipeline engine:
  * selection routes EVERY pipeline here (TaskControlPlaneApiService), executing the state-machine
  * template pinned for the run; a pipeline without a valid template FAILS LOUD at selection. The old
  * hardcoded `developTask` workflow + its role→phase classifiers were removed.
@@ -11,9 +11,9 @@
  * deps. This file is registered via the engine seam in PipelineService.
  *
  * GENERIC ENGINE: zero role-ids / pipeline shapes here. `roleRef`/`scriptRef` are opaque capability
- * handles resolved against the run's route bindings + the existing runner machinery (§1/§10).
+ * handles resolved against the run's route bindings + the existing runner machinery.
  *
- * The loop (§10):
+ * The loop:
  *   { state, decision } = core.step(template, state, lastResult)
  *     → execute `decision` as a durable DBOS step (runner / human gate / integrator / fork)
  *     → validate result vs the node's `resultSchema` + redact at this boundary (reuse runStep/append)
@@ -225,7 +225,7 @@ function optionalFailureKind(
 }
 
 /**
- * Reserved engine error codes (matched only by a node's `catch`, §3/§6).
+ * Reserved engine error codes (matched only by a node's `catch`).
  *
  * A built-in script (the integrator) has TWO distinct failure modes the routing data discriminates:
  *  - `revo.ScriptBlocked` — the script needs a human (nothing-to-integrate, ambiguous PRs, a refused
@@ -274,8 +274,7 @@ function pipelineBlockedPayload(
 }
 
 /** Per-node execution stepKey: the bare nodeId on the first entry (stable ids for existing tests), an
- *  ordinal-suffixed key on loop re-entries so attempts/events/outputs are distinct per iteration (0016
- *  §4.1 — fixes the latent 0015 stepKey-reuse collision). */
+ *  ordinal-suffixed key on loop re-entries so attempts/events/outputs are distinct per iteration. */
 function stepKeyFor(nodeId: string, ordinal: number): string {
   return ordinal <= 1 ? nodeId : `${nodeId}#${ordinal}`;
 }
@@ -370,7 +369,7 @@ function artifactRefFromResult(result: AttemptResult): string | undefined {
  * Discriminate a TRANSIENT runner failure from a DELIBERATE agent `needsHuman` (both arrive as
  * AttemptResult.needsHuman, but route to DIFFERENT pipeline_blocked lessons — see invokeRole).
  *
- * runStep (pipeline.service.ts §7) converts a runner-process crash / non-zero exit / 429 / timeout into
+ * runStep (pipeline.service.ts) converts a runner-process crash / non-zero exit / 429 / timeout into
  * a SYNTHETIC blocking attempt whose `output` is `{ verdict:'BLOCKER', error:'runner_failed', reason }`.
  * That `error:'runner_failed'` marker is set ONLY on that transient path; a deliberate agent's `output`
  * is its own free-form result and never carries it. Returns the recoverable `reason` (possibly empty)
@@ -452,10 +451,9 @@ function resultVerdictProblem(template: Template, node: Node, result: AttemptRes
 }
 
 /**
- * Validate a recorded result against a node's `resultSchema` at the ADAPTER boundary (§10). MVP
- * contract (resolves §14 Q3 — resultSchema is a DATA handle, validated structurally here): a declared
+ * Validate a recorded result against a node's `resultSchema` at the ADAPTER boundary. A declared
  * `resultSchema` requires a non-empty object/string output. Token redaction already happens inside
- * `runStep`/`appendEvent`; this guards a malformed effect result → `revo.ResultInvalid` (§6 precedence).
+ * `runStep`/`appendEvent`; this guards a malformed effect result → `revo.ResultInvalid`.
  */
 function resultSatisfiesSchema(node: Node, result: AttemptResult): boolean {
   if (!('resultSchema' in node) || !node.resultSchema) return true;
@@ -471,7 +469,7 @@ function resultSatisfiesSchema(node: Node, result: AttemptResult): boolean {
 /** Dependencies for the dataDrivenTask builder. */
 export type DataDrivenTaskDeps = {
   appendEvent: (input: AppendEventInput) => Promise<void>;
-  /** Persist a produced step output to Revisium (0016). DBOS-wrapped in prod; idempotent on replay. */
+  /** Persist a produced step output to Revisium. DBOS-wrapped in prod; idempotent on replay. */
   appendRunOutput: (input: RunOutputRow) => Promise<void>;
   /** Public DBOS event seam for the latest graph cursor; never writes Revisium progress rows. */
   setProgress?: (runId: string, cursor: DataDrivenProgressCursor) => Promise<void>;
@@ -504,11 +502,11 @@ export type DataDrivenTaskDeps = {
   confirmMergeFn: (input: IntegratorInput) => Promise<ConfirmMergeOutput | IntegratorBlocked>;
   /** Stub confirm-merge — pure (script). */
   runConfirmStub: (input: IntegratorInput) => ConfirmMergeOutput;
-  /** Real pollPr — DBOS step (live): observe + classify PR feedback (plan 0018). Produces prFeedback. */
+  /** Real pollPr — DBOS step (live): observe + classify PR feedback. Produces prFeedback. */
   pollPrFn: (input: IntegratorInput) => Promise<PrFeedback | IntegratorBlocked>;
   /** Stub pollPr — pure (script): reports a clean PR so the loop converges to the merge gate. */
   runPollStub: (input: IntegratorInput) => PrFeedback;
-  /** Real respondThreads — DBOS step (live): reply + resolve the triaged threads (plan 0018). */
+  /** Real respondThreads — DBOS step (live): reply + resolve the triaged threads. */
   respondThreadsFn: (input: IntegratorInput) => Promise<RespondThreadsOutput | IntegratorBlocked>;
   /** Stub respondThreads — pure (script): no threads to reply/resolve. */
   runRespondStub: (input: IntegratorInput) => RespondThreadsOutput;
@@ -524,7 +522,7 @@ export type DataDrivenTaskDeps = {
    */
   preflightFn: (taskId: string, base: string) => Promise<{ ok: true } | { needsHuman: true; lesson: string }>;
   /**
-   * Per-run worktree lifecycle (plan 0017) — memoized DBOS steps. `createWorktreeFn` is create-if-absent
+   * Per-run worktree lifecycle — memoized DBOS steps. `createWorktreeFn` is create-if-absent
    * (idempotent on replay), called ONCE after a passing live preflight and before any live effect.
    * `releaseWorktreeFn` is best-effort + idempotent, called from the workflow `finally` at every terminal
    * (succeeded/failed/blocked) — never while parked at a gate (the workflow stays alive across `recv`).
@@ -545,10 +543,10 @@ function progressCursor(state: RunState, lastResult: LastResult | undefined): Da
 
 /**
  * Map an approve/reject human decision onto a DOMAIN verdict the template's gate `outcomes` can route.
- * The core never sees approve/reject — it routes on a domain label (§8). Approve → the first declared
+ * The core never sees approve/reject — it routes on a domain label. Approve → the first declared
  * outcome (the "proceed" label by template convention, e.g. `approved`); reject → fail-closed to a
  * NON-first outcome if one exists (e.g. `changes_requested`), else undefined so the gate's `default`
- * (typically a `blocked` terminal) fires. This keeps gate semantics 100% in the routing data (§6/§8).
+ * (typically a `blocked` terminal) fires. This keeps gate semantics 100% in the routing data.
  */
 function gateVerdict(decision: GateDecision, outcomes: string[]): string | undefined {
   if (decision.decision === 'approve') return outcomes[0];
@@ -559,8 +557,8 @@ function gateVerdict(decision: GateDecision, outcomes: string[]): string | undef
 /**
  * Stable gate topic from a node's reason. The topic is the DBOS recv channel AND part of the gate
  * inbox id (`runId|topic`), so DISTINCT gates in one pipeline MUST map to DISTINCT topics — otherwise
- * a second gate's `recv` collides with the first's already-consumed message and the run hangs (plan
- * 0018: the `review-question` gate would otherwise reuse the `plan` topic of the plan gate).
+ * a second gate's `recv` collides with the first's already-consumed message and the run hangs
+ * (the `review-question` gate would otherwise reuse the `plan` topic of the plan gate).
  *   merge-review   → 'merge'
  *   review-question→ 'question'
  *   (anything else)→ 'plan'  (the plan-review gate)
@@ -631,7 +629,7 @@ function gateArtifactView(row: RunOutputRow, as?: string): GateArtifactView {
 
 /**
  * Build the enriched gate inbox summary from the workflow-local outputs (replay-safe — rebuilt
- * identically, 0016 §6). `verdictFrom` resolves a node's verdict output; when it is NOT specified, the
+ * identically). `verdictFrom` resolves a node's verdict output; when it is NOT specified, the
  * verdict defaults to the routing verdict that opened the gate (`lastVerdict`). Routing is unaffected —
  * purely informational.
  */
@@ -672,7 +670,7 @@ export function makeDataDrivenTask(
   const { appendEvent, appendRunOutput, awaitHuman, completeRun, failRun, blockRun, loadRunTaskContext, integrateFn, runStub, confirmMergeFn, runConfirmStub, pollPrFn, runPollStub, respondThreadsFn, runRespondStub, captureChangeFn, preflightFn, createWorktreeFn, releaseWorktreeFn } = deps;
 
   /** Resolve a node's `consumes` from the workflow-local output accumulator — NOT live Revisium reads
-   *  (0016 §6 / consensus M4: a live read on replay can see rows written past the replay point). */
+   *  (a live read on replay can see rows written past the replay point). */
   function resolveConsumes(
     node: Node,
     outputsByNode: Map<string, RunOutputRow[]>,
@@ -753,7 +751,7 @@ export function makeDataDrivenTask(
   async function runBody(runId: string, opts: DataDrivenTaskOpts): Promise<DataDrivenResult> {
     const { route, template } = opts;
 
-    // Defense-in-depth: the pinned template is validated at the boundary (§9 — pipeline-core is the
+    // Defense-in-depth: the pinned template is validated at the boundary (pipeline-core is the
     // authoritative validator even though selection already validated it). A broken pin fails the run.
     const diagnostics = validateTemplate(template).filter((d) => d.severity === 'error');
     if (diagnostics.length > 0) {
@@ -779,7 +777,7 @@ export function makeDataDrivenTask(
       }
     }
 
-    // Per-run worktree (plan 0017): create AFTER a passing preflight and BEFORE any live effect, so all
+    // Per-run worktree: create AFTER a passing preflight and BEFORE any live effect, so all
     // repo-touching steps (developer/rework + integrator) resolve to the isolated worktree (keyed by
     // runId) — never the shared base checkout. Skipped for non-live runs. The `finally` releases it at a
     // SUCCEEDED terminal (the PR is merged via confirmMerge → branch is in base → worktree disposable) and
@@ -840,7 +838,7 @@ export function makeDataDrivenTask(
     let lastVerdict = '';
     let lastFailureReason = '';
     let stepCount = 0;
-    // Workflow-local dataflow state (0016 §4.1/§6): per-node execution ordinals + produced outputs.
+    // Workflow-local dataflow state: per-node execution ordinals + produced outputs.
     // Both are rebuilt deterministically on DBOS replay (the loop re-runs identically); the adapter
     // hydrates consumers from `outputsByNode`, never from a live Revisium read.
     const effectOrdinalByNode = new Map<string, number>();
@@ -951,7 +949,7 @@ export function makeDataDrivenTask(
         const stepKey = stepKeyFor(node.id, ordinal);
         const resolved = resolveConsumes(node, ctx.outputsByNode);
         if ('missing' in resolved) {
-          // A required upstream output is absent → fail-loud as a WIRING fault (0016 §6 / consensus M3):
+          // A required upstream output is absent → fail-loud as a WIRING fault:
           // a dedicated step_failed names the missing (node, as), distinct from a domain `blocker`. The
           // node's default onFailure='abort' then routes to a failed terminal (the run fails loud).
           await appendEvent({
@@ -995,7 +993,7 @@ export function makeDataDrivenTask(
       case 'invokeScript': {
         const node = resolveNode(template, decision.nodeId);
         const ordinal = nextOrdinal(ctx.effectOrdinalByNode, node.id);
-        // A script node may `consumes` upstream data (plan 0018: respondThreads ← triage). Hydrate it
+        // A script node may `consumes` upstream data (respondThreads ← triage). Hydrate it
         // from the workflow-local accumulator (same seam as agents), fail-loud on a missing required input.
         const resolved = resolveConsumes(node, ctx.outputsByNode);
         if ('missing' in resolved) {
@@ -1007,7 +1005,7 @@ export function makeDataDrivenTask(
         }
         const scriptResult = await invokeScript(runId, decision, { taskId, title, base, issueRef: ctx.issueRef }, bindingByRef, stepKeyFor(node.id, ordinal), resolved.inputs);
         // A blocked script (needsHuman) routes via revo.ScriptBlocked → a `blocked` terminal; a thrown
-        // script routes via revo.ScriptFailed → a `failed` terminal (§6 catch). The lesson-bearing
+        // script routes via revo.ScriptFailed → a `failed` terminal. The lesson-bearing
         // pipeline_blocked is emitted inside invokeScript for the block path (parity with the old engine).
         if (scriptResult.outcome === 'blocked') {
           return { lastResult: { outcome: 'failed', errorCode: REVO_SCRIPT_BLOCKED }, lastVerdict: 'blocked', stepDelta: 1 };
@@ -1016,15 +1014,15 @@ export function makeDataDrivenTask(
           return { lastResult: { outcome: 'failed', errorCode: REVO_SCRIPT_FAILED }, lastVerdict: 'failed', stepDelta: 1 };
         }
         await recordOutput(runId, node, ordinal, stepKeyFor(node.id, ordinal), scriptResult.pointer, ctx.outputsByNode);
-        // A classifying script (pollPr, plan 0018) surfaces a DOMAIN verdict so the next `choice` can
-        // route on it (§8). Scripts with a single fixed `next` (integrator/confirmMerge) carry none.
+        // A classifying script (pollPr) surfaces a DOMAIN verdict so the next `choice` can
+        // route on it. Scripts with a single fixed `next` (integrator/confirmMerge) carry none.
         const sv = scriptResult.verdict;
         return { lastResult: { outcome: 'succeeded', ...(sv ? { verdict: sv } : {}) }, ...(sv ? { lastVerdict: sv } : {}), stepDelta: 1 };
       }
       case 'awaitGate': {
         const topic = gateTopicFor(decision.reason);
         // Per-entry gate key (nodeId#ordinal) so a re-entered gate (e.g. a question gate looped in the
-        // review phase) gets a DISTINCT inbox row instead of colliding on `runId|topic` (§3.2 audit).
+        // review phase) gets a DISTINCT inbox row instead of colliding on `runId|topic`.
         const ordinal = nextOrdinal(ctx.effectOrdinalByNode, decision.nodeId);
         const human = await awaitHuman(
           runId,
@@ -1039,7 +1037,7 @@ export function makeDataDrivenTask(
       case 'fork': {
         // Fork/join is supported by the core; the MVP feature-development pipeline has none. Record a
         // deterministic barrier arrival per branch (verdict undefined) so an `all` join proceeds. A richer
-        // concurrent-branch executor (DBOS child workflows) is a later slice (§14 Q1).
+        // concurrent-branch executor (DBOS child workflows) is a later slice.
         await appendEvent({
           runId,
           taskId,
@@ -1054,7 +1052,7 @@ export function makeDataDrivenTask(
         };
       }
       case 'startTimer':
-        // `wait` nodes are rare (§1) and unused by the MVP templates; a durable timer executor is a later
+        // `wait` nodes are unused by the MVP templates; a durable timer executor is a later
         // slice. Treat as an immediate (recorded) resume so a template using it still advances.
         return { lastResult: {}, stepDelta: 0 };
     }
@@ -1072,7 +1070,7 @@ export function makeDataDrivenTask(
     stepKey: string,
   ): Promise<InvokeRoleResult> {
     const binding = resolveRoleBinding(ctx, decision);
-    // stepKey is ordinal-aware (0016 §4.1): distinct per loop iteration, stable across replay. The
+    // stepKey is ordinal-aware: distinct per loop iteration, stable across replay. The
     // hydrated `inputs` (consumed upstream outputs) ride in stepInput → the runner renders them as a
     // `## Inputs (from previous steps)` prompt section (build-context).
     return invokeRoleAttempts({ runId, decision, node, ctx, inputs, stepKey, binding });
@@ -1362,7 +1360,7 @@ export function makeDataDrivenTask(
     const isPollPr = decision.scriptRef === 'script:pollPr';
     const isRespondThreads = decision.scriptRef === 'script:respondThreads';
     const binding = bindingByRef.get(decision.scriptRef) ?? bindingByRef.get('script:integrator');
-    // respondThreads consumes `triage` (plan 0018) — ride the hydrated input on the integrator input so
+    // respondThreads consumes `triage` — ride the hydrated input on the integrator input so
     // the live script can reply/resolve the triaged threads without a live Revisium read.
     const change = producedChangeFromInputs(inputs);
     const mergeReadiness = mergeReadinessFromInputs(inputs);
@@ -1443,7 +1441,7 @@ export function makeDataDrivenTask(
     }
     if (isPollPr) {
       // pollPr CLASSIFIES the feedback: its verdict (review_changes/ci_changes/clean) routes the prRouter
-      // choice (§8 — a script may emit a domain verdict the routing data acts on, same as an agent).
+      // choice (a script may emit a domain verdict the routing data acts on, same as an agent).
       const feedback = result as PrFeedback;
       await appendEvent({
         runId,

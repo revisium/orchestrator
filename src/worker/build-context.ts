@@ -154,10 +154,10 @@ export async function buildContext(
   const taskTitle = task ? toStr(task.data.title) : '(unknown task)';
   const taskScope = task ? toStr(task.data.scope) : '';
   const repoRef = task ? toStr(task.data.repo_ref) : '';
-  // A LIVE run edits in an isolated git worktree (plan 0017) — and its cwd is already that worktree
+  // A LIVE run edits in an isolated git worktree — and its cwd is already that worktree
   // (resolveRunCwd). Point the agent's repo CONTEXT at the worktree too, so prompt and cwd agree and the
-  // agent's writes land where the worktree-based integrator reads them, not in the original repo path
-  // (slice 143). Only when a worktree actually exists on disk (live run); non-live runs and unit tests
+  // agent's writes land where the worktree-based integrator reads them, not in the original repo path.
+  // Only when a worktree actually exists on disk (live run); non-live runs and unit tests
   // (dataDir omitted) keep repo_ref unchanged.
   let taskRepo = repoRef;
   if (dataDir && taskRepo) {
@@ -168,7 +168,7 @@ export async function buildContext(
   // planPath authorization stays anchored to the ORIGINAL repo_ref, NOT the rewritten worktree path: the
   // worktree rewrite is a display/working-tree concern, and reusing it as the plan-context sandbox would
   // widen the boundary to <dataDir>/worktrees/** — letting a live run read SIBLING worktrees via a
-  // `planPath: ../other-run/…` traversal (security; CodeRabbit on slice 143).
+  // `planPath: ../other-run/…` traversal (security).
   const planContext = await materializePlanContext(publicParams.planPath, repoRef);
 
   // WORKAROUND: JsonFilterDto.equals is typed as { [key: string]: unknown } but accepts scalar
@@ -209,7 +209,7 @@ export async function buildContext(
     }
   }
 
-  // 0016 dataflow: the data-driven adapter hydrates `step.input.inputs` with upstream step outputs
+  // Dataflow: the data-driven adapter hydrates `step.input.inputs` with upstream step outputs
   // (e.g. the analyst's plan for a developer/reviewer). Render them as a clear, named section so the
   // agent receives the produced artifacts. Omitted entirely when there are no hydrated inputs (every
   // legacy/no-consumes node), so existing prompts are unchanged.

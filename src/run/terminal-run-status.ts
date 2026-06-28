@@ -105,7 +105,7 @@ export async function recordTerminalRunStatus(
 
   async function patchRelatedTerminalRows(): Promise<void> {
     // Only `tasks` are cascaded to the terminal status. There is no `steps` row to patch — the
-    // data-driven engine writes none (audit §3.1); progress lives in DBOS, not a step row.
+    // data-driven engine writes none; progress lives in DBOS, not a step row.
     const tasks = await listRowsForRun('tasks');
     const patches = tasks
       .filter((task) => task.data.run_id === runId && task.data.status !== params.status)

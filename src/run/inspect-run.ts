@@ -103,7 +103,7 @@ function toTaskSummary(row: ControlPlaneRow): TaskSummary {
 const EVENT_DESCRIPTION_MAX = 280;
 
 /**
- * Compact a `run_created` event payload for the event/digest read surfaces (slice 141 D1). That payload
+ * Compact a `run_created` event payload for the event/digest read surfaces. That payload
  * embeds the ENTIRE pipeline graph (`route_decision.executionPolicy.template_json`) + `execution_profile`
  * + the full run description, so a single `get_run_events` page that includes it was ~57KB — bloat an
  * operator polls constantly. The graph is a RUN property, retrievable from the run's route (the

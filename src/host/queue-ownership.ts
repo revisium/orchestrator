@@ -1,5 +1,5 @@
 /**
- * Daemon singleton gate (slice 139, hardened slice 140). Exactly ONE host daemon per profile may own —
+ * Daemon singleton gate. Exactly ONE host daemon per profile may own —
  * and therefore poll — the `dev-tasks` WorkflowQueue. Ownership is a connection-scoped Postgres
  * ADVISORY LOCK:
  *
@@ -24,7 +24,7 @@
  * bridges spawning at once) and exits; ensureHost then attaches to the winner via host.json. This
  * closes the "concurrent cold-start spawns multiple daemons" hole that let stale daemons accumulate.
  * It does NOT, however, coordinate LEGACY hosts that predate the lock — those are detected by the
- * `pg_stat_activity` census (queue-poller-census.ts) and evicted by `revo doctor`/`stop` (slice 140).
+ * `pg_stat_activity` census (queue-poller-census.ts) and evicted by `revo doctor`/`stop`.
  */
 import pg from 'pg';
 

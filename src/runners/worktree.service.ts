@@ -1,5 +1,5 @@
 /**
- * worktree.service.ts — @Injectable wrapper over the per-run git worktree manager (plan 0017).
+ * worktree.service.ts — @Injectable wrapper over the per-run git worktree manager.
  *
  * DBOS-SEALED: zero @dbos-inc imports. PipelineService registers `ensure`/`release` as memoized DBOS
  * steps and wires them into the data-driven adapter's run lifecycle (create after live preflight,

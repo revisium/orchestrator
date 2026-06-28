@@ -1,8 +1,8 @@
 /**
- * PipelineService — the DBOS registration hub for the data-driven pipeline engine (plan 0015 / ADR-0002).
+ * PipelineService — the DBOS registration hub for the data-driven pipeline engine (ADR-0002).
  *
  * (Renamed from `develop-task.workflow.ts`: the hardcoded `developTask` workflow that file was named for was
- * removed in the plan-0015 cutover, so the old name described code that no longer exists.)
+ * removed in the data-driven cutover, so the old name described code that no longer exists.)
  *
  * INVARIANT: `src/pipeline/*` imports NO `@dbos-inc/dbos-sdk` (M1 — DBOS sealed).
  * All DBOS interaction goes through the generic DbosService verbs.
@@ -141,7 +141,7 @@ export type RunStepDeps = {
 /**
  * verdictForAttemptRow — best-effort verdict label for the observability attempts row.
  *
- * The data-driven engine routes on a node's DOMAIN verdict (resolved in the adapter, §8) and never
+ * The data-driven engine routes on a node's DOMAIN verdict (resolved in the adapter) and never
  * consults this. This is purely the human-readable verdict surfaced on the per-attempt log row: read
  * only the explicit top-level AttemptResult.verdict, else mark it `unknown` for observability. No
  * engine semantics are derived from it.
@@ -548,7 +548,7 @@ export class PipelineService {
   ) => Promise<AttemptResult>;
 
   /**
-   * The DATA-DRIVEN workflow (plan 0015) — the SOLE pipeline engine. Selection routes EVERY pipeline
+   * The DATA-DRIVEN workflow — the SOLE pipeline engine. Selection routes EVERY pipeline
    * here (TaskControlPlaneApiService); the engine executes the pinned `pipeline-core` graph on real
    * DBOS, reusing the SAME runStep DBOS step + awaitHuman + integrator + live preflight.
    */
@@ -601,14 +601,14 @@ export class PipelineService {
       this.integratorService.runIntegrate.bind(this.integratorService),
     );
 
-    // Register the REAL confirm-merge as a DBOS step (plan 0017 follow-up: gate worktree cleanup on a
+    // Register the REAL confirm-merge as a DBOS step (gate worktree cleanup on a
     // real merge). Idempotent (re-views before merging) → replay-safe.
     const confirmMergeFn = this.dbos.registerStep(
       'PipelineService.confirmMerge',
       this.integratorService.runConfirmMerge.bind(this.integratorService),
     );
 
-    // Register the REAL pollPr + respondThreads as DBOS steps (plan 0018: the PR review-feedback loop).
+    // Register the REAL pollPr + respondThreads as DBOS steps (the PR review-feedback loop).
     // pollPr observes + classifies; respondThreads replies + resolves. Both gh-pinned + idempotent.
     const pollPrFn = this.dbos.registerStep(
       'PipelineService.pollPr',
@@ -630,7 +630,7 @@ export class PipelineService {
       this.integratorService.runPreflight.bind(this.integratorService),
     );
 
-    // Register the per-run worktree lifecycle as memoized DBOS steps (plan 0017). `ensure` is
+    // Register the per-run worktree lifecycle as memoized DBOS steps. `ensure` is
     // create-if-absent (idempotent on replay); `release` is best-effort + idempotent.
     const createWorktreeFn = this.dbos.registerStep(
       'PipelineService.worktreeCreate',
@@ -648,7 +648,7 @@ export class PipelineService {
       appendEvent: stepDeps.appendEvent,
     });
 
-    // Register the DATA-DRIVEN workflow (plan 0015) using the production builder with the DBOS-wrapped
+    // Register the DATA-DRIVEN workflow using the production builder with the DBOS-wrapped
     // step. Reuses the SAME runStep + awaitHuman + integrator + preflight so capabilities resolve
     // through the existing runner machinery (no duplicate dispatch logic, no role-ids in the engine).
     const dataDrivenDeps: DataDrivenTaskDeps = {
@@ -690,11 +690,11 @@ export class PipelineService {
   }
 
   /**
-   * Enqueue the DATA-DRIVEN workflow for the given runId (plan 0015).
+   * Enqueue the DATA-DRIVEN workflow for the given runId.
    *
    * Idempotent by workflowID=runId: re-starting the same runId returns the existing handle. The pinned,
    * validated template is passed as a DBOS workflow ARGUMENT, so it is durable and replayed verbatim on
-   * recovery (the MVP pin — a Revisium-revision pin is a later upgrade per §11/§14 Q4). Route role
+   * recovery (the MVP pin — a Revisium-revision pin is a later upgrade). Route role
    * bindings and the resolved runner retry policy are also persisted in the DBOS workflow input row and
    * are authoritative for replay; recovery must not branch on changed process env.
    */

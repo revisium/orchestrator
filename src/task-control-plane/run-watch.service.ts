@@ -1,5 +1,5 @@
 /**
- * RunWatchService — bounded long-poll watch primitive over many runs (slice 141 D2).
+ * RunWatchService — bounded long-poll watch primitive over many runs.
  *
  * The MCP HTTP transport is stateless-per-request with a request timeout (see McpHttpService): no
  * session, no held async-iterator, no server-initiated SSE survives one POST. So we cannot "subscribe

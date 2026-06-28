@@ -20,7 +20,7 @@ export type HostRuntimeState = {
   mcpPort: number;
   startedAt: string;
   profile: string;
-  /** Build version this daemon runs (slice 139). Absent in host.json written before 139. */
+  /** Build version this daemon runs. Absent in host.json written before this field existed. */
   version?: string;
 };
 
@@ -28,7 +28,7 @@ let cachedCodeVersion: string | undefined;
 
 /**
  * This build's package version (e.g. `0.1.0-alpha.7`). Recorded in host.json so `ensureHost`/`doctor`
- * can detect a stale daemon running a DIFFERENT build than the current install (slice 139). A `0.0.0`
+ * can detect a stale daemon running a DIFFERENT build than the current install. A `0.0.0`
  * dev checkout does not change across rebuilds, so dev relies on `revo restart`; released builds differ.
  */
 export function hostCodeVersion(): string {
@@ -66,7 +66,7 @@ export function readHostRuntimeAt(file: string): HostRuntimeState | null {
 }
 
 /**
- * Live tracked daemon pids across ALL profiles (slice 140 Phase 2). The rogue reaper must protect
+ * Live tracked daemon pids across ALL profiles. The rogue reaper must protect
  * EVERY profile's daemon tree, not just the active one — else `revo stop --all --profile default`
  * would SIGKILL a live `dev` daemon (and its bridges), aborting that profile's in-flight DBOS work.
  * Band-default dirs only (a custom REVO_DATA_DIR layout isn't enumerable; documented in profileDataDir).

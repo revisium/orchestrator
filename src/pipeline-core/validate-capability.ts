@@ -1,5 +1,5 @@
 /**
- * validate-capability — §12 rule 12 (agent/script capability-ref shape). Lifted from validate.ts.
+ * validate-capability — validation rule 12 (agent/script capability-ref shape). Lifted from validate.ts.
  */
 
 import type { Template } from './types.js';

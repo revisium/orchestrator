@@ -1,5 +1,5 @@
 /**
- * Pinned DBOS identity for the host daemon (slice 140, Part A Layer 2).
+ * Pinned DBOS identity for the host daemon.
  *
  * DBOS derives two identifiers from the environment AT IMPORT TIME (dbos-sdk `utils.js` `globalParams`
  * is a module-level literal: `executorID = process.env.DBOS__VMID || 'local'`,

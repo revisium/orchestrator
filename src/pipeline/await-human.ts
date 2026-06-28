@@ -5,7 +5,7 @@
  * All DBOS interaction goes through injected deps: `awaitDecision` (wraps DBOS.recv)
  * and `appendEvent` (pure Revisium write).
  *
- * Gate mechanic (0004, §3.3):
+ * Gate mechanic:
  *  1. Write a deterministic inbox row (kind='approval', no stepId) via `pushInbox`.
  *     id = `inbox_${fnv1a64Hex(`${runId}|${topic}`)}` (22 chars ≤ 64, no timestamp).
  *     ROW_CONFLICT on replay → pushInbox returns the existing id (no-op, no throw).
@@ -32,7 +32,7 @@ export type Decision = {
 /** Dependencies injected into makeAwaitHuman — all DBOS-free typed. */
 export type AwaitHumanDeps = {
   /**
-   * Deterministic, idempotent inbox push (ROW_CONFLICT handled INSIDE the verb — §3.4a).
+   * Deterministic, idempotent inbox push (ROW_CONFLICT handled INSIDE the verb).
    * Wraps InboxService.pushInbox(item, { id }) with the verbatim deterministic id.
    */
   pushInbox: (item: NewInboxItem, id: string) => Promise<string>;
@@ -71,7 +71,7 @@ export function makeAwaitHuman(deps: AwaitHumanDeps) {
     const inboxId = `inbox_${fnv1a64Hex(inboxKey)}`;
 
     // 2. Draft write: pending approval row. context carries the topic (OQ-2) so resolve can read it back.
-    //    pushInbox catches ROW_CONFLICT internally and returns the same id (no-op on replay) — §3.4a.
+    //    pushInbox catches ROW_CONFLICT internally and returns the same id (no-op on replay).
     //    Gate rows carry NO stepId (gate is workflow-level, not a steps row — E9/E14).
     await pushInbox(
       {
