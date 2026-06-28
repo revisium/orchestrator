@@ -9,7 +9,7 @@ export type RuntimeState = {
   pgPort: number;
   pid: number;
   startedAt: string;
-  /** Data directory used by the standalone daemon. Written by ensureRevisium(). */
+
   dataDir?: string;
 };
 
@@ -24,12 +24,10 @@ type ConfigFile = {
   branch: string;
 };
 
-/**
- * Runtime profiles let an installed package (`default`) and a source checkout (`dev`) run on one
- * machine at once: a profile shifts the whole isolation band off the committed defaults, so the two
- * never share a port, data dir, or `dbos` database. Custom layouts set the REVO_* knobs directly
- * instead of adding a profile here. The single source of band constants (offset/suffix/db name).
- */
+
+
+
+
 export const PROFILES = {
   default: { suffix: '', portOffset: 0, dbosDb: 'dbos' },
   dev: { suffix: '-dev', portOffset: 400, dbosDb: 'dbos_dev' },
@@ -63,7 +61,7 @@ function loadConfig(): ConfigFile {
 
 let cachedConfig: RevoConfig | null = null;
 
-/** Parse a positive-integer env var, or undefined if unset/invalid. */
+
 function numEnv(name: string, env: NodeJS.ProcessEnv = process.env): number | undefined {
   const raw = env[name];
   if (raw === undefined) return undefined;
@@ -71,7 +69,7 @@ function numEnv(name: string, env: NodeJS.ProcessEnv = process.env): number | un
   return Number.isFinite(n) && n > 0 ? n : undefined;
 }
 
-/** Resolve the active profile from REVO_PROFILE (default `default`); unknown names fail loudly. */
+
 export function resolveProfileName(env: NodeJS.ProcessEnv = process.env): ProfileName {
   const raw = env['REVO_PROFILE'];
   if (!raw) return 'default';
@@ -89,20 +87,16 @@ export type ProfileConfig = {
   preferredPgPort: number;
 };
 
-/**
- * Band-default data dir for a SPECIFIC profile (config-file base + the profile's suffix). Deliberately
- * ignores `REVO_DATA_DIR` — that env var overrides only the ACTIVE profile, so for enumerating SIBLING
- * profiles' tracked daemons (the cross-profile-safe reap, slice 140 Phase 2) we must use band defaults.
- * Returns the band-default dir for every profile; a custom REVO_DATA_DIR layout is not enumerable here.
- */
+
+
+
+
 export function profileDataDir(profile: ProfileName): string {
   return expandHome(`${loadConfig().dataDir}${PROFILES[profile].suffix}`);
 }
 
-/**
- * Layer profile + env into the data dir and ports: the profile sets the band, then an explicit
- * REVO_* env var overrides that single knob. Pure (no fs) so the precedence is unit-testable.
- */
+
+
 export function resolveProfileConfig(
   raw: Pick<ConfigFile, 'dataDir' | 'preferredPort' | 'preferredPgPort'>,
   env: NodeJS.ProcessEnv = process.env,
@@ -117,13 +111,11 @@ export function resolveProfileConfig(
   };
 }
 
-/**
- * Test/CI isolation: env overrides keep a throwaway daemon (and its embedded Postgres + DBOS db)
- * fully separate from the developer's dogfooding control-plane. `REVO_DATA_DIR` redirects the data
- * directory (so runtime.json, the embedded PG, and the DBOS connection all key off it); `REVO_PORT`
- * / `REVO_PG_PORT` give the test daemon distinct preferred ports so it never collides with a live
- * dev daemon. Unset in normal use → the committed `revisium.config.json` values apply.
- */
+
+
+
+
+
 export function getConfig(): RevoConfig {
   if (cachedConfig) return cachedConfig;
 

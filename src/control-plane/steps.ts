@@ -1,15 +1,12 @@
-/**
- * Step types + deterministic id / format helpers for the control plane.
- *
- * NOTE: the legacy step-lifecycle verbs (`claimNextStep`/`startAttempt`/`writeResult`/`failStep`/
- * `recoverInFlight`/`createSteps`) were the pre-pivot dumb-loop step queue. They are superseded by the
- * DBOS-driven data-driven engine and were removed (audit §2.1). What remains here is the `Step` shape the
- * runner machinery still consumes (synthesized in-memory by the engine — `RunService.loadPipelineContext` —
- * not read from a `steps` row) plus a few pure id / format helpers reused across the run / inbox / pipeline
- * layers.
- */
 
-// ─── public types ───────────────────────────────────────────
+
+
+
+
+
+
+
+
 
 export type Step = {
   id: string;
@@ -51,7 +48,6 @@ export type CostRecord = {
   currency?: string;
 };
 
-// ─── id / format helpers ─────────────────────────────────────
 
 export function compactStamp(date: Date): string {
   const pad = (v: number, l = 2) => String(v).padStart(l, '0');
@@ -68,10 +64,6 @@ export function compactStamp(date: Date): string {
   ].join('');
 }
 
-// Non-cryptographic FNV-1a 64-bit hash → 16 hex chars. Used to derive DETERMINISTIC, BOUNDED row ids
-// (same input → same id, so a crash-retry is idempotent) that fit Revisium's 64-char rowId limit:
-// `inbox_`/`event_`/`cost_`/`attempt_`/`out_`/`step_` + 16 hex stays well under the cap. Not crypto, so
-// it does not trip the weak-hash security hotspot.
 export function fnv1a64Hex(input: string): string {
   let hash = 0xcbf29ce484222325n;
   const prime = 0x100000001b3n;

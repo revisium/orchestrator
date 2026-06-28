@@ -19,7 +19,7 @@ export function ruleParallelJoin(template: Template, d: DiagSink): void {
   }
 }
 
-/** Validate one parallel against its declared join (resolution, kind, quorum, membership, merge). */
+
 function checkParallelAgainstJoin(
   template: Template,
   par: Extract<Node, { kind: 'parallel' }>,
@@ -40,14 +40,12 @@ function checkParallelAgainstJoin(
   (joinUsedBy.get(par.join) ?? joinUsedBy.set(par.join, []).get(par.join)!).push(par.id);
 
   checkQuorumBound(par, join, d);
-  // Branch membership + cross-branch goto + all-reachability.
   checkBranchMembership(template, par, join.id, d);
-  // Multi-writer fields need a merge reducer.
   checkMergeReducers(template, par, join, d);
   checkRejectedMergeReducers(join, d);
 }
 
-/** Quorum K must satisfy 1 ≤ K ≤ N (branch count). */
+
 function checkQuorumBound(
   par: Extract<Node, { kind: 'parallel' }>,
   join: Extract<Node, { kind: 'join' }>,
@@ -62,7 +60,7 @@ function checkQuorumBound(
   }
 }
 
-/** Reject any merge reducer outside the allowed set (defensive; the type forbids it but data may carry it). */
+
 function checkRejectedMergeReducers(join: Extract<Node, { kind: 'join' }>, d: DiagSink): void {
   for (const [field, reducer] of Object.entries(join.merge ?? {})) {
     if (!MERGE_REDUCERS.includes(reducer)) {
@@ -84,10 +82,8 @@ function checkBranchMembership(
   checkCrossBranchGotos(template, memberOf, joinId, d);
 }
 
-/**
- * Assign each branch sub-graph node to its owning branch (flagging shared membership) and, for an
- * `all` join, flag any branch that cannot reach the join. Returns the node→branch ownership map.
- */
+
+
 function buildBranchMembership(
   template: Template,
   par: Extract<Node, { kind: 'parallel' }>,
@@ -109,7 +105,7 @@ function buildBranchMembership(
   return memberOf;
 }
 
-/** all-reachability: an `all`-join branch must be able to reach the join (no deadlock). */
+
 function checkAllJoinReachable(
   template: Template,
   branch: { id: string; entry: string },
@@ -125,7 +121,7 @@ function checkAllJoinReachable(
   }
 }
 
-/** Cross-branch goto: a branch member may only goto within its own branch sub-graph or to the join. */
+
 function checkCrossBranchGotos(
   template: Template,
   memberOf: Map<string, string>,
@@ -154,10 +150,6 @@ function checkMergeReducers(
   join: Extract<Node, { kind: 'join' }>,
   d: DiagSink,
 ): void {
-  // v1 cannot statically know a node's written fields without a resultSchema model, so we use a
-  // conservative proxy: a parallel fanning out ≥2 effect (agent/script) branches writes results from
-  // >1 branch; absent a `merge` reducer those fields are unguarded (§4/§12.8). A real per-field model
-  // lands with native Revisium typing; until then the entry-kind heuristic surfaces the hazard.
   if (par.branches.length < 2) return;
   if (Object.keys(join.merge ?? {}).length > 0) return;
   const writers = par.branches.filter((b) => {

@@ -1,10 +1,8 @@
-/**
- * block-run.ts - patch task_runs to `paused` + write a run_blocked event.
- *
- * A pipeline can stop cleanly with `blocked: true` while DBOS reports workflow SUCCESS.
- * Without this verb, the Revisium run row stays `ready`, making the control-plane state
- * claim work is still claimable even though the workflow intentionally stopped.
- */
+
+
+
+
+
 import type { ControlPlaneDataAccess } from '../control-plane/index.js';
 import { recordTerminalRunStatus } from './terminal-run-status.js';
 

@@ -1,9 +1,6 @@
 import type { Step } from '../control-plane/steps.js';
 import type { NewStepSpec } from './runner.js';
 
-// The only supported agent result channel: the Claude CLI `--json-schema` constrains the final
-// message and returns it as the transport `structured_output` field. The engine routes only on the
-// top-level `verdict` from that structured object; prose output is never parsed for routing.
 export const AGENT_RESULT_SCHEMA = JSON.stringify({
   type: 'object',
   additionalProperties: false,
@@ -26,7 +23,7 @@ export const AGENT_RESULT_SCHEMA = JSON.stringify({
   required: ['verdict', 'output'],
 });
 
-/** Short prompt note paired with `--json-schema`; the CLI returns the result as `structured_output`. */
+
 export const STRUCTURED_RESULT_NOTE = `
 Return your final answer as JSON matching the provided output schema:
 - "verdict": the single routing token for your role (lowercase; e.g. approved | changes_requested | blocker | clean | dirty).
@@ -35,7 +32,7 @@ Return your final answer as JSON matching the provided output schema:
 Set "needsHuman": true only if you are blocked and a human must intervene.
 `;
 
-/** Build the AgentResult from the required structured_output object (the --json-schema path). */
+
 export function agentResultFromStructured(structured: unknown): AgentResult {
   if (structured === undefined) {
     throw new TypeError('agent structured result missing structured_output');
@@ -78,7 +75,7 @@ export type TransportEnvelope = {
   costUsd?: number;
   inputTokens?: number;
   outputTokens?: number;
-  /** The `--json-schema`-validated final message (claude CLI `structured_output`), when present. */
+
   structuredOutput?: unknown;
 };
 
@@ -105,8 +102,6 @@ function readNonEmptyString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
-// Layer A. Parse defensively; field names are read only inside this module, so a CLI drift is a
-// one-file change. Throws only when stdout is not parseable JSON.
 export function parseTransportEnvelope(stdout: string): TransportEnvelope {
   let parsed: unknown;
   try {
@@ -135,23 +130,17 @@ export function parseTransportEnvelope(stdout: string): TransportEnvelope {
   };
 }
 
-/**
- * Reduce the runner's stdout to the single terminal `result` JSON object, then hand it to
- * parseTransportEnvelope. Handles BOTH shapes:
- *   - legacy `--output-format json`     → the whole stdout is one `{...}` object;
- *   - `--output-format stream-json`     → a JSONL stream (system/assistant/user/… lines) whose LAST
- *                                          line is `{"type":"result",...}`.
- * Confirmed by experiment (2026-06-23): under stream-json the terminal result still carries
- * `structured_output`, `usage`, and `total_cost_usd`, so verdict/cost extraction is unchanged.
- * Throws when no result object is present (the runner maps that to a lesson-bearing failure).
- */
+
+
+
+
+
+
+
+
 export function extractTerminalResult(stdout: string): string {
   const trimmed = stdout.trim();
   if (trimmed === '') throw new Error('claude -p produced no output (no result envelope)');
-  // Legacy single-object form: the whole stdout parses as one object. Accept only a terminal
-  // result (`type` 'result' or absent — the legacy `--output-format json` blob is `type:'result'`);
-  // a lone non-result stream event (e.g. `{"type":"assistant",…}`) must fall through so the JSONL
-  // scan reports the clear "no result event" error rather than failing later on a missing result.
   try {
     const whole = JSON.parse(trimmed);
     if (whole !== null && typeof whole === 'object' && !Array.isArray(whole)) {
@@ -159,9 +148,7 @@ export function extractTerminalResult(stdout: string): string {
       if (type === undefined || type === 'result') return trimmed;
     }
   } catch {
-    // Not a single object → fall through to the JSONL scan.
   }
-  // stream-json: the terminal result is the LAST line with `"type":"result"`.
   const lines = trimmed.split(/\r?\n/);
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i].trim();
@@ -170,15 +157,11 @@ export function extractTerminalResult(stdout: string): string {
       const obj = JSON.parse(line) as Record<string, unknown>;
       if (obj !== null && typeof obj === 'object' && obj.type === 'result') return line;
     } catch {
-      // skip a partial/non-JSON line
     }
   }
   throw new Error('claude -p stream contained no result event (transport envelope)');
 }
 
-// Map each raw nextSteps entry to NewStepSpec. Require role/kind/input; default taskId and
-// modelProfile from the current step so the agent never needs to know IDs. Throw a lesson-bearing
-// error (naming the index) on a malformed entry.
 export function normalizeNextSteps(raw: unknown[], step: Step): NewStepSpec[] {
   return raw.map((entry, i) => {
     if (entry === null || typeof entry !== 'object') {

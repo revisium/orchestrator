@@ -134,8 +134,6 @@ function parseRole(value: unknown, index: number, root: string): RoleCatalogReco
     path,
     surface: stringField(record, 'surface', context),
     rights: stringField(record, 'rights', context),
-    // allowedTools is DATA the role declares directly (no rights→tools table in code). A role's
-    // `rights` label remains a human-facing descriptor; the executable tool list is `allowed_tools`.
     allowedTools: stringArrayField(record, 'allowed_tools', context),
     defaultModelLevel: modelLevel as RoleCatalogRecord['defaultModelLevel'],
     runnerId,

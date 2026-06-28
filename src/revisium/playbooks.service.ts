@@ -68,11 +68,9 @@ function alternativeRoles(value: unknown): PipelineSummary['alternativeRoles'] {
   });
 }
 
-/**
- * The HEAD transport caches the read-scope (revision) it resolved at boot; the recoverable scope
- * resolver behind it exposes `invalidate()` to drop that cache. The injected {@link ControlPlaneTransport}
- * type doesn't surface it, so detect the capability structurally rather than widening the shared type.
- */
+
+
+
 type Invalidatable = { invalidate(): void };
 
 function canInvalidate(transport: unknown): transport is Invalidatable {
@@ -106,10 +104,6 @@ export class PlaybooksService {
       access: createVersionedMeaningAccess({ dryRun: options.dryRun }),
     });
     const result = await installer.install(options);
-    // A committed install writes new HEAD rows, but `head` caches the HEAD read-scope it resolved at
-    // boot — so listPlaybooks/listPipelines would keep serving the pre-install revision for the rest of
-    // the daemon's lifetime (forcing a restart). Drop that cached scope after a real commit so the next
-    // read re-resolves against the new HEAD. Reads (dryRun / non-commit) leave the cache intact.
     if (result.committed && canInvalidate(this.head)) this.head.invalidate();
     return result;
   }

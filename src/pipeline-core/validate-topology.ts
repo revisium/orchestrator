@@ -4,9 +4,6 @@ import { DiagSink } from './validate-sink.js';
 import { outgoingEdges } from './validate-edges.js';
 import { guardConditionsOf, reachableFrom } from './validate-graph.js';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Rule 1 — single entry.
-// ─────────────────────────────────────────────────────────────────────────────
 
 export function ruleSingleEntry(template: Template, ids: Set<string>, d: DiagSink): void {
   if (!template.entry) {
@@ -20,9 +17,6 @@ export function ruleSingleEntry(template: Template, ids: Set<string>, d: DiagSin
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Rule 2 — references resolve (every edge target exists).
-// ─────────────────────────────────────────────────────────────────────────────
 
 export function ruleReferencesResolve(template: Template, ids: Set<string>, d: DiagSink): void {
   const check = (target: string | undefined, node: Node, path: string): void => {
@@ -36,9 +30,6 @@ export function ruleReferencesResolve(template: Template, ids: Set<string>, d: D
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Rule 3 — terminals & non-terminals.
-// ─────────────────────────────────────────────────────────────────────────────
 
 export function ruleTerminals(template: Template, d: DiagSink): void {
   for (const node of Object.values(template.nodes)) {
@@ -48,7 +39,6 @@ export function ruleTerminals(template: Template, d: DiagSink): void {
           nodeId: node.id,
         });
       }
-      // The discriminated union forbids exit fields on a terminal at the type level; nothing else to check.
     } else if (outgoingEdges(node).length === 0) {
       d.error('NONTERMINAL_NO_EXIT', `non-terminal ${node.id} (${node.kind}) has no exit edge`, {
         nodeId: node.id,
@@ -57,9 +47,6 @@ export function ruleTerminals(template: Template, d: DiagSink): void {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Condition grammar sanity — a malformed guard can't be evaluated (feeds rules 2/4/9).
-// ─────────────────────────────────────────────────────────────────────────────
 
 export function ruleConditionGrammar(template: Template, d: DiagSink): void {
   for (const node of Object.values(template.nodes)) {
@@ -100,9 +87,6 @@ function checkCondition(cond: Condition, nodeId: string, d: DiagSink): void {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Rule 4 — total routing (default present; no guard after default; one default).
-// ─────────────────────────────────────────────────────────────────────────────
 
 export function ruleTotalRouting(template: Template, d: DiagSink): void {
   for (const node of Object.values(template.nodes)) {
@@ -129,12 +113,9 @@ export function ruleTotalRouting(template: Template, d: DiagSink): void {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Rule 5 — reachability (every node reachable from entry; no dead nodes).
-// ─────────────────────────────────────────────────────────────────────────────
 
 export function ruleReachability(template: Template, ids: Set<string>, d: DiagSink): void {
-  if (!template.entry || !ids.has(template.entry)) return; // rule 1 already flagged it
+  if (!template.entry || !ids.has(template.entry)) return;
   const reachable = reachableFrom(template, template.entry);
   for (const id of ids) {
     if (!reachable.has(id)) d.error('UNREACHABLE_NODE', `node "${id}" is unreachable from entry`, { nodeId: id });

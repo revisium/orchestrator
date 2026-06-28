@@ -98,7 +98,6 @@ export class ControlPlaneSubscriptionBridge implements OnModuleInit, OnModuleDes
       const workflow = await this.runsApi.getRunWorkflow({ runId });
       await this.pubSub.publish(RUN_WORKFLOW_UPDATED_TOPIC, { runWorkflowUpdated: workflow, runId });
     } catch (error) {
-      // Low-level topics remain authoritative even if the aggregate projection is temporarily unavailable.
       this.logger.warn(`Run workflow subscription publish skipped for ${runId}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }

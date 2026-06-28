@@ -1,11 +1,7 @@
-/**
- * integrator-remote — GitHub remote → owner/repo derivation. Lifted from integrator.ts.
- * `parseOwnerRepo` is unit-tested directly and re-exported by integrator.ts.
- */
+
+
 import type { ExecFn, IntegratorBlocked } from './integrator-types.js';
 
-// Owner and repo: GitHub-safe chars only ([A-Za-z0-9._-]); trailing .git stripped; no trailing paths.
-// Non-greedy repo segment (+?) allows the (?:\.git)? suffix to back-trim a trailing ".git".
 const GITHUB_SSH_RE = /^git@github\.com:([A-Za-z0-9._-]+\/[A-Za-z0-9._-]+?)(?:\.git)?$/;
 const GITHUB_HTTPS_RE = /^https?:\/\/github\.com\/([A-Za-z0-9._-]+\/[A-Za-z0-9._-]+?)(?:\.git)?$/;
 

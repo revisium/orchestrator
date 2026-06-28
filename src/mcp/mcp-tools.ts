@@ -40,9 +40,7 @@ const prReadinessInputSchema = {
   includeReviewThreads: z.boolean().optional().default(true),
 };
 
-// Shared by the bounded long-poll watch tools (wait_for_any_gate / watch_runs).
 const watchInputSchema = {
-  // min(1): an explicit empty array would otherwise be treated like omission (watch-all) — surprising.
   runIds: z.array(z.string().min(1)).min(1).max(50).optional().describe('Runs to watch; omit to watch all active runs'),
   timeoutMs: z.number().int().nonnegative().max(45000).optional().describe('Server hold (clamped ≤45s)'),
   cursor: watchCursorSchema.optional().describe('Resume cursor from a prior call; suppresses already-delivered transitions'),
@@ -189,8 +187,6 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
     {
       description:
         'Compatibility/diagnostic tool: resolve current run state and next action. Prefer observe_run with cursor for normal observation loops.',
-      // Cap matches the MCP inner-hop SDK timeout budget (~60s): a longer busy-poll dies at the transport,
-      // not the daemon. To wait across runs, prefer wait_for_any_gate / watch_runs.
       inputSchema: {
         runId: runIdSchema,
         timeoutMs: z.number().int().nonnegative().max(45000).optional(),

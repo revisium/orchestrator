@@ -169,10 +169,6 @@ function normalizeInput(input: CreateRunInput): NormalizedInput {
   };
 }
 
-// A role row id is generic data: any well-formed id (charset + length) is accepted. Roles are data,
-// not a code allow-list — the route binds an installed role row id and the data-driven engine resolves
-// it as an opaque capability handle (it holds ZERO role-ids). A hyphen is NOT required (a bare id like
-// `developer` is valid).
 function isValidRoleRowId(role: string): boolean {
   if (role.length === 0 || role.length > maxRoleRowIdLength) return false;
   return /^[A-Za-z0-9_-]+$/.test(role);
@@ -241,9 +237,6 @@ export async function createRunWorkflow(
     });
     createdIds.taskId = ids.taskId;
 
-    // No `steps` row is written: the data-driven engine owns progress in DBOS and synthesizes the
-    // per-step `Step` in-memory (RunService.loadPipelineContext). The pre-pivot phantom `plan_run`
-    // step row (stuck at `ready` forever, never advanced) was retired here (audit §3.1).
     await dataAccess.createRow('events', ids.eventId, {
       id: ids.eventId,
       run_id: ids.runId,

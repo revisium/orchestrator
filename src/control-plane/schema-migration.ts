@@ -58,11 +58,9 @@ function loadBootstrapTables(configPath: string): BootstrapTable[] {
   });
 }
 
-/**
- * Apply the bootstrap.config.json table schemas additively onto a caller-provided DRAFT scope:
- * create missing tables, patch additive drift on existing ones. Does NOT commit — the caller owns the
- * scope and commits the whole bootstrap once (one `client.revision('draft')` → tables + rows → commit).
- */
+
+
+
 export async function applyAdditiveSchemaMigration(
   draft: RevisionScope,
   configPath: string,
@@ -76,10 +74,6 @@ export async function applyAdditiveSchemaMigration(
     try {
       currentSchema = await draft.getTableSchema(table.id);
     } catch {
-      // Table absent on an upgraded control-plane (e.g. `run_outputs`, added in 0016). The previous
-      // code only PATCHED existing tables, so a brand-new table would never land on an already-
-      // bootstrapped control-plane. Create it from the bootstrap schema (fresh bootstrap already
-      // creates every config table; this covers the upgrade path).
       await draft.createTable(table.id, table.schema);
       updatedTables.push(table.id);
       patchCount += 1;

@@ -1,13 +1,11 @@
-/**
- * ClaudeCodeService — Nest provider wrapping createClaudeCodeRunner.
- *
- * Injects a PROCESS_EXECUTOR DI token so tests can inject a fake ProcessExecutor
- * without spawning a real `claude` process (M2).
- *
- * resolveCwd comes from RunService.makeResolveCwd() — STEP-level (reads tasks.repo_ref).
- *
- * DBOS-SEALED: zero @dbos-inc imports.
- */
+
+
+
+
+
+
+
+
 import { Injectable, Inject } from '@nestjs/common';
 import { join } from 'node:path';
 import { createClaudeCodeRunner } from '../worker/claude-code-runner.js';
@@ -35,6 +33,6 @@ export class ClaudeCodeService {
     });
   }
 
-  /** Arrow property — safe to pass unbound as a RunAgent. */
+
   run: RunAgent = (args) => this.runner(args);
 }

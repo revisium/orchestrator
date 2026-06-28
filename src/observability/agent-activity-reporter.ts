@@ -117,10 +117,6 @@ export function createAgentActivityReporter(
   let attemptSeq = 0;
   let firstWriteFailure: unknown;
 
-  // Cursor identity intentionally uses only durable public identifiers and structural counters.
-  // The current product attemptId is deterministic for runId|stepKey, so same-step retries collapse
-  // to the same observability attempt. These cursors are stable for DBOS replay; attemptSeq is only
-  // diagnostic ordering within that product attempt identity and is not a durable retry ordinal.
   function enqueue(kind: AgentOutputEventKind, patch: Partial<AgentOutputEvent> = {}): void {
     const at = patch.at ?? nowIso();
     snapshot.lastEventAt = at;

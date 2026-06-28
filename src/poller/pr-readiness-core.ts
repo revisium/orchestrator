@@ -134,7 +134,6 @@ function resolveGhExecutable(): string {
       accessSync(candidate, constants.X_OK);
       return candidate;
     } catch {
-      // Try the next fixed system location.
     }
   }
   throw new Error(`gh executable not found in fixed locations: ${GH_EXECUTABLE_CANDIDATES.join(', ')}`);
@@ -439,9 +438,7 @@ function fetchReviewThreads(repo: string, prNumber: number, execGh: ExecGhFn): R
   return mapReviewThreads(parseGhJson<unknown>(raw, `review-threads #${prNumber}`));
 }
 
-/** Map the statusCheckRollup contexts GraphQL payload to the SET of check names branch protection
- *  marks REQUIRED. The check name matches {@link checkName}'s convention so it joins cleanly against
- *  CI failure names: CheckRun → `name`, StatusContext → `context`. */
+
 function mapRequiredCheckNames(raw: unknown): Set<string> {
   const root = asRecord(raw);
   const repository = asRecord(root?.['repository']);
@@ -453,22 +450,19 @@ function mapRequiredCheckNames(raw: unknown): Set<string> {
   for (const node of nodes) {
     const ctx = asRecord(node);
     if (!ctx || ctx['isRequired'] !== true) continue;
-    // CheckRun carries `name`; StatusContext carries `context` — mirror checkName().
     const checkName = asStr(ctx['name']) || asStr(ctx['context']);
     if (checkName) required.add(checkName);
   }
   return required;
 }
 
-/**
- * fetchRequiredCheckNames — the SET of check names branch protection marks REQUIRED for this PR.
- *
- * `gh pr view --json statusCheckRollup` (fetchPrView) does NOT carry isRequired, so this issues a
- * dedicated GraphQL read mirroring {@link fetchReviewThreads}. `isRequired` lives on
- * StatusCheckRollupContext and needs the `pullRequestNumber:` arg. Used by pollPr to limit the
- * `ci_changes` verdict to required-check failures (advisory checks — Sonar/CodeRabbit — must not
- * trigger a rework loop). Throws on a gh error so callers can apply the fail-safe fallback.
- */
+
+
+
+
+
+
+
 export function fetchRequiredCheckNames(repo: string, prNumber: number, execGh: ExecGhFn): Set<string> {
   const { owner, name } = splitRepo(repo);
   const raw = execGh([
@@ -506,10 +500,6 @@ function fetchComments(input: PrReadinessInput, prNumber: number, execGh: ExecGh
   const issueComments = parseGhJson<CommentEntry[]>(issueCommentsRaw, `issue-comments #${prNumber}`);
   const allComments = [...reviewComments, ...issueComments];
 
-  // reviews come back chronological; keep only the latest per author so a stale review never
-  // overrides a newer one. Mirror this for CodeRabbit (a Bot author, hence excluded from the human
-  // map) — otherwise a stale actionable CodeRabbit body keeps a PR stuck even after a newer clean
-  // review (#142 Finding #2).
   const latestHumanReviewByAuthor = new Map<string, ReviewEntry>();
   const latestCodeRabbitReviewByAuthor = new Map<string, ReviewEntry>();
   for (const review of reviews) {
@@ -525,8 +515,6 @@ function fetchComments(input: PrReadinessInput, prNumber: number, execGh: ExecGh
     human_reviews: [...latestHumanReviewByAuthor.values()],
     human_comments: allComments.filter((comment) => !isBot(comment.user)),
     bot_comments: allComments.filter((comment) => isBot(comment.user)),
-    // CodeRabbit review bodies are excluded from human_reviews above (they are Bot-authored). They
-    // carry actionable findings as a top-level review body, so keep them for buildFeedback (#142).
     coderabbit_reviews: [...latestCodeRabbitReviewByAuthor.values()],
   };
 }
@@ -537,9 +525,7 @@ function isCodeRabbit(user: { login: string } | null | undefined): boolean {
 
 type CodeRabbitWaitReason = 'provider_limit' | 'review_in_progress' | 'skipped' | 'no_actionable_comments' | '';
 
-/** Classify a single CodeRabbit body into a non-actionable provider-WAIT reason (or '' for none).
- *  Single source of truth shared by codeRabbitCommentReason (drives providerWait) and
- *  isCodeRabbitActionable (so a provider-wait body is never ALSO emitted as a developerFix — #144). */
+
 function codeRabbitProviderWaitReason(rawBody: string): CodeRabbitWaitReason {
   const body = rawBody.toLowerCase();
   if (/rate.limit|provider.limit|quota|capacity|temporar/.test(body) && /did not start|could not start|not start|unable to start|paused/.test(body)) {
@@ -560,9 +546,7 @@ function codeRabbitCommentReason(comments: CommentEntry[]): CodeRabbitWaitReason
   return '';
 }
 
-/** Best-effort extraction of a "retry in N <unit>" hint from a bot comment body, e.g.
- *  "retry in 10 min". Returns null when no hint is present — the caller must keep the
- *  raw evidence either way. Case-insensitive and intentionally lenient. */
+
 function extractResumeHint(comments: CommentEntry[]): string | null {
   for (const comment of comments) {
     if (!isCodeRabbit(comment.user)) continue;
@@ -575,10 +559,6 @@ function extractResumeHint(comments: CommentEntry[]): string | null {
   return null;
 }
 
-// CodeRabbit's own structured markers for a finding that still needs developer action. A review
-// body or comment carrying any of these is an actionable blocker — UNLESS it is one of the
-// non-actionable states classified by codeRabbitCommentReason (provider_limit / review_in_progress
-// / skipped / no_actionable_comments), or it has been addressed/resolved/outdated.
 const CODERABBIT_FINDING_MARKERS = [
   /⚠️\s*potential issue/i,
   /🛠️\s*refactor suggestion/i,
@@ -586,19 +566,12 @@ const CODERABBIT_FINDING_MARKERS = [
   /🧹\s*nitpick/i,
 ];
 
-// "Actionable comments posted: N" — the count CodeRabbit prints atop a review summary. N>0 means
-// the review found work; N=0 (handled as no_actionable_comments) is explicitly NOT a blocker.
 const CODERABBIT_ACTIONABLE_COUNT_RE = /actionable comments posted:\s*(\d+)/i;
 
-// A finding CodeRabbit reports as already handled. Anchored to CodeRabbit's own addressed-markers
-// rather than bare words so a live finding whose prose merely mentions e.g. "remove these outdated
-// comments" or "unresolved promise" survives. Such evidence is stale and must NOT remain a blocker.
 const CODERABBIT_ADDRESSED_RE = /✅\s*addressed|\baddressed in\b|marked as resolved|now outdated|marked (?:as )?outdated/i;
 
-/** True when a CodeRabbit review-body / comment text reports a finding that still needs developer
- *  action. Conservative — returns false (item dropped, not kept as a blocker) when the body is:
- *  an explicit `Actionable comments posted: 0`; a non-actionable provider-WAIT state (so a wait is
- *  never ALSO a developerFix — #144); or carries an addressed/resolved/outdated marker. */
+
+
 function isCodeRabbitActionable(body: string): boolean {
   const countMatch = body.match(CODERABBIT_ACTIONABLE_COUNT_RE);
   if (countMatch && Number(countMatch[1]) === 0) return false;
@@ -608,18 +581,16 @@ function isCodeRabbitActionable(body: string): boolean {
   return CODERABBIT_FINDING_MARKERS.some((marker) => marker.test(body));
 }
 
-/** Actionable CodeRabbit feedback that arrives as a top-level review body or bot comment rather
- *  than a resolvable GraphQL review thread. `fetchComments` already retrieves this data (bot reviews
- *  and bot comments) but buildFeedback never routed it to developerFixes; an actual finding therefore
- *  vanished (#142). Review bodies come from the `reviews` REST call independent of includeReviewThreads,
- *  so this also covers the poll path. The non-actionable provider states (provider_limit /
- *  review_in_progress / skipped / no_actionable_comments) stay with providerWait — they are excluded
- *  here so the WAIT and FIXES buckets never collapse (#144).
- *
- *  `threadLocations` carries the path:line of unresolved review threads already emitted as the
- *  richer `review_thread` developerFix; a bot comment at the same location is the SAME inline
- *  finding (the thread's first comment), so it is skipped to avoid emitting it twice (#142
- *  Finding #1). Only non-empty locations dedup — a comment with no path:line is never matched. */
+
+
+
+
+
+
+
+
+
+
 function codeRabbitActionableFeedback(
   reviews: ReviewEntry[],
   botComments: CommentEntry[],
@@ -711,10 +682,8 @@ function locationOf(item: { component?: string; path?: string; line?: number }) 
   return item.line ? `${path}:${item.line}` : path;
 }
 
-/** A single developer-fix feedback item. Sources (ci / sonar / sonar_hotspot / human_review /
- *  review_thread / coderabbit_review_body / coderabbit_comment) populate the optional fields they
- *  have; the shape is a superset mirroring the generic PrFeedbackItemModel so a heterogeneous bucket
- *  stays one coherent type. */
+
+
 export type DeveloperFix = {
   source: string;
   summary: string;
@@ -724,9 +693,7 @@ export type DeveloperFix = {
   author?: string;
 };
 
-/** A single provider-wait feedback item. `nature` distinguishes the two cases:
- *  - 'informational': a stale comment-derived wait observed on the terminal path (NOT blocking).
- *  - 'blocking': a genuinely-pending provider check observed on the pending path (blocking). */
+
 export type ProviderWaitItem = {
   provider: string;
   reason: string;
@@ -739,12 +706,6 @@ export type ProviderWaitItem = {
 function providerWaitFeedback(state: ReturnType<typeof providerState>, botComments: CommentEntry[]): ProviderWaitItem[] {
   const codeRabbit = state.codeRabbit;
   if (codeRabbit?.state !== 'waiting') return [];
-  // This function is reached on the TERMINAL path (collectPrReadiness only calls buildFeedback
-  // after the ci.pending gate). By then any CodeRabbit check is terminal, so a rate-limit /
-  // review-in-progress BOT COMMENT is necessarily stale relative to the current green head —
-  // it is informational, NOT a readiness blocker. A genuinely-pending CodeRabbit check is
-  // caught earlier by the pending gate and surfaced as a blocking providerWait (see
-  // buildWaitingReadiness), so the two cases are distinguishable via `blocking`.
   return [{
     provider: 'CodeRabbit',
     reason: codeRabbit.reason,
@@ -842,11 +803,6 @@ function buildFeedback(input: {
       location: locationOf(thread),
       evidence: thread.url ?? thread.id,
     })),
-    // Actionable CodeRabbit feedback delivered as a review body / bot comment rather than a
-    // resolvable review thread (#142). Appended after review_thread items so the thread-aware
-    // classification keeps producing the leading developerFix where threads are present. Pass the
-    // thread path:line locations so a bot comment for a thread already emitted above is not
-    // emitted a second time (#142 Finding #1).
     ...codeRabbitActionableFeedback(
       input.coderabbitReviews ?? [],
       input.botComments,
@@ -1037,11 +993,6 @@ function buildWaitingReadiness(input: {
   evidence: string[];
   isDraft?: boolean;
 }): PrReadinessResult {
-  // The pending path previously left providerState empty and built providerWait from it (also
-  // empty), so a genuinely-pending CodeRabbit check was never explained as a provider wait.
-  // Synthesize a blocking providerState/providerWait from the pending check names so the output
-  // surfaces WHY the wait is blocking — mirroring the informational entry emitted on the
-  // terminal path. This does not change the verdict (still waiting/watcher_wait).
   const pendingCodeRabbit = input.ci.pendingNames.find((name) => name.toLowerCase().includes('coderabbit'));
   const pendingProviderState: ReturnType<typeof providerState> = pendingCodeRabbit
     ? {
@@ -1068,8 +1019,6 @@ function buildWaitingReadiness(input: {
     pr: { head: input.prView.headRefName, title: input.prView.title },
   });
 
-  // buildFeedback -> providerWaitFeedback classifies from providerState, but on the pending path
-  // the wait IS blocking (a live check), so emit a blocking item in place of the synthesized one.
   const providerWait: ProviderWaitItem[] = pendingCodeRabbit
     ? [{
         provider: 'CodeRabbit',
@@ -1111,11 +1060,6 @@ function readinessAction(input: {
   ci: ReturnType<typeof collectCiChecks>;
   feedback: ReturnType<typeof buildFeedback>;
 }): { verdict: PrReadinessVerdict; nextAction: PrReadinessNextAction } {
-  // NOTE: a CodeRabbit provider_limit / review_in_progress bot comment is intentionally NOT a
-  // `waiting` verdict here. This function is only reached after the ci.pending gate (see
-  // collectPrReadiness), so every check is already terminal — such a comment is stale relative
-  // to the current green head and is surfaced as an informational providerWait instead. A
-  // genuinely-pending CodeRabbit check is handled by the pending gate before this point.
   if (!input.ci.ci_passed || input.feedback.developerFixes.length > 0) {
     return { verdict: 'needs_work', nextAction: 'developer_fix' };
   }

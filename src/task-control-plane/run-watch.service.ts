@@ -1,18 +1,16 @@
-/**
- * RunWatchService — bounded long-poll watch primitive over many runs (slice 141 D2).
- *
- * The MCP HTTP transport is stateless-per-request with a request timeout (see McpHttpService): no
- * session, no held async-iterator, no server-initiated SSE survives one POST. So we cannot "subscribe
- * over MCP"; instead we convert the daemon's existing in-process push (APP_PUB_SUB) into a bounded
- * long-poll that RETURNS UNDER THE BRIDGE TIMEOUT with a resume cursor.
- *
- * Correctness rests on the SWEEP + CURSOR, not the push. The push (option A) only lowers latency; a
- * pure poll (option B, no pubSub) is an equivalent-correctness degrade. Delivery is **at-least-once +
- * idempotent**: `resolveRunState` is a point-in-time LEVEL read (a gate is `inbox.find(approval)`, not
- * an event edge), so the cursor is a per-run *marker* watermark — a re-call suppresses a run whose
- * actionable level it already delivered, and reports it again only when the marker changes (a new gate
- * id, or a status transition). Approving the same gate twice is already guarded downstream.
- */
+
+
+
+
+
+
+
+
+
+
+
+
+
 import { ControlPlaneError } from '../control-plane/errors.js';
 import {
   deriveCanonicalActivitySignal,
@@ -20,13 +18,10 @@ import {
   type CanonicalActivitySignal,
 } from '../observability/activity-signal.js';
 import type { AgentRunActivity } from '../observability/types.js';
-// Single source of truth for the topic names (a zero-import leaf module, so no import cycle). The
-// ControlPlaneSubscriptionBridge publishes these from the Postgres LISTEN feed, each payload carrying
-// `runId` — the field we filter wakeups on.
 import { INBOX_ITEM_ADDED_TOPIC, RUN_UPDATED_TOPIC } from '../api/graphql-api/graphql-ws/constants.js';
 import type { RunState } from './task-control-plane-api.service.js';
 
-/** A run that became actionable since the caller's cursor. `inbox` is the same row D3 enriches. */
+
 export type RunTransition = {
   runId: string;
   state: RunState['state'];
@@ -130,21 +125,21 @@ export type ObserveRunResult = {
   diagnostic?: ObserveRunDiagnostic;
 };
 
-/** The minimal read surface RunWatchService needs from TaskControlPlaneApiService (keeps it fakeable). */
+
 export type RunStateSource = {
   resolveRunState(runId: string): Promise<RunState>;
   listRuns(filter?: { status?: string; limit?: number }): Promise<Array<{ runId: string; status: string }>>;
   getAgentActivity?(runId: string): Promise<AgentRunActivity | null>;
 };
 
-/** The minimal slice of graphql-subscriptions' PubSub we use (subscribe/unsubscribe, no async-iterator). */
+
 export type WatchPubSub = {
   subscribe(triggerName: string, onMessage: (payload: unknown) => void): Promise<number>;
   unsubscribe(subId: number): void;
 };
 
 export const MAX_RUN_IDS = 50;
-/** Below the SDK inner-hop default of 60000ms with margin for two serial hops + the sweep itself. */
+
 export const MAX_SERVER_HOLD_MS = 45_000;
 export const DEFAULT_SERVER_HOLD_MS = 28_000;
 const WAKEUP_DEBOUNCE_MS = 75;
@@ -169,13 +164,13 @@ const OBSERVE_TRANSITION_STATES: ReadonlySet<RunState['state']> = new Set([
   'retrying',
 ]);
 const TERMINAL_RUN_STATUS: ReadonlySet<string> = new Set(['completed', 'failed', 'cancelled']);
-/** Defensive cap on caller-supplied cursor size (a legitimate cursor only carries the watched runs, ≤ MAX_RUN_IDS). */
+
 const MAX_CURSOR_ENTRIES = 200;
 export const MAX_WATCH_CURSOR_CHARS = 8_192;
 export const DEFAULT_HEARTBEAT_EVERY_MS = 5_000;
 export const MAX_HEARTBEAT_EVERY_MS = MAX_SERVER_HOLD_MS;
 
-/** The topics this watch composes off APP_PUB_SUB — exported so a test can assert sync with constants.js. */
+
 export const WATCH_TOPICS = [INBOX_ITEM_ADDED_TOPIC, RUN_UPDATED_TOPIC] as const;
 
 export function clampServerHold(timeoutMs?: number): number {
@@ -190,12 +185,10 @@ export function clampHeartbeatEvery(heartbeatEveryMs?: number): number {
   return Math.min(requested, MAX_HEARTBEAT_EVERY_MS);
 }
 
-/**
- * The cursor marker for an *actionable* run level. A *changed* marker (vs the caller's cursor) is a new
- * transition worth delivering: a gate is keyed by its inbox id (deterministic per gateKey, so a
- * *different* gate yields a different id), a terminal/blocked run by its status. `running` is not
- * actionable and is never recorded — `null`.
- */
+
+
+
+
 function markerFor(state: RunState): string | null {
   switch (state.state) {
     case 'ready':
@@ -229,7 +222,6 @@ function decodeCursor(cursor?: string): Record<string, string> {
       m?: Record<string, unknown>;
     };
     if (!parsed || parsed.v !== 1 || !parsed.m || typeof parsed.m !== 'object') return {};
-    // Keep only well-formed string markers, capped — a forged/oversized cursor can't force unbounded work.
     const out: Record<string, string> = {};
     for (const [runId, marker] of Object.entries(parsed.m)) {
       if (typeof marker !== 'string') continue;
@@ -249,12 +241,12 @@ export class RunWatchService {
     private readonly now: () => number = () => Date.now(),
   ) {}
 
-  /** Block until any watched run hits an approval/question gate (or the hold elapses). */
+
   waitForAnyGate(input: WatchInput): Promise<WatchResult> {
     return this.watch(input, GATE_STATES);
   }
 
-  /** Like waitForAnyGate, but also surfaces terminal (completed/failed) and blocked transitions. */
+
   watchRuns(input: WatchInput): Promise<WatchResult> {
     return this.watch(input, WATCH_STATES);
   }
@@ -303,9 +295,6 @@ export class RunWatchService {
     const runIds = await this.resolveRunIds(input.runIds);
     const serverHold = clampServerHold(input.timeoutMs);
 
-    // 1. Initial sweep first — deliver anything already actionable (the common "already gated" case
-    //    returns instantly) without arming a subscription. A transition that lands AFTER this read but
-    //    BEFORE the subscription resolves is not lost: the cursor re-call's next sweep observes it.
     const sweep = await this.sweep(runIds);
     const initial = collectNew(sweep, prev, actionable);
     const cursor0 = mergeCursor(sweep, actionable);
@@ -316,7 +305,6 @@ export class RunWatchService {
       return { transitions: [], cursor: encodeCursor(cursor0), timedOut: true };
     }
 
-    // 2. Nothing actionable yet → hold this single request open for the next transition.
     return this.holdForTransition(runIds, prev, actionable, cursor0, serverHold, input.signal);
   }
 
@@ -343,8 +331,6 @@ export class RunWatchService {
         clearTimeout(holdTimer);
         if (debounceTimer) clearTimeout(debounceTimer);
         if (pollTimer) clearInterval(pollTimer);
-        // Detach the pubsub subscription — a held-open request that is torn down (abort/timeout) must
-        // not leak a subscriber on the long-lived APP_PUB_SUB.
         for (const id of subIds) this.pubSub?.unsubscribe(id);
         subIds.length = 0;
         signal?.removeEventListener('abort', onAbort);
@@ -364,18 +350,15 @@ export class RunWatchService {
         try {
           states = await this.sweep(ids);
         } catch {
-          return; // transient; a later wakeup/poll retries
+          return;
         }
         if (settled) return;
         const found = collectNew(states, prev, actionable);
-        // Merge the re-swept (dirty) runs' markers over this call's initial cursor so the other watched
-        // runs keep theirs; still this-call-only (no cross-call carry-forward → bounded).
         if (found.length > 0) {
           settle({ transitions: found, cursor: encodeCursor({ ...cursor0, ...mergeCursor(states, actionable) }), timedOut: false });
         }
       };
 
-      // Coalesce a burst of wakeups into one re-sweep per tick (each sweep is ~4 control-plane reads/run).
       const scheduleReSweep = (): void => {
         if (settled || debounceTimer) return;
         debounceTimer = setTimeout(() => {
@@ -384,14 +367,13 @@ export class RunWatchService {
         }, WAKEUP_DEBOUNCE_MS);
       };
 
-      // res.on('close') in McpHttpService aborts extra.signal mid-handler (SDK protocol _onclose).
       if (signal) signal.addEventListener('abort', onAbort, { once: true });
       const holdTimer = setTimeout(() => settle(timeout()), serverHold);
 
       if (this.pubSub) {
         const onMessage = (payload: unknown): void => {
           const rid = (payload as { runId?: string } | null)?.runId;
-          if (rid !== undefined && !watched.has(rid)) return; // not one of ours
+          if (rid !== undefined && !watched.has(rid)) return;
           if (rid) dirty.add(rid);
           scheduleReSweep();
         };
@@ -399,14 +381,12 @@ export class RunWatchService {
           this.pubSub
             .subscribe(topic, onMessage)
             .then((id) => {
-              // The hold may have settled (timer/abort) before subscribe resolved — detach immediately.
               if (settled) this.pubSub?.unsubscribe(id);
               else subIds.push(id);
             })
             .catch(() => undefined);
         }
       } else {
-        // Option B: no push source → poll. Same sweep+cursor correctness, latency rises by one interval.
         pollTimer = setInterval(() => {
           if (!settled) void reSweep();
         }, POLL_INTERVAL_MS);
@@ -423,9 +403,6 @@ export class RunWatchService {
       }
       return [...new Set(provided)];
     }
-    // Omitted → watch every active (non-terminal) run, capped. A run that terminates between polls drops
-    // out of this set, so omit-mode is best-effort for terminal transitions — pass explicit runIds for
-    // guaranteed terminal delivery (those are always swept regardless of status).
     const runs = await this.api.listRuns({});
     return runs
       .filter((run) => !TERMINAL_RUN_STATUS.has(run.status))
@@ -442,7 +419,6 @@ export class RunWatchService {
       if (error instanceof ControlPlaneError && error.code === 'ROW_NOT_FOUND') {
         return { runId, state: 'failed', nextAction: 'run not found', runStatus: 'not_found', workflowStatus: '' };
       }
-      // A transient read error must not masquerade as a terminal transition; keep waiting.
       return { runId, state: 'running', nextAction: 'transient read error; will retry', runStatus: 'unknown', workflowStatus: '' };
     });
   }
@@ -520,13 +496,11 @@ function collectNew(
   return out;
 }
 
-/**
- * Build the next cursor from THIS sweep only — no carry-forward of prior keys, so it never grows beyond
- * the watched set (bounds it at ≤ MAX_RUN_IDS). Records a marker only for states actionable in the
- * CURRENT mode: a tool must not advance the cursor past a transition it did not deliver (else a later
- * call in the other mode — e.g. watch_runs after wait_for_any_gate saw a `completed` run — would
- * wrongly suppress it). `running` and other non-actionable states carry no marker.
- */
+
+
+
+
+
 function mergeCursor(states: RunState[], actionable: ReadonlySet<RunState['state']>): Record<string, string> {
   const next: Record<string, string> = {};
   for (const state of states) {

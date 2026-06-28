@@ -11,7 +11,6 @@ import { RunProgressSubscriptionPoller } from './run-progress-subscription-polle
 @Module({
   imports: [RunsApiModule, TaskControlPlaneModule],
   providers: [
-    // Local-first production choice. Swap this provider to graphql-redis-subscriptions for multi-instance hosts.
     { provide: APP_PUB_SUB, useFactory: () => new PubSub() },
     AgentObservabilitySubscriptionBridge,
     ControlPlaneSubscriptionBridge,

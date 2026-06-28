@@ -1,47 +1,39 @@
-/**
- * Pure decision logic for `revo doctor`: turn observed stack state into a pass/fail report with
- * actionable issues. Kept free of IO so the diagnosis rules are unit-tested in isolation;
- * lifecycle.ts does the file/port probing and the printing.
- *
- * `revo doctor` is the LIFECYCLE doctor — it sees the process/port/profile/stale-file problems that
- * the daemon-side control-plane doctor (`api.doctor()`, exposed over MCP/GraphQL) structurally
- * cannot diagnose about itself (a dead daemon answers nothing; a stale runtime file is invisible from
- * inside the process that should have removed it). The two doctors are complementary, not duplicates.
- */
+
+
+
+
+
+
+
+
 
 export type TierObservation = {
-  /** The tier's runtime file (host.json / runtime.json) exists on disk. */
+
   present: boolean;
-  /** The pid recorded in that file is alive. */
+
   alive: boolean;
-  /** The tier answered its health probe (GraphQL for the host, HTTP for the standalone). */
+
   healthy: boolean;
   pid: number | null;
-  /** Port the health probe targets — only used to make the message actionable. */
+
   port: number | null;
 };
 
 export type DoctorObservation = {
   host: TierObservation;
   standalone: TierObservation;
-  /**
-   * Processes listening on the profile's ports whose pid does NOT match the tracked daemon/standalone
-   * — an untracked or duplicate daemon (the "daemon zoo" signal that lets stale daemons silently serve
-   * runs). slice 139.
-   */
+
+
+
   unexpectedPortOwners?: Array<{ label: string; port: number; pid: number }>;
-  /** The running daemon's code version differs from this build/installation (stale daemon). slice 139. */
+
   versionMismatch?: { running: string; current: string };
-  /**
-   * Foreign DBOS connections on the profile's `dbos` database whose executor id is not this profile's
-   * pinned owner — a legacy/duplicate daemon polling `dev-tasks` that the advisory lock cannot stop and
-   * the port-based reap cannot see (it has no inbound listener). slice 140.
-   */
+
+
+
   queuePollerRogues?: Array<{ pid: number; executorId: string; applicationName: string }>;
-  /**
-   * The rogue-poller census could not run (DB unreachable, or the DB role lacks privilege to see other
-   * backends) — so single-ownership could NOT be verified. Reported as a warning, never as "clean".
-   */
+
+
   rogueCensusUnavailable?: boolean;
 };
 
@@ -50,8 +42,6 @@ export type DoctorReport = { ok: boolean; issues: string[] };
 export function buildDoctorReport(o: DoctorObservation): DoctorReport {
   const issues: string[] = [];
 
-  // Daemon-zoo signal: a process not tracked by host.json/runtime.json holds a profile port. The
-  // advisory-lock singleton (slice 139) stops new duplicates, but pre-existing/orphan ones must be seen.
   for (const owner of o.unexpectedPortOwners ?? []) {
     issues.push(
       `Unexpected process (pid ${owner.pid}) on the ${owner.label} port ${owner.port} — an untracked or ` +
@@ -59,7 +49,6 @@ export function buildDoctorReport(o: DoctorObservation): DoctorReport {
     );
   }
 
-  // Stale-code daemon: the live daemon is a different build than this CLI/installation.
   if (o.versionMismatch && o.versionMismatch.running !== o.versionMismatch.current) {
     issues.push(
       `Running daemon is version ${o.versionMismatch.running} but this build is ${o.versionMismatch.current} — ` +
@@ -67,8 +56,6 @@ export function buildDoctorReport(o: DoctorObservation): DoctorReport {
     );
   }
 
-  // Rogue queue pollers: a legacy/duplicate daemon connected to the dbos DB under a foreign executor id.
-  // The advisory lock can't coordinate it and port-based stop can't see it; reap the stale process.
   const rogues = o.queuePollerRogues ?? [];
   if (rogues.length > 0) {
     const byExecutor = new Map<string, number[]>();
@@ -88,13 +75,11 @@ export function buildDoctorReport(o: DoctorObservation): DoctorReport {
     );
   }
 
-  // Nothing recorded on either tier → the stack is simply down (unless a rogue process was flagged above).
   if (!o.host.present && !o.standalone.present) {
     if (issues.length === 0) return { ok: false, issues: ['Stack is not running. Run `revo start`.'] };
     return { ok: false, issues };
   }
 
-  // Host tier — the single DBOS owner and the GraphQL/MCP front door.
   if (o.host.present && !o.host.alive) {
     issues.push(
       `Stale host.json: recorded pid ${o.host.pid} is not alive. Run \`revo stop\` to clear it, then \`revo start\`.`,
@@ -107,7 +92,6 @@ export function buildDoctorReport(o: DoctorObservation): DoctorReport {
     issues.push('Host daemon is not running while the standalone daemon is — the stack is partial. Run `revo start`.');
   }
 
-  // Standalone tier — the Revisium control plane and its embedded Postgres.
   if (o.standalone.present && !o.standalone.alive) {
     issues.push(`Stale runtime.json: recorded standalone pid ${o.standalone.pid} is not alive.`);
   } else if (o.standalone.alive && !o.standalone.healthy) {

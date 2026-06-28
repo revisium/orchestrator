@@ -175,16 +175,12 @@ export class PrFeedbackItemModel {
   @Field(() => String, { nullable: true })
   reason!: string | null;
 
-  // Whether this item blocks readiness/merge. Provider waits set this: a genuinely-pending
-  // provider check is blocking; a stale rate-limit comment (terminal path) is not.
   @Field(() => Boolean, { nullable: true })
   blocking!: boolean | null;
 
-  // 'informational' for stale/comment-derived provider waits, 'blocking' for a live pending check.
   @Field(() => String, { nullable: true })
   nature!: string | null;
 
-  // Best-effort "retry in N min" hint parsed from a provider comment; null when none is present.
   @Field(() => String, { nullable: true })
   resumeAfter!: string | null;
 }

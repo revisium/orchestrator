@@ -5,17 +5,14 @@ import {
   type RunnerActivityTrackerSnapshot,
 } from '../observability/activity-signal.js';
 
-// Generic process-spawn boundary. Knows nothing about runner protocols — it is the testability seam:
-// the runner depends on this type, and unit tests pass a fake that returns canned stdout/exit codes,
-// so no real external runner process is spawned.
 
 export type ExecRequest = {
-  command: string; // executable name or absolute path
-  args: string[]; // executable arguments
-  cwd: string; // resolved target repo directory
-  timeoutMs: number; // wall-clock safety cap
-  idleTimeoutMs?: number; // kill only after this much inactivity and no in-flight operation
-  input?: string; // prompt piped on stdin (avoids argv length limits for large context)
+  command: string;
+  args: string[];
+  cwd: string;
+  timeoutMs: number;
+  idleTimeoutMs?: number;
+  input?: string;
   env?: Record<string, string>;
   onSpawn?: (pid: number) => void;
   onStdoutChunk?: (chunk: string) => void;
@@ -50,10 +47,10 @@ export type RunnerTimeoutEvidence = {
 };
 
 export type ExecResult = {
-  code: number | null; // process exit code; null if killed by a signal
+  code: number | null;
   stdout: string;
   stderr: string;
-  timedOut: boolean; // true if killed by the timeout
+  timedOut: boolean;
   timeoutKind?: RunnerTimeoutFailureKind;
   timeoutEvidence?: RunnerTimeoutEvidence;
 };
@@ -120,9 +117,6 @@ export function resolveEffectiveRunnerTimeoutPolicy(
   };
 }
 
-// Kill the whole process group, not just the leader: external runners can spawn subprocesses, and
-// only a negative-PID signal reaches the group. `detached: true` below makes the child its own group
-// leader. Fall back to a direct kill if the group send throws.
 function killGroup(child: ChildProcess): void {
   const pid = child.pid;
   if (pid === undefined) {
@@ -136,7 +130,6 @@ function killGroup(child: ChildProcess): void {
   }
 }
 
-// Real implementation, used only in production wiring (never in unit tests).
 export const spawnExecutor: ProcessExecutor = (req) =>
   new Promise<ExecResult>((resolve, reject) => {
     const policy = resolveRunnerTimeoutPolicy({
@@ -160,8 +153,6 @@ export const spawnExecutor: ProcessExecutor = (req) =>
     const child = spawn(req.command, req.args, {
       cwd: req.cwd,
       env: req.env ? { ...process.env, ...req.env } : process.env,
-      // Own process group → a negative-PID SIGKILL reaps the runner and its children on timeout.
-      // Do NOT unref(): the parent must stay attached to collect stdout/stderr and observe exit.
       detached: true,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -186,7 +177,6 @@ export const spawnExecutor: ProcessExecutor = (req) =>
       reject(err);
     }
 
-    // Spawn-level errors (binary missing) reject — the runner converts that to a lesson.
     child.on('error', (err) => {
       if (settled) return;
       settled = true;
@@ -245,9 +235,6 @@ export const spawnExecutor: ProcessExecutor = (req) =>
 
     child.stdout?.setEncoding('utf8');
     child.stderr?.setEncoding('utf8');
-    // Guard the sink callbacks: a throw here (e.g. a failed artifact write) would otherwise
-    // escape the stream 'data' handler as an uncaughtException and crash the worker. The
-    // in-memory capture above is unaffected, so the result envelope is still collected.
     child.stdout?.on('data', (chunk: string) => {
       stdout += chunk;
       activity.recordOutput('stdout', Buffer.byteLength(chunk, 'utf8'));
@@ -272,7 +259,6 @@ export const spawnExecutor: ProcessExecutor = (req) =>
     }, policy.wallClockLimitMs);
     scheduleIdleTimer();
 
-    // Never reject for a non-zero exit; return the result and let the runner decide how to map it.
     child.on('close', (code) => {
       if (settled) return;
       settled = true;
@@ -287,8 +273,7 @@ export const spawnExecutor: ProcessExecutor = (req) =>
       });
     });
 
-    // Swallow EPIPE: the child may exit before draining stdin; the 'close' handler reports the result.
-    child.stdin?.on('error', () => { /* ignore broken-pipe on stdin */ });
+    child.stdin?.on('error', () => {  });
     if (req.input !== undefined) child.stdin?.write(req.input);
     child.stdin?.end();
   });
