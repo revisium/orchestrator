@@ -38,7 +38,7 @@ There is no internal archive of obsolete plans. Git history is the archive.
 | GraphQL schema, resolver shape, UI contract | [GraphQL admin API v1 spec](./specs/graphql-admin-api-v1.spec.md) | `src/api/graphql-api/**`, feature API services, schema drift tests |
 | MCP tool surface or agent-facing verbs | [getting-started.md](./getting-started.md), [human gates spec](./specs/human-gates-v1.spec.md) | `src/mcp/**`, feature API services, MCP capability tests |
 | Control-plane tables or ownership classes | [control-plane-schema.md](./control-plane-schema.md) | `control-plane/bootstrap.config.json`, `src/control-plane/**`, `src/revisium/**` |
-| Playbook import or built-in playbook catalogs | [architecture-overview.md](./architecture-overview.md), [pipeline state machine spec](./specs/pipeline-state-machine-v1.spec.md) | `control-plane/default-playbook/**`, `src/playbook/**`, `@revisium/agent-playbook` catalog compatibility |
+| Playbook import or built-in playbook catalogs | [architecture-overview.md](./architecture-overview.md), [pipeline state machine spec](./specs/pipeline-state-machine-v1.spec.md), [default playbook policy spec](./specs/default-playbook-policy.spec.md) | `control-plane/default-playbook/**`, `src/playbook/**`, `@revisium/agent-playbook` catalog compatibility |
 | Model profiles, routing policy, budgets, limits | [control-plane-schema.md](./control-plane-schema.md), [pipeline state machine spec](./specs/pipeline-state-machine-v1.spec.md) | `src/control-plane/definitions.ts`, default playbook policy rows, cost tests |
 | Runner behavior or external effects | [runner-contract.md](./runner-contract.md) | `src/runners/**`, `src/worker/**`, e2e runner scenarios |
 | Context compression or prompt inputs | [context-budget.md](./context-budget.md) | `src/worker/build-context.ts`, run output references, role prompt composition |
@@ -64,6 +64,7 @@ generated PNG diagrams unless the asset is genuinely visual and cannot be repres
 | [Pipeline state machine v1](./specs/pipeline-state-machine-v1.spec.md) | Template grammar, reducer, validation, versioning |
 | [Run dataflow v1](./specs/run-dataflow-v1.spec.md) | Step outputs, prompt hydration, output storage, validation |
 | [Human gates v1](./specs/human-gates-v1.spec.md) | Inbox-backed gates, questions, watch tools, PR review feedback loop |
+| [Default playbook policy](./specs/default-playbook-policy.spec.md) | Bundled `feature-development` policy rules, static verifier scope, and #141-deferred behavior |
 
 ## Guides and References
 
