@@ -51,6 +51,13 @@ type CodexJsonlSummary = {
 
 const DEFAULT_COMMAND = 'codex';
 
+const FALLBACK_VERDICT_TOKENS = ['approved', 'changes_requested', 'blocker', 'clean', 'dirty'] as const;
+
+function verdictMenu(acceptedVerdicts: readonly string[] | undefined): string {
+  const tokens = acceptedVerdicts && acceptedVerdicts.length > 0 ? acceptedVerdicts : FALLBACK_VERDICT_TOKENS;
+  return tokens.join(' | ');
+}
+
 export const CODEX_OUTPUT_SCHEMA = {
   type: 'object',
   additionalProperties: false,
@@ -88,22 +95,40 @@ export const CODEX_OUTPUT_SCHEMA = {
   required: ['verdict', 'output', 'artifacts', 'nextSteps', 'needsHuman', 'lesson'],
 } as const;
 
-const STRUCTURED_RESULT_NOTE = `
+function codexOutputSchemaFor(acceptedVerdicts: readonly string[] | undefined): Record<string, unknown> {
+  const verdictEnum = acceptedVerdicts && acceptedVerdicts.length > 0 ? { enum: [...acceptedVerdicts] } : {};
+  return {
+    ...CODEX_OUTPUT_SCHEMA,
+    properties: {
+      ...CODEX_OUTPUT_SCHEMA.properties,
+      verdict: {
+        ...CODEX_OUTPUT_SCHEMA.properties.verdict,
+        ...verdictEnum,
+        description: `the single routing token for the role, lowercase, exactly one of: ${verdictMenu(acceptedVerdicts)}`,
+      },
+    },
+  };
+}
+
+function structuredResultNote(acceptedVerdicts: readonly string[] | undefined): string {
+  return `
 Return only JSON matching the provided output schema as your final answer.
 All fields are required: verdict, output, artifacts, nextSteps, needsHuman, lesson.
+"verdict" must be exactly one of: ${verdictMenu(acceptedVerdicts)}. Use no other token.
 Use null for nullable fields when they do not apply. Do not put the result only in prose.
 `;
+}
 
-function writeCodexOutputSchema(processDir: string): string {
+function writeCodexOutputSchema(processDir: string, acceptedVerdicts: readonly string[] | undefined): string {
   mkdirSync(processDir, { recursive: true });
   const schemaPath = join(processDir, 'codex-output.schema.json');
-  writeFileSync(schemaPath, JSON.stringify(CODEX_OUTPUT_SCHEMA, null, 2) + '\n', 'utf8');
+  writeFileSync(schemaPath, JSON.stringify(codexOutputSchemaFor(acceptedVerdicts), null, 2) + '\n', 'utf8');
   return schemaPath;
 }
 
-function buildPrompt(context: string, attemptId: string): string {
+function buildPrompt(context: string, attemptId: string, acceptedVerdicts: readonly string[] | undefined): string {
   const idempotencyLine = `Attempt-Id: ${attemptId} - idempotency key. Reference it on any external effect you create.`;
-  return [context, idempotencyLine, STRUCTURED_RESULT_NOTE].join('\n');
+  return [context, idempotencyLine, structuredResultNote(acceptedVerdicts)].join('\n');
 }
 
 function isOpenAiCompatibleProvider(provider: string): boolean {
@@ -502,7 +527,7 @@ export function createCodexRunner(deps: CodexRunnerDeps): RunAgent {
   });
   const command = deps.command ?? DEFAULT_COMMAND;
 
-  return async ({ role, profile, context, attemptId, step, reporter }) => {
+  return async ({ role, profile, context, attemptId, step, reporter, acceptedVerdicts }) => {
     let processArtifact: ReturnType<ArtifactStore['startProcess']> | undefined;
     let processActivity: RunnerActivityTracker | undefined;
     try {
@@ -514,7 +539,7 @@ export function createCodexRunner(deps: CodexRunnerDeps): RunAgent {
       });
       const cwd = await deps.resolveCwd(step);
       const sandbox = sandboxForRole(role);
-      const schemaPath = writeCodexOutputSchema(deps.artifactStore.resolveAttemptDir(step.runId, attemptId));
+      const schemaPath = writeCodexOutputSchema(deps.artifactStore.resolveAttemptDir(step.runId, attemptId), acceptedVerdicts);
       const args = buildArgs(profile.modelId, sandbox, cwd, schemaPath);
       processArtifact = deps.artifactStore.startProcess({
         runId: step.runId,
@@ -538,7 +563,7 @@ export function createCodexRunner(deps: CodexRunnerDeps): RunAgent {
         cwd,
         timeoutMs: timeoutPolicy.wallClockLimitMs,
         idleTimeoutMs: timeoutPolicy.idleTimeoutMs,
-        input: buildPrompt(context, attemptId),
+        input: buildPrompt(context, attemptId, acceptedVerdicts),
         onSpawn: (pid) => reporter?.spawned(pid),
         onActivityTracker: (activity) => {
           processActivity = activity;

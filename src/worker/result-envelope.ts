@@ -1,36 +1,48 @@
 import type { Step } from '../control-plane/steps.js';
 import type { NewStepSpec } from './runner.js';
 
-export const AGENT_RESULT_SCHEMA = JSON.stringify({
-  type: 'object',
-  additionalProperties: false,
-  properties: {
-    verdict: {
-      type: 'string',
-      minLength: 1,
-      description: 'the single routing token, lowercase, e.g. approved | changes_requested | blocker | clean | dirty',
-    },
-    output: { type: 'string', description: 'a short summary, or the artifact (e.g. the plan) the next step consumes' },
-    artifacts: { description: 'optional JSON artifacts, e.g. { "planPath": "docs/plans/00xx.md" }' },
-    nextSteps: {
-      type: 'array',
-      description: 'optional follow-up work items; use [] when there is no follow-up work',
-      items: { type: 'object' },
-    },
-    needsHuman: { type: 'boolean', description: 'true only if you are blocked and a human must intervene' },
-    lesson: { type: 'string', description: 'optional one-line note for a future attempt' },
-  },
-  required: ['verdict', 'output'],
-});
+const FALLBACK_VERDICT_TOKENS = ['approved', 'changes_requested', 'blocker', 'clean', 'dirty'] as const;
 
+function verdictMenu(acceptedVerdicts: readonly string[] | undefined): string {
+  const tokens = acceptedVerdicts && acceptedVerdicts.length > 0 ? acceptedVerdicts : FALLBACK_VERDICT_TOKENS;
+  return tokens.join(' | ');
+}
 
-export const STRUCTURED_RESULT_NOTE = `
+export function agentResultSchema(acceptedVerdicts?: readonly string[]): string {
+  const verdictEnum = acceptedVerdicts && acceptedVerdicts.length > 0 ? { enum: [...acceptedVerdicts] } : {};
+  return JSON.stringify({
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      verdict: {
+        type: 'string',
+        minLength: 1,
+        ...verdictEnum,
+        description: `the single routing token, lowercase, exactly one of: ${verdictMenu(acceptedVerdicts)}`,
+      },
+      output: { type: 'string', description: 'a short summary, or the artifact (e.g. the plan) the next step consumes' },
+      artifacts: { description: 'optional JSON artifacts, e.g. { "planPath": "docs/plans/00xx.md" }' },
+      nextSteps: {
+        type: 'array',
+        description: 'optional follow-up work items; use [] when there is no follow-up work',
+        items: { type: 'object' },
+      },
+      needsHuman: { type: 'boolean', description: 'true only if you are blocked and a human must intervene' },
+      lesson: { type: 'string', description: 'optional one-line note for a future attempt' },
+    },
+    required: ['verdict', 'output'],
+  });
+}
+
+export function structuredResultNote(acceptedVerdicts?: readonly string[]): string {
+  return `
 Return your final answer as JSON matching the provided output schema:
-- "verdict": the single routing token for your role (lowercase; e.g. approved | changes_requested | blocker | clean | dirty).
+- "verdict": the single routing token for your role (lowercase), exactly one of: ${verdictMenu(acceptedVerdicts)}. Use no other token.
 - "output": a short summary, or — if you produce an artifact for a later step (e.g. an implementation plan) — that artifact.
 - "nextSteps": [] unless you are explicitly creating legacy follow-up steps.
 Set "needsHuman": true only if you are blocked and a human must intervene.
 `;
+}
 
 
 export function agentResultFromStructured(structured: unknown): AgentResult {

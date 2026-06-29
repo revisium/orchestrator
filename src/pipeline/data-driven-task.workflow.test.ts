@@ -12,7 +12,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeDataDrivenTask, resolveRunnerTransientRetryPolicy, type DataDrivenProgressCursor, type DataDrivenTaskDeps, type GateSummary, type RunnerTransientRetryPolicy } from './data-driven-task.workflow.js';
 import { templateFromExecutionPolicy } from './data-driven-template.js';
-import { featureDevelopment, featureDevelopmentPrReview, confirmMergeFlow } from '../pipeline-core/kit/fixtures.js';
+import { featureDevelopment, featureDevelopmentPrReview, confirmMergeFlow, localChange } from '../pipeline-core/kit/fixtures.js';
 import type { Template } from '../pipeline-core/index.js';
 import type { AttemptResult } from '../worker/runner.js';
 import type { AppendEventInput } from '../run/append-event.js';
@@ -89,6 +89,7 @@ type Recorder = {
   /** Hydrated `inputs` the adapter passed to each step, keyed by stepKey (0016 consumes). */
   inputsByStep: Record<string, unknown>;
   runStepAttempts: Array<{ stepKey: string; attemptNo?: number; attemptId?: string }>;
+  acceptedVerdictsByStep: Record<string, readonly string[] | undefined>;
   retrySleeps: number[];
   progress: DataDrivenProgressCursor[];
 };
@@ -140,6 +141,7 @@ function buildAdapter(opts: {
     worktreeIssueRefs: [],
     inputsByStep: {},
     runStepAttempts: [],
+    acceptedVerdictsByStep: {},
     retrySleeps: [],
     progress: [],
   };
@@ -153,7 +155,9 @@ function buildAdapter(opts: {
     _resolvedRunnerId?: string,
     _executionProfile?: unknown,
     physicalAttempt?: { attemptNo: number; attemptId: string },
+    acceptedVerdicts?: readonly string[],
   ): Promise<AttemptResult> => {
+    rec.acceptedVerdictsByStep[stepKey] = acceptedVerdicts;
     // The adapter ordinal-suffixes the stepKey on loop re-entries (0016 §4.1: `nodeId#2`); the verdict
     // script + visit count are keyed by the NODE (a verdict is a property of the role, not the iteration).
     const nodeId = stepKey.includes('#') ? stepKey.slice(0, stepKey.indexOf('#')) : stepKey;
@@ -1222,6 +1226,45 @@ test('DD5c: top-level verdict outside template domain fails as revo.ResultInvali
   assert.equal(result.status, 'failed');
   assert.match(rec.failed[0] ?? '', /revo\.ResultInvalid/);
   assert.ok(rec.events.some((e) => e === 'step_failed:review'), 'invalid domain verdict emits step_failed');
+});
+
+test('DD5d: the adapter threads the active template accepted-verdict domain to each agent step (issue #207)', async () => {
+  const tmpl = template('verdict-vocab')
+    .specVersion('1.0')
+    .entry('review')
+    .domain('approved', 'blocker')
+    .add(
+      node.agent('review', 'role:reviewer', 'router', { resultSchema: 'schema:review', onFailure: 'abort' }),
+      node.choice('router', [on(verdictEq('approved'), 'done'), otherwise('blocked')]),
+      node.terminal('done', 'succeeded'),
+      node.terminal('blocked', 'blocked'),
+    )
+    .build();
+  const { run, rec } = buildAdapter({ template: tmpl, verdicts: { review: 'approved' } });
+
+  const result = await run();
+  assert.equal(result.status, 'succeeded');
+  assert.deepEqual(
+    rec.acceptedVerdictsByStep['review'],
+    ['approved', 'blocker'],
+    'the runner is offered exactly the template domain — not a wider global menu the engine would reject',
+  );
+});
+
+test('DD5e: a narrow single-token domain (local-change) reaches the agent step verbatim (issue #207)', async () => {
+  const { run, rec } = buildAdapter({
+    template: localChange(),
+    route: {
+      ...makeRoute(),
+      roleBindings: [binding('orchestrator', 'claude-code'), binding('developer', 'claude-code')],
+    },
+    verdicts: { orchestrator: 'approved', developer: 'approved' },
+  });
+
+  const result = await run();
+  assert.equal(result.status, 'succeeded');
+  assert.deepEqual(rec.acceptedVerdictsByStep['orchestrator'], ['approved']);
+  assert.deepEqual(rec.acceptedVerdictsByStep['developer'], ['approved']);
 });
 
 test('DD6: an invalid pinned template fails the run loudly (defense-in-depth validation)', async () => {

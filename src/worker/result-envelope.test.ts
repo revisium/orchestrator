@@ -2,9 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   agentResultFromStructured,
+  agentResultSchema,
   extractTerminalResult,
   parseTransportEnvelope,
   normalizeNextSteps,
+  structuredResultNote,
 } from './result-envelope.js';
 import { BASE_STEP } from './test-fixtures.js';
 
@@ -36,6 +38,26 @@ test('extractTerminalResult: throws when the stream has no result event', () => 
 });
 
 // ─── transport envelope (layer A) ─────────────────────────────────────────────
+
+test('agentResultSchema: constrains verdict to the accepted template domain when supplied', () => {
+  const schema = JSON.parse(agentResultSchema(['approved', 'blocker'])) as {
+    properties?: { verdict?: { enum?: unknown; description?: string } };
+  };
+  assert.deepEqual(schema.properties?.verdict?.enum, ['approved', 'blocker']);
+  assert.match(schema.properties?.verdict?.description ?? '', /approved \| blocker/);
+
+  const note = structuredResultNote(['approved', 'blocker']);
+  assert.match(note, /approved \| blocker/);
+  assert.doesNotMatch(note, /dirty/);
+});
+
+test('agentResultSchema: omits verdict enum when no template domain is supplied', () => {
+  const schema = JSON.parse(agentResultSchema()) as {
+    properties?: { verdict?: { enum?: unknown; description?: string } };
+  };
+  assert.equal(schema.properties?.verdict?.enum, undefined);
+  assert.match(schema.properties?.verdict?.description ?? '', /approved \| changes_requested \| blocker \| clean \| dirty/);
+});
 
 test('parseTransportEnvelope: extracts text, cost and token usage', () => {
   const stdout = JSON.stringify({

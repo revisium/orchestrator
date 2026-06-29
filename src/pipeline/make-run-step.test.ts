@@ -182,6 +182,29 @@ test('T1: runStep(architect) writes one step_succeeded event with a canonical lo
   assert.equal(attempt?.status, 'succeeded');
 });
 
+test('runStep forwards accepted template verdicts to the runner', async () => {
+  const { deps } = buildRunStepDeps();
+  let capturedVerdicts: readonly string[] | undefined;
+  deps.runAgent = async ({ acceptedVerdicts }): Promise<AttemptResult> => {
+    capturedVerdicts = acceptedVerdicts;
+    return { output: 'ok', verdict: 'approved', nextSteps: [], costs: [], needsHuman: false };
+  };
+  const runStep = makeRunStep(deps);
+
+  await runStep(
+    'run-verdict-domain',
+    'developer',
+    'developer',
+    { phase: 'implement' },
+    'script',
+    undefined,
+    undefined,
+    ['approved'],
+  );
+
+  assert.deepEqual(capturedVerdicts, ['approved']);
+});
+
 test('B7: the model profile is resolved from role.modelLevel (architect=deep), not hardcoded', async () => {
   const runId = 'run-b7';
   const { deps, harness } = buildRunStepDeps();

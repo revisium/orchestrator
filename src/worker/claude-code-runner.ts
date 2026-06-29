@@ -9,8 +9,8 @@ import type { ArtifactStore } from './artifact-store.js';
 import type { Step } from '../control-plane/steps.js';
 import type { AgentActivityReporter } from '../observability/agent-activity-reporter.js';
 import {
-  AGENT_RESULT_SCHEMA,
-  STRUCTURED_RESULT_NOTE,
+  agentResultSchema,
+  structuredResultNote,
   agentResultFromStructured,
   extractTerminalResult,
   parseTransportEnvelope,
@@ -138,9 +138,15 @@ function recordClaudeOperationBlocks(evt: Record<string, unknown>, activity: Run
   }
 }
 
-function buildArgs(modelId: string, allowedTools: string[], permissionMode: string, params: unknown): string[] {
+function buildArgs(
+  modelId: string,
+  allowedTools: string[],
+  permissionMode: string,
+  params: unknown,
+  acceptedVerdicts: readonly string[] | undefined,
+): string[] {
   const args = ['-p', '--model', modelId, '--output-format', 'stream-json', '--verbose', '--permission-mode', permissionMode];
-  args.push('--json-schema', AGENT_RESULT_SCHEMA);
+  args.push('--json-schema', agentResultSchema(acceptedVerdicts));
   if (allowedTools.length > 0) {
     args.push('--allowedTools', allowedTools.join(','));
   }
@@ -151,7 +157,12 @@ function buildArgs(modelId: string, allowedTools: string[], permissionMode: stri
   return args;
 }
 
-function buildPrompt(context: string, attemptId: string, worktreePath?: string): string {
+function buildPrompt(
+  context: string,
+  attemptId: string,
+  acceptedVerdicts: readonly string[] | undefined,
+  worktreePath?: string,
+): string {
   const idempotencyLine =
     `Attempt-Id: ${attemptId} — idempotency key. Reference it on any external effect you create.`;
   const parts = [context];
@@ -162,7 +173,7 @@ function buildPrompt(context: string, attemptId: string, worktreePath?: string):
       `Write ALL file changes here; ignore any other repo path.`,
     );
   }
-  parts.push(idempotencyLine, STRUCTURED_RESULT_NOTE);
+  parts.push(idempotencyLine, structuredResultNote(acceptedVerdicts));
   return parts.join('\n');
 }
 
@@ -173,7 +184,7 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
   });
   const command = deps.command ?? DEFAULT_COMMAND;
 
-  return async ({ role, profile, context, attemptId, step, reporter }) => {
+  return async ({ role, profile, context, attemptId, step, reporter, acceptedVerdicts }) => {
     const timeoutPolicy = resolveEffectiveRunnerTimeoutPolicy({
       idleTimeoutMs: defaultTimeoutPolicy.idleTimeoutMs,
       wallClockLimitMs: defaultTimeoutPolicy.wallClockLimitMs,
@@ -185,7 +196,7 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
     try {
       const cwd = await deps.resolveCwd(step);
       const liveWorktree = isWorktreeDir(cwd);
-      const args = buildArgs(profile.modelId, role.allowedTools, permissionMode, profile.params);
+      const args = buildArgs(profile.modelId, role.allowedTools, permissionMode, profile.params, acceptedVerdicts);
       processArtifact = deps.artifactStore?.startProcess({
         runId: step.runId,
         attemptId,
@@ -222,7 +233,7 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
         cwd,
         timeoutMs: timeoutPolicy.wallClockLimitMs,
         idleTimeoutMs: timeoutPolicy.idleTimeoutMs,
-        input: buildPrompt(context, attemptId, liveWorktree ? cwd : undefined),
+        input: buildPrompt(context, attemptId, acceptedVerdicts, liveWorktree ? cwd : undefined),
         env: liveWorktree ? { REVO_WORKTREE_PATH: cwd } : undefined,
         onSpawn: (pid) => reporter?.spawned(pid),
         onActivityTracker: (activity) => {

@@ -92,6 +92,16 @@ type Branch = { when: Condition; goto: string } | { default: string };
 Core verdicts route structurally and must not appear in `verdict.*` guards. Domain verdicts are declared in
 `template.verdicts.domain` and are opaque labels to the engine.
 
+## Runner Verdict Vocabulary
+
+For agent nodes, the DBOS adapter passes the active `template.verdicts.domain` to the runner. The runner's structured
+output schema and final-result instructions must advertise only that active domain, including a JSON Schema `enum` when
+the domain is known. This keeps narrow templates such as `local-change` from offering broad tokens like `clean` that the
+template would reject.
+
+The adapter still validates every agent result against `template.verdicts.domain` before routing. This validation is
+defense-in-depth; it is not a substitute for giving the runner the active domain up front.
+
 ## Failure and Timeout
 
 - Transient runner retry is a DBOS adapter concern, not a template concern. Templates do not declare retry policy;
