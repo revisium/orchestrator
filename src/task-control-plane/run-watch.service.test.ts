@@ -8,10 +8,7 @@ import {
   MAX_WATCH_CURSOR_CHARS,
   MAX_SERVER_HOLD_MS,
   DEFAULT_SERVER_HOLD_MS,
-  DEFAULT_HEARTBEAT_EVERY_MS,
-  MAX_HEARTBEAT_EVERY_MS,
   clampServerHold,
-  clampHeartbeatEvery,
   type RunStateSource,
   type WatchPubSub,
 } from './run-watch.service.js';
@@ -209,14 +206,6 @@ test('clampServerHold: default, clamp to max, reject negative/NaN', () => {
   assert.equal(clampServerHold(0), 0);
 });
 
-test('clampHeartbeatEvery: default, clamp to max, reject nonpositive/NaN', () => {
-  assert.equal(clampHeartbeatEvery(undefined), DEFAULT_HEARTBEAT_EVERY_MS);
-  assert.equal(clampHeartbeatEvery(120_000), MAX_HEARTBEAT_EVERY_MS);
-  assert.equal(clampHeartbeatEvery(2_000), 2_000);
-  assert.equal(clampHeartbeatEvery(0), DEFAULT_HEARTBEAT_EVERY_MS);
-  assert.equal(clampHeartbeatEvery(Number.NaN), DEFAULT_HEARTBEAT_EVERY_MS);
-});
-
 test('WATCH_TOPICS composes exactly the inbox-added + run-updated topics', () => {
   assert.deepEqual([...WATCH_TOPICS], [INBOX_ITEM_ADDED_TOPIC, RUN_UPDATED_TOPIC]);
 });
@@ -226,7 +215,7 @@ test('initial sweep returns an already-gated run immediately, without arming a s
   const ps = fakePubSub();
   const svc = new RunWatchService(api, ps.pubSub);
 
-  const result = await svc.waitForAnyGate({ runIds: ['r1'], timeoutMs: 5_000 });
+  const result = await svc.watchRunChanges({ runId: 'r1', timeoutMs: 5_000 });
 
   assert.equal(result.timedOut, false);
   assert.equal(result.transitions.length, 1);
@@ -241,7 +230,7 @@ test('subscription wakeup resolves on a matching inbox event and tears the subsc
   const ps = fakePubSub();
   const svc = new RunWatchService(api, ps.pubSub);
 
-  const pending = svc.waitForAnyGate({ runIds: ['r1'], timeoutMs: 3_000 });
+  const pending = svc.watchRunChanges({ runId: 'r1', timeoutMs: 3_000 });
   await tick(); // let the initial sweep + both subscribe() promises resolve
   assert.equal(ps.state.subscribeCalls, WATCH_TOPICS.length, 'armed one subscription per topic');
 
@@ -258,7 +247,7 @@ test('a wakeup for an unwatched run does not resolve the watch', async () => {
   const ps = fakePubSub();
   const svc = new RunWatchService(api, ps.pubSub);
 
-  const pending = svc.waitForAnyGate({ runIds: ['r1'], timeoutMs: 60 });
+  const pending = svc.watchRunChanges({ runId: 'r1', timeoutMs: 60 });
   await tick();
   ps.fire({ inboxItemAdded: {}, runId: 'other' }); // not in the watch set
   const result = await pending;
@@ -271,7 +260,7 @@ test('timer expiry returns {timedOut:true} with a resume cursor', async () => {
   const ps = fakePubSub();
   const svc = new RunWatchService(api, ps.pubSub);
 
-  const result = await svc.waitForAnyGate({ runIds: ['r1'], timeoutMs: 30 });
+  const result = await svc.watchRunChanges({ runId: 'r1', timeoutMs: 30 });
 
   assert.equal(result.timedOut, true);
   assert.deepEqual(result.transitions, []);
@@ -284,17 +273,17 @@ test('cursor makes re-calls idempotent and O(new): same gate suppressed, new gat
   const api = fakeApi({ states: { r1: gate('r1', 'inbox-A') } });
   const svc = new RunWatchService(api); // poll-fallback; timeoutMs:0 means no hold at all
 
-  const first = await svc.waitForAnyGate({ runIds: ['r1'], timeoutMs: 0 });
+  const first = await svc.watchRunChanges({ runId: 'r1', timeoutMs: 0 });
   assert.equal(first.transitions.length, 1, 'first sight of the gate is delivered');
 
-  const second = await svc.waitForAnyGate({ runIds: ['r1'], timeoutMs: 0, cursor: first.cursor });
+  const second = await svc.watchRunChanges({ runId: 'r1', timeoutMs: 0, cursor: first.cursor });
   assert.equal(second.transitions.length, 0, 'same gate (same inbox id) suppressed by the cursor');
   assert.equal(second.timedOut, true);
 
   // A genuinely new gate (different inbox id) must be reported even with the old cursor.
   const api2 = fakeApi({ states: { r1: gate('r1', 'inbox-B') } });
   const svc2 = new RunWatchService(api2);
-  const third = await svc2.waitForAnyGate({ runIds: ['r1'], timeoutMs: 0, cursor: first.cursor });
+  const third = await svc2.watchRunChanges({ runId: 'r1', timeoutMs: 0, cursor: first.cursor });
   assert.equal(third.transitions.length, 1, 'a different gate id is a new transition');
 });
 
@@ -304,7 +293,7 @@ test('aborting the request (transport close) resolves timedOut and detaches subs
   const svc = new RunWatchService(api, ps.pubSub);
   const ac = new AbortController();
 
-  const pending = svc.waitForAnyGate({ runIds: ['r1'], timeoutMs: 10_000, signal: ac.signal });
+  const pending = svc.watchRunChanges({ runId: 'r1', timeoutMs: 10_000, signal: ac.signal });
   await tick();
   ac.abort();
   const result = await pending;
@@ -320,74 +309,28 @@ test('an already-aborted signal returns immediately after the sweep', async () =
   const ac = new AbortController();
   ac.abort();
 
-  const result = await svc.waitForAnyGate({ runIds: ['r1'], timeoutMs: 10_000, signal: ac.signal });
+  const result = await svc.watchRunChanges({ runId: 'r1', timeoutMs: 10_000, signal: ac.signal });
 
   assert.equal(result.timedOut, true);
   assert.equal(ps.state.subscribeCalls, 0, 'pre-aborted → never arms');
-});
-
-test('watchRuns surfaces a terminal transition that waitForAnyGate ignores', async () => {
-  const api = fakeApi({ states: { r1: completed('r1') } });
-  const watched = await new RunWatchService(api).watchRuns({ runIds: ['r1'], timeoutMs: 0 });
-  assert.equal(watched.transitions[0]?.state, 'completed');
-
-  const gateOnly = await new RunWatchService(fakeApi({ states: { r1: completed('r1') } })).waitForAnyGate({
-    runIds: ['r1'],
-    timeoutMs: 30,
-  });
-  assert.equal(gateOnly.transitions.length, 0, 'a completed run is not an approval gate');
-  assert.equal(gateOnly.timedOut, true);
 });
 
 test('poll fallback (no pubSub) still resolves a gate that appears after the initial sweep', async () => {
   const api = fakeApi({ states: { r1: [running('r1'), gate('r1')] } });
   const svc = new RunWatchService(api); // no pubSub → internal poll
 
-  const result = await svc.waitForAnyGate({ runIds: ['r1'], timeoutMs: 3_000 });
+  const result = await svc.watchRunChanges({ runId: 'r1', timeoutMs: 3_000 });
 
   assert.equal(result.timedOut, false);
   assert.equal(result.transitions[0]?.state, 'pending_gate');
 });
 
-test('omitted runIds watches only active (non-terminal) runs', async () => {
-  const api = fakeApi({
-    states: { a: gate('a'), b: completed('b') },
-    runs: [
-      { runId: 'a', status: 'running' },
-      { runId: 'b', status: 'completed' },
-    ],
-  });
-  const svc = new RunWatchService(api);
-
-  const result = await svc.waitForAnyGate({ timeoutMs: 0 });
-
-  assert.equal(result.transitions.length, 1);
-  assert.equal(result.transitions[0].runId, 'a');
-  assert.ok(!api.calls.includes('b'), 'terminal run b is filtered out before resolveRunState');
+test('a not-found run surfaces as a failed transition in watchRunChanges', async () => {
+  const result = await new RunWatchService(fakeApi({})).watchRunChanges({ runId: 'ghost', timeoutMs: 0 });
+  assert.equal(result.transitions[0]?.state, 'failed');
 });
 
-test('too many runIds is rejected before any work', async () => {
-  const svc = new RunWatchService(fakeApi({}));
-  await assert.rejects(
-    () => svc.waitForAnyGate({ runIds: Array.from({ length: 51 }, (_, i) => `r${i}`) }),
-    /at most 50 runIds/,
-  );
-});
-
-test('a not-found run is a failed transition for watchRuns, ignored by waitForAnyGate', async () => {
-  const watched = await new RunWatchService(fakeApi({})).watchRuns({ runIds: ['ghost'], timeoutMs: 0 });
-  assert.equal(watched.transitions[0]?.state, 'failed');
-
-  const gateOnly = await new RunWatchService(fakeApi({})).waitForAnyGate({ runIds: ['ghost'], timeoutMs: 25 });
-  assert.equal(gateOnly.transitions.length, 0);
-  assert.equal(gateOnly.timedOut, true);
-});
-
-// ── Coverage hardening (adversarial-review findings) ──────────────────────────────────────────────
-
-test('watch_runs with EXPLICIT runIds delivers a between-poll terminal exactly once (the guaranteed path)', async () => {
-  // Explicit runIds are always swept regardless of status, so a run that terminates between polls is
-  // still delivered. (Omit mode is best-effort — a terminated run drops out of the active set.)
+test('watchRunChanges delivers a between-poll terminal exactly once under the cursor', async () => {
   let state: RunState = running('r1');
   const api: RunStateSource = {
     async resolveRunState() {
@@ -399,49 +342,32 @@ test('watch_runs with EXPLICIT runIds delivers a between-poll terminal exactly o
   };
   const svc = new RunWatchService(api);
 
-  const first = await svc.watchRuns({ runIds: ['r1'], timeoutMs: 0 });
+  const first = await svc.watchRunChanges({ runId: 'r1', timeoutMs: 0 });
   assert.equal(first.transitions.length, 0);
 
-  state = completed('r1'); // r1 terminates between polls
-  const second = await svc.watchRuns({ runIds: ['r1'], timeoutMs: 0, cursor: first.cursor });
-  assert.equal(second.transitions[0]?.state, 'completed', 'explicit runIds deliver the terminal transition');
+  state = completed('r1');
+  const second = await svc.watchRunChanges({ runId: 'r1', timeoutMs: 0, cursor: first.cursor });
+  assert.equal(second.transitions[0]?.state, 'completed', 'terminal transition delivered');
 
-  const third = await svc.watchRuns({ runIds: ['r1'], timeoutMs: 0, cursor: second.cursor });
-  assert.equal(third.transitions.length, 0, 'and then suppressed (delivered once)');
-});
-
-test('[fix D] one tool must not advance the cursor past a transition it did not deliver', async () => {
-  // wait_for_any_gate (gate-only) observing a completed run must NOT record marker 'c' — else a later
-  // watch_runs call with that cursor would wrongly suppress the (never-delivered) completion.
-  const api = fakeApi({ states: { r1: completed('r1') }, runs: [{ runId: 'r1', status: 'completed' }] });
-  const svc = new RunWatchService(api);
-
-  const gateCall = await svc.waitForAnyGate({ runIds: ['r1'], timeoutMs: 0 });
-  assert.equal(gateCall.transitions.length, 0, 'completed is not a gate → nothing delivered');
-
-  const watchCall = await svc.watchRuns({ runIds: ['r1'], timeoutMs: 0, cursor: gateCall.cursor });
-  assert.equal(watchCall.transitions[0]?.state, 'completed', 'watch_runs still delivers it — not suppressed by the gate cursor');
+  const third = await svc.watchRunChanges({ runId: 'r1', timeoutMs: 0, cursor: second.cursor });
+  assert.equal(third.transitions.length, 0, 'terminal suppressed after delivery');
 });
 
 test('[fix C] an oversized forged cursor is ignored before decode work and the returned cursor is capped', async () => {
   const api = fakeApi({ states: { r1: gate('r1', 'i1') } });
   const svc = new RunWatchService(api);
-  // Oversized cursors must not be decoded/parsed; ignoring them is equivalent to a fresh observation.
   const huge: Record<string, unknown> = { r1: 12345 }; // wrong type for r1 → must be ignored → gate re-delivered
   for (let i = 0; i < 5_000; i++) huge[`junk-${i}`] = 'x';
   const forged = Buffer.from(JSON.stringify({ v: 1, m: huge }), 'utf8').toString('base64url');
   assert.equal(forged.length > MAX_WATCH_CURSOR_CHARS, true, 'test cursor exceeds the service guard');
 
-  const result = await svc.waitForAnyGate({ runIds: ['r1'], timeoutMs: 0, cursor: forged });
+  const result = await svc.watchRunChanges({ runId: 'r1', timeoutMs: 0, cursor: forged });
   assert.equal(result.transitions[0]?.inbox?.id, 'i1', 'oversized cursor ignored → gate delivered');
-  // The returned cursor is built from this sweep only — bounded, not the forged entries.
   const decoded = JSON.parse(Buffer.from(result.cursor, 'base64url').toString('utf8')) as { m: Record<string, string> };
   assert.ok(Object.keys(decoded.m).length <= 50, 'returned cursor is bounded to the watched set');
 });
 
 test('[leak race] a subscription resolving AFTER the hold settled is still detached', async () => {
-  // Deferred subscribe: resolve the subscribe() promises only AFTER the hold has timed out, exercising
-  // the `if (settled) unsubscribe(id)` late-detach branch that a synchronous fake never reaches.
   const resolvers: Array<() => void> = [];
   let nextId = 0;
   const counts = { unsubscribe: 0 };
@@ -455,7 +381,7 @@ test('[leak race] a subscription resolving AFTER the hold settled is still detac
   };
   const svc = new RunWatchService(fakeApi({ states: { r1: running('r1') } }), pubSub);
 
-  const result = await svc.waitForAnyGate({ runIds: ['r1'], timeoutMs: 20 });
+  const result = await svc.watchRunChanges({ runId: 'r1', timeoutMs: 20 });
   assert.equal(result.timedOut, true);
   assert.equal(counts.unsubscribe, 0, 'nothing to detach yet — subscribe() still pending at settle');
 
@@ -470,7 +396,7 @@ test('[integration] a real graphql-subscriptions PubSub wakes the watch on a rea
   const api = fakeApi({ states: { r1: [running('r1'), gate('r1')] } });
   const svc = new RunWatchService(api, pubSub as unknown as WatchPubSub);
 
-  const pending = svc.waitForAnyGate({ runIds: ['r1'], timeoutMs: 3_000 });
+  const pending = svc.watchRunChanges({ runId: 'r1', timeoutMs: 3_000 });
   await tick(20); // let the real (async) subscribe() register both topics
   await pubSub.publish(INBOX_ITEM_ADDED_TOPIC, { inboxItemAdded: { id: 'i1' }, runId: 'r1' });
   const result = await pending;
@@ -483,7 +409,7 @@ test('[debounce] a burst of wakeups coalesces into a single re-sweep', async () 
   const ps = fakePubSub();
   const svc = new RunWatchService(api, ps.pubSub);
 
-  const pending = svc.waitForAnyGate({ runIds: ['r1'], timeoutMs: 250 });
+  const pending = svc.watchRunChanges({ runId: 'r1', timeoutMs: 250 });
   await tick();
   const afterInitial = api.calls.length;
   for (let i = 0; i < 10; i++) ps.fire({ inboxItemAdded: {}, runId: 'r1' }); // burst within the debounce window
@@ -491,36 +417,6 @@ test('[debounce] a burst of wakeups coalesces into a single re-sweep', async () 
 
   assert.equal(result.timedOut, true);
   assert.equal(api.calls.length - afterInitial, 1, '10 wakeups collapse to one re-sweep');
-});
-
-test('[dirty-set] a wakeup re-sweeps only the changed run, not the whole watch set', async () => {
-  const api = fakeApi({ states: { r1: running('r1'), r2: running('r2') } });
-  const ps = fakePubSub();
-  const svc = new RunWatchService(api, ps.pubSub);
-
-  const pending = svc.waitForAnyGate({ runIds: ['r1', 'r2'], timeoutMs: 250 });
-  await tick();
-  const afterInitial = api.calls.length;
-  ps.fire({ inboxItemAdded: {}, runId: 'r1' }); // only r1 dirtied
-  const result = await pending;
-
-  assert.equal(result.timedOut, true);
-  assert.deepEqual(api.calls.slice(afterInitial), ['r1'], 'only the dirtied run is re-swept');
-});
-
-test('[no-runId] a wakeup payload without a runId conservatively re-sweeps the full set', async () => {
-  const api = fakeApi({ states: { r1: running('r1'), r2: running('r2') } });
-  const ps = fakePubSub();
-  const svc = new RunWatchService(api, ps.pubSub);
-
-  const pending = svc.waitForAnyGate({ runIds: ['r1', 'r2'], timeoutMs: 250 });
-  await tick();
-  const afterInitial = api.calls.length;
-  ps.fire({ runUpdated: {} }); // no runId
-  const result = await pending;
-
-  assert.equal(result.timedOut, true);
-  assert.deepEqual(api.calls.slice(afterInitial).sort(), ['r1', 'r2'], 'unknown wakeup sweeps everything');
 });
 
 test('[cursor lineage] one run gate(i1) → running → gate(i2): each new gate reported, old suppressed', async () => {
@@ -535,22 +431,22 @@ test('[cursor lineage] one run gate(i1) → running → gate(i2): each new gate 
   };
   const svc = new RunWatchService(api);
 
-  const a = await svc.waitForAnyGate({ runIds: ['r1'], timeoutMs: 0 });
+  const a = await svc.watchRunChanges({ runId: 'r1', timeoutMs: 0 });
   assert.equal(a.transitions[0]?.inbox?.id, 'i1');
 
   state = running('r1');
-  const b = await svc.waitForAnyGate({ runIds: ['r1'], timeoutMs: 0, cursor: a.cursor });
+  const b = await svc.watchRunChanges({ runId: 'r1', timeoutMs: 0, cursor: a.cursor });
   assert.equal(b.transitions.length, 0, 'running between gates → nothing');
 
   state = gate('r1', 'i2');
-  const c = await svc.waitForAnyGate({ runIds: ['r1'], timeoutMs: 0, cursor: b.cursor });
+  const c = await svc.watchRunChanges({ runId: 'r1', timeoutMs: 0, cursor: b.cursor });
   assert.equal(c.transitions[0]?.inbox?.id, 'i2', 'a new gate id is reported across the lineage');
 
-  const d = await svc.waitForAnyGate({ runIds: ['r1'], timeoutMs: 0, cursor: c.cursor });
+  const d = await svc.watchRunChanges({ runId: 'r1', timeoutMs: 0, cursor: c.cursor });
   assert.equal(d.transitions.length, 0, 're-sighting the same gate is suppressed');
 });
 
-test('[cursor lineage] gate then completion both delivered under one advancing cursor (watch_runs)', async () => {
+test('[cursor lineage] gate then completion both delivered under one advancing cursor', async () => {
   let state: RunState = gate('r1', 'i1');
   const api: RunStateSource = {
     async resolveRunState() {
@@ -562,24 +458,55 @@ test('[cursor lineage] gate then completion both delivered under one advancing c
   };
   const svc = new RunWatchService(api);
 
-  const a = await svc.watchRuns({ runIds: ['r1'], timeoutMs: 0 });
+  const a = await svc.watchRunChanges({ runId: 'r1', timeoutMs: 0 });
   assert.equal(a.transitions[0]?.state, 'pending_gate');
 
   state = completed('r1');
-  const b = await svc.watchRuns({ runIds: ['r1'], timeoutMs: 0, cursor: a.cursor });
+  const b = await svc.watchRunChanges({ runId: 'r1', timeoutMs: 0, cursor: a.cursor });
   assert.equal(b.transitions[0]?.state, 'completed', 'the terminal transition follows the gate under one cursor');
 });
 
-test('observeRun reports a compact gate transition once under its cursor', async () => {
+// ── getRunAttention tests ─────────────────────────────────────────────────────
+
+test('getRunAttention maps states to canonical nextAction and requiresAttention', async () => {
+  const cases: Array<{
+    name: string;
+    state: RunState;
+    activity?: AgentRunActivity;
+    nextAction: string;
+    requiresAttention: boolean;
+  }> = [
+    { name: 'ready', state: ready('r1'), nextAction: 'start_run', requiresAttention: true },
+    { name: 'pending_gate', state: gate('r1'), nextAction: 'ask_human', requiresAttention: true },
+    { name: 'question', state: question('r1'), nextAction: 'ask_human', requiresAttention: true },
+    { name: 'blocked', state: blocked('r1'), nextAction: 'inspect_digest', requiresAttention: true },
+    { name: 'failed-log', state: failed('r1'), activity: activity('failed'), nextAction: 'inspect_log', requiresAttention: true },
+    { name: 'completed', state: completed('r1'), nextAction: 'done', requiresAttention: false },
+    { name: 'cancelled', state: { ...blocked('r1'), runStatus: 'cancelled' }, nextAction: 'done', requiresAttention: false },
+    { name: 'retrying', state: retrying('r1'), nextAction: 'wait', requiresAttention: false },
+    { name: 'running', state: running('r1'), nextAction: 'wait', requiresAttention: false },
+  ];
+
+  for (const item of cases) {
+    const svc = new RunWatchService(fakeApi({ states: { r1: item.state }, activity: item.activity ?? null }));
+    const result = await svc.getRunAttention('r1');
+
+    assert.equal(result.nextAction, item.nextAction, item.name);
+    assert.equal(result.requiresAttention, item.requiresAttention, item.name);
+    assert.equal(result.runId, 'r1', item.name);
+    assert.equal(result.state, item.state.state, item.name);
+    assert.ok(Array.isArray(result.suggestedTools), item.name);
+  }
+});
+
+test('getRunAttention compacts inbox for gate states', async () => {
   const svc = new RunWatchService(fakeApi({ states: { r1: gate('r1', 'gate-1') }, activity: activity() }));
 
-  const first = await svc.observeRun({ runId: 'r1', timeoutMs: 0 });
-  const second = await svc.observeRun({ runId: 'r1', timeoutMs: 0, cursor: first.cursor });
+  const result = await svc.getRunAttention('r1');
 
-  assert.equal(first.state, 'pending_gate');
-  assert.equal(first.transition?.state, 'pending_gate');
-  assert.equal(first.transition?.nextAction, 'ask_human');
-  assert.deepEqual(first.transition?.inbox, {
+  assert.equal(result.state, 'pending_gate');
+  assert.equal(result.nextAction, 'ask_human');
+  assert.deepEqual(result.inbox, {
     id: 'gate-1',
     kind: 'approval',
     title: 'Plan approval',
@@ -587,199 +514,100 @@ test('observeRun reports a compact gate transition once under its cursor', async
     stepId: 's1',
     optionCount: 2,
   });
-  assert.equal(JSON.stringify(first).includes('context'), false, 'observe_run does not inline full inbox context');
-  assert.equal(first.activeAttempt?.attemptId, 'attempt-1');
-  assert.equal(second.transition, undefined, 'same gate marker is not re-delivered');
-  assert.equal(second.state, 'pending_gate');
-  assert.equal(second.nextAction, 'ask_human');
+  assert.equal(JSON.stringify(result).includes('context'), false, 'does not inline full inbox context');
+  assert.equal(result.activeAttempt?.attemptId, 'attempt-1');
+  assert.equal(result.requiresAttention, true);
+  assert.deepEqual(result.suggestedTools, ['get_inbox_item', 'approve_gate', 'reject_gate', 'answer_question']);
 });
 
-test('observeRun returns an actionable transition even when activity enrichment stalls', async () => {
+test('getRunAttention propagates ROW_NOT_FOUND for missing runs', async () => {
+  const svc = new RunWatchService(fakeApi({}));
+
+  await assert.rejects(
+    () => svc.getRunAttention('ghost'),
+    (err: unknown) => err instanceof ControlPlaneError && (err as ControlPlaneError).code === 'ROW_NOT_FOUND',
+  );
+});
+
+test('getRunAttention returns attention result even when activity enrichment stalls', async () => {
   const svc = new RunWatchService(fakeApi({ states: { r1: gate('r1', 'gate-1') }, activity: neverActivity }));
 
-  const observed = await resultBeforeDeadline(svc.observeRun({ runId: 'r1', timeoutMs: 0 }));
-  assert.notEqual(observed, 'deadline', 'observe_run transition must not wait indefinitely for activity');
-  if (observed === 'deadline') return;
+  const result = await resultBeforeDeadline(svc.getRunAttention('r1'));
+  assert.notEqual(result, 'deadline', 'getRunAttention must not wait indefinitely for activity');
+  if (result === 'deadline') return;
 
-  assert.equal(observed.state, 'pending_gate');
-  assert.equal(observed.transition?.state, 'pending_gate');
-  assert.equal(observed.transition?.nextAction, 'ask_human');
-  assert.equal(observed.activeAttempt, undefined);
-  assert.equal(observed.nextAction, 'ask_human');
+  assert.equal(result.state, 'pending_gate');
+  assert.equal(result.nextAction, 'ask_human');
+  assert.equal(result.activeAttempt, undefined);
+  assert.equal(result.requiresAttention, true);
 });
 
-test('observeRun does not wait for a slow activity enrichment that eventually settles', async () => {
-  const slowActivity = () => new Promise<AgentRunActivity | null>((resolve) => {
-    const timer = setTimeout(() => resolve(activity()), 500);
-    (timer as ReturnType<typeof setTimeout> & { unref?: () => void }).unref?.();
-  });
-  const svc = new RunWatchService(fakeApi({ states: { r1: gate('r1', 'gate-1') }, activity: slowActivity }));
-  const startedAt = Date.now();
-
-  const observed = await svc.observeRun({ runId: 'r1', timeoutMs: 0 });
-
-  assert.ok(Date.now() - startedAt < 175, 'lifecycle response must not wait for best-effort activity');
-  assert.equal(observed.state, 'pending_gate');
-  assert.equal(observed.transition?.nextAction, 'ask_human');
-  assert.equal(observed.activeAttempt, undefined);
-});
-
-test('observeRun keeps actionable timeout bounded when activity enrichment stalls', async () => {
-  const svc = new RunWatchService(fakeApi({ states: { r1: running('r1') }, activity: neverActivity }));
-
-  const observed = await resultBeforeDeadline(svc.observeRun({ runId: 'r1', timeoutMs: 1 }), 700);
-  assert.notEqual(observed, 'deadline', 'observe_run timeout path must not wait indefinitely for activity');
-  if (observed === 'deadline') return;
-
-  assert.equal(observed.state, 'running');
-  assert.equal(observed.timedOut, true);
-  assert.equal(observed.transition, undefined);
-  assert.equal(observed.activeAttempt, undefined);
-  assert.equal(observed.nextAction, 'wait');
-});
-
-test('observeRun heartbeat mode returns a heartbeat even when activity enrichment stalls', async () => {
-  const svc = new RunWatchService(
-    fakeApi({ states: { r1: running('r1') }, activity: neverActivity }),
-    undefined,
-    () => Date.parse('2026-06-26T10:00:04.000Z'),
-  );
-
-  const observed = await resultBeforeDeadline(
-    svc.observeRun({ runId: 'r1', mode: 'heartbeat', timeoutMs: 1_000, heartbeatEveryMs: 25 }),
-    700,
-  );
-  assert.notEqual(observed, 'deadline', 'heartbeat must be emitted even when activity is unavailable');
-  if (observed === 'deadline') return;
-
-  assert.equal(observed.state, 'running');
-  assert.equal(observed.timedOut, true);
-  assert.equal(observed.heartbeat?.observedAt, '2026-06-26T10:00:04.000Z');
-  assert.equal(observed.heartbeat?.activity, undefined);
-  assert.equal(observed.nextAction, 'wait');
-});
-
-test('observeRun maps actionable states to canonical next actions', async () => {
-  const cases: Array<{
-    name: string;
-    state: RunState;
-    activity?: AgentRunActivity;
-    nextAction: string;
-    transitionState: RunState['state'];
-  }> = [
-    { name: 'ready', state: ready('r1'), nextAction: 'start_run', transitionState: 'ready' },
-    { name: 'question', state: question('r1'), nextAction: 'ask_human', transitionState: 'question' },
-    { name: 'blocked', state: blocked('r1'), nextAction: 'inspect_digest', transitionState: 'blocked' },
-    { name: 'failed', state: failed('r1'), activity: activity('failed'), nextAction: 'inspect_log', transitionState: 'failed' },
-    { name: 'completed', state: completed('r1'), nextAction: 'done', transitionState: 'completed' },
-    { name: 'cancelled', state: { ...blocked('r1'), runStatus: 'cancelled' }, nextAction: 'done', transitionState: 'blocked' },
-    { name: 'retrying', state: retrying('r1'), nextAction: 'wait', transitionState: 'retrying' },
-  ];
-
-  for (const item of cases) {
-    const svc = new RunWatchService(fakeApi({ states: { r1: item.state }, activity: item.activity ?? null }));
-    const result = await svc.observeRun({ runId: 'r1', timeoutMs: 0 });
-
-    assert.equal(result.transition?.state, item.transitionState, item.name);
-    assert.equal(result.nextAction, item.nextAction, item.name);
-    assert.equal(result.transition?.nextAction, item.nextAction, item.name);
-  }
-});
-
-test('observeRun omits stale activeAttempt on completed terminal states', async () => {
+test('getRunAttention omits stale activeAttempt on completed terminal states', async () => {
   const svc = new RunWatchService(fakeApi({ states: { r1: completed('r1') }, activity: activity('permission_blocked') }));
 
-  const result = await svc.observeRun({ runId: 'r1', timeoutMs: 0 });
+  const result = await svc.getRunAttention('r1');
 
   assert.equal(result.state, 'completed');
   assert.equal(result.nextAction, 'done');
-  assert.equal(result.transition?.state, 'completed');
   assert.equal(result.activeAttempt, undefined);
+  assert.equal(result.requiresAttention, false);
 });
 
-test('observeRun heartbeat suppresses stale agent activity on completed terminal states', async () => {
-  const svc = new RunWatchService(
-    fakeApi({ states: { r1: completed('r1') }, activity: activity('permission_blocked') }),
-    undefined,
-    () => Date.parse('2026-06-26T10:00:04.000Z'),
-  );
+// ── getRunStatus tests ────────────────────────────────────────────────────────
 
-  const result = await svc.observeRun({ runId: 'r1', mode: 'heartbeat', timeoutMs: 0 });
+test('getRunStatus returns neutral shape without nextAction or suggestedTools', async () => {
+  const svc = new RunWatchService(fakeApi({ states: { r1: gate('r1') }, activity: activity() }));
+
+  const result = await svc.getRunStatus('r1');
+
+  assert.equal(result.runId, 'r1');
+  assert.equal(result.state, 'pending_gate');
+  assert.equal(result.runStatus, 'running');
+  assert.ok('workflowStatus' in result);
+  assert.equal('nextAction' in result, false, 'getRunStatus must not include nextAction');
+  assert.equal('suggestedTools' in result, false, 'getRunStatus must not include suggestedTools');
+});
+
+test('getRunStatus includes activity for non-completed states', async () => {
+  const svc = new RunWatchService(fakeApi({ states: { r1: running('r1') }, activity: activity() }));
+
+  const result = await svc.getRunStatus('r1');
+
+  assert.equal(result.state, 'running');
+  assert.ok(result.activity, 'activity present for non-completed running state');
+  assert.equal(result.activity?.aggregateStatus, 'running');
+  assert.equal('nextAction' in result, false);
+  assert.equal('suggestedTools' in result, false);
+});
+
+test('getRunStatus omits activity for completed states', async () => {
+  const svc = new RunWatchService(fakeApi({ states: { r1: completed('r1') }, activity: activity() }));
+
+  const result = await svc.getRunStatus('r1');
 
   assert.equal(result.state, 'completed');
-  assert.equal(result.nextAction, 'done');
-  assert.equal(result.heartbeat?.workflow.runStatus, 'completed');
-  assert.equal(result.heartbeat?.activity, undefined);
+  assert.equal(result.activity, undefined, 'activity suppressed for completed runs');
 });
 
-test('observeRun heartbeat mode returns on heartbeat cadence with the canonical activity signal', async () => {
-  const svc = new RunWatchService(
-    fakeApi({ states: { r1: running('r1') }, activity: activity() }),
-    undefined,
-    () => Date.parse('2026-06-26T10:00:04.000Z'),
+test('getRunStatus propagates ROW_NOT_FOUND for missing runs', async () => {
+  const svc = new RunWatchService(fakeApi({}));
+
+  await assert.rejects(
+    () => svc.getRunStatus('ghost'),
+    (err: unknown) => err instanceof ControlPlaneError && (err as ControlPlaneError).code === 'ROW_NOT_FOUND',
   );
-  const startedAt = Date.now();
-
-  const result = await svc.observeRun({
-    runId: 'r1',
-    mode: 'heartbeat',
-    timeoutMs: 1_000,
-    heartbeatEveryMs: 25,
-  });
-
-  assert.equal(result.state, 'running');
-  assert.equal(result.timedOut, true);
-  assert.equal(result.transition, undefined);
-  assert.equal(result.nextAction, 'wait');
-  assert.equal(result.heartbeat?.observedAt, '2026-06-26T10:00:04.000Z');
-  assert.equal(result.heartbeat?.activity?.latestActivityAt, '2026-06-26T10:00:03.000Z');
-  assert.ok(Date.now() - startedAt < 500, 'heartbeat cadence, not timeoutMs, bounds the hold');
 });
 
-test('observeRun heartbeat mode includes workflow pulse without agent activity', async () => {
-  const svc = new RunWatchService(
-    fakeApi({
-      states: {
-        r1: {
-          ...running('r1'),
-          latestEventAt: '2026-06-26T10:00:05.000Z',
-          latestEventType: 'pr_polled',
-        },
-      },
-      activity: null,
-    }),
-    undefined,
-    () => Date.parse('2026-06-26T10:00:06.000Z'),
-  );
+test('getRunStatus does not leak raw blocking event payload', async () => {
+  const svc = new RunWatchService(fakeApi({ states: { r1: blocked('r1') }, activity: null }));
 
-  const result = await svc.observeRun({
-    runId: 'r1',
-    mode: 'heartbeat',
-    timeoutMs: 1_000,
-    heartbeatEveryMs: 25,
-  });
-
-  assert.equal(result.state, 'running');
-  assert.equal(result.heartbeat?.activity, undefined);
-  assert.deepEqual(result.heartbeat?.workflow, {
-    runStatus: 'running',
-    workflowStatus: 'PENDING',
-    latestEventAt: '2026-06-26T10:00:05.000Z',
-    latestEventType: 'pr_polled',
-  });
-});
-
-test('observeRun diagnostic mode stays bounded and omits raw event payloads', async () => {
-  const svc = new RunWatchService(fakeApi({ states: { r1: blocked('r1') }, activity: activity() }));
-
-  const result = await svc.observeRun({ runId: 'r1', mode: 'diagnostic', timeoutMs: 0 });
+  const result = await svc.getRunStatus('r1');
   const serialized = JSON.stringify(result);
 
   assert.equal(result.state, 'blocked');
-  assert.equal(result.nextAction, 'inspect_digest');
-  assert.equal(result.diagnostic?.latestBlockingEvent?.type, 'pipeline_blocked');
-  assert.equal(result.diagnostic?.suggestedTools.includes('get_run_digest'), true);
-  assert.equal(serialized.includes('do not expose'), false);
-  assert.equal(serialized.includes('"payload"'), false);
-  assert.ok(Buffer.byteLength(serialized, 'utf8') < 4_096, 'diagnostic observe response remains compact');
+  assert.equal(result.runStatus, 'paused');
+  assert.equal('nextAction' in result, false);
+  assert.equal('suggestedTools' in result, false);
+  assert.equal(serialized.includes('do not expose'), false, 'raw blocking payload must not leak');
+  assert.ok(Buffer.byteLength(serialized, 'utf8') < 2_048, 'status response stays compact');
 });

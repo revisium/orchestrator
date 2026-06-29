@@ -74,8 +74,9 @@ MCP tools:
 - `list_inbox`, `get_inbox_item`, `get_pending_decisions`
 - `approve_gate`, `reject_gate`, `answer_question`, `resolve_inbox_item`
 - `summarize_gate_risk`
-- `observe_run`
-- `wait_for_run`, `wait_for_any_gate`, `watch_runs` (compatibility/diagnostic)
+- `get_run_attention` (primary observation), `get_run_status` (neutral status)
+- `watch_run_changes` (advanced cursor-based delivery)
+- `get_run_digest`, `get_run_events`, `get_agent_activity`, `get_agent_log` (diagnostics)
 
 GraphQL mutations:
 
@@ -89,120 +90,76 @@ GraphQL subscriptions:
 - `inboxItemAdded`
 - `inboxItemResolved`
 
-`observe_run` is the canonical normal observation surface. `wait_for_run`, `wait_for_any_gate`, and `watch_runs`
-remain registered for existing clients and diagnostic scripts, but new polling loops should use `observe_run`.
+`get_run_attention` is the canonical normal observation surface. `get_run_status` is for neutral
+dashboard/status checks. `watch_run_changes` is the advanced cursor-based delivery API.
 
 ## Run Observation Contract
 
-`observe_run` provides low-context run observation for MCP clients. It is a bounded long-poll call over product
-services, not a raw DBOS/Revisium table read.
+Three intent-named tools replace the former transport-named surface:
 
-Input:
+### get_run_attention
+
+Single-shot. No cursor. Answers "what currently requires attention?"
 
 ```ts
-type ObserveRunInput = {
+type RunAttentionResult = {
   runId: string;
-  cursor?: string;
-  mode?: 'actionable' | 'heartbeat' | 'diagnostic';
-  timeoutMs?: number;
-  heartbeatEveryMs?: number;
+  state: 'ready' | 'running' | 'pending_gate' | 'question' | 'blocked' | 'failed' | 'completed' | 'retrying';
+  requiresAttention: boolean; // true iff nextAction ∈ {start_run, ask_human, inspect_digest, inspect_log}
+  nextAction: 'start_run' | 'wait' | 'ask_human' | 'inspect_digest' | 'inspect_log' | 'done';
+  issueRef?: IssueRef;
+  inbox?: { id: string; kind: string; title: string; status: string; stepId?: string; optionCount: number };
+  blockedReason?: string;
+  activeAttempt?: CanonicalActivityAttemptSignal;
+  suggestedTools: string[];
 };
 ```
 
-Result:
+### get_run_status
+
+Single-shot. Neutral current state for dashboards and status checks. Must not include `nextAction` or `suggestedTools`.
 
 ```ts
-type ObserveRunResult = {
+type RunStatusResult = {
   runId: string;
-  cursor: string;
-  state: 'ready' | 'running' | 'pending_gate' | 'question' | 'blocked' | 'failed' | 'completed' | 'retrying';
-  timedOut: boolean;
-  transition?: {
-    runId: string;
-    state: ObserveRunResult['state'];
-    nextAction: ObserveRunResult['nextAction'];
-    inbox?: { id: string; kind: string; title: string; status: string; stepId?: string; optionCount: number };
-    blockedReason?: string;
-  };
-  activeAttempt?: {
-    attemptId: string;
-    stepId: string;
-    stepKey?: string;
-    role: string;
-    runner: string;
-    status: AgentActivityStatus;
-    startedAt: string;
-    lastEventAt: string;
-    lastOutputAt?: string;
-    stdoutBytes: number;
-    stderrBytes: number;
-    eventCount: number;
-  };
-  heartbeat?: {
-    observedAt: string;
-    workflow: {
-      runStatus: string;
-      workflowStatus: string;
-      latestEventAt?: string;
-      latestEventType?: string;
-    };
-    activity?: {
-      aggregateStatus: string;
-      latestActivityAt: string;
-      latestOutputAt?: string;
-      stdoutBytes: number;
-      stderrBytes: number;
-      eventCount: number;
-    };
-  };
-  diagnostic?: {
-    runStatus: string;
-    workflowStatus: string;
-    blockedReason?: string;
-    latestBlockingEvent?: {
-      eventId?: string;
-      type?: string;
-      createdAt?: string;
-    };
-    activity?: {
-      aggregateStatus: string;
-      latestActivityAt: string;
-      latestOutputAt?: string;
-      stdoutBytes: number;
-      stderrBytes: number;
-      eventCount: number;
-    };
-    suggestedTools: string[];
-  };
-  nextAction: 'start_run' | 'wait' | 'ask_human' | 'inspect_digest' | 'inspect_log' | 'done';
+  state: RunAttentionResult['state'];
+  runStatus: string;
+  workflowStatus: string;
+  issueRef?: IssueRef;
+  latestEventAt?: string;
+  latestEventType?: string;
+  inbox?: { id: string; kind: string; title: string; status: string; stepId?: string; optionCount: number };
+  blockedReason?: string;
+  activity?: ObserveRunActivitySignal;
 };
+```
+
+### watch_run_changes
+
+Bounded long-poll. Cursor lives here. Returns transitions since the cursor position.
+
+```ts
+type WatchRunChangesInput = { runId: string; cursor?: string; timeoutMs?: number };
+type WatchResult = { transitions: RunTransition[]; cursor: string; timedOut: boolean };
 ```
 
 Rules:
 
-- `cursor` suppresses already-delivered transitions. Re-calling with the returned cursor must not re-deliver the
-  same gate, blocked, failed, completed, or retrying transition.
-- MCP schemas cap cursor length; over-cap service-side cursors are ignored before base64 decode or JSON parse.
-- `mode: 'actionable'` is the default. It waits up to the bounded server hold for a gate, question, blocked,
-  failed, completed, or future retry transition.
-- `mode: 'heartbeat'` returns a heartbeat at `heartbeatEveryMs` cadence when no transition appears first.
-- `mode: 'diagnostic'` may include bounded hints such as run/workflow status, a compact blocking-event header,
-  activity counters, and suggested tools. It must not include raw log text or full event payloads.
-- The canonical activity signal is derived from existing agent observability fields: `latestActivityAt`,
-  `latestOutputAt`, `lastEventAt`, `lastOutputAt`, stdout/stderr byte counters, and event counters. The runner
-  idle-timeout policy uses the same activity vocabulary plus generic in-flight operation state at the process
-  executor boundary. `observe_run` keeps its existing result shape and does not expose in-flight-operation fields
-  in v1.
-- Activity is best-effort bounded enrichment. A slow, unavailable, or wedged activity projection must not delay
-  delivery of lifecycle transitions, timeout responses, or heartbeat responses; clients should treat missing
-  activity/`activeAttempt` as "not available from this observation call", not as proof that no work is running.
+- `cursor` in `watch_run_changes` suppresses already-delivered transitions. Re-calling with the returned cursor
+  must not re-deliver the same gate, blocked, failed, completed, or retrying transition.
+- MCP schemas cap cursor length; over-cap cursors are ignored before base64 decode or JSON parse.
+- `get_run_attention` and `get_run_status` accept only `{runId}`; they never accept a cursor.
+- Activity is best-effort bounded enrichment (250ms cap). A slow, unavailable, or wedged activity projection must
+  not delay delivery; clients should treat missing `activeAttempt` as "not available from this observation call",
+  not as proof that no work is running.
+- `activeAttempt` is suppressed on completed runs in `get_run_attention`.
 - Normal observation must not require `get_run(includeEvents: true)`, full logs, raw log text, full event history,
   or unbounded payloads.
 - `nextAction: 'ask_human'` means resolve the inbox item through gate/question tools. `inspect_digest` means call
   `get_run_digest`. `inspect_log` means use bounded `get_agent_log` reads with offsets or `tailBytes`.
-- Runner retry does not add a new observe_run state in v1. Retry evidence is exposed through the existing event,
-  attempt, digest, diagnostic, and log surfaces (`runner_retry_scheduled`, `runner_retry_exhausted`, per-attempt
-  rows, and per-attempt agent logs). `retrying` remains reserved for a future transition shape.
+- Runner retry does not add a new state in v1. Retry evidence is exposed through the existing event,
+  attempt, digest, and log surfaces (`runner_retry_scheduled`, `runner_retry_exhausted`, per-attempt rows, and
+  per-attempt agent logs). `retrying` remains reserved for a future transition shape.
 
 ## Gate Kinds
 
@@ -251,6 +208,8 @@ Contracts:
 
 ## Changelog
 
+- 2026-06-29: Replaced observe_run/wait_for_run/wait_for_any_gate/watch_runs with get_run_attention (primary),
+  get_run_status (neutral), and watch_run_changes (advanced delivery). Cursor moves to watch_run_changes only.
 - 2026-06-27: Documented that runner retry evidence uses existing observation surfaces without adding a new
   observe_run state.
 - 2026-06-26: Added canonical `observe_run` low-context observation contract and documented older watch tools as
