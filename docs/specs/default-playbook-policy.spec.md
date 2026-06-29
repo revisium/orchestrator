@@ -1,11 +1,14 @@
 # Default playbook policy spec
 
-- **Status:** Accepted for static bundled-playbook checks; #141 merge-gate reject/recheck routing is implemented.
+- **Status:** Accepted.
+- **Version:** v1
 - **Source files:** `control-plane/default-playbook/catalog/pipelines.json`,
   `src/control-plane/default-playbook-policy.ts`, `src/control-plane/default-playbook-policy.test.ts`.
 - **Related specs:** [pipeline-state-machine-v1.spec.md](./pipeline-state-machine-v1.spec.md),
   [run-dataflow-v1.spec.md](./run-dataflow-v1.spec.md),
   [human-gates-v1.spec.md](./human-gates-v1.spec.md).
+
+The static bundled-playbook checks are accepted, and #141 merge-gate reject/recheck routing is implemented.
 
 ## Scope
 
@@ -13,20 +16,22 @@ This spec defines product policy for the bundled default `feature-development` p
 pipeline grammar: `pipeline-core` validates whether a template is structurally legal; this policy validates whether
 the bundled default graph keeps the handoffs and safeguards expected by the current Revo default pipeline.
 
-The policy verifier is deterministic and I/O-free. It must not call GitHub, runner providers, network services,
+The key words MUST, MUST NOT, SHOULD, SHOULD NOT, MAY are to be interpreted as in RFC 2119 / BCP 14.
+
+The policy verifier is deterministic and I/O-free. It MUST NOT call GitHub, runner providers, network services,
 Revisium, DBOS, or the filesystem. Runtime facts such as provider freshness, branch contents, pushed commits, actual
 review-thread state, and artifact payload content are verified by runtime tests and PR watcher evidence, not by this
 static verifier.
 
 ## Stabilization Map
 
-| Issue | Static default-playbook policy | Runtime evidence check | Deferred |
-| --- | --- | --- | --- |
-| #140 | Change-producing developer nodes declare `schema:change` outputs, and reviewer/integrator nodes consume those produced changes. | Captured `branch`/`headSha`, worktree cleanliness, actual pushed PR head, and integrator behavior. | No |
-| #142 | The graph preserves routes that can carry `review_changes` and `ci_changes` after `pollPr` classifies PR feedback. | CodeRabbit/provider classification, stale review-body suppression, provider-wait bucketing, and grace polling. | No |
-| #143 | The graph requires `pollPr -> mergeReadiness -> mergeGate`, routes fresh `review_changes`/`ci_changes` before the gate, and gives merge approval/confirmation the `mergeReadiness` artifact. | Isolated worktree execution, real PR polling, fresh `headSha`, branch push, and provider state. | No |
-| #144 | No graph policy is inferred from stale provider comments or install versioning; the default catalog can still be checked statically. | `catalogHash` reseed behavior and informational provider waits for stale CodeRabbit comments. | No |
-| #141 | `mergeGate` reject/non-approve maps to `recheck`, routes through a fresh `mergeRecheck` `script:pollPr` node, then routes `review_changes` to `triage`, bounded `ci_changes + ciLoop < 3` to `ciRework`, and `clean`/default to `blockedEnd`; `triage` and `ciRework` receive optional stale-ok `mergeRecheck` evidence. | Actual GitHub/provider freshness, rejected-gate runtime execution, and proof that live review/CI changes return to the correct recovery loop. | No |
+| Issue | Static default-playbook policy | Runtime evidence check |
+| --- | --- | --- |
+| #140 | Change-producing developer nodes declare `schema:change` outputs, and reviewer/integrator nodes consume those produced changes. | Captured `branch`/`headSha`, worktree cleanliness, actual pushed PR head, and integrator behavior. |
+| #142 | The graph preserves routes that can carry `review_changes` and `ci_changes` after `pollPr` classifies PR feedback. | CodeRabbit/provider classification, stale review-body suppression, provider-wait bucketing, and grace polling. |
+| #143 | The graph requires `pollPr -> mergeReadiness -> mergeGate`, routes fresh `review_changes`/`ci_changes` before the gate, and gives merge approval/confirmation the `mergeReadiness` artifact. | Isolated worktree execution, real PR polling, fresh `headSha`, branch push, and provider state. |
+| #144 | No graph policy is inferred from stale provider comments or install versioning; the default catalog can still be checked statically. | `catalogHash` reseed behavior and informational provider waits for stale CodeRabbit comments. |
+| #141 | `mergeGate` reject/non-approve maps to `recheck`, routes through a fresh `mergeRecheck` `script:pollPr` node, then routes `review_changes` to `triage`, bounded `ci_changes + ciLoop < 3` to `ciRework`, and `clean`/default to `blockedEnd`; `triage` and `ciRework` receive optional stale-ok `mergeRecheck` evidence. | Actual GitHub/provider freshness, rejected-gate runtime execution, and proof that live review/CI changes return to the correct recovery loop. |
 
 ## Static Rules
 
@@ -49,10 +54,10 @@ The scoped policy requires the bundled `mergeGate` to expose `approved,recheck` 
 gate approval to the first outcome and rejection to the last outcome, a merge-gate reject reaches `mergeRecheck`
 instead of terminal-blocking immediately.
 
-`mergeRecheck` must be a `script:pollPr` step that produces `schema:prFeedback` and routes to
-`mergeRecheckRouter`. The router must send a still-clean recheck, or an unclassified/default recheck, to
-`blockedEnd` as an explicit abort. It must send recoverable fresh feedback back into the existing loops:
-`review_changes -> triage` and `ci_changes + ciLoop < 3 -> ciRework`.
+`mergeRecheck` MUST be a `script:pollPr` step that produces `schema:prFeedback` and routes to `mergeRecheckRouter`.
+The router MUST send a still-clean recheck, or an unclassified/default recheck, to `blockedEnd` as an explicit
+abort. The router MUST send recoverable fresh feedback back into the existing loops: `review_changes -> triage` and
+`ci_changes + ciLoop < 3 -> ciRework`.
 
 The verifier also requires both `triage` and `ciRework` to consume `mergeRecheck` as optional stale-ok
 `recheckFeedback`, so reject-routed recovery steps can inspect the fresh recheck evidence. This remains a static graph
@@ -60,6 +65,7 @@ contract: the verifier does not prove that GitHub/provider state was fresh at ru
 
 ## Changelog
 
+- 2026-06-29: Normative-language / canon-discipline pass; no contract change.
 - 2026-06-28: Updated #141 from deferred to implemented in the default policy, including merge-gate recheck routing
   and recheck evidence handoff checks.
 - 2026-06-28: Added scoped default-playbook policy for #145 with static rules separated from runtime evidence checks

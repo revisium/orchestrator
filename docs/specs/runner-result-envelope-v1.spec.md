@@ -11,15 +11,17 @@
 
 This spec governs the canonical agent result envelope, the three structured-output tiers
 (`native-schema` | `tool-call` | `prompt-only`), the `submit_result` tool-call mechanism, how the engine harvests the
-envelope per tier, and the existing validate seam those tiers ride. It does NOT govern verdict-vocabulary
+envelope per tier, and the existing validate seam those tiers ride. It does not govern verdict-vocabulary
 correctness (the membership of a verdict in a template's domain set — a separate concern, see #207) beyond noting
 the boundary.
+
+The key words MUST, MUST NOT, SHOULD, SHOULD NOT, MAY are to be interpreted as in RFC 2119 / BCP 14.
 
 The manifest envelope and the StdoutParser/PermissionStyle contracts are in
 [runner-manifest-v1.spec.md](./runner-manifest-v1.spec.md); the full `capabilities` field list is in
 [runner-capabilities-v1.spec.md](./runner-capabilities-v1.spec.md).
 
-Paths are `src/...` = the `@revisium/orchestrator` package root.
+Paths under `src/...` are relative to the `@revisium/orchestrator` package root.
 
 ## Current Contract
 
@@ -35,22 +37,22 @@ validate seam is already shipped. What ships:
   `validateCodexOutputAgainstSchema` (`:424-478`) and normalized by `normalizeCodexResult` (`:480-496`).
 - **The harvested result is an `AttemptResult`** (`src/worker/runner.ts:8-18`) whose only routing-relevant field is
   the top-level `verdict` (`:10-13`).
-- **The validate seam is verdict-PRESENCE + verdict-VOCABULARY on AGENT nodes only — NOT a full-envelope schema
+- **The validate seam is verdict-presence + verdict-vocabulary on agent nodes only — not a full-envelope schema
   check.** `domainVerdictOf` reads `AttemptResult.verdict`, `.trim().toLowerCase()`
   (`src/pipeline/data-driven-task.workflow.ts:434-440`). `resultVerdictProblem` is gated on `node.kind === 'agent'`
   (early `return undefined` otherwise, `:443`) and checks the verdict is present and a member of
-  `template.verdicts.domain` (`:442-452`). `resultSatisfiesSchema` is a **no-op when the node declares no
-  `resultSchema`** (early `return true`, `:461`); only when a `resultSchema` is declared does it require a
+  `template.verdicts.domain` (`:442-452`). `resultSatisfiesSchema` is a *no-op when the node declares no
+  `resultSchema`* (early `return true`, `:461`); only when a `resultSchema` is declared does it require a
   non-empty object/string/array output (`:460-467`). `roleValidationFailure` gathers both (`:1241-1256`); a failure
   produces `invalidRoleResult(... REVO_RESULT_INVALID ...)` (`:243`, constant `'revo.ResultInvalid'` at `:240`), a
   terminal `InvokeRoleFailedResult` (`:128-134`, returned at `:1119-1120`).
-- **`revo.ResultInvalid` is terminal, not a retry.** It FAILS the node and does NOT re-enter the attempt-retry
+- **`revo.ResultInvalid` is terminal, not a retry.** It fails the node and does not re-enter the attempt-retry
   loop. Re-attempting is governed by the separate transient-failure / `needsHuman` machinery
   (`maybeHandleNeedsHumanRoleResult` and the attempt loop's `continue` at `:1110-1117`, the transient retry block
   at `~:1156-1205`; transient classification at `:369-432`), orthogonal to verdict validity.
 - **The prompt-only extractor parses whole-string JSON only.** `parseJsonObjectText`
   (`src/worker/codex-runner.ts:205-213`) trims a candidate, requires it to start with `{` and end with `}`, then
-  `JSON.parse`s the whole thing — it is NOT a balanced-brace scan over surrounding prose. Text keys are walked by
+  `JSON.parse`s the whole thing — it is *not* a balanced-brace scan over surrounding prose. Text keys are walked by
   `structuredCandidateFromTextKeys` (`:251-259`).
 
 ## Target Migration
@@ -61,11 +63,11 @@ and the degradation rule are the proposal (ADR-0004 is Status: Draft).
 
 ### The canonical result envelope
 
-Every runner, regardless of tier, must yield this object — the union (superset) of the two shipped schemas:
+Every runner, regardless of tier, MUST yield this object — the union (superset) of the two shipped schemas:
 
 ```ts
 type AgentResultEnvelope = {
-  verdict: string;        // the single routing token, lowercase (required)
+  verdict: string;        // the single routing token (required)
   output: unknown;        // a short summary, or the artifact a later step consumes (required)
   artifacts?: unknown;    // optional JSON artifacts, e.g. { planPath: "docs/plans/00xx.md" }
   nextSteps: unknown[];   // follow-up work items; [] when none
@@ -74,20 +76,28 @@ type AgentResultEnvelope = {
 };
 ```
 
-Claude and Codex differ only in strictness (Codex requires all six keys and allows `null`; Claude requires two and
-omits the rest). A runner's `schemaDelivery`/tier decides which concrete schema body is delivered.
+Field contract:
 
-#### REQUIRED: lift the envelope `verdict` into `AttemptResult.verdict` for EVERY tier
+- `verdict` (non-empty string) and `output` are REQUIRED.
+- `nextSteps` is REQUIRED (`[]` when there are none).
+- `artifacts`, `needsHuman`, and `lesson` are OPTIONAL.
 
-The `StdoutParser → AttemptResult` mapping MUST copy the envelope's top-level `verdict` into
-`AttemptResult.verdict` regardless of tier. This mirrors `agentResultFromStructured`, which lifts `verdict:
-o.verdict` (`src/worker/result-envelope.ts:62-69`, copy at `:64`). The whole floor depends on it: the validate seam
-reads ONLY `AttemptResult.verdict` (`domainVerdictOf`, `src/pipeline/data-driven-task.workflow.ts:435-440`), so a
-parser that harvests the envelope but fails to lift the verdict produces a node that ALWAYS fails to
-`revo.ResultInvalid`, no matter how well-formed the envelope was. The parser lifts the verdict AS EMITTED — it does
-NOT lowercase. **Normalization (trim + lowercase) is the ENGINE's job**, applied later at routing/validation by
+Claude and Codex differ only in strictness: Codex requires all six keys and allows `null`; Claude requires the two
+REQUIRED keys and omits the rest. A runner's `schemaDelivery`/tier decides which concrete schema body is delivered.
+
+#### Verdict lift (all tiers)
+
+The `StdoutParser → AttemptResult` mapping MUST copy the envelope's top-level `verdict` into `AttemptResult.verdict`
+for every tier, and MUST NOT lowercase or otherwise normalize it. The mapping mirrors `agentResultFromStructured`,
+which lifts `verdict: o.verdict` (`src/worker/result-envelope.ts:62-69`, copy at `:64`).
+
+The whole floor depends on this lift: the validate seam reads only `AttemptResult.verdict` (`domainVerdictOf`,
+`src/pipeline/data-driven-task.workflow.ts:435-440`), so a parser that harvests the envelope but fails to lift the
+verdict produces a node that always fails to `revo.ResultInvalid`, however well-formed the envelope was.
+
+Normalization (trim + lowercase) is the engine's responsibility, applied later at routing/validation by
 `domainVerdictOf` (`.trim().toLowerCase()`, `src/pipeline/data-driven-task.workflow.ts:435-440`). The engine routes
-ONLY on the top-level `verdict`; prose output is never mined for routing (`src/worker/result-envelope.ts:5-6`,
+only on the top-level `verdict`; prose output is never mined for routing (`src/worker/result-envelope.ts:5-6`,
 `src/pipeline/data-driven-task.workflow.ts:435-440`).
 
 ### The three structured-output tiers
@@ -102,26 +112,33 @@ produces the envelope, governing reliability and cost — not eligibility (every
   Codex: `--output-schema <file>` (`src/worker/codex-runner.ts:161-162`, file written at `:97-102`); harvested from
   the terminal `turn.completed` event (`:261-269`). Reliability ~100% (provider-enforced).
 - **`tool-call`.** The engine registers a `submit_result` tool whose `input_schema` is the envelope; the agent
-  calls it and the call's arguments ARE the result. The call is forced via `tool_choice` so the agent cannot end
-  the turn without submitting. Shape compliance is **best-effort per provider**: where the provider validates
-  tool-call arguments and honors forced `tool_choice`, compliance is high (forcing removes "agent forgot to emit
-  JSON"); where a provider ignores forced `tool_choice` / strict tool schemas, this tier **degrades to the
-  `prompt-only` floor** (see the degradation rule). No runner is asserted to have a working `tool-call` tier until
-  a live probe confirms its provider honors forced tool choice.
+  calls it and the call's arguments are the result. The engine MUST force the call via the provider's `tool_choice`
+  equivalent so the agent cannot end the turn without submitting. If a `submit_result` call does not arrive, the
+  engine MUST fall through to the `prompt-only` floor per the degradation rule below; it MUST NOT treat the missing
+  call as an immediate hard failure. A runner MUST NOT be classified `tool-call` until a live probe confirms its
+  provider honors forced tool choice.
+
+  > Informative: where a provider validates tool-call arguments and honors forced `tool_choice`, forcing removes the
+  > "agent forgot to emit JSON" failure mode and shape compliance is high. Where a provider ignores forced
+  > `tool_choice` or strict tool schemas, shape compliance is best-effort and the degradation rule carries the run.
 - **`prompt-only`.** The prompt asks for JSON matching the envelope; the runner returns free text and the
-  StdoutParser extracts the structured object from the final text block. Reliability weakest; leans entirely on the
-  verdict-presence validate seam to reject output with no usable verdict. Always available — it is the floor. A
-  `prompt-only` parser MAY reuse the shipped whole-string-JSON algorithm (`parseJsonObjectText`,
+  StdoutParser extracts the structured object from the final text block. It is always available — the floor — and
+  leans entirely on the verdict-presence validate seam to reject output with no usable verdict. A `prompt-only`
+  parser MAY reuse the shipped whole-string-JSON algorithm (`parseJsonObjectText`,
   `src/worker/codex-runner.ts:205-213`, over the final text block) and MUST then lift the `verdict` (the engine
   normalizes it via `domainVerdictOf`).
 
+  > Informative: `prompt-only` reliability is the weakest of the three tiers because nothing constrains the
+  > model's output shape before the parser runs.
+
   **Known limitation (whole-string JSON only).** `parseJsonObjectText` requires the candidate to be JSON
   end-to-end (trim, then `startsWith('{') && endsWith('}')`, then `JSON.parse`,
-  `src/worker/codex-runner.ts:205-213`) — it REJECTS fenced (```` ```json … ``` ````) or prose-wrapped JSON. So the
+  `src/worker/codex-runner.ts:205-213`) — it rejects fenced (```` ```json … ``` ````) or prose-wrapped JSON. So the
   `tool-call` → `prompt-only` degradation can fall straight through to `revo.ResultInvalid` for providers that emit
-  fenced JSON, because their final text block does not parse whole-string. **Hardening follow-up:** strip ```` ``` ````
-  fences and extract the first balanced JSON object before parsing, so a fenced-JSON provider degrades to a usable
-  verdict instead of a hard failure.
+  fenced JSON, because their final text block does not parse whole-string.
+
+  > Informative (hardening follow-up): strip ```` ``` ```` fences and extract the first balanced JSON object before
+  > parsing, so a fenced-JSON provider degrades to a usable verdict instead of a hard failure.
 
 ### The `submit_result` tool-call contract
 
@@ -138,10 +155,10 @@ For `tool-call`-tier runners, the engine injects exactly one tool:
 
 - `name`: `submit_result` (stable; part of the contract).
 - `input_schema`: the envelope schema — the same body `native-schema` runners receive via flag.
-- Forcing: the engine sets the provider's forced-tool option (the `tool_choice` equivalent) to require
-  `submit_result`, so the terminal turn must be this call.
-- `strict`: the provider rejects arguments violating the schema (where supported; otherwise the validate seam
-  catches drift).
+- Forcing: the engine MUST set the provider's forced-tool option (the `tool_choice` equivalent) to require
+  `submit_result`, so the terminal turn is this call.
+- `strict`: the provider rejects arguments violating the schema where supported; otherwise the validate seam
+  catches drift.
 
 Harvest: the StdoutParser reads the tool-call arguments from the runner's event stream (the `parts-stream` parser
 for OpenCode) and returns them as `StdoutParserResult.structured`. The engine then maps `structured` →
@@ -155,11 +172,11 @@ for OpenCode) and returns them as `StdoutParserResult.structured`. The engine th
 | `tool-call` | `submit_result` call arguments | new; harvested by the family's StdoutParser |
 | `prompt-only` | whole-string JSON in the final text block | `parseJsonObjectText` (`src/worker/codex-runner.ts:205-213`), tried over text keys by `structuredCandidateFromTextKeys` (`:251-259`) |
 
-After harvest, ALL tiers pass through the same validate seam (the Current Contract seam above). "Prompt-only is a
+After harvest, all tiers pass through the same validate seam (the Current Contract seam above). "Prompt-only is a
 floor" means a *verdict-presence floor*, not a full-schema guarantee. The tier only changes how often this seam
-FAILS a node:
+fails a node:
 
-1. Map `structured` → `AttemptResult` (`src/worker/runner.ts:8-18`), lifting `verdict` AS EMITTED (no lowercasing
+1. Map `structured` → `AttemptResult` (`src/worker/runner.ts:8-18`), lifting `verdict` as emitted (no lowercasing
    in the mapping — normalization happens at the validate seam below).
 2. `resultVerdictProblem` — gated on `node.kind === 'agent'`; the top-level verdict (normalized via `domainVerdictOf`,
    `.trim().toLowerCase()`) must be present and a member of
@@ -170,31 +187,33 @@ FAILS a node:
 4. `roleValidationFailure` gathers (2)+(3) (`:1241-1256`); a failure → `revo.ResultInvalid` (`:240,243`), a
    terminal `InvokeRoleFailedResult` (`:128-134`, returned at `:1119-1120`).
 
-`revo.ResultInvalid` is a TERMINAL failure signal — it does NOT re-enter the attempt-retry loop (retries are the
+`revo.ResultInvalid` is a terminal failure signal — it does not re-enter the attempt-retry loop (retries are the
 transient/`needsHuman` machinery's job, see Current Contract). So "a lower tier fires the validate seam more often"
 means "produces more `revo.ResultInvalid` *terminal* failed-nodes," not "triggers more retries." Routing may
 require a minimum tier to keep this failure rate low.
 
 ### Tier-degradation rule for `tool-call` (no silent failure)
 
-A `tool-call` runner's provider may ignore forced `tool_choice` / strict tool schemas, so the engine MUST NOT treat
-a missing `submit_result` call as an immediate hard failure. The degradation order WITHIN a single attempt:
+A `tool-call` runner's provider may ignore forced `tool_choice` or strict tool schemas, so the engine MUST NOT treat
+a missing `submit_result` call as an immediate hard failure. The degradation order within a single attempt:
 
 1. If a `submit_result` tool call arrives, harvest its arguments as `structured` (the `native-schema`-equivalent
    path) and validate.
-2. If NO `submit_result` call arrives, fall back to `prompt-only` extraction of the final text block (the
+2. If no `submit_result` call arrives, fall back to `prompt-only` extraction of the final text block (the
    whole-string-JSON algorithm): parse, lift the `verdict` (engine normalizes via `domainVerdictOf`), validate.
-3. Only if step 2 ALSO yields no valid verdict does the node fail to `revo.ResultInvalid`.
+3. Only if step 2 also yields no valid verdict does the node fail to `revo.ResultInvalid`.
 
 This is the explicit answer to "what happens when forcing isn't honored": a deterministic fall-through to the
 floor, not a silent failure and not an unconditional `revo.ResultInvalid`. The fall-through is per-attempt and
-inside the parser/harvest seam; it does not by itself trigger a retry. (See the known fenced-JSON limitation above:
-step 2 can still fail for providers that emit fenced JSON until the hardening follow-up lands.)
+inside the parser/harvest seam; it does not by itself trigger a retry.
+
+> Informative: per the known fenced-JSON limitation above, step 2 can still fail for providers that emit fenced JSON
+> until the hardening follow-up lands.
 
 ### Shape vs. vocabulary (boundary with #207)
 
-A schema (any tier) guarantees the result's SHAPE — `verdict` is a non-empty string, `output` is present, etc. It
-does NOT guarantee the verdict is a VALID token for the role/template. Vocabulary correctness is a separate check —
+A schema (any tier) guarantees the result's *shape* — `verdict` is a non-empty string, `output` is present, etc. It
+does not guarantee the verdict is a *valid* token for the role/template. Vocabulary correctness is a separate check —
 `resultVerdictProblem`'s membership test against `template.verdicts.domain`
 (`src/pipeline/data-driven-task.workflow.ts:448-450`) — and the broader verdict-vocabulary work is tracked under
 #207. Tiers improve shape compliance; they do not improve vocabulary correctness.

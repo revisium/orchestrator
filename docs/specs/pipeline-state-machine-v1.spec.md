@@ -10,12 +10,14 @@
 This spec defines the versioned pipeline template grammar and the pure state-machine contract executed by the DBOS
 adapter. It covers routing and progress decisions, not runner implementation details or UI rendering.
 
+The key words MUST, MUST NOT, SHOULD, SHOULD NOT, MAY are to be interpreted as in RFC 2119 / BCP 14.
+
 ## Invariants
 
 - Pipelines are data: a versioned graph template stored in a `pipelines.execution_policy_json` payload.
 - `pipeline-core` is pure, deterministic, and I/O-free.
 - DBOS owns live progress and replay; Revisium owns meaning, projections, events, and inbox rows.
-- Role and script identifiers in templates are opaque capability handles. The core does not hardcode role ids.
+- Role and script identifiers in templates are opaque capability handles. The core MUST NOT hardcode role ids.
 - A run pins the template revision at start; later HEAD edits affect only new runs.
 
 ## Template Shape
@@ -36,7 +38,7 @@ type Template = {
 };
 ```
 
-Each node has a stable map key id. Node ids are permanent: do not reuse a removed id for a different meaning.
+Each node has a stable map key id. Node ids are permanent: a removed id MUST NOT be reused for a different meaning.
 
 ## Node Kinds
 
@@ -70,7 +72,7 @@ type EffectNodeFields = {
 
 ## Conditions and Branches
 
-`Condition` is a closed tagged union. Expression strings are forbidden.
+`Condition` is a closed tagged union. Expression strings MUST NOT be used.
 
 ```ts
 type Condition =
@@ -83,13 +85,13 @@ type Condition =
   | { op: 'not'; cond: Condition };
 ```
 
-Branches are ordered, first true wins, and must end with exactly one default branch:
+Branches are ordered, first true wins, and MUST end with exactly one default branch:
 
 ```ts
 type Branch = { when: Condition; goto: string } | { default: string };
 ```
 
-Core verdicts route structurally and must not appear in `verdict.*` guards. Domain verdicts are declared in
+Core verdicts route structurally and MUST NOT appear in `verdict.*` guards. Domain verdicts are declared in
 `template.verdicts.domain` and are opaque labels to the engine.
 
 ## Runner Verdict Vocabulary
@@ -104,7 +106,7 @@ defense-in-depth; it is not a substitute for giving the runner the active domain
 
 ## Failure and Timeout
 
-- Transient runner retry is a DBOS adapter concern, not a template concern. Templates do not declare retry policy;
+- Transient runner retry is a DBOS adapter concern, not a template concern. Templates MUST NOT declare retry policy;
   the adapter pins the resolved policy in the DBOS workflow input before enqueue and retries only eligible physical
   runner attempts while keeping the logical node `stepKey` unchanged.
 - `humanGate.timeout` is optional. If absent, the gate can wait indefinitely.
@@ -117,7 +119,7 @@ defense-in-depth; it is not a substitute for giving the runner the active domain
 
 ## Fork and Join
 
-`parallel` branches are named and enter global node ids. A branch may route only within itself or to the matching
+`parallel` branches are named and enter global node ids. A branch MUST route only within itself or to the matching
 join. `joinMode` is one of:
 
 ```ts
@@ -127,7 +129,7 @@ type JoinMode =
   | { kind: 'quorum'; count: number };
 ```
 
-Merge reducers are `overwrite` or `appendByBranchOrder`. `lastWrite` is rejected because replay order must be
+Merge reducers are `overwrite` or `appendByBranchOrder`. `lastWrite` MUST be rejected because replay order must be
 deterministic.
 
 The adapter records branch arrivals as durable facts and feeds them to the pure core as `joinArrivals`. The core
@@ -162,7 +164,7 @@ type LastResult = {
 
 ## Validation
 
-`validateTemplate(template)` returns all diagnostics from the full validation pass. Diagnostic codes are stable
+`validateTemplate(template)` returns all diagnostics from the full validation pass. Diagnostic codes are a stable
 public contract. Rule groups:
 
 1. Single entry.
@@ -190,13 +192,14 @@ in [run-dataflow-v1.spec.md](./run-dataflow-v1.spec.md).
 
 - Deleting a node, changing a node kind, or changing outgoing topology is breaking.
 - Reusing a deleted id with incompatible meaning is invalid.
-- Display name, prompt, and payload-only changes may be safe when explicitly classified.
-- Any unclassified field/path defaults to breaking with a diagnostic.
+- Display name, prompt, and payload-only changes are classified safe only by an explicit allowlist entry;
+  everything else defaults to breaking with a diagnostic.
 
 v1 reports safe/breaking information but does not migrate live in-flight runs.
 
 ## Changelog
 
+- 2026-06-29: Normative-language / canon-discipline pass; no contract change.
 - 2026-06-27: Clarified that transient runner retry is implemented by the DBOS adapter around physical attempts,
   not by templates or `pipeline-core`.
 - 2026-06-26: Initial spec extracted from the data-driven state-machine ADR, former plan 0015, and

@@ -14,12 +14,14 @@ This spec governs the runner manifest field schema and the two code system-entit
 `StdoutParser` and `PermissionStyle`. It also pins the route-time snapshot that keeps capability resolution
 deterministic across DBOS replay and recovery.
 
-It does NOT govern selection (which runner a role resolves to, execution profiles) or manifest persistence/loading
+It does not govern selection (which runner a role resolves to, execution profiles) or manifest persistence/loading
 — those are the registry decision (#169 / #170 / #186, a future selection ADR). The result-envelope schema and the
 structured-output tiers are in [runner-result-envelope-v1.spec.md](./runner-result-envelope-v1.spec.md); the full
 `capabilities` field list is in [runner-capabilities-v1.spec.md](./runner-capabilities-v1.spec.md).
 
-Paths are `src/...` = the `@revisium/orchestrator` package root.
+The key words MUST, MUST NOT, SHOULD, SHOULD NOT, MAY are to be interpreted as in RFC 2119 / BCP 14.
+
+Paths under `src/...` are relative to the `@revisium/orchestrator` package root.
 
 ## Current Contract
 
@@ -41,7 +43,7 @@ this spec relocates:
   stdin with a trailing `-` terminator (`src/worker/codex-runner.ts:175`, `:541`).
 - **`--allowedTools` is Claude-only and dropped when empty.** Claude pushes the comma-joined flag pair only when
   `role.allowedTools` is non-empty (`args.push('--allowedTools', allowedTools.join(','))`,
-  `src/worker/claude-code-runner.ts:161-162`). Codex has NO `--allowedTools` flag at all — it expresses permission
+  `src/worker/claude-code-runner.ts:161-162`). Codex has no `--allowedTools` flag at all — it expresses permission
   via `--sandbox <enum>` (`src/worker/codex-runner.ts:167-168`), consistent with the PermissionStyle design (Codex =
   `sandbox-enum`, Claude = `tool-allowlist`).
 - **Provider compatibility is a hard throw.** Codex rejects a non-OpenAI-compatible provider via
@@ -68,7 +70,7 @@ that ships today; everything below is the proposed model (ADR-0004 is Status: Dr
 ### Two kinds of identifier
 
 - **Code-referenced ids** — strings naming a code strategy in a closed registry: the `stdoutParser` id and the
-  `permissionStyle` id, referenced as two INDEPENDENT axes (no bundled `family` id). Changing or removing one is a
+  `permissionStyle` id, referenced as two independent axes (no bundled `family` id). Changing or removing one is a
   breaking change to the system-entity contract (see Compatibility).
 - **Pure data** — strings/objects the engine substitutes or compares without dispatching to code: `binary`,
   `argTemplate`, `schemaDelivery`, `promptDelivery`, `kind`, `constraints`, `capabilities`, `timeouts`,
@@ -84,15 +86,21 @@ axes — no bundled `family` id) and fills declarable fields.
 | `id` | string | yes | The runner id used by `role.runner` today (`src/control-plane/definitions.ts:9,112`). Code-referenced key into the registry. |
 | `stdoutParser` | string | yes | Code-referenced id of the StdoutParser strategy (below). Independent of `permissionStyle`. |
 | `permissionStyle` | string | yes | Code-referenced id of the PermissionStyle strategy (below). Independent of `stdoutParser`. |
-| `kind` | enum `cli`\|`api`\|`gateway`\|`deterministic-script` | yes | The transport CLASS (a manifest field, NOT a capability): `cli` spawns a binary, `api` calls a hosted endpoint, `gateway` routes `provider/model` through a provider gateway, `deterministic-script` is the in-process script runner. Data, not a code-dispatch key. |
+| `kind` | enum `cli`\|`api`\|`gateway`\|`deterministic-script` | yes | The transport class (a manifest field, *not* a capability): `cli` spawns a binary, `api` calls a hosted endpoint, `gateway` routes `provider/model` through a provider gateway, `deterministic-script` is the in-process script runner. Data, not a code-dispatch key. |
 | `binary` | string | when `kind=cli` | Executable name or absolute path; feeds `ExecRequest.command` (`src/worker/process-executor.ts:13`). Replaces the literal default `'claude'` in code. |
-| `versionProbe` | object `{ args: string[], parse?: stdoutParserId }` | no | Argv to print a version (e.g. `['--version']`) for `needsLivePreflight`/doctor. **Absent → the version check is SKIPPED (not a failure)**; when `needsLivePreflight: true`, the clean/base preflight (auth + worktree state) still runs — only the binary-version probe is omitted. |
+| `versionProbe` | object `{ args: string[], parse?: stdoutParserId }` | no | Argv to print a version (e.g. `['--version']`) for `needsLivePreflight`/doctor. See the normative rules below the table. |
 | `argTemplate` | string[] | when `kind=cli` | Ordered argv with placeholders, substituted before spawn (see Placeholders). |
 | `schemaDelivery` | enum `inline-flag`\|`file-flag`\|`none` | yes | How the result schema reaches the runner. Claude=`inline-flag` (`src/worker/claude-code-runner.ts:159`), Codex=`file-flag` (`src/worker/codex-runner.ts:161-162`, file written at `:97-102`), OpenCode=`none`. |
 | `promptDelivery` | enum `stdin`\|`stdin-dash`\|`arg` | yes | How the prompt reaches the runner. Claude pipes on stdin (`ExecRequest.input`, `src/worker/claude-code-runner.ts:254`); Codex uses stdin with a trailing `-` argv terminator (`src/worker/codex-runner.ts:175`, `:541`) → `stdin-dash`. |
 | `constraints` | object (see below) | no | Declarative provider/auth requirements. Replaces `requireCompatibleProfile` (`src/worker/codex-runner.ts:179-186`). |
-| `capabilities` | object (see [runner-capabilities-v1.spec.md](./runner-capabilities-v1.spec.md)) | yes | The fields that replace the four hardcoded branch functions plus the structured-output tier. `kind` is NOT under `capabilities`. |
+| `capabilities` | object (see [runner-capabilities-v1.spec.md](./runner-capabilities-v1.spec.md)) | yes | The fields that replace the four hardcoded branch functions plus the structured-output tier. `kind` is *not* under `capabilities`. |
 | `timeouts` | object `{ idleTimeoutMs?: number, wallClockLimitMs?: number }` | no | Runner-level defaults; role `timeoutMs` still overrides per role (`src/control-plane/definitions.ts:18-19`, `src/worker/claude-code-runner.ts:200-204`). Engine defaults remain `DEFAULT_RUNNER_IDLE_TIMEOUT_MS`/`DEFAULT_RUNNER_WALL_CLOCK_LIMIT_MS` (`src/worker/process-executor.ts:32-33`). Timeout policy itself is owned by the [runner contract](../runner-contract.md). |
+
+`versionProbe` rules:
+
+- When `versionProbe` is absent, the engine MUST skip the binary-version check; its absence MUST NOT be a failure.
+- When `versionProbe` is absent and `needsLivePreflight: true`, the engine MUST still run the clean/base preflight
+  (auth + worktree state); only the binary-version probe is omitted.
 
 #### `constraints`
 
@@ -104,7 +112,7 @@ axes — no bundled `family` id) and fills declarable fields.
 #### `RouteRoleBinding` gains snapshot fields (named schema change)
 
 `RouteRoleBinding` today is `{roleId, rowId, modelLevel, runnerId, resolvedRunnerId, runnerSource}`
-(`src/pipeline/route-contract.ts:9-16`). Under this spec it GAINS snapshot fields:
+(`src/pipeline/route-contract.ts:9-16`). Under this spec it gains snapshot fields:
 
 ```ts
 type RouteRoleBinding = {
@@ -114,7 +122,7 @@ type RouteRoleBinding = {
   runnerId: string;
   resolvedRunnerId: string;
   runnerSource: 'playbook' | 'execution-profile';
-  // added by ADR-0004 (the determinism fix, a named schema change — not silently deferred):
+  // added by ADR-0004 (the determinism fix, a named schema change):
   stdoutParserId: string;
   permissionStyleId: string;
   capabilities: RunnerCapabilities;   // the resolved capabilities block
@@ -123,29 +131,32 @@ type RouteRoleBinding = {
 };
 ```
 
+> Informative: this is a named schema change (the ADR-0004 determinism fix), carried in the contract rather than
+> deferred to a later revision.
+
 ### Placeholders
 
 `argTemplate` and `versionProbe.args` use these substitutions, resolved by the engine just before building the
-`ExecRequest`. **Schema placeholders are unified by `schemaDelivery`**: `inline-flag` → only `{schemaInline}` is
+`ExecRequest`. Schema placeholders are unified by `schemaDelivery`: `inline-flag` → only `{schemaInline}` is
 defined; `file-flag` → only `{schemaPath}` is defined; `none` → neither.
 
 | Placeholder | Source | Provenance / omit-if-empty |
 |---|---|---|
 | `{model}` | `ModelProfile.modelId` (`src/control-plane/definitions.ts:47`) | always defined |
 | `{cwd}` | resolved worktree dir (`src/worker/claude-code-runner.ts:209`, `src/worker/codex-runner.ts:515`) | always defined |
-| `{schemaInline}` | the inline JSON-schema STRING (`AGENT_RESULT_SCHEMA` serialized, `src/worker/result-envelope.ts:7-27`), substituted as a flag value (`src/worker/claude-code-runner.ts:159`) | defined only when `schemaDelivery=inline-flag`; otherwise the pair is dropped |
+| `{schemaInline}` | the inline JSON-schema string (`AGENT_RESULT_SCHEMA` serialized, `src/worker/result-envelope.ts:7-27`), substituted as a flag value (`src/worker/claude-code-runner.ts:159`) | defined only when `schemaDelivery=inline-flag`; otherwise the pair is dropped |
 | `{schemaPath}` | path written when `schemaDelivery=file-flag` (`src/worker/codex-runner.ts:97-102`, used at `:161-162`) | defined only when `schemaDelivery=file-flag`; otherwise the pair is dropped |
 | `{allowedTools}` | `role.allowedTools` joined per `permissionStyle` (`src/worker/claude-code-runner.ts:161-163`) | rendered by the PermissionStyle; empty → pair dropped |
-| `{sandbox}` | the `sandbox-enum` level chosen by the PermissionStyle (`src/worker/codex-runner.ts:144-155`) | meaningful only for `sandbox-enum` style; **absent from `argTemplate` when `permissionStyle ≠ sandbox-enum`** (symmetry with the schema-placeholder unification) |
+| `{sandbox}` | the `sandbox-enum` level chosen by the PermissionStyle (`src/worker/codex-runner.ts:144-155`) | meaningful only for `sandbox-enum` style; absent from `argTemplate` when `permissionStyle ≠ sandbox-enum` (symmetry with the schema-placeholder unification) |
 | `{permissionMode}` | `role.permissionMode ?? 'default'` (`src/worker/claude-code-runner.ts:205`) | supplied by the `tool-allowlist` style; omit the pair if the runner has no permission-mode flag |
 
-**Placeholder drop rule.** When a placeholder resolves to empty/undefined, the engine drops the PAIR — the
-immediately preceding flag token AND the placeholder arg — not just the placeholder, so no dangling flag is
-emitted. This generalizes today's behavior where `--allowedTools <value>` is pushed only when the list is non-empty
+**Placeholder drop rule.** When a placeholder resolves to empty or undefined, the engine MUST drop the pair — the
+immediately preceding flag token and the placeholder arg — and MUST NOT emit a dangling flag. This generalizes
+today's behavior where `--allowedTools <value>` is pushed only when the list is non-empty
 (`src/worker/claude-code-runner.ts:161-163`); the same applies to `--json-schema {schemaInline}`,
 `--output-schema {schemaPath}`, and the `--sandbox {sandbox}` pair when `{sandbox}` is undefined.
 
-### StdoutParser contract (CODE system entity)
+### StdoutParser contract (code system entity)
 
 A `StdoutParser` is a pure function the engine selects by the manifest's `stdoutParser` id. It is irreducibly code:
 it walks a vendor-specific event tree. It MUST NOT spawn processes, read files, or call DBOS — that is the runner
@@ -164,12 +175,11 @@ type StdoutParserInput = {
 **`exitCode` states** (the `ExecResult.code: number | null` field is typed at `src/worker/process-executor.ts:53`
 and populated from the process `close` event at `:281`, where Node delivers `null` on signal kill):
 
-- `0` — normal exit. The parser proceeds to terminal reduction; `status.kind` depends on harvested content (`'ok'`
-  on a clean envelope, `'needsHuman'` on a parser-detectable block, `'failed'` if the stream reports a turn failure
-  even at exit 0).
-- non-zero — error exit. `status.kind: 'failed'` unless the stream/stderr matches a `needsHuman` predicate (e.g.
-  Codex permission-blocked), in which case `'needsHuman'`.
-- `null` — killed by signal (no clean exit code). Treated as `status.kind: 'failed'` with a signal/abort reason.
+- `0` — normal exit. The parser proceeds to terminal reduction. `status.kind` MUST be `'ok'` on a clean envelope,
+  `'needsHuman'` on a parser-detectable block, or `'failed'` if the stream reports a turn failure even at exit 0.
+- non-zero — error exit. `status.kind` MUST be `'failed'` unless the stream/stderr matches a `needsHuman` predicate
+  (e.g. Codex permission-blocked), in which case it MUST be `'needsHuman'`.
+- `null` — killed by signal (no clean exit code). `status.kind` MUST be `'failed'` with a signal/abort reason.
 
 Live parsers may also consume the line stream incrementally for observability (Claude buffers JSONL lines at
 `src/worker/claude-code-runner.ts:232-273`; Codex uses a streaming collector at `src/worker/codex-runner.ts:378-417`).
@@ -206,10 +216,13 @@ Mapping to today's code:
   body is carried by `structured`, not this status — the engine already distinguishes a transient runner failure
   from a deliberate block (`src/pipeline/data-driven-task.workflow.ts:369-409`).
 
-Live parser ids: `stream-json` (Claude), `jsonl-exec` (Codex). Anticipated: `parts-stream` (OpenCode), `openai-api`,
-`acp` — `(unverified)` against orchestrator source today (no `opencode`/`acp` references exist).
+The normative live parser ids are `stream-json` (Claude) and `jsonl-exec` (Codex).
 
-### PermissionStyle contract (CODE system entity, DATA-driven)
+> Informative: anticipated parser ids `parts-stream` (OpenCode), `openai-api`, and `acp` are unverified against
+> orchestrator source today (no `opencode`/`acp` references exist). They are not part of the normative id set until
+> a corresponding parser ships.
+
+### PermissionStyle contract (code system entity, data-driven)
 
 A `PermissionStyle` maps portable `role.rights` + `role.allowedTools` (`src/control-plane/definitions.ts:10,17`) to
 a runner's native permission expression. The code is a tiny per-style interpreter; the mapping table is data the
@@ -245,7 +258,7 @@ manifest/style declares for that fragment** — for `--allowedTools` (Claude-onl
   (`src/worker/claude-code-runner.ts:161-163`); empty list → omit the flag pair (most restrictive). Supplies
   `{permissionMode}` as a scalar from `role.permissionMode ?? 'default'` (`src/worker/claude-code-runner.ts:205`).
   No rights→level collapse: the allowlist *is* the expression.
-- **`sandbox-enum` (Codex).** Collapses to `read-only` | `workspace-write` via this DATA table (verbatim from
+- **`sandbox-enum` (Codex).** Collapses to `read-only` | `workspace-write` via this data table (verbatim from
   `src/worker/codex-runner.ts:114-133`, expressed declaratively):
 
   ```jsonc
@@ -278,40 +291,40 @@ manifest/style declares for that fragment** — for `--allowedTools` (Claude-onl
   `{allowedTools}`/`{sandbox}`, delivers the schema per `schemaDelivery` and the prompt per `promptDelivery`, then
   builds an `ExecRequest` (`src/worker/process-executor.ts:12-24`) — unchanged.
 - **Parse-response:** the engine selects the manifest's `stdoutParser` and maps its output to `AttemptResult`
-  (`src/worker/runner.ts:8-18`), lifting the envelope `verdict` AS EMITTED; the engine normalizes it later via
+  (`src/worker/runner.ts:8-18`), lifting the envelope `verdict` as emitted; the engine normalizes it later via
   `domainVerdictOf` per the result-envelope spec.
 - The `switch (role.runner)` factory (`src/worker/runner-dispatch.ts:6-22`) becomes a registry lookup keyed by
   `runner.id` → manifest → `(stdoutParser, permissionStyle)` pair.
 
 ### Replay model (which fields are pinned, and why)
 
-The resolved capability set is **snapshotted into `RouteRoleBinding` (inside `RouteDecision`) at route time, pinned
-into the DBOS workflow args, and read FROM THAT PIN on replay**. The route already rides this durability seam:
+The resolved capability set MUST be snapshotted into `RouteRoleBinding` (inside `RouteDecision`) at route time,
+pinned into the DBOS workflow args, and read from that pin on replay. The route already rides this durability seam:
 `DataDrivenTaskOpts.route: RouteDecision` is a DBOS workflow argument (`src/pipeline/data-driven-task.workflow.ts:94`),
 and the sibling pinned fields are documented as "a DBOS workflow arg ⇒ durable on recovery" / "pinned before DBOS
-workflow enqueue so recovery cannot branch on changed process env" (`:92-98`). The manifest registry is **NEVER
-consulted during workflow execution or DBOS recovery**.
+workflow enqueue so recovery cannot branch on changed process env" (`:92-98`). The manifest registry MUST NOT be
+consulted during workflow execution or DBOS recovery.
 
-Be exact about what is pinned and why:
+What is pinned, and why:
 
-- **Capability fields consumed in the DETERMINISTIC workflow body** — `needsLivePreflight`, `performsMerge`,
+- **Capability fields consumed in the deterministic workflow body** — `needsLivePreflight`, `performsMerge`,
   `producesWorktreeChanges` — MUST be pinned. The workflow body re-runs on replay and would otherwise recompute
   them from a mutable registry, branching differently than the original run.
 - **`stdoutParser` / `permissionStyle` ids** are consumed inside the `runStep` effect (a memoized DBOS step). On a
-  normal replay the recorded step result is replayed and the parser does NOT re-run; but on **crash-recovery
-  RE-EXECUTION** of an incomplete step the same ids must be used, so they are pinned too.
-- **`manifestDigest`** is AUDIT / mismatch-detection ONLY: a stable hash over the canonicalized manifest. The
+  normal replay the recorded step result is replayed and the parser does not re-run; but on crash-recovery
+  re-execution of an incomplete step the same ids must be used, so they MUST be pinned too.
+- **`manifestDigest`** is audit / mismatch-detection only: a stable hash over the canonicalized manifest. The
   snapshot is self-contained (it already carries the full ids + `capabilities` block), so replay/recovery reads
   everything from the snapshot and MUST NOT do a content-address lookup-by-digest — that would reopen the
   determinism blocker. A later digest mismatch is an operator/audit signal, not a replay input.
 
-Invariant: a manifest-registry change MID-RUN must not alter `producesWorktreeChanges` / `performsMerge` /
+Invariant: a manifest-registry change mid-run MUST NOT alter `producesWorktreeChanges` / `performsMerge` /
 `needsLivePreflight` / the `stdoutParser` id / the `permissionStyle` id / the structured-output tier for an
 in-flight run. A run started against digest `D` continues, replays, and recovers against `D` — even after the
-operator edits or replaces the manifest. (Whether a NEW run picks up the edited manifest is a selection concern,
+operator edits or replaces the manifest. (Whether a new run picks up the edited manifest is a selection concern,
 out of scope — #186.)
 
-The snapshot makes the routing DECISION deterministic; it does NOT make the external CLI's behavior deterministic.
+The snapshot makes the routing *decision* deterministic; it does not make the external CLI's behavior deterministic.
 CLI version, locale, and process env are not pinned, so the standard DBOS external-effect caveat applies — a step
 re-executed after the external world changed can diverge — and is explicitly out of this ADR's scope.
 
@@ -322,11 +335,11 @@ re-executed after the external world changed can diverge — and is explicitly o
   today's `RUNNER_NOT_IMPLEMENTED` throw at `src/worker/runner-dispatch.ts:12,16,19`, surfaced at manifest-load
   time).
 - **Acceptance: manifest-only runner addition (zero code).** A same-`(parser, style)`-pair runner is added by a
-  manifest-only change with ZERO code edits, proven by a test: a new manifest reusing an existing pair routes,
+  manifest-only change with zero code edits, proven by a test: a new manifest reusing an existing pair routes,
   builds args, and parses output through the engine with no source diff.
 - **Golden-output immutability test per code-strategy id.** Each `stdoutParser` and each `permissionStyle` id has a
   golden-output test pinning its observable behavior (a fixed input stream / rights set → a fixed normalized
-  result / fragment set). This ENFORCES the versioning rule (a behavior change → a NEW id) as a test, not just a
+  result / fragment set). This enforces the versioning rule (a behavior change → a new id) as a test, not just a
   documented policy: any behavior change to an existing id breaks its golden test, forcing the author to mint a new
   id instead of an in-place swap.
 - **Placeholder drop coverage.** A test asserts that an empty `{allowedTools}`, an undefined `{sandbox}` (style ≠
@@ -339,19 +352,19 @@ re-executed after the external world changed can diverge — and is explicitly o
 
 ## Compatibility
 
-The system-entity ids (`stdoutParser`, `permissionStyle`) are a PUBLIC, versioned contract once manifests reference
+The system-entity ids (`stdoutParser`, `permissionStyle`) are a public, versioned contract once manifests reference
 them. Versioning policy:
 
 - **Ids are immutable public contracts.** An id names a fixed behavior; manifests in the wild depend on it.
-- **A behavior-CHANGING parser/style ships as a NEW id**, never an in-place behavior swap — e.g. a stream-format
+- **A behavior-changing parser/style MUST ship as a new id**, never an in-place behavior swap — e.g. a stream-format
   change is `stream-json` → `stream-json-v2`, and manifests migrate deliberately. This keeps an in-flight run's
   pinned id meaningful (see Replay model). Enforced by the golden-output test above.
-- **Additive, backward-compatible data-table changes do NOT need a new id** — e.g. adding a `rights → level` row to
+- **Additive, backward-compatible data-table changes do not need a new id** — e.g. adding a `rights → level` row to
   the `sandbox-enum` table, or a new recognized read-only label, stays on the same id.
 - **Adding a brand-new id is backward-compatible.**
-- **Renaming or removing an id is breaking**: every manifest referencing it must be migrated in the same change.
+- **Renaming or removing an id is breaking**: every manifest referencing it MUST be migrated in the same change.
   Treat like a plugin API.
-- A manifest referencing an unknown id is a startup/validation error, not a silent fallback.
+- A manifest referencing an unknown id MUST be a startup/validation error, not a silent fallback.
 
 Manifest storage/loading is deferred to the registry decision (#186); this spec defines field shape, not
 persistence. This spec refines the [runner contract](../runner-contract.md) (which still owns the runner boundary,

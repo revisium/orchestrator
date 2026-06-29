@@ -11,18 +11,20 @@
 ## Scope
 
 This spec enumerates every field of a manifest's `capabilities` block — type, meaning, and the exact hardcoded
-behavior it replaces. It is the table that makes the audit's runner-id hardcode theme resolvable as config.
+behavior it replaces.
 
-It does NOT govern selection (which runner satisfies a run's requirements) — that primary consumer is #170. The
+It does not govern selection (which runner satisfies a run's requirements) — that primary consumer is #170. The
 manifest envelope and the StdoutParser/PermissionStyle contracts are in
 [runner-manifest-v1.spec.md](./runner-manifest-v1.spec.md); the structured-output tier is in
 [runner-result-envelope-v1.spec.md](./runner-result-envelope-v1.spec.md).
 
-`kind` (`cli` | `api` | `gateway` | `deterministic-script`) is NOT a capability — it is the transport CLASS and
-lives as a top-level MANIFEST field. It is data, not a code-dispatch key, and appears exactly once, on the
+The key words MUST, MUST NOT, SHOULD, SHOULD NOT, MAY are to be interpreted as in RFC 2119 / BCP 14.
+
+`kind` (`cli` | `api` | `gateway` | `deterministic-script`) is not a capability — it is the transport class and
+lives as a top-level manifest field. It is data, not a code-dispatch key, and appears exactly once, on the
 manifest, never under `capabilities`.
 
-Paths are `src/...` = the `@revisium/orchestrator` package root.
+Paths under `src/...` are relative to the `@revisium/orchestrator` package root.
 
 ## Current Contract
 
@@ -38,7 +40,7 @@ Today there is no `capabilities` block. The same decisions live as hardcoded bra
 - `runnerProducesWorktreeChanges(runnerId)` returns `true` for `'claude-code'`, `'codex'`
   (`src/pipeline/data-driven-task.workflow.ts:358-360`); consumed at `:1128` (change capture).
 - `dispatchRunnerId(runnerId)` switch (`src/pipeline/route-contract.ts:110-114`) consumed at
-  `src/pipeline/pipeline.service.ts:470`, AND `switch (role.runner)` (`src/worker/runner-dispatch.ts:8-20`) — two
+  `src/pipeline/pipeline.service.ts:470`, and `switch (role.runner)` (`src/worker/runner-dispatch.ts:8-20`) — two
   surfaces of the same dispatch decision.
 - `requireCompatibleProfile(profile)` throws for a non-OpenAI-compatible provider
   (`src/worker/codex-runner.ts:179-186`, `isOpenAiCompatibleProvider` at `:109-112`).
@@ -56,11 +58,11 @@ the `capabilities` block below is the proposal (ADR-0004 is Status: Draft).
 
 | Field | Type | Meaning |
 |---|---|---|
-| `provider` | string | Provider family the runner targets (e.g. `anthropic`, `openai-compatible`, `provider-gateway`). DATA; recorded in provenance. Keep concrete account/model names out (canonical-method discipline). |
+| `provider` | string | Provider family the runner targets (e.g. `anthropic`, `openai-compatible`, `provider-gateway`). Data; recorded in provenance. Keep concrete account/model names out (canonical-method discipline). |
 | `authMode` | enum `cli-session`\|`api-key`\|`gateway-token`\|`none` | How the runner authenticates. Feeds `needsLivePreflight` doctor checks. |
 | `privacyClass` | enum `external`\|`self-hosted`\|`local` | Data-egress class of the provider. Lets routing/profile policy exclude external providers for sensitive runs. Consumed by selection (#170), not by this ADR. |
 | `supportsWorkspaceWrite` | boolean | Whether the runner can write the worktree at all. Distinct from per-role permission: a read-only role on a write-capable runner is fine. Relates to Codex `sandbox-enum` (`src/worker/codex-runner.ts:144-155`). |
-| `supportsStructuredOutput` | enum `native-schema`\|`tool-call`\|`prompt-only` | The structured-output TIER (not a boolean). Defined in [runner-result-envelope-v1.spec.md](./runner-result-envelope-v1.spec.md). Routing may require a minimum tier. |
+| `supportsStructuredOutput` | enum `native-schema`\|`tool-call`\|`prompt-only` | The structured-output tier (not a boolean). Defined in [runner-result-envelope-v1.spec.md](./runner-result-envelope-v1.spec.md). Routing may require a minimum tier. |
 | `needsLivePreflight` | boolean | Whether the runner requires a live auth/binary/reachability probe before dispatch. |
 | `performsMerge` | boolean | Whether the runner mechanically performs the integrate/merge (real integrator vs. pure stub). |
 | `producesWorktreeChanges` | boolean | Whether a successful run is expected to leave file changes in the worktree (so the engine captures a `change` artifact). |
@@ -72,7 +74,7 @@ the `capabilities` block below is the proposal (ADR-0004 is Status: Draft).
 | `needsLivePreflight` | `runnerNeedsLivePreflight(runnerId)` (`src/pipeline/route-contract.ts:116-118`) | `true` for `claude-code`, `codex`, `revo-integrator`, `revo-merger`. Consumed at `src/pipeline/data-driven-task.workflow.ts:772`. |
 | `performsMerge` | `runnerUsesRealIntegrator(runnerId)` (`src/pipeline/route-contract.ts:120-122`) | `true` for `revo-integrator`, `revo-merger`. Consumed at `src/pipeline/data-driven-task.workflow.ts:832,1383`. |
 | `producesWorktreeChanges` | `runnerProducesWorktreeChanges(runnerId)` (`src/pipeline/data-driven-task.workflow.ts:358-360`) | `true` for `claude-code`, `codex`. Consumed at `:1128` (change capture). |
-| `stdoutParser` + `permissionStyle` (manifest ids, not under `capabilities`) → registry lookup | `dispatchRunnerId(runnerId)` switch (`src/pipeline/route-contract.ts:110-114`) consumed at `src/pipeline/pipeline.service.ts:470`, AND `switch (role.runner)` (`src/worker/runner-dispatch.ts:8-20`) | `stub-agent`→`script`; `claude-code`/`codex`/`script` pass through; `revo-*`→`script`; else identity. After: resolve the manifest by `runner.id`, dispatch by its `(stdoutParser, permissionStyle)` pair. |
+| `stdoutParser` + `permissionStyle` (manifest ids, not under `capabilities`) → registry lookup | `dispatchRunnerId(runnerId)` switch (`src/pipeline/route-contract.ts:110-114`) consumed at `src/pipeline/pipeline.service.ts:470`, and `switch (role.runner)` (`src/worker/runner-dispatch.ts:8-20`) | `stub-agent`→`script`; `claude-code`/`codex`/`script` pass through; `revo-*`→`script`; else identity. After: resolve the manifest by `runner.id`, dispatch by its `(stdoutParser, permissionStyle)` pair. |
 | `constraints.allowedProviders` (manifest, see manifest spec) | `requireCompatibleProfile(profile)` throw (`src/worker/codex-runner.ts:179-186`, `isOpenAiCompatibleProvider` at `:109-112`) | Codex rejects a non-OpenAI-compatible provider. After: declarative provider match; a mismatch is a typed precondition failure routed to a lesson, not a hard throw inside the adapter. |
 | default-runner config id | literal `'claude-code'` default in `loadRole` (`src/control-plane/definitions.ts:112`) | A role row with no `runner_id`/`runner` defaults to `claude-code`. After: the default runner id is named config, not a literal in `loadRole`. |
 
@@ -94,15 +96,15 @@ collapse into a single registry lookup keyed by `runner.id` → manifest → `(s
 
 ## Compatibility
 
-`capabilities` is additive manifest data; adding a new capability field is backward-compatible as long as the
-engine defaults a missing field conservatively (e.g. `producesWorktreeChanges: false`). The capability vocabulary
-is a stable contract its primary consumer (#170 selection) reads; renaming or removing a field is breaking. This
-spec refines the [runner contract](../runner-contract.md) without contradicting it.
+`capabilities` is additive manifest data. Adding a new capability field is backward-compatible, and the engine
+MUST default a missing capability field conservatively (e.g. `producesWorktreeChanges: false`). The capability
+vocabulary is a stable contract its primary consumer (#170 selection) reads; renaming or removing a field is a
+breaking change. This spec refines the [runner contract](../runner-contract.md) without contradicting it.
 
 ## Examples
 
 Grounded in the two live adapters. These are the `capabilities` objects only; `kind` is a sibling manifest field
-(shown in the comment), NOT a capability.
+(shown in the comment), not a capability.
 
 ### claude-code (`kind: "cli"` on the manifest)
 
@@ -142,20 +144,22 @@ Grounded in the two live adapters. These are the `capabilities` objects only; `k
   "authMode": "gateway-token",
   "privacyClass": "external",
   "supportsWorkspaceWrite": true,
-  "supportsStructuredOutput": "prompt-only",      // ONLY "no --json-schema flag" is proven; tool-call UNVERIFIED
+  "supportsStructuredOutput": "prompt-only",      // only "no --json-schema flag" is proven; tool-call unverified
   "needsLivePreflight": true,
   "performsMerge": false,
   "producesWorktreeChanges": true
 }
 ```
 
-`(unverified)` — no `opencode`/`acp` code exists in the orchestrator today; values are from a live CLI probe
-(2026-06-29: `opencode run --format json`, no schema flag; `opencode models` lists `provider/model`; a session
-model carries `providerID`/`modelID`/`tokens{input,output,reasoning,cache}`/`cost`). Only "no schema flag" is
-proven; OpenCode is classified `prompt-only` until tool-call support (forced `tool_choice` / a
-`submit_result`-style tool) is verified by a live probe — it is NOT asserted to be `tool-call` today. If a probe
-later confirms tool support, the tier is promoted to `tool-call`, which degrades to the `prompt-only` floor per
+OpenCode is classified `prompt-only` until tool-call support (forced `tool_choice` / a `submit_result`-style tool)
+is verified by a live probe; it is not asserted to be `tool-call` today. If a probe later confirms tool support,
+the tier is promoted to `tool-call`, which degrades to the `prompt-only` floor per
 [runner-result-envelope-v1.spec.md](./runner-result-envelope-v1.spec.md).
+
+> Informative: no `opencode`/`acp` code exists in the orchestrator today, so these values are unverified against
+> source. They come from a live CLI probe (2026-06-29: `opencode run --format json`, no schema flag; `opencode
+> models` lists `provider/model`; a session model carries
+> `providerID`/`modelID`/`tokens{input,output,reasoning,cache}`/`cost`). Only "no schema flag" is proven.
 
 ### script / stub-agent (deterministic; `kind: "deterministic-script"` on the manifest)
 
@@ -167,7 +171,7 @@ later confirms tool support, the tier is promoted to `tool-call`, which degrades
   "supportsWorkspaceWrite": true,                 // the real integrator writes git/gh
   "supportsStructuredOutput": "native-schema",    // it emits a typed result directly
   "needsLivePreflight": false,                    // stub path; revo-integrator/merger set it true
-  "performsMerge": false,                         // true ONLY for revo-integrator / revo-merger
+  "performsMerge": false,                         // true only for revo-integrator / revo-merger
   "producesWorktreeChanges": false                // integrator produces a PR, not worktree edits
 }
 ```

@@ -3,6 +3,7 @@
 - **Status:** Accepted
 - **Decision date:** 2026-05
 - **Supersedes:** the earlier hand-rolled loop runtime
+- **Amended-by:** [ADR-0002](./0002-data-driven-pipeline-state-machine.md) (data-driven pipeline state machine)
 - **Specs:** [pipeline state machine](../specs/pipeline-state-machine-v1.spec.md),
   [human gates](../specs/human-gates-v1.spec.md)
 
@@ -29,8 +30,8 @@ CLI lifecycle commands. The host talks to Revisium for meaning and projections, 
 Revisium remains the source of truth for meaning: roles, playbooks, pipeline definitions, inbox rows, events,
 costs, and domain data. DBOS remains the source of truth for progress.
 
-The current pipeline engine is data-driven. ADR-0002 records that follow-up decision and amends the original
-short-lived MVP choice to prove DBOS with a coded workflow.
+The original choice proved DBOS with a short-lived MVP coded workflow. The current pipeline engine is data-driven;
+ADR-0002 records that amendment.
 
 ## Examples
 

@@ -7,11 +7,13 @@
 ## Scope
 
 The GraphQL admin API is a local NestJS/Yoga front door for UI and scripts. It delegates to feature API services
-over the same product logic as MCP. Resolvers and feature services must not read Revisium or DBOS internal tables
+over the same product logic as MCP. Resolvers and feature services MUST NOT read Revisium or DBOS internal tables
 directly.
 
 This spec defines the public GraphQL contract for the admin API. It does not define the MCP protocol. MCP tools
 mirror many product verbs, but their wire contract lives in `src/mcp/mcp-tools.ts`.
+
+The key words MUST, MUST NOT, SHOULD, SHOULD NOT, MAY are to be interpreted as in RFC 2119 / BCP 14.
 
 ## Transport
 
@@ -22,19 +24,21 @@ mirror many product verbs, but their wire contract lives in `src/mcp/mcp-tools.t
 - Port: `REVO_GRAPHQL_PORT`, otherwise the default resolved by `resolveDefaultGraphqlPort()`.
 - WebSocket subscriptions are enabled by the host GraphQL WebSocket bridge.
 - GraphQL operation metrics are recorded at the Yoga plugin boundary.
-- Product validation and domain conflicts must be returned as stable GraphQL errors with `extensions.code`.
+- Product validation and domain conflicts MUST be returned as stable GraphQL errors with `extensions.code`.
 
 ## Shape Principles
 
-- Query roots are nouns with ids, list roots, or unscoped operations.
-- Anything that requires a `runId` is a field on `Run`.
+These are the structural rules of the contract; each is normative as marked.
+
+- Query roots MUST be nouns with ids, list roots, or unscoped operations.
+- Anything that requires a `runId` MUST be a field on `Run`.
 - A run screen uses one `run(id)` selection for workflow, events, inbox, attempts, agent observability, cost,
   usage, and progress.
 - Domain types use clean names such as `Run`, `InboxItem`, and `WorkflowNode`.
-- Use Relay-style connections for pageable collections.
+- Pageable collections MUST use Relay-style connections.
 - Use typed objects where the structure is known and backed by product data.
-- Keep `JSON` only for truly open or product-defined payloads.
-- Use enums for closed sets only. Open vocabularies such as `RunEvent.type` stay strings.
+- `JSON` MUST be used only for truly open or product-defined payloads.
+- Enums MUST be used for closed sets only. Open vocabularies such as `RunEvent.type` stay strings.
 
 ## Query Roots
 
@@ -64,7 +68,7 @@ type Query {
 }
 ```
 
-The public query root must not expose run-scoped facet operations. These legacy root names are reserved for
+The public query root MUST NOT expose run-scoped facet operations. These legacy root names are reserved for
 removal or rejection in the public contract: `runWorkflow`, `runDigest`, `runProgress`, `runEvents`,
 `runAttempts`, `runAgentActivity`, `runAgentAttempts`, `runAgentLog`, `pendingDecisions`, and `gateRisk`.
 
@@ -156,7 +160,7 @@ type RunAgent {
 - Persisted accounting belongs to `RunAttempt`.
 - Live process state belongs to `RunAgent`.
 - `RunEvent` is the immutable event log. `RunActivity` is a derived human-readable feed.
-- Overlapping aggregate projections are not part of the public run contract when equivalent graph fields exist.
+- Overlapping aggregate projections MUST NOT be part of the public run contract when equivalent graph fields exist.
 
 ## Mutations
 
@@ -178,19 +182,23 @@ type Mutation {
 Canceling a terminal run returns the run. Continuation after a human gate or question is driven by inbox
 resolution; the public contract does not define a separate resume mutation.
 
-Mutation resolvers must enforce the auth/principal seam before the API can bind outside loopback.
+Mutation resolvers MUST enforce the auth/principal seam before the API can bind outside loopback.
 
 `CreateRunInput` accepts optional `issueRef: IssueRefInput` traceability metadata with shape
-`{ repo: String!, number: positive Int!, url: String! }`. The canonical value is stored in public run params as
-`params.issueRef`; if `CreateRunInput.issueRef` and `CreateRunInput.params.issueRef` are both present and differ,
-the mutation rejects the input deterministically. `Run.issueRef`, run digest/read projections, and PR readiness
-results project only this structured `IssueRefModel` metadata, not arbitrary run params.
+`{ repo: String!, number: positive Int!, url: String! }`. The reconciliation rules:
+
+- The canonical value is stored in public run params as `params.issueRef`.
+- If `CreateRunInput.issueRef` and `CreateRunInput.params.issueRef` are both present and differ, the mutation MUST
+  reject the input deterministically.
+- `Run.issueRef`, run digest/read projections, and PR readiness results project only this structured
+  `IssueRefModel` metadata.
+- These projections MUST NOT project arbitrary run params.
 
 `PrReadinessInput` also accepts optional `issueRef` with the same shape. For issue-bound runs, readiness reports a
-human-decision item when branch/title linkage is missing; the link policy is reference-only and must not emit
+human-decision item when branch/title linkage is missing. The link policy is reference-only: it MUST NOT emit
 closing keywords such as `Closes`, `Fixes`, or `Resolves`. Issue closure remains a manual/out-of-band action; this
-API must not call issue-close endpoints. Issue-bound PR titles and commits may include a non-closing `#<number>`
-same-repo reference or `owner/repo#<number>` cross-repo reference, and PR bodies may remain empty for compatibility
+API MUST NOT call issue-close endpoints. Issue-bound PR titles and commits MAY include a non-closing `#<number>`
+same-repo reference or `owner/repo#<number>` cross-repo reference, and PR bodies MAY remain empty for compatibility
 with the existing publication flow.
 
 ## Subscriptions
@@ -264,17 +272,17 @@ enum RunChangeKind {
 }
 ```
 
-`RunEvent.type` remains `String!` because event types are playbook-extensible. A GraphQL enum must not reject
+`RunEvent.type` remains `String!` because event types are playbook-extensible. A GraphQL enum MUST NOT reject
 unknown event types.
 
-Status normalization happens at the API boundary. Internal workflow or storage vocabulary must not leak if the
+Status normalization happens at the API boundary. Internal workflow or storage vocabulary MUST NOT leak when the
 public enum has a more precise UI-facing value.
 
 ## Compatibility And Removal Policy
 
-Compatibility phases may keep deprecated aliases while consumers move to the graph-shaped selection, but the
-target public contract is the graph above. Deprecated aliases must point at the same source-of-truth paths as the
-graph fields and must not introduce second read windows for money, inbox, progress, or activity.
+Compatibility phases MAY keep deprecated aliases while consumers move to the graph-shaped selection, but the
+target public contract is the graph above. Deprecated aliases MUST point at the same source-of-truth paths as the
+graph fields and MUST NOT introduce second read windows for money, inbox, progress, or activity.
 
 Removal order:
 
@@ -287,21 +295,22 @@ Removal order:
 ## Performance
 
 This contract states graph shape, ownership, and source-of-truth rules. It does not guarantee N+1 elimination or
-particular batching mechanics. Implementations should bound list fan-out and add batching in feature services
+particular batching mechanics. Implementations SHOULD bound list fan-out and add batching in feature services
 where needed.
 
 ## Validation
 
 - GraphQL schema drift tests guard intentional contract changes.
-- Host e2e coverage must include one read path, one sanctioned write, and one `graphql-ws` subscription triggered
+- Host e2e coverage MUST include one read path, one sanctioned write, and one `graphql-ws` subscription triggered
   by that write.
-- CLI, MCP, DBOS, and GraphQL tests must prove resolvers delegate to product feature services instead of forking
+- CLI, MCP, DBOS, and GraphQL tests MUST prove resolvers delegate to product feature services instead of forking
   product logic.
-- Contract tests must cover `Run.usage` deriving from `Run.cost`, inbox/gate status deriving from inbox row
+- Contract tests MUST cover `Run.usage` deriving from `Run.cost`, inbox/gate status deriving from inbox row
   status, lifecycle mutation idempotency, and stable `extensions.code` errors.
 
 ## Changelog
 
+- 2026-06-29: Normative-language / canon-discipline pass; no contract change.
 - 2026-06-27: Added issueRef create-run, Run projection, and PR readiness linkage contract.
 - 2026-06-26: Erratum: explicitly added `runAttempts` to the legacy run-scoped root reserved/removal list,
   backfilling a previous omission without changing the accepted graph-shaped target contract.
