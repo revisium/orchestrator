@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  agentResultSchema,
+  structuredResultNote,
   agentResultFromStructured,
   extractTerminalResult,
   parseTransportEnvelope,
@@ -163,4 +165,51 @@ test('normalizeNextSteps: throws when input is absent', () => {
     () => normalizeNextSteps([{ role: 'developer', kind: 'implement' }], BASE_STEP),
     /nextSteps\[0\] missing required "input"/,
   );
+});
+
+// ─── agentResultSchema — enum strengthening ───────────────────────────────────
+
+test('agentResultSchema: with domain — verdict has enum equal to domain', () => {
+  const domain = ['approved', 'blocker'];
+  const schema = JSON.parse(agentResultSchema(domain)) as Record<string, unknown>;
+  const verdictProp = (schema.properties as Record<string, unknown>).verdict as Record<string, unknown>;
+  assert.deepEqual(verdictProp.enum, domain);
+});
+
+test('agentResultSchema: with single-element domain — verdict has single-value enum', () => {
+  const schema = JSON.parse(agentResultSchema(['approved'])) as Record<string, unknown>;
+  const verdictProp = (schema.properties as Record<string, unknown>).verdict as Record<string, unknown>;
+  assert.deepEqual(verdictProp.enum, ['approved']);
+});
+
+test('agentResultSchema: without domain — no enum, description mentions fallback tokens', () => {
+  const schema = JSON.parse(agentResultSchema()) as Record<string, unknown>;
+  const verdictProp = (schema.properties as Record<string, unknown>).verdict as Record<string, unknown>;
+  assert.equal('enum' in verdictProp, false);
+  const desc = verdictProp.description as string;
+  assert.ok(desc.includes('approved'), 'fallback token approved in description');
+  assert.ok(desc.includes('blocker'), 'fallback token blocker in description');
+  assert.ok(desc.includes('changes_requested'), 'fallback token changes_requested in description');
+});
+
+test('agentResultSchema: empty array treated as no domain — no enum', () => {
+  const schema = JSON.parse(agentResultSchema([])) as Record<string, unknown>;
+  const verdictProp = (schema.properties as Record<string, unknown>).verdict as Record<string, unknown>;
+  assert.equal('enum' in verdictProp, false);
+});
+
+// ─── structuredResultNote — domain tokens in prose ───────────────────────────
+
+test('structuredResultNote: with domain — lists domain tokens', () => {
+  const note = structuredResultNote(['approved', 'blocker']);
+  assert.ok(note.includes('approved'), 'note includes approved');
+  assert.ok(note.includes('blocker'), 'note includes blocker');
+  assert.ok(!note.includes('changes_requested'), 'note does not include non-domain token');
+});
+
+test('structuredResultNote: without domain — lists fallback tokens', () => {
+  const note = structuredResultNote();
+  assert.ok(note.includes('approved'));
+  assert.ok(note.includes('changes_requested'));
+  assert.ok(note.includes('blocker'));
 });

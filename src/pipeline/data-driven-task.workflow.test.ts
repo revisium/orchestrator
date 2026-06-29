@@ -12,7 +12,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeDataDrivenTask, resolveRunnerTransientRetryPolicy, type DataDrivenProgressCursor, type DataDrivenTaskDeps, type GateSummary, type RunnerTransientRetryPolicy } from './data-driven-task.workflow.js';
 import { templateFromExecutionPolicy } from './data-driven-template.js';
-import { featureDevelopment, featureDevelopmentPrReview, confirmMergeFlow } from '../pipeline-core/kit/fixtures.js';
+import { featureDevelopment, featureDevelopmentPrReview, confirmMergeFlow, localChange } from '../pipeline-core/kit/fixtures.js';
 import type { Template } from '../pipeline-core/index.js';
 import type { AttemptResult } from '../worker/runner.js';
 import type { AppendEventInput } from '../run/append-event.js';
@@ -1468,4 +1468,128 @@ test('confirmMerge: not merged (block) → blocked terminal, worktree KEPT', asy
   assert.equal(rec.confirmMergeCalls, 1, 'confirmMerge ran once');
   assert.ok(rec.events.includes('worktree_create:pipeline'));
   assert.ok(!rec.events.includes('worktree_release:pipeline'), 'worktree KEPT on blocked (rework / manual merge)');
+});
+
+// ─── acceptedVerdicts domain forwarding (issue #207) ─────────────────────────
+
+test('domain forwarding: local-change passes [approved] as acceptedVerdicts to every agent step', async () => {
+  const lc = localChange();
+  const capturedByStep: Record<string, readonly string[] | undefined> = {};
+
+  const route: RouteDecision = {
+    playbookId: 'pb',
+    pipelineId: 'local-change',
+    pipelineRowId: 'row',
+    source: 'explicit',
+    roles: ['orchestrator', 'developer'],
+    requiredRoles: ['orchestrator', 'developer'],
+    optionalRoles: [],
+    routeGates: [],
+    executionPolicy: {},
+    executionProfile: { id: 'test', runnerOverrides: {} },
+    roleBindings: [
+      binding('orchestrator'),
+      binding('developer'),
+    ],
+    params: {},
+  };
+
+  const runStepFn = async (
+    _runId: string,
+    _role: string,
+    stepKey: string,
+    _input: unknown,
+    _resolvedRunnerId?: string,
+    _executionProfile?: unknown,
+    _physicalAttempt?: { attemptNo: number; attemptId: string },
+    acceptedVerdicts?: readonly string[],
+  ): Promise<AttemptResult> => {
+    capturedByStep[stepKey] = acceptedVerdicts;
+    return { output: { from: stepKey }, verdict: 'approved', nextSteps: [], costs: [] };
+  };
+
+  const deps: DataDrivenTaskDeps = {
+    appendEvent: async () => undefined,
+    appendRunOutput: async () => undefined,
+    sleep: async () => undefined,
+    awaitHuman: async () => ({ decision: 'approve' }),
+    completeRun: async () => null,
+    failRun: async () => null,
+    blockRun: async () => null,
+    loadRunTaskContext: async () => ({ taskId: 'task-1', title: 'T', base: 'master', repoRef: '' }),
+    integrateFn: async () => ({ prUrl: 'https://example/pr/1', branch: 'feat/x', prNumber: 1 }),
+    runStub: () => ({ prUrl: 'stub://pr/placeholder', branch: 'feat/stub', prNumber: 0 }),
+    confirmMergeFn: async () => ({ merged: true as const, prNumber: 1, prUrl: 'https://example/pr/1/merged' }),
+    runConfirmStub: () => ({ merged: true as const, prNumber: 0, prUrl: 'stub://pr/merged' }),
+    pollPrFn: async () => ({ prNumber: 1, headSha: 'sha', evidence: [], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] }),
+    runPollStub: () => ({ prNumber: 0, headSha: 'stub', evidence: [], verdict: 'clean', ciFailures: [], reviewThreads: [] }),
+    respondThreadsFn: async () => ({ replied: 0, resolved: 0 }),
+    runRespondStub: () => ({ replied: 0, resolved: 0 }),
+    captureChangeFn: async (input) => ({ branch: `feat/${input.taskId}`, headSha: 'sha', worktreePath: '/fake' }),
+    preflightFn: async () => ({ ok: true }),
+    createWorktreeFn: async () => ({ worktreePath: '/fake/worktree' }),
+    releaseWorktreeFn: async () => undefined,
+  };
+
+  const fn = makeDataDrivenTask(runStepFn, deps);
+  await fn(RUN_ID, { route, template: lc, runnerRetryPolicy: resolveRunnerTransientRetryPolicy() });
+
+  assert.ok(Object.keys(capturedByStep).length > 0, 'agent steps were invoked');
+  for (const [stepKey, acceptedVerdicts] of Object.entries(capturedByStep)) {
+    assert.deepEqual(acceptedVerdicts, ['approved'], `step ${stepKey} received the local-change domain [approved]`);
+  }
+});
+
+test('domain forwarding: feature-development passes broad domain to every agent step', async () => {
+  const fd = featureDevelopment();
+  const capturedDomains: Array<readonly string[] | undefined> = [];
+
+  const runStepFn = async (
+    _runId: string,
+    _role: string,
+    stepKey: string,
+    _input: unknown,
+    _resolvedRunnerId?: string,
+    _executionProfile?: unknown,
+    _physicalAttempt?: { attemptNo: number; attemptId: string },
+    acceptedVerdicts?: readonly string[],
+  ): Promise<AttemptResult> => {
+    capturedDomains.push(acceptedVerdicts);
+    const nodeId = stepKey.includes('#') ? stepKey.slice(0, stepKey.indexOf('#')) : stepKey;
+    const verdicts: Record<string, string> = { analyst: 'approved', developer: 'approved', reviewer: 'approved' };
+    return { output: { from: nodeId }, verdict: verdicts[nodeId] ?? 'approved', nextSteps: [], costs: [] };
+  };
+
+  const deps: DataDrivenTaskDeps = {
+    appendEvent: async () => undefined,
+    appendRunOutput: async () => undefined,
+    sleep: async () => undefined,
+    awaitHuman: async () => ({ decision: 'approve' }),
+    completeRun: async () => null,
+    failRun: async () => null,
+    blockRun: async () => null,
+    loadRunTaskContext: async () => ({ taskId: 'task-1', title: 'T', base: 'master', repoRef: '' }),
+    integrateFn: async () => ({ prUrl: 'https://example/pr/1', branch: 'feat/x', prNumber: 1 }),
+    runStub: () => ({ prUrl: 'stub://pr/placeholder', branch: 'feat/stub', prNumber: 0 }),
+    confirmMergeFn: async () => ({ merged: true as const, prNumber: 1, prUrl: 'https://example/pr/1/merged' }),
+    runConfirmStub: () => ({ merged: true as const, prNumber: 0, prUrl: 'stub://pr/merged' }),
+    pollPrFn: async () => ({ prNumber: 1, headSha: 'sha', evidence: [], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] }),
+    runPollStub: () => ({ prNumber: 0, headSha: 'stub', evidence: [], verdict: 'clean', ciFailures: [], reviewThreads: [] }),
+    respondThreadsFn: async () => ({ replied: 0, resolved: 0 }),
+    runRespondStub: () => ({ replied: 0, resolved: 0 }),
+    captureChangeFn: async (input) => ({ branch: `feat/${input.taskId}`, headSha: 'sha', worktreePath: '/fake' }),
+    preflightFn: async () => ({ ok: true }),
+    createWorktreeFn: async () => ({ worktreePath: '/fake/worktree' }),
+    releaseWorktreeFn: async () => undefined,
+  };
+
+  const fn = makeDataDrivenTask(runStepFn, deps);
+  await fn(RUN_ID, { route: makeRoute(), template: fd, runnerRetryPolicy: resolveRunnerTransientRetryPolicy() });
+
+  const expectedDomain = fd.verdicts.domain;
+  assert.ok(capturedDomains.length > 0, 'agent steps were invoked');
+  for (const d of capturedDomains) {
+    assert.deepEqual(d, expectedDomain, 'each agent step receives the full feature-development domain');
+  }
+  assert.ok(expectedDomain.length > 1, 'feature-development domain is broad (not single-element)');
 });

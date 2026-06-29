@@ -191,7 +191,7 @@ function trackingActivity(calls: string[]): RunnerActivityTracker {
   };
 }
 
-function run(executor: ProcessExecutor, roleOverrides = {}) {
+function run(executor: ProcessExecutor, roleOverrides = {}, acceptedVerdicts?: readonly string[]) {
   const runner = createClaudeCodeRunner({
     executor,
     resolveCwd: async () => '/workspace/repo',
@@ -203,6 +203,7 @@ function run(executor: ProcessExecutor, roleOverrides = {}) {
     context: '## Role: architect\nDo the thing.',
     attemptId: ATTEMPT_ID,
     step: BASE_STEP,
+    acceptedVerdicts,
   });
 }
 
@@ -231,6 +232,34 @@ test('claude-code runner: builds the documented claude -p invocation', async () 
   assert.ok(req?.args.includes('--verbose'), 'stream-json requires --verbose in -p mode');
   assert.equal(req?.cwd, '/workspace/repo', 'cwd comes from resolveCwd');
   assert.ok(req?.input?.includes(ATTEMPT_ID), 'prompt delivered on stdin includes the attemptId');
+  const schemaArg = req?.args[req.args.indexOf('--json-schema') + 1] ?? '';
+  const schema = JSON.parse(schemaArg) as Record<string, unknown>;
+  const verdictProp = (schema.properties as Record<string, unknown>).verdict as Record<string, unknown>;
+  assert.equal('enum' in verdictProp, false, 'no enum when acceptedVerdicts not provided');
+});
+
+test('claude-code runner: --json-schema arg encodes verdict.enum for passed acceptedVerdicts', async () => {
+  const captured: ExecRequest[] = [];
+  const domain = ['approved', 'blocker'];
+  await run(fakeExecutor(ok(structuredTransport()), captured), {}, domain);
+
+  const req = captured[0];
+  const schemaArg = req?.args[req?.args.indexOf('--json-schema') + 1] ?? '';
+  const schema = JSON.parse(schemaArg) as Record<string, unknown>;
+  const verdictProp = (schema.properties as Record<string, unknown>).verdict as Record<string, unknown>;
+  assert.deepEqual(verdictProp.enum, domain);
+  assert.match(req?.input ?? '', /approved.*blocker|blocker.*approved/);
+});
+
+test('claude-code runner: single-element domain produces single-value enum in schema arg', async () => {
+  const captured: ExecRequest[] = [];
+  await run(fakeExecutor(ok(structuredTransport()), captured), {}, ['approved']);
+
+  const req = captured[0];
+  const schemaArg = req?.args[req?.args.indexOf('--json-schema') + 1] ?? '';
+  const schema = JSON.parse(schemaArg) as Record<string, unknown>;
+  const verdictProp = (schema.properties as Record<string, unknown>).verdict as Record<string, unknown>;
+  assert.deepEqual(verdictProp.enum, ['approved']);
 });
 
 test('claude-code runner: stream-json — reports a per-turn transcript and extracts the terminal result', async () => {

@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createArtifactStore } from './artifact-store.js';
-import { CODEX_OUTPUT_SCHEMA, createCodexRunner } from './codex-runner.js';
+import { createCodexRunner } from './codex-runner.js';
 import {
   RUNNER_WALL_CLOCK_LIMIT_KIND,
   type ExecRequest,
@@ -168,6 +168,7 @@ async function runWith(
   roleOverrides: Parameters<typeof makeRole>[1] = {},
   profile: ModelProfile = PROFILE,
   reporter?: AgentActivityReporter,
+  acceptedVerdicts?: readonly string[],
 ) {
   const runner = createCodexRunner({
     executor,
@@ -182,6 +183,7 @@ async function runWith(
     attemptId: ATTEMPT_ID,
     step: BASE_STEP,
     reporter,
+    acceptedVerdicts,
   });
 }
 
@@ -208,9 +210,53 @@ test('codex runner: builds documented codex exec invocation and writes schema fi
     assert.match(req.input ?? '', new RegExp(ATTEMPT_ID));
 
     const schemaPath = req.args[3] ?? '';
-    const schema = JSON.parse(readFileSync(schemaPath, 'utf8')) as typeof CODEX_OUTPUT_SCHEMA;
+    const schema = JSON.parse(readFileSync(schemaPath, 'utf8')) as Record<string, unknown>;
     assert.deepEqual(schema.required, ['verdict', 'output', 'artifacts', 'nextSteps', 'needsHuman', 'lesson']);
     assert.equal(schema.additionalProperties, false);
+    const verdictProp = (schema.properties as Record<string, unknown>).verdict as Record<string, unknown>;
+    assert.equal('enum' in verdictProp, false, 'no enum when acceptedVerdicts not provided');
+  });
+});
+
+test('codex runner: writes schema with verdict.enum equal to acceptedVerdicts', async () => {
+  await withTempRoot(async (root) => {
+    const domain = ['approved', 'blocker'];
+    const captured: ExecRequest[] = [];
+    await runWith(
+      fakeExecutor(ok(jsonl({ type: 'turn.completed', output: finalResult() })), captured),
+      root,
+      {},
+      PROFILE,
+      undefined,
+      domain,
+    );
+
+    const req = captured[0];
+    const schemaPath = req?.args[3] ?? '';
+    const schema = JSON.parse(readFileSync(schemaPath, 'utf8')) as Record<string, unknown>;
+    const verdictProp = (schema.properties as Record<string, unknown>).verdict as Record<string, unknown>;
+    assert.deepEqual(verdictProp.enum, domain);
+    assert.match(req?.input ?? '', /approved.*blocker|blocker.*approved/);
+  });
+});
+
+test('codex runner: single-element domain produces single-value enum in written schema', async () => {
+  await withTempRoot(async (root) => {
+    const captured: ExecRequest[] = [];
+    await runWith(
+      fakeExecutor(ok(jsonl({ type: 'turn.completed', output: finalResult() })), captured),
+      root,
+      {},
+      PROFILE,
+      undefined,
+      ['approved'],
+    );
+
+    const req = captured[0];
+    const schemaPath = req?.args[3] ?? '';
+    const schema = JSON.parse(readFileSync(schemaPath, 'utf8')) as Record<string, unknown>;
+    const verdictProp = (schema.properties as Record<string, unknown>).verdict as Record<string, unknown>;
+    assert.deepEqual(verdictProp.enum, ['approved']);
   });
 });
 

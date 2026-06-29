@@ -623,6 +623,7 @@ export function makeDataDrivenTask(
     resolvedRunnerId?: string,
     executionProfile?: ExecutionProfile,
     physicalAttempt?: PhysicalRunStepAttempt,
+    acceptedVerdicts?: readonly string[],
   ) => Promise<AttemptResult>,
   deps: DataDrivenTaskDeps,
 ) {
@@ -993,6 +994,7 @@ export function makeDataDrivenTask(
         binding.resolvedRunnerId,
         ctx.executionProfile,
         physicalAttempt,
+        ctx.template.verdicts.domain,
       );
 
       const needsHuman = await maybeHandleNeedsHumanRoleResult({

@@ -431,6 +431,37 @@ test('per-role runner threading: a resolved stub runner dispatches via the stub 
   assert.ok(typeof output.echo === 'string' && output.echo.includes('role=developer'));
 });
 
+test('acceptedVerdicts: runStep forwards acceptedVerdicts to runAgent', async () => {
+  const runId = 'run-accepted-verdicts';
+  const { deps } = buildRunStepDeps();
+  let capturedAcceptedVerdicts: readonly string[] | undefined = undefined;
+  deps.runAgent = async ({ acceptedVerdicts }): Promise<AttemptResult> => {
+    capturedAcceptedVerdicts = acceptedVerdicts;
+    return { output: 'ok', verdict: 'approved', nextSteps: [], costs: [], needsHuman: false };
+  };
+  const runStep = makeRunStep(deps);
+  const domain = ['approved', 'blocker'] as const;
+
+  await runStep(runId, 'developer', 'developer', {}, 'script', undefined, undefined, domain);
+
+  assert.deepEqual(capturedAcceptedVerdicts, domain, 'runAgent received the forwarded acceptedVerdicts');
+});
+
+test('acceptedVerdicts: runStep omits acceptedVerdicts when not provided', async () => {
+  const runId = 'run-no-verdicts';
+  const { deps } = buildRunStepDeps();
+  let capturedAcceptedVerdicts: readonly string[] | undefined = 'SENTINEL' as unknown as readonly string[];
+  deps.runAgent = async ({ acceptedVerdicts }): Promise<AttemptResult> => {
+    capturedAcceptedVerdicts = acceptedVerdicts;
+    return { output: 'ok', verdict: 'approved', nextSteps: [], costs: [], needsHuman: false };
+  };
+  const runStep = makeRunStep(deps);
+
+  await runStep(runId, 'developer', 'developer', {}, 'script');
+
+  assert.equal(capturedAcceptedVerdicts, undefined, 'runAgent has no acceptedVerdicts when not forwarded');
+});
+
 test('idempotency: appendEvent ROW_CONFLICT on replay is a no-op (no duplicate write, no throw)', async () => {
   const { da: conflictDa } = makeFakeDa({ throwConflict: true });
   const { appendRunEvent } = await import('../run/append-event.js');
