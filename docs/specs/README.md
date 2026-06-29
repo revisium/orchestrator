@@ -16,6 +16,9 @@ archive of superseded plans.
 | [run-dataflow-v1.spec.md](./run-dataflow-v1.spec.md) | Step output production/consumption, prompt hydration, runtime output storage, and validation |
 | [human-gates-v1.spec.md](./human-gates-v1.spec.md) | Inbox-backed human gates, gate resolution, question gates, watch tools, and PR review-feedback gates |
 | [default-playbook-policy.spec.md](./default-playbook-policy.spec.md) | Bundled `feature-development` policy rules, static verifier scope, and merge-gate recheck behavior |
+| [runner-manifest-v1.spec.md](./runner-manifest-v1.spec.md) | Runner manifest field schema, StdoutParser/PermissionStyle code contracts, route-time capability snapshot, and replay determinism |
+| [runner-result-envelope-v1.spec.md](./runner-result-envelope-v1.spec.md) | Canonical result envelope, structured-output tiers, `submit_result` tool-call floor, tier degradation, and the verdict-presence validate seam |
+| [runner-capabilities-v1.spec.md](./runner-capabilities-v1.spec.md) | Runner capability vocabulary replacing the hardcoded branch functions, with one-to-one replacement mapping and worked blocks |
 
 ## Authoring rules
 
