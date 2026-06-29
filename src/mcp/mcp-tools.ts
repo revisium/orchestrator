@@ -127,14 +127,14 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
   server.registerTool(
     'create_run',
     {
-      description: 'Create a development run, optionally starting the pipeline immediately.',
+      description: 'Create a development run, optionally starting the pipeline immediately. An explicit pipelineId is required: omitting it returns confirmationRequired with candidatePipelines and a best-effort wouldAutoRoute so you can choose and re-call — no run is created.',
       inputSchema: {
         title: z.string().min(1),
         repo: z.string().min(1),
         description: z.string().optional(),
         scope: z.string().optional(),
         playbookId: z.string().min(1).optional(),
-        pipelineId: z.string().min(1).optional(),
+        pipelineId: z.string().min(1).optional().describe('Required: the pipeline to use. Omit to receive candidatePipelines for selection (no run is created).'),
         params: paramsSchema,
         issueRef: issueRefSchema,
         priority: z.number().int().optional(),

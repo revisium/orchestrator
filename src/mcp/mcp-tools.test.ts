@@ -77,6 +77,27 @@ test('create_run schema accepts issueRef traceability metadata', async () => {
   assert.equal(schema.safeParse({ title: 'Task', repo: '.', start: false, issueRef: { ...issueRef, number: 0 } }).success, false);
 });
 
+test('create_run description mentions explicit pipelineId requirement and confirmationRequired', () => {
+  const { server, tools } = makeServer();
+  registerRevoMcpTools(server as never, {} as McpFacadeService);
+  const tool = tools.find((registered) => registered.name === 'create_run');
+  assert.ok(tool);
+  assert.ok(tool.config.description?.includes('explicit pipelineId'), 'description must mention explicit pipelineId');
+  assert.ok(tool.config.description?.includes('confirmationRequired'), 'description must mention confirmationRequired');
+});
+
+test('create_run schema accepts both omitted and explicit pipelineId', async () => {
+  const { z } = await import('zod');
+  const { server, tools } = makeServer();
+  registerRevoMcpTools(server as never, {} as McpFacadeService);
+  const tool = tools.find((registered) => registered.name === 'create_run');
+  assert.ok(tool);
+  const schema = z.object(tool.config.inputSchema as Record<string, never>);
+  assert.equal(schema.safeParse({ title: 'Task', repo: '.' }).success, true, 'pipelineId may be omitted');
+  assert.equal(schema.safeParse({ title: 'Task', repo: '.', pipelineId: 'feature-development' }).success, true, 'explicit pipelineId accepted');
+  assert.equal(schema.safeParse({ title: 'Task', repo: '.', pipelineId: '' }).success, false, 'empty pipelineId rejected by min(1)');
+});
+
 test('pipeline MCP tools expose compact defaults with explicit detail opt-in', async () => {
   const { z } = await import('zod');
   const { server, tools } = makeServer();

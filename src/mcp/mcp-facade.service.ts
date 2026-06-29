@@ -405,6 +405,8 @@ export class McpFacadeService {
     priority?: number;
     start?: boolean;
   }) {
+    const pipelineId = input.pipelineId?.trim();
+    if (!pipelineId) return this.requirePipelineSelection(input);
     return this.api.createRun(input).then((result) => compactCreateRunResult(result) as JsonRecord).catch((error: unknown) => {
       if (error instanceof CreateRunWorkflowError) {
         const created = Object.keys(error.createdIds).length > 0
@@ -414,6 +416,29 @@ export class McpFacadeService {
       }
       throw error;
     });
+  }
+
+  private async requirePipelineSelection(input: {
+    title: string;
+    description?: string;
+    scope?: string;
+    playbookId?: string;
+  }): Promise<JsonRecord> {
+    const preview = await this.api.previewPipelineSelection({
+      title: input.title,
+      description: input.description,
+      scope: input.scope,
+      playbookId: input.playbookId,
+    });
+    return {
+      confirmationRequired: true,
+      reason: 'pipeline_selection_required',
+      message: 'create_run requires an explicit pipelineId; no run was created. Choose one of candidatePipelines (by its pipelineId) and call create_run again with that pipelineId.',
+      playbookId: preview.playbookId,
+      candidatePipelines: preview.candidatePipelines.map(compactPipeline),
+      wouldAutoRoute: preview.wouldAutoRoute,
+      ...(preview.wouldAutoRouteReason ? { wouldAutoRouteReason: preview.wouldAutoRouteReason } : {}),
+    };
   }
 
   startRun(input: { runId: string }) {

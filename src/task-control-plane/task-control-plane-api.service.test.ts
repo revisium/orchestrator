@@ -2131,6 +2131,122 @@ test('TaskControlPlaneApiService.resolveRunState exposes the latest workflow eve
   assert.equal(state.latestEventType, 'pr_polled');
 });
 
+test('TaskControlPlaneApiService.previewPipelineSelection returns confident wouldAutoRoute pick', async () => {
+  const api = makeApi();
+
+  const preview = await api.previewPipelineSelection({ title: 'small local edit' });
+
+  assert.equal(preview.playbookId, 'pb');
+  assert.ok(Array.isArray(preview.candidatePipelines) && preview.candidatePipelines.length > 0, 'candidatePipelines must be non-empty');
+  assert.deepEqual(preview.wouldAutoRoute, { pipelineId: 'local-change', pipelineRowId: 'pb-local-change' });
+  assert.equal(preview.wouldAutoRouteReason, undefined);
+});
+
+test('TaskControlPlaneApiService.previewPipelineSelection returns wouldAutoRoute:null with reason when ambiguous', async () => {
+  const api = makeApi({
+    playbooksService: {
+      async resolvePlaybook() {
+        return { id: 'pb', name: 'PB', packageName: '@x/pb', version: '1.0.0', source: 'local:/pb', schemaVersion: 2 };
+      },
+      async listPipelines() {
+        return [
+          {
+            id: 'pb-a',
+            playbookId: 'pb',
+            pipelineId: 'a',
+            path: 'pipelines/a/PIPELINE.md',
+            triggers: ['review task'],
+            requiredRoles: ['developer'],
+            alternativeRoles: [],
+            optionalRoles: [],
+            routeGates: [],
+            executionPolicy: {},
+          },
+          {
+            id: 'pb-b',
+            playbookId: 'pb',
+            pipelineId: 'b',
+            path: 'pipelines/b/PIPELINE.md',
+            triggers: ['review task'],
+            requiredRoles: ['developer'],
+            alternativeRoles: [],
+            optionalRoles: [],
+            routeGates: [],
+            executionPolicy: {},
+          },
+        ];
+      },
+      async resolvePipeline() { return null as never; },
+      async getPipeline() { return null; },
+    },
+  });
+
+  const preview = await api.previewPipelineSelection({ title: 'review task' });
+
+  assert.equal(preview.wouldAutoRoute, null);
+  assert.ok(typeof preview.wouldAutoRouteReason === 'string' && preview.wouldAutoRouteReason.length > 0, 'reason must be non-empty');
+  assert.equal(preview.candidatePipelines.length, 2, 'both pipelines are candidates');
+});
+
+test('TaskControlPlaneApiService.previewPipelineSelection filters candidatePipelines to resolved playbook and sorts by id', async () => {
+  const api = makeApi({
+    playbooksService: {
+      async resolvePlaybook() {
+        return { id: 'pb', name: 'PB', packageName: '@x/pb', version: '1.0.0', source: 'local:/pb', schemaVersion: 2 };
+      },
+      async listPipelines() {
+        return [
+          {
+            id: 'pb-z',
+            playbookId: 'pb',
+            pipelineId: 'z-pipeline',
+            path: 'pipelines/z/PIPELINE.md',
+            triggers: [],
+            requiredRoles: [],
+            alternativeRoles: [],
+            optionalRoles: [],
+            routeGates: [],
+            executionPolicy: {},
+          },
+          {
+            id: 'pb-a',
+            playbookId: 'pb',
+            pipelineId: 'a-pipeline',
+            path: 'pipelines/a/PIPELINE.md',
+            triggers: [],
+            requiredRoles: [],
+            alternativeRoles: [],
+            optionalRoles: [],
+            routeGates: [],
+            executionPolicy: {},
+          },
+          {
+            id: 'other-x',
+            playbookId: 'other-playbook',
+            pipelineId: 'x-pipeline',
+            path: 'pipelines/x/PIPELINE.md',
+            triggers: [],
+            requiredRoles: [],
+            alternativeRoles: [],
+            optionalRoles: [],
+            routeGates: [],
+            executionPolicy: {},
+          },
+        ];
+      },
+      async resolvePipeline() { return null as never; },
+      async getPipeline() { return null; },
+    },
+  });
+
+  const preview = await api.previewPipelineSelection({ title: 'anything' });
+
+  assert.equal(preview.candidatePipelines.length, 2, 'only pipelines for playbook pb');
+  assert.equal(preview.candidatePipelines[0]?.id, 'pb-a', 'sorted by id ascending');
+  assert.equal(preview.candidatePipelines[1]?.id, 'pb-z');
+  assert.ok(preview.candidatePipelines.every((p) => p.playbookId === 'pb'), 'all from correct playbook');
+});
+
 test('TaskControlPlaneApiService.simulateRoute rejects omitted pipelineId when no trigger matches', async () => {
   const api = makeApi();
 

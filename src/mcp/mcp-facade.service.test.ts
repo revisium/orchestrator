@@ -115,9 +115,9 @@ test('McpFacadeService delegates product operations to TaskControlPlaneApiServic
   } as unknown as TaskControlPlaneApiService;
   const facade = new McpFacadeService(api);
 
-  const result = await facade.createRun({ title: 'Task', repo: '.', start: false, issueRef });
+  const result = await facade.createRun({ title: 'Task', repo: '.', pipelineId: 'feature-development', start: false, issueRef });
 
-  assert.deepEqual(received, { title: 'Task', repo: '.', start: false, issueRef });
+  assert.deepEqual(received, { title: 'Task', repo: '.', pipelineId: 'feature-development', start: false, issueRef });
   assert.deepEqual(result, { runId: 'run-1', started: false });
 });
 
@@ -161,7 +161,7 @@ test('McpFacadeService.createRun returns a compact default response without the 
   } as unknown as TaskControlPlaneApiService;
   const facade = new McpFacadeService(api);
 
-  const result = await facade.createRun({ title: 'Task', repo: '.', start: true });
+  const result = await facade.createRun({ title: 'Task', repo: '.', pipelineId: 'feature-development', start: true });
   const serialized = JSON.stringify(result);
 
   assert.equal(result.runId, 'run-1');
@@ -321,6 +321,73 @@ test('McpFacadeService.simulateRoute can include route details when explicitly r
   assert.equal(result, route);
 });
 
+test('McpFacadeService.createRun returns confirmationRequired when pipelineId is omitted', async () => {
+  const pipeline = {
+    id: 'pb-feature-development',
+    playbookId: 'pb',
+    pipelineId: 'feature-development',
+    path: 'pipelines/feature-development.json',
+    triggers: ['feature'],
+    requiredRoles: ['developer'],
+    alternativeRoles: [],
+    optionalRoles: [],
+    routeGates: [],
+    executionPolicy: { template_json: { specVersion: '1.0', nodes: { developer: { id: 'developer' } } } },
+  };
+  let createRunCalled = false;
+  const api = {
+    async createRun() {
+      createRunCalled = true;
+      return { runId: 'run-1' };
+    },
+    async previewPipelineSelection() {
+      return {
+        playbookId: 'pb',
+        candidatePipelines: [pipeline],
+        wouldAutoRoute: { pipelineId: 'feature-development', pipelineRowId: 'pb-feature-development' },
+      };
+    },
+  } as unknown as TaskControlPlaneApiService;
+  const facade = new McpFacadeService(api);
+
+  const result = await facade.createRun({ title: 'Add auth', repo: '.' });
+
+  assert.equal(createRunCalled, false, 'api.createRun must NOT be called when pipelineId is omitted');
+  assert.equal(result.confirmationRequired, true);
+  assert.equal(result.reason, 'pipeline_selection_required');
+  assert.ok(typeof result.message === 'string' && result.message.includes('pipelineId'));
+  assert.equal(result.playbookId, 'pb');
+  assert.deepEqual(result.wouldAutoRoute, { pipelineId: 'feature-development', pipelineRowId: 'pb-feature-development' });
+  const candidates = result.candidatePipelines as Array<Record<string, unknown>>;
+  assert.equal(candidates.length, 1);
+  assert.equal(candidates[0]?.pipelineId, 'feature-development');
+  assert.equal(JSON.stringify(candidates).includes('template_json'), false, 'candidatePipelines must be compact');
+});
+
+test('McpFacadeService.createRun confirmationRequired includes wouldAutoRouteReason when auto-route is ambiguous', async () => {
+  const api = {
+    async createRun() {
+      return { runId: 'run-1' };
+    },
+    async previewPipelineSelection() {
+      return {
+        playbookId: 'pb',
+        candidatePipelines: [],
+        wouldAutoRoute: null,
+        wouldAutoRouteReason: 'ambiguous pipeline route; provide pipelineId',
+      };
+    },
+  } as unknown as TaskControlPlaneApiService;
+  const facade = new McpFacadeService(api);
+
+  const result = await facade.createRun({ title: 'Fix bug', repo: '.' });
+
+  assert.equal(result.confirmationRequired, true);
+  assert.equal(result.wouldAutoRoute, null);
+  assert.ok(typeof result.wouldAutoRouteReason === 'string' && result.wouldAutoRouteReason.includes('ambiguous'));
+  assert.equal('wouldAutoRouteReason' in result, true);
+});
+
 test('McpFacadeService.createRun exposes workflow row failure cause for MCP debugging', async () => {
   const api = {
     async createRun() {
@@ -334,7 +401,7 @@ test('McpFacadeService.createRun exposes workflow row failure cause for MCP debu
   const facade = new McpFacadeService(api);
 
   await assert.rejects(
-    () => facade.createRun({ title: 'Task', repo: '.', start: false }),
+    () => facade.createRun({ title: 'Task', repo: '.', pipelineId: 'feature-development', start: false }),
     /Failed to create run workflow rows: VALIDATION_FAILURE status=422: Validation failure: task_runs\/run-1; createdBeforeFailure=\{"runId":"run-1"\}/,
   );
 });
