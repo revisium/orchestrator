@@ -122,27 +122,44 @@ export function createRunWorktree(opts: CreateRunWorktreeOpts): { worktreePath: 
   return { worktreePath };
 }
 
+export type ReleaseRunWorktreeResult =
+  | { released: true }
+  | { released: false; reason: 'absent' | 'dirty' };
+
 export type ReleaseRunWorktreeOpts = {
   runId: string;
 
   baseRepoCwd: string;
   dataDir: string;
   execGit?: WorktreeExecGit;
+  force?: boolean;
 };
 
 
 
 
 
-export function releaseRunWorktree(opts: ReleaseRunWorktreeOpts): void {
-  const { runId, baseRepoCwd, dataDir } = opts;
+export function releaseRunWorktree(opts: ReleaseRunWorktreeOpts): ReleaseRunWorktreeResult {
+  const { runId, baseRepoCwd, dataDir, force = false } = opts;
   const execGit = opts.execGit ?? defaultExecGit;
   const worktreePath = worktreePathFor(dataDir, runId);
 
+  if (!existsSync(worktreePath)) {
+    try { execGit(['worktree', 'prune'], baseRepoCwd); } catch { }
+    return { released: false, reason: 'absent' };
+  }
+
+  if (!force) {
+    try {
+      const status = execGit(['status', '--porcelain'], worktreePath);
+      if (status.trim().length > 0) {
+        return { released: false, reason: 'dirty' };
+      }
+    } catch { }
+  }
+
   try {
-    if (existsSync(worktreePath)) {
-      execGit(['worktree', 'remove', '--force', worktreePath], baseRepoCwd);
-    }
+    execGit(['worktree', 'remove', '--force', worktreePath], baseRepoCwd);
   } catch {
   }
   try {
@@ -157,6 +174,7 @@ export function releaseRunWorktree(opts: ReleaseRunWorktreeOpts): void {
     rmSync(worktreeMarkerFor(dataDir, runId), { force: true });
   } catch {
   }
+  return { released: true };
 }
 
 function writeMarker(dataDir: string, runId: string): void {

@@ -11,6 +11,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { writeFileSync } from 'node:fs';
 import { createRunWorktree, releaseRunWorktree } from './git-worktree-manager.js';
 import { worktreePathFor, worktreeMarkerFor } from '../control-plane/resolve-cwd.js';
 
@@ -144,16 +145,47 @@ test('createRunWorktree: non-pnpm repo → does NOT invoke the installer (symlin
   }
 });
 
-test('releaseRunWorktree: removes the worktree + marker, idempotent', () => {
+test('releaseRunWorktree: clean worktree is removed + marker gone, idempotent', () => {
   const { root, baseRepo, dataDir } = setup();
   try {
     const { worktreePath } = createRunWorktree({ runId: 'run-5', baseRepoCwd: baseRepo, base: 'master', branch: 'feat/r', dataDir });
     assert.ok(existsSync(worktreePath));
-    releaseRunWorktree({ runId: 'run-5', baseRepoCwd: baseRepo, dataDir });
+    const result = releaseRunWorktree({ runId: 'run-5', baseRepoCwd: baseRepo, dataDir });
+    assert.deepEqual(result, { released: true });
     assert.ok(!existsSync(worktreePath), 'worktree dir removed');
     assert.ok(!existsSync(worktreeMarkerFor(dataDir, 'run-5')), 'marker removed');
-    // idempotent — releasing again is a no-op (no throw)
-    releaseRunWorktree({ runId: 'run-5', baseRepoCwd: baseRepo, dataDir });
+    // idempotent — releasing again returns absent, no throw
+    const result2 = releaseRunWorktree({ runId: 'run-5', baseRepoCwd: baseRepo, dataDir });
+    assert.deepEqual(result2, { released: false, reason: 'absent' });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('releaseRunWorktree: dirty worktree (untracked file) is preserved by default', () => {
+  const { root, baseRepo, dataDir } = setup();
+  try {
+    const { worktreePath } = createRunWorktree({ runId: 'run-dirty', baseRepoCwd: baseRepo, base: 'master', branch: 'feat/dirty', dataDir });
+    // Write an untracked file to make the worktree dirty
+    writeFileSync(join(worktreePath, 'uncommitted.txt'), 'uncommitted work\n', 'utf8');
+    const result = releaseRunWorktree({ runId: 'run-dirty', baseRepoCwd: baseRepo, dataDir });
+    assert.deepEqual(result, { released: false, reason: 'dirty' });
+    assert.ok(existsSync(worktreePath), 'dirty worktree dir preserved');
+    assert.ok(existsSync(worktreeMarkerFor(dataDir, 'run-dirty')), 'marker preserved');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('releaseRunWorktree: force:true removes a dirty worktree', () => {
+  const { root, baseRepo, dataDir } = setup();
+  try {
+    const { worktreePath } = createRunWorktree({ runId: 'run-force', baseRepoCwd: baseRepo, base: 'master', branch: 'feat/force', dataDir });
+    writeFileSync(join(worktreePath, 'uncommitted.txt'), 'uncommitted work\n', 'utf8');
+    const result = releaseRunWorktree({ runId: 'run-force', baseRepoCwd: baseRepo, dataDir, force: true });
+    assert.deepEqual(result, { released: true });
+    assert.ok(!existsSync(worktreePath), 'force-removed even when dirty');
+    assert.ok(!existsSync(worktreeMarkerFor(dataDir, 'run-force')), 'marker removed');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -83,13 +83,16 @@ export function confirmMergeFlow(): Template {
     .entry('confirmMerge')
     .domain('approved', 'clean', 'blocker', 'changes_requested')
     .add(
-      node.script('confirmMerge', 'script:confirmMerge', 'mergedEnd', {
+      node.script('confirmMerge', 'script:confirmMerge', 'cleanupWorktree', {
         resultSchema: 'schema:integration',
         onFailure: 'route',
         catch: [
           { onError: 'revo.ScriptBlocked', goto: 'blockedEnd' },
           { onError: 'revo.ScriptFailed', goto: 'failedEnd' },
         ],
+      }),
+      node.script('cleanupWorktree', 'script:cleanupWorktree', 'mergedEnd', {
+        resultSchema: 'schema:integration',
       }),
       node.terminal('mergedEnd', 'succeeded'),
       node.terminal('blockedEnd', 'blocked'),

@@ -722,22 +722,10 @@ export function makeDataDrivenTask(
       }
     }
 
-    let result: DataDrivenResult | undefined;
-    try {
-      if (live) {
-        await createWorktreeFn(runId, taskId, title, base, issueRef);
-      }
-      result = await runGraph(runId, opts, taskId, title, base, issueRef, live);
-      return result;
-    } finally {
-      if (live && result?.status !== 'blocked') {
-        try {
-          await releaseWorktreeFn(runId, taskId);
-        } catch (releaseErr) {
-          console.warn(`[data-driven] worktree release for ${runId} failed (orphan; pruned later): ${String(releaseErr)}`);
-        }
-      }
+    if (live) {
+      await createWorktreeFn(runId, taskId, title, base, issueRef);
     }
+    return runGraph(runId, opts, taskId, title, base, issueRef, live);
   }
 
 
@@ -1240,6 +1228,11 @@ export function makeDataDrivenTask(
     stepKey: string,
     inputs: Record<string, unknown>,
   ): Promise<{ outcome: 'ok'; pointer: unknown; verdict?: string } | { outcome: 'blocked' } | { outcome: 'failed' }> {
+    if (decision.scriptRef === 'script:cleanupWorktree') {
+      try { await releaseWorktreeFn(runId, ctx.taskId); } catch { /* best-effort */ }
+      await appendEvent({ runId, taskId: ctx.taskId, stepId: '', stepKey, type: 'worktree_released', payload: { nodeId: decision.nodeId } });
+      return { outcome: 'ok', pointer: { released: true } };
+    }
     const isConfirmMerge = decision.scriptRef === 'script:confirmMerge';
     const isPollPr = decision.scriptRef === 'script:pollPr';
     const isRespondThreads = decision.scriptRef === 'script:respondThreads';

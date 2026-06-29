@@ -222,7 +222,8 @@ function buildAdapter(opts: {
     // default it passes (these tests exercise the graph, not preflight); a test can override it.
     preflightFn: async () => (opts.preflight ? opts.preflight() : { ok: true }),
     // Per-run worktree lifecycle (plan 0017) — fakes here record create/release ordering via events;
-    // the live runner binding means both fire (create after preflight, release in the terminal finally).
+    // the live runner binding means create fires after preflight, and release fires via the explicit
+    // cleanupWorktree pipeline step (not an engine-level finally).
     createWorktreeFn: async (_runId, _taskId, _title, _base, issueRef) => {
       rec.events.push('worktree_create:pipeline');
       rec.worktreeIssueRefs.push(issueRef);
@@ -1511,4 +1512,27 @@ test('confirmMerge: not merged (block) → blocked terminal, worktree KEPT', asy
   assert.equal(rec.confirmMergeCalls, 1, 'confirmMerge ran once');
   assert.ok(rec.events.includes('worktree_create:pipeline'));
   assert.ok(!rec.events.includes('worktree_release:pipeline'), 'worktree KEPT on blocked (rework / manual merge)');
+});
+
+// ─── engine no longer auto-deletes on failure (issue #208) ───────────────────
+
+test('failed run: engine does NOT fire worktree_release (teardown is opt-in pipeline step)', async () => {
+  // featureDevelopment has no cleanupWorktree node; integrator failing routes to failedEnd.
+  const { run, rec } = buildAdapter({
+    template: featureDevelopment(),
+    integrate: () => { throw new Error('network error'); },
+  });
+  const r = await run();
+  assert.equal(r.status, 'failed');
+  assert.ok(rec.events.includes('worktree_create:pipeline'), 'worktree created');
+  assert.ok(!rec.events.includes('worktree_release:pipeline'), 'worktree NOT released on failure — preserved for inspection');
+});
+
+test('plain featureDevelopment (no cleanupWorktree) succeeded run does NOT release worktree', async () => {
+  // mergeGate -> mergedEnd: no cleanupWorktree node, so release must never fire.
+  const { run, rec } = buildAdapter({ template: featureDevelopment(), verdicts: { watcherPost: 'clean' } });
+  const r = await run();
+  assert.equal(r.status, 'succeeded');
+  assert.ok(rec.events.includes('worktree_create:pipeline'));
+  assert.ok(!rec.events.includes('worktree_release:pipeline'), 'no release without an explicit cleanupWorktree node');
 });

@@ -115,6 +115,8 @@ function capabilityRoleIds(template: { nodes: Record<string, Record<string, unkn
   // (observe/classify) + `script:respondThreads` (reply/resolve). Map them to `integrator` (runner-wins)
   // so the coverage check is satisfied.
   const BUILT_IN_SCRIPTS = new Set(['integrator', 'confirmMerge', 'pollPr', 'respondThreads']);
+  // Engine-handled scripts that need no role binding at all — skip them from the coverage check.
+  const ROLE_FREE_SCRIPTS = new Set(['cleanupWorktree']);
   const ids = new Set<string>();
   for (const node of Object.values(template.nodes)) {
     for (const key of ['roleRef', 'scriptRef'] as const) {
@@ -122,6 +124,7 @@ function capabilityRoleIds(template: { nodes: Record<string, Record<string, unkn
       // A handle is `role:<id>` / `script:<id>`; the engine resolves the suffix against role bindings.
       if (typeof ref === 'string' && ref.includes(':')) {
         const suffix = ref.slice(ref.indexOf(':') + 1);
+        if (ref.startsWith('script:') && ROLE_FREE_SCRIPTS.has(suffix)) continue;
         ids.add(ref.startsWith('script:') && BUILT_IN_SCRIPTS.has(suffix) ? 'integrator' : suffix);
       }
     }
@@ -156,6 +159,21 @@ for (const pipeline of pipelines) {
     }
   });
 }
+
+test('default playbook: feature-development wires cleanupWorktree after confirmMerge, local-change has no cleanup', () => {
+  type NodeMap = Record<string, { kind?: string; scriptRef?: string; next?: string }>;
+  const featureTemplate = pipelineTemplate('feature-development') as unknown as { nodes: NodeMap };
+  const localTemplate = pipelineTemplate('local-change') as unknown as { nodes: NodeMap };
+  const nodes = featureTemplate.nodes;
+  assert.ok(nodes['cleanupWorktree'], 'feature-development has a cleanupWorktree node');
+  assert.equal(nodes['cleanupWorktree'].kind, 'script', 'cleanupWorktree is a script node');
+  assert.equal(nodes['cleanupWorktree'].scriptRef, 'script:cleanupWorktree');
+  assert.equal(nodes['cleanupWorktree'].next, 'mergedEnd', 'cleanupWorktree leads to mergedEnd');
+  assert.equal(nodes['confirmMerge']?.next, 'cleanupWorktree', 'confirmMerge.next is cleanupWorktree');
+  const localNodes = localTemplate.nodes;
+  const hasCleanup = Object.values(localNodes).some((n) => n.scriptRef === 'script:cleanupWorktree');
+  assert.equal(hasCleanup, false, 'local-change has no cleanupWorktree — recoverable worktree is preserved');
+});
 
 test('default playbook: verdict domains preserve local-change narrowness and feature-development breadth', () => {
   assert.deepEqual(

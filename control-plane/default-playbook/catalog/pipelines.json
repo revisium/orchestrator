@@ -409,7 +409,7 @@
             "id": "confirmMerge",
             "kind": "script",
             "scriptRef": "script:confirmMerge",
-            "next": "mergedEnd",
+            "next": "cleanupWorktree",
             "catch": [
               {
                 "onError": "revo.ScriptBlocked",
@@ -428,6 +428,13 @@
                 "as": "mergeReadiness"
               }
             ]
+          },
+          "cleanupWorktree": {
+            "id": "cleanupWorktree",
+            "kind": "script",
+            "scriptRef": "script:cleanupWorktree",
+            "next": "mergedEnd",
+            "resultSchema": "schema:integration"
           },
           "mergedEnd": {
             "id": "mergedEnd",

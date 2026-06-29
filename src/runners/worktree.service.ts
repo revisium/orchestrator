@@ -44,6 +44,6 @@ export class WorktreeService {
     } catch {
       return;
     }
-    releaseRunWorktree({ runId, baseRepoCwd, dataDir: getConfig().dataDir });
+    void releaseRunWorktree({ runId, baseRepoCwd, dataDir: getConfig().dataDir });
   };
 }
