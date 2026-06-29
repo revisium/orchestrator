@@ -1311,6 +1311,30 @@ export class TaskControlPlaneApiService {
     });
   }
 
+  async previewPipelineSelection(input: {
+    title: string;
+    description?: string;
+    scope?: string;
+    playbookId?: string;
+  }): Promise<{
+    playbookId: string;
+    candidatePipelines: PipelineSummary[];
+    wouldAutoRoute: { pipelineId: string; pipelineRowId: string } | null;
+    wouldAutoRouteReason?: string;
+  }> {
+    const playbook = await this.playbooks.resolvePlaybook(input.playbookId);
+    const candidatePipelines = (await this.playbooks.listPipelines())
+      .filter((p) => p.playbookId === playbook.id)
+      .sort((a, b) => a.id.localeCompare(b.id));
+    const text = [input.title, input.description, input.scope].filter(Boolean).join(' ');
+    try {
+      const pick = await this.resolveAutoPipeline(playbook.id, text);
+      return { playbookId: playbook.id, candidatePipelines, wouldAutoRoute: { pipelineId: pick.pipelineId, pipelineRowId: pick.id } };
+    } catch (error) {
+      return { playbookId: playbook.id, candidatePipelines, wouldAutoRoute: null, wouldAutoRouteReason: asErrorMessage(error) };
+    }
+  }
+
   private async routeForRun(run: { data: Record<string, unknown> }): Promise<RouteDecision> {
     if (isRouteDecision(run.data.route_decision)) return run.data.route_decision;
     return this.resolveRouteDecision({

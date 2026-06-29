@@ -67,4 +67,6 @@ Compatibility note: wait_for_run, wait_for_any_gate, and watch_runs remain regis
 diagnostic scripts, but observe_run is the canonical normal observation surface.
 
 This MCP server is local stdio only and does not expose generic Revisium table CRUD.
-Use product-level tools instead of writing raw rows.`;
+Use product-level tools instead of writing raw rows.
+
+create_run requires an explicit pipelineId; omit it and no run is created — you get candidatePipelines plus a best-effort wouldAutoRoute to choose from (no silent auto-routing). Use list_pipelines/simulate_route to pick.`;
