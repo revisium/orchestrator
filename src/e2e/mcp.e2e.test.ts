@@ -35,7 +35,23 @@ after(async () => {
 const inv = <T = Record<string, unknown>>(name: string, args?: Record<string, unknown>) =>
   mcp.invoke(name, args) as Promise<T>;
 
-test('H1: create_run → start_run → wait_for_run → get_run round-trips a run to completion', { skip: e2eSkip }, async () => {
+type AttentionResult = { runId: string; state: string; nextAction: string; requiresAttention: boolean; inbox?: { id: string } };
+type WatchChangesResult = { transitions: Array<{ runId: string; state: string; inbox?: { id: string } }>; cursor: string; timedOut: boolean };
+
+/**
+ * Poll get_run_attention until nextAction reaches the target value or 'done'.
+ * Bounded by retries to keep the suite wait-bounded (e2e perf contract).
+ */
+async function attentionUntil(runId: string, target: string, retries = 20): Promise<AttentionResult> {
+  for (let i = 0; i < retries; i++) {
+    const att = await inv<AttentionResult>('get_run_attention', { runId });
+    if (att.nextAction === target || att.nextAction === 'done') return att;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  throw new Error(`run ${runId} did not reach nextAction=${target} after ${retries} retries`);
+}
+
+test('H1: create_run → start_run → get_run_attention → get_run round-trips a run to completion', { skip: e2eSkip }, async () => {
   // MCP strips runner overrides (safety), so the real runner runs a live preflight — use a clean
   // throwaway repo so local-change reaches completion.
   const target = createTargetRepo();
@@ -48,8 +64,8 @@ test('H1: create_run → start_run → wait_for_run → get_run round-trips a ru
     });
     h.developerWrites.set(created.runId, target.worktree);
     await inv('start_run', { runId: created.runId });
-    const settled = await inv<{ state: string }>('wait_for_run', { runId: created.runId, timeoutMs: 10_000, intervalMs: 500 });
-    assert.equal(settled.state, 'completed');
+    const settled = await attentionUntil(created.runId, 'done');
+    assert.equal(settled.nextAction, 'done');
     const detail = await inv<{ run: { status: string } }>('get_run', { runId: created.runId, includeEvents: true });
     assert.equal(detail.run.status, 'completed');
   } finally {
@@ -70,33 +86,24 @@ test('H2: a feature run drives plan + merge gates entirely through MCP tools', {
     await inv('start_run', { runId: created.runId });
 
     for (let i = 0; i < 2; i++) {
-      const st = await inv<{ state: string; inbox?: { id: string } }>('wait_for_run', {
-        runId: created.runId,
-        timeoutMs: 10_000,
-        intervalMs: 500,
-      });
-      assert.equal(st.state, 'pending_gate', `gate ${i + 1} should park`);
-      const inboxId = st.inbox?.id;
-      assert.ok(inboxId, 'pending_gate must surface the inbox item');
-      await inv('approve_gate', { inboxId, resolvedBy: 'mcp-e2e' });
+      const att = await attentionUntil(created.runId, 'ask_human');
+      assert.equal(att.nextAction, 'ask_human', `gate ${i + 1} should require attention`);
+      assert.ok(att.inbox?.id, 'pending_gate must surface the inbox item');
+      assert.equal(att.requiresAttention, true);
+      await inv('approve_gate', { inboxId: att.inbox.id, resolvedBy: 'mcp-e2e' });
     }
-    const done = await inv<{ state: string }>('wait_for_run', { runId: created.runId, timeoutMs: 10_000, intervalMs: 500 });
-    assert.equal(done.state, 'completed');
+    const done = await attentionUntil(created.runId, 'done');
+    assert.equal(done.nextAction, 'done');
   } finally {
     target.cleanup();
   }
 });
 
-test('H11: wait_for_any_gate / watch_runs drive a feature run to completion with the gate inbox inline', { skip: e2eSkip }, async () => {
-  type WatchResult = {
-    transitions: Array<{ runId: string; state: string; inbox?: { id: string } }>;
-    cursor: string;
-    timedOut: boolean;
-  };
+test('H11: watch_run_changes delivers gates and terminal under a single advancing cursor', { skip: e2eSkip }, async () => {
   const target = createTargetRepo();
   try {
     const created = await inv<{ runId: string }>('create_run', {
-      title: 'E2E MCP watch gates',
+      title: 'E2E MCP watch-changes cursor',
       repo: target.worktree,
       pipelineId: 'feature-development',
       start: false,
@@ -105,33 +112,38 @@ test('H11: wait_for_any_gate / watch_runs drive a feature run to completion with
     await inv('start_run', { runId: created.runId });
 
     let cursor: string | undefined;
-    // wait_for_any_gate holds the request open and polls; a few bounded re-calls cover a slow first gate.
-    const nextGate = async (): Promise<string> => {
+
+    const nextTransition = async (targetState: string): Promise<string | undefined> => {
       for (let i = 0; i < 6; i++) {
-        const res = await inv<WatchResult>('wait_for_any_gate', { runIds: [created.runId], timeoutMs: 10_000, cursor });
+        const res = await inv<WatchChangesResult>('watch_run_changes', {
+          runId: created.runId,
+          timeoutMs: 10_000,
+          ...(cursor ? { cursor } : {}),
+        });
         cursor = res.cursor;
-        const gate = res.transitions.find((t) => t.state === 'pending_gate');
-        if (gate) {
-          assert.equal(gate.runId, created.runId);
-          assert.ok(gate.inbox?.id, 'wait_for_any_gate returns the gate inbox inline (no get_agent_attempts dig)');
-          return gate.inbox.id;
-        }
+        const match = res.transitions.find((t) => t.state === targetState);
+        if (match) return match.inbox?.id;
       }
-      throw new Error('no gate surfaced via wait_for_any_gate');
+      return undefined;
     };
 
     for (let g = 0; g < 2; g++) {
-      const inboxId = await nextGate(); // a NEW gate id each round → the cursor reports it past the prior one
+      const inboxId = await nextTransition('pending_gate');
+      assert.ok(inboxId, `gate ${g + 1} inbox must be surfaced via watch_run_changes`);
       await inv('approve_gate', { inboxId, resolvedBy: 'mcp-e2e' });
     }
 
-    let done = false;
-    for (let i = 0; i < 6 && !done; i++) {
-      const res = await inv<WatchResult>('watch_runs', { runIds: [created.runId], timeoutMs: 10_000, cursor });
+    let completed = false;
+    for (let i = 0; i < 6 && !completed; i++) {
+      const res = await inv<WatchChangesResult>('watch_run_changes', {
+        runId: created.runId,
+        timeoutMs: 10_000,
+        ...(cursor ? { cursor } : {}),
+      });
       cursor = res.cursor;
-      done = res.transitions.some((t) => t.state === 'completed');
+      completed = res.transitions.some((t) => t.state === 'completed');
     }
-    assert.ok(done, 'watch_runs surfaces the terminal transition');
+    assert.ok(completed, 'watch_run_changes surfaces the terminal transition under advancing cursor');
   } finally {
     target.cleanup();
   }
@@ -195,13 +207,9 @@ test('H7: gate-only verbs are enforced — answer_question on a gate is rejected
     });
     h.developerWrites.set(created.runId, target.worktree);
     await inv('start_run', { runId: created.runId });
-    const st = await inv<{ state: string; inbox?: { id: string } }>('wait_for_run', {
-      runId: created.runId,
-      timeoutMs: 10_000,
-      intervalMs: 500,
-    });
-    assert.equal(st.state, 'pending_gate');
-    const inboxId = st.inbox?.id;
+    const att = await attentionUntil(created.runId, 'ask_human');
+    assert.equal(att.nextAction, 'ask_human');
+    const inboxId = att.inbox?.id;
     assert.ok(inboxId, 'pending_gate must surface the inbox item');
     await assert.rejects(
       () => mcp.invoke('answer_question', { inboxId, answer: { nope: true } }),
@@ -218,14 +226,18 @@ test('H7: gate-only verbs are enforced — answer_question on a gate is rejected
   }
 });
 
-test('H8: get_capabilities advertises the full stdio tool set', { skip: e2eSkip }, async () => {
+test('H8: get_capabilities advertises the full stdio tool set with new observation names', { skip: e2eSkip }, async () => {
   const caps = await inv<{ transport: string; auth: string; tools: string[] }>('get_capabilities');
   assert.equal(caps.transport, 'stdio');
   assert.equal(caps.auth, 'none');
   assert.deepEqual([...caps.tools].sort(), [...mcp.toolNames].sort(), 'advertised tools match the registered handlers');
-  for (const t of ['create_run', 'start_run', 'wait_for_run', 'approve_gate', 'get_run']) {
+  for (const t of ['create_run', 'start_run', 'get_run_attention', 'get_run_status', 'watch_run_changes', 'approve_gate', 'get_run']) {
     assert.ok(caps.tools.includes(t), `capabilities must list ${t}`);
   }
+  assert.equal(caps.tools.includes('observe_run'), false, 'observe_run must not be advertised');
+  assert.equal(caps.tools.includes('wait_for_run'), false, 'wait_for_run must not be advertised');
+  assert.equal(caps.tools.includes('wait_for_any_gate'), false, 'wait_for_any_gate must not be advertised');
+  assert.equal(caps.tools.includes('watch_runs'), false, 'watch_runs must not be advertised');
 });
 
 test('H9: catalog tools reflect the installed playbook', { skip: e2eSkip }, async () => {
@@ -248,8 +260,8 @@ test('H10: inspection tools reflect a completed run', { skip: e2eSkip }, async (
     });
     h.developerWrites.set(created.runId, target.worktree);
     await inv('start_run', { runId: created.runId });
-    const settled = await inv<{ state: string }>('wait_for_run', { runId: created.runId, timeoutMs: 10_000, intervalMs: 500 });
-    assert.equal(settled.state, 'completed');
+    const settled = await attentionUntil(created.runId, 'done');
+    assert.equal(settled.nextAction, 'done');
     let events = await inv<Array<{ type: string }>>('get_run_events', { runId: created.runId, limit: 500 });
     for (let waited = 0; waited < 15_000 && !events.some((e) => e.type === 'run_completed'); waited += 250) {
       await new Promise((resolve) => setTimeout(resolve, 250));

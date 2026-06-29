@@ -49,8 +49,7 @@ Verify from the agent by calling:
 - `list_pipelines`
 - `get_project`
 
-Core MCP verbs include run creation/start/cancel, watch tools, inbox gate resolution, repository diagnostics, and PR
-readiness.
+Core MCP verbs include run creation/start/cancel, `get_run_attention` (primary observation loop), `watch_run_changes` (cursor-based delivery), inbox gate resolution, repository diagnostics, and PR readiness. Normal observation loop: call `get_run_attention` after `start_run` and after each gate resolution; repeat until `nextAction` is `'done'`.
 
 ## Use GraphQL
 
@@ -133,12 +132,13 @@ instead of treating legacy run-scoped roots as the long-term shape.
 
 Use MCP for agent-driven work:
 
+- `get_run_attention` — primary single-shot observation; returns `nextAction` and `requiresAttention`
+- `get_run_status` — neutral status for dashboards (no prescriptive actions)
+- `watch_run_changes` — bounded long-poll with cursor for advanced change delivery
 - `list_inbox`
 - `approve_gate`
 - `reject_gate`
 - `answer_question`
-- `wait_for_any_gate`
-- `watch_runs`
 
 Use GraphQL for UI/script flows:
 

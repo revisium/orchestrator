@@ -8,7 +8,9 @@ export const MCP_TOOL_NAMES = [
   'create_run',
   'start_run',
   'resume_run',
-  'observe_run',
+  'get_run_attention',
+  'get_run_status',
+  'watch_run_changes',
   'cancel_run',
   'list_runs',
   'get_run',
@@ -20,9 +22,6 @@ export const MCP_TOOL_NAMES = [
   'tail_agent_log',
   'read_agent_output_events',
   'get_run_digest',
-  'wait_for_run',
-  'wait_for_any_gate',
-  'watch_runs',
   'list_inbox',
   'get_inbox_item',
   'get_pending_decisions',
@@ -49,22 +48,23 @@ export const MCP_INSTRUCTIONS = `Revo is a local-first software-development task
 Use these tools to manage tasks end-to-end from your coding agent:
 - create and start runs;
 - resume terminal recoverable preflight blocks with resume_run after the target repo is repaired;
-- observe run state through the low-context observe_run contract;
+- observe run state and attention requirements through the intent-named observation tools;
 - inspect bounded digests, events, attempts, agent activity, and logs only when needed;
 - resolve human inbox gates and questions;
 - inspect installed playbooks, roles, and pipelines;
 - inspect PR readiness and actionable review feedback before resuming work;
 - validate repository context before starting live work.
 
-Preferred run observation order:
-1. Use observe_run with the returned cursor for normal observation loops.
-2. Use observe_run with mode:"heartbeat" for explicit liveness checks.
-3. Use get_run_digest when observe_run.nextAction is "inspect_digest".
-4. Use get_agent_log with offsetBytes/limitBytes or tailBytes only when observe_run.nextAction is "inspect_log" or explicit debugging requires logs.
-5. Avoid get_run(includeEvents:true) and raw agent logs in polling loops.
+Normal run observation loop:
+1. Use get_run_attention after start_run and after each gate resolution. It answers "what currently requires attention?" with requiresAttention, nextAction, and suggestedTools.
+2. nextAction values: start_run → call start_run; ask_human → resolve the inbox item with approve_gate/reject_gate/answer_question; inspect_digest → call get_run_digest; inspect_log → call get_agent_log; wait → re-poll get_run_attention; done → run is terminal.
+3. Use get_run_status for neutral dashboard or status checks that must not prescribe actions.
+4. Use watch_run_changes for advanced clients that need cursor-based change delivery since a prior call (single run, bounded long-poll).
 
-Compatibility note: wait_for_run, wait_for_any_gate, and watch_runs remain registered for existing clients and
-diagnostic scripts, but observe_run is the canonical normal observation surface.
+Diagnostic tools (call only when required):
+- get_run_digest when nextAction is "inspect_digest".
+- get_agent_log with offsetBytes/limitBytes or tailBytes when nextAction is "inspect_log" or explicit debugging requires logs.
+- Avoid get_run(includeEvents:true) and raw agent logs in polling loops.
 
 This MCP server is local stdio only and does not expose generic Revisium table CRUD.
 Use product-level tools instead of writing raw rows.

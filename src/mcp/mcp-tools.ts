@@ -28,7 +28,6 @@ const issueRefSchema = z.object({
   url: z.string().min(1),
 }).optional();
 const watchCursorSchema = z.string().max(MAX_WATCH_CURSOR_CHARS);
-const observeRunModeSchema = z.enum(['actionable', 'heartbeat', 'diagnostic']);
 const prReadinessInputSchema = {
   repo: z.string().min(1).describe('GitHub repository in owner/name form, for example revisium/agent-orchestrator'),
   prNumber: z.number().int().positive().optional(),
@@ -40,18 +39,6 @@ const prReadinessInputSchema = {
   includeReviewThreads: z.boolean().optional().default(true),
 };
 
-const watchInputSchema = {
-  runIds: z.array(z.string().min(1)).min(1).max(50).optional().describe('Runs to watch; omit to watch all active runs'),
-  timeoutMs: z.number().int().nonnegative().max(45000).optional().describe('Server hold (clamped ≤45s)'),
-  cursor: watchCursorSchema.optional().describe('Resume cursor from a prior call; suppresses already-delivered transitions'),
-};
-const observeRunInputSchema = {
-  runId: runIdSchema,
-  cursor: watchCursorSchema.optional().describe('Resume cursor from a prior observe_run call'),
-  mode: observeRunModeSchema.optional().describe('Observation mode: actionable by default, heartbeat for liveness, diagnostic for bounded hints'),
-  timeoutMs: z.number().int().nonnegative().max(45000).optional().describe('Server hold (clamped ≤45s)'),
-  heartbeatEveryMs: z.number().int().positive().max(45000).optional().describe('Heartbeat cadence for mode:"heartbeat" (clamped ≤45s)'),
-};
 
 function assertValidAgentLogRange(input: { offsetBytes?: number; limitBytes?: number; tailBytes?: number }): void {
   if (input.tailBytes !== undefined && (input.offsetBytes !== undefined || input.limitBytes !== undefined)) {
@@ -172,51 +159,40 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
   );
 
   server.registerTool(
-    'observe_run',
+    'get_run_attention',
     {
       description:
-        'Canonical low-context run observation. Use with the returned cursor for normal polling; returns compact state, transition, heartbeat/activity counters, and the next bounded action without raw logs or full events.',
-      inputSchema: observeRunInputSchema,
+        'Primary run observation: return what currently requires attention for a run. Single-shot, no cursor. Normal loop: poll until nextAction is "done"; resolve inbox on "ask_human", call start_run on "start_run", check digest/log on inspect actions.',
+      inputSchema: { runId: runIdSchema },
       annotations: { readOnlyHint: true },
     },
-    async (input, extra) => json(await facade.observeRun({ ...input, signal: extra?.signal })),
+    async ({ runId }) => json(await facade.getRunAttention(runId)),
   );
 
   server.registerTool(
-    'wait_for_run',
+    'get_run_status',
     {
       description:
-        'Compatibility/diagnostic tool: resolve current run state and next action. Prefer observe_run with cursor for normal observation loops.',
+        'Return neutral current run state for dashboards and status checks. Does not prescribe actions.',
+      inputSchema: { runId: runIdSchema },
+      annotations: { readOnlyHint: true },
+    },
+    async ({ runId }) => json(await facade.getRunStatus(runId)),
+  );
+
+  server.registerTool(
+    'watch_run_changes',
+    {
+      description:
+        'Advanced bounded long-poll: block until a run transitions to an actionable or terminal state, returning the transition and a resume cursor. Re-call with the returned cursor to continue without re-delivering prior transitions.',
       inputSchema: {
         runId: runIdSchema,
-        timeoutMs: z.number().int().nonnegative().max(45000).optional(),
-        intervalMs: z.number().int().positive().max(10000).optional(),
+        cursor: watchCursorSchema.optional().describe('Resume cursor from a prior call'),
+        timeoutMs: z.number().int().nonnegative().max(45000).optional().describe('Server hold (clamped ≤45s)'),
       },
       annotations: { readOnlyHint: true },
     },
-    async (input) => json(await facade.waitForRun(input)),
-  );
-
-  server.registerTool(
-    'wait_for_any_gate',
-    {
-      description:
-        'Compatibility/diagnostic bounded long-poll: block until ANY watched run hits an approval/question gate, returning the gate (with its inbox row) and a resume cursor. Prefer observe_run for normal observation loops. Omit runIds to watch all active runs (capped).',
-      inputSchema: watchInputSchema,
-      annotations: { readOnlyHint: true },
-    },
-    async (input, extra) => json(await facade.waitForAnyGate({ ...input, signal: extra?.signal })),
-  );
-
-  server.registerTool(
-    'watch_runs',
-    {
-      description:
-        'Compatibility/diagnostic bounded long-poll: surfaces gate, terminal, failed, and blocked transitions. Prefer observe_run for normal observation loops. Returns {transitions, cursor, timedOut}; re-call with the cursor to continue.',
-      inputSchema: watchInputSchema,
-      annotations: { readOnlyHint: true },
-    },
-    async (input, extra) => json(await facade.watchRuns({ ...input, signal: extra?.signal })),
+    async (input, extra) => json(await facade.watchRunChanges({ ...input, signal: extra?.signal })),
   );
 
   server.registerTool(
@@ -248,7 +224,7 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
     'get_run',
     {
       description:
-        'Diagnostic tool: show a run with tasks and steps; can include bounded events and attempt summaries. Avoid includeEvents in polling loops; prefer observe_run and get_run_digest.',
+        'Diagnostic tool: show a run with tasks and steps; can include bounded events and attempt summaries. Avoid includeEvents in polling loops; prefer get_run_attention and get_run_digest.',
       inputSchema: {
         runId: runIdSchema,
         includeEvents: z.boolean().optional(),

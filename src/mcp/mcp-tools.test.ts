@@ -41,22 +41,37 @@ test('registerRevoMcpTools registers agent observability tools', () => {
   assert.equal(Boolean(tools.find((tool) => tool.name === 'get_agent_log')?.config.inputSchema?.stream), true);
 });
 
-test('observe_run is registered as the canonical low-context observation tool', async () => {
+test('get_run_attention and get_run_status are registered with runId-only schemas', async () => {
   const { z } = await import('zod');
   const { server, tools } = makeServer();
 
   registerRevoMcpTools(server as never, {} as McpFacadeService);
 
-  const tool = tools.find((registered) => registered.name === 'observe_run');
-  assert.ok(tool);
+  for (const name of ['get_run_attention', 'get_run_status']) {
+    const tool = tools.find((registered) => registered.name === name);
+    assert.ok(tool, `${name} must be registered`);
+    const schema = z.object(tool.config.inputSchema as Record<string, never>);
+    assert.equal(schema.safeParse({ runId: 'r1' }).success, true, `${name} accepts runId`);
+    assert.equal(schema.safeParse({}).success, false, `${name} rejects empty input`);
+    assert.equal('cursor' in (tool.config.inputSchema ?? {}), false, `${name} must not accept cursor`);
+    assert.equal('timeoutMs' in (tool.config.inputSchema ?? {}), false, `${name} must not accept timeoutMs`);
+  }
+});
+
+test('watch_run_changes is registered with runId + optional cursor and timeoutMs ≤45s', async () => {
+  const { z } = await import('zod');
+  const { server, tools } = makeServer();
+
+  registerRevoMcpTools(server as never, {} as McpFacadeService);
+
+  const tool = tools.find((registered) => registered.name === 'watch_run_changes');
+  assert.ok(tool, 'watch_run_changes must be registered');
   const schema = z.object(tool.config.inputSchema as Record<string, never>);
   assert.equal(schema.safeParse({ runId: 'r1' }).success, true);
-  assert.equal(schema.safeParse({ runId: 'r1', mode: 'heartbeat', heartbeatEveryMs: 45_000 }).success, true);
-  assert.equal(schema.safeParse({ runId: 'r1', mode: 'other' }).success, false);
-  assert.equal(schema.safeParse({ runId: 'r1', timeoutMs: 45_001 }).success, false);
+  assert.equal(schema.safeParse({ runId: 'r1', timeoutMs: 45_000 }).success, true);
+  assert.equal(schema.safeParse({ runId: 'r1', timeoutMs: 45_001 }).success, false, 'rejects >45s');
   assert.equal(schema.safeParse({ runId: 'r1', cursor: 'x'.repeat(MAX_WATCH_CURSOR_CHARS) }).success, true);
-  assert.equal(schema.safeParse({ runId: 'r1', cursor: 'x'.repeat(MAX_WATCH_CURSOR_CHARS + 1) }).success, false);
-  assert.equal(tool.config.description?.includes('without raw logs or full events'), true);
+  assert.equal(schema.safeParse({ runId: 'r1', cursor: 'x'.repeat(MAX_WATCH_CURSOR_CHARS + 1) }).success, false, 'rejects oversized cursor');
 });
 
 test('create_run schema accepts issueRef traceability metadata', async () => {
@@ -118,24 +133,24 @@ test('pipeline MCP tools expose compact defaults with explicit detail opt-in', a
   assert.equal(getTool.config.description?.includes('Compact by default'), true);
 });
 
-test('observe_run handler forwards the request abort signal to the facade', async () => {
+test('watch_run_changes handler forwards the request abort signal to the facade', async () => {
   const { server, tools } = makeServer();
   let received: { runId?: string; signal?: AbortSignal } | undefined;
   const facade = {
-    async observeRun(input: { runId?: string; signal?: AbortSignal }) {
+    async watchRunChanges(input: { runId?: string; signal?: AbortSignal }) {
       received = input;
-      return { runId: 'r1', cursor: 'c', state: 'running', timedOut: true, nextAction: 'wait' };
+      return { transitions: [], cursor: 'c', timedOut: true };
     },
   } as unknown as McpFacadeService;
   registerRevoMcpTools(server as never, facade);
-  const tool = tools.find((registered) => registered.name === 'observe_run');
+  const tool = tools.find((registered) => registered.name === 'watch_run_changes');
   assert.ok(tool);
 
   const ac = new AbortController();
   const invoke = tool.handler as unknown as (input: unknown, extra: unknown) => Promise<unknown>;
   const result = await invoke({ runId: 'r1' }, { signal: ac.signal });
 
-  assert.deepEqual(parseToolText(result), { runId: 'r1', cursor: 'c', state: 'running', timedOut: true, nextAction: 'wait' });
+  assert.deepEqual(parseToolText(result), { transitions: [], cursor: 'c', timedOut: true });
   assert.deepEqual(received?.runId, 'r1');
   assert.equal(received?.signal, ac.signal);
 });
@@ -170,54 +185,19 @@ test('get_agent_log MCP tool validates conflicting bounded read inputs before fa
   assert.deepEqual(calls, [{ runId: 'run-1', stream: 'combined', tailBytes: 65_536 }]);
 });
 
-test('wait_for_any_gate and watch_runs are registered with a hold cap ≤45s', async () => {
-  const { z } = await import('zod');
+test('registerRevoMcpTools registers the 3 new observation tools and not the 4 old ones', () => {
   const { server, tools } = makeServer();
   registerRevoMcpTools(server as never, {} as McpFacadeService);
   const names = tools.map((tool) => tool.name);
-  assert.ok(names.includes('wait_for_any_gate'));
-  assert.ok(names.includes('watch_runs'));
-  assert.ok(names.includes('observe_run'));
 
-  // The cap is the binding fix: a wait above the inner-hop budget dies at the transport. Includes
-  // wait_for_run, whose 120000 cap was lowered to 45000 in the same slice.
-  for (const name of ['wait_for_run', 'wait_for_any_gate', 'watch_runs']) {
-    const tool = tools.find((registered) => registered.name === name);
-    assert.ok(tool, name);
-    const schema = z.object(tool.config.inputSchema as Record<string, never>);
-    assert.equal(schema.safeParse({ runId: 'r', runIds: ['r'], timeoutMs: 45_001 }).success, false, `${name} rejects >45s`);
-    assert.equal(schema.safeParse({ runId: 'r', runIds: ['r'], timeoutMs: 45_000 }).success, true, `${name} accepts 45s`);
-    if (name !== 'wait_for_run') {
-      assert.equal(schema.safeParse({ runIds: ['r'], cursor: 'x'.repeat(MAX_WATCH_CURSOR_CHARS) }).success, true, `${name} accepts max cursor`);
-      assert.equal(schema.safeParse({ runIds: ['r'], cursor: 'x'.repeat(MAX_WATCH_CURSOR_CHARS + 1) }).success, false, `${name} rejects oversized cursor`);
-    }
-  }
-  const observeRun = tools.find((registered) => registered.name === 'observe_run');
-  assert.ok(observeRun);
-  const schema = z.object(observeRun.config.inputSchema as Record<string, never>);
-  assert.equal(schema.safeParse({ runId: 'r', timeoutMs: 45_001 }).success, false, 'observe_run rejects >45s');
-  assert.equal(schema.safeParse({ runId: 'r', timeoutMs: 45_000 }).success, true, 'observe_run accepts 45s');
-});
+  assert.ok(names.includes('get_run_attention'), 'get_run_attention must be registered');
+  assert.ok(names.includes('get_run_status'), 'get_run_status must be registered');
+  assert.ok(names.includes('watch_run_changes'), 'watch_run_changes must be registered');
 
-test('wait_for_any_gate handler forwards the request abort signal to the facade', async () => {
-  const { server, tools } = makeServer();
-  let received: { runIds?: string[]; signal?: AbortSignal } | undefined;
-  const facade = {
-    async waitForAnyGate(input: { runIds?: string[]; signal?: AbortSignal }) {
-      received = input;
-      return { transitions: [], cursor: 'c', timedOut: true };
-    },
-  } as unknown as McpFacadeService;
-  registerRevoMcpTools(server as never, facade);
-  const tool = tools.find((registered) => registered.name === 'wait_for_any_gate');
-  assert.ok(tool);
-
-  const ac = new AbortController();
-  const invoke = tool.handler as unknown as (input: unknown, extra: unknown) => Promise<unknown>;
-  await invoke({ runIds: ['r1'] }, { signal: ac.signal });
-
-  assert.deepEqual(received?.runIds, ['r1']);
-  assert.equal(received?.signal, ac.signal);
+  assert.equal(names.includes('observe_run'), false, 'observe_run must be removed');
+  assert.equal(names.includes('wait_for_run'), false, 'wait_for_run must be removed');
+  assert.equal(names.includes('wait_for_any_gate'), false, 'wait_for_any_gate must be removed');
+  assert.equal(names.includes('watch_runs'), false, 'watch_runs must be removed');
 });
 
 test('get_run_events: schema accepts expand:["graph"] and rejects unknown expand values', async () => {

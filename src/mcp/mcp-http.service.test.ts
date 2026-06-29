@@ -30,7 +30,7 @@ test('McpHttpService: a client disconnect mid-long-poll aborts the in-flight too
   // transport close actually propagates an abort to the handler. It signals `handlerReached` once the
   // abort listener is attached, so the test disconnects on that fact, not a fixed sleep (no race).
   const facade = {
-    async waitForAnyGate(input: { signal?: AbortSignal }) {
+    async watchRunChanges(input: { signal?: AbortSignal }) {
       return new Promise((resolve) => {
         input.signal?.addEventListener(
           'abort',
@@ -53,7 +53,7 @@ test('McpHttpService: a client disconnect mid-long-poll aborts the in-flight too
 
   try {
     const call = client
-      .callTool({ name: 'wait_for_any_gate', arguments: { runIds: ['r1'], timeoutMs: 30_000 } })
+      .callTool({ name: 'watch_run_changes', arguments: { runId: 'r1', timeoutMs: 30_000 } })
       .catch(() => undefined); // closing the connection rejects/aborts the client call — result irrelevant
     await handlerReached; // the handler attached its abort listener — safe to disconnect (no race)
     await client.close(); // drop the connection → server res.on('close') fires while the handler is held

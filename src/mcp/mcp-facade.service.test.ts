@@ -6,7 +6,7 @@ import type { TaskControlPlaneApiService } from '../task-control-plane/task-cont
 import { ControlPlaneError } from '../control-plane/errors.js';
 import { AgentObservabilityError } from '../observability/types.js';
 import { CreateRunWorkflowError } from '../run/create-run.js';
-import { RunWatchService } from '../task-control-plane/run-watch.service.js';
+import { RunWatchService, type WatchResult } from '../task-control-plane/run-watch.service.js';
 
 const never = <T>() => new Promise<T>(() => undefined);
 
@@ -41,47 +41,52 @@ test('McpFacadeService.getCapabilities exposes the MCP transport surface', () =>
   assert.ok(capabilities.tools.includes('get_agent_log'));
   assert.ok(capabilities.tools.includes('tail_agent_log'));
   assert.ok(capabilities.tools.includes('read_agent_output_events'));
-  assert.ok(capabilities.tools.includes('observe_run'));
-  assert.ok(capabilities.tools.includes('wait_for_any_gate'));
-  assert.ok(capabilities.tools.includes('watch_runs'));
-  assert.deepEqual(capabilities.observation.compatibilityTools, ['wait_for_run', 'wait_for_any_gate', 'watch_runs']);
-  assert.equal(capabilities.observation.preferredOrder[0]?.startsWith('observe_run with cursor'), true);
+  assert.ok(capabilities.tools.includes('get_run_attention'), 'get_run_attention must be in tools');
+  assert.ok(capabilities.tools.includes('get_run_status'), 'get_run_status must be in tools');
+  assert.ok(capabilities.tools.includes('watch_run_changes'), 'watch_run_changes must be in tools');
+  const toolSet = new Set<string>(capabilities.tools);
+  assert.equal(toolSet.has('observe_run'), false, 'observe_run must be removed');
+  assert.equal(toolSet.has('wait_for_any_gate'), false, 'wait_for_any_gate must be removed');
+  assert.equal(toolSet.has('watch_runs'), false, 'watch_runs must be removed');
+  assert.equal(capabilities.observation.primaryTool, 'get_run_attention');
+  assert.equal(capabilities.observation.deliveryTool, 'watch_run_changes');
+  assert.equal('compatibilityTools' in capabilities.observation, false, 'no compatibilityTools in new surface');
+  assert.equal(capabilities.observation.preferredOrder[0]?.startsWith('get_run_attention'), true);
   assert.ok(capabilities.observation.preferredOrder.some((item) => item.includes('avoid get_run(includeEvents:true)')));
 });
 
-test('McpFacadeService delegates observe and watch primitives to the injected RunWatchService', async () => {
+test('McpFacadeService delegates attention/status/watch primitives to the injected RunWatchService', async () => {
   const api = {} as TaskControlPlaneApiService;
   const calls: Array<{ method: string; input: unknown }> = [];
   const runWatch = {
-    async observeRun(input: unknown) {
-      calls.push({ method: 'observeRun', input });
-      return { runId: 'r1', cursor: 'oc1', state: 'running', timedOut: true, nextAction: 'wait' };
+    async getRunAttention(runId: unknown) {
+      calls.push({ method: 'getRunAttention', input: runId });
+      return { runId: 'r1', state: 'pending_gate', requiresAttention: true, nextAction: 'ask_human', suggestedTools: [] };
     },
-    async waitForAnyGate(input: unknown) {
-      calls.push({ method: 'waitForAnyGate', input });
-      return { transitions: [{ runId: 'r1', state: 'pending_gate', nextAction: 'approve' }], cursor: 'c1', timedOut: false };
+    async getRunStatus(runId: unknown) {
+      calls.push({ method: 'getRunStatus', input: runId });
+      return { runId: 'r1', state: 'running', runStatus: 'running', workflowStatus: 'PENDING' };
     },
-    async watchRuns(input: unknown) {
-      calls.push({ method: 'watchRuns', input });
-      return { transitions: [], cursor: 'c2', timedOut: true };
+    async watchRunChanges(input: unknown) {
+      calls.push({ method: 'watchRunChanges', input });
+      return { transitions: [], cursor: 'c1', timedOut: true } as WatchResult;
     },
   } as unknown as RunWatchService;
   const facade = new McpFacadeService(api, runWatch);
 
-  const observeResult = await facade.observeRun({ runId: 'r1', timeoutMs: 1000 });
-  const gateResult = await facade.waitForAnyGate({ runIds: ['r1'], timeoutMs: 1000 });
-  const watchResult = await facade.watchRuns({ cursor: 'c1' });
+  const attentionResult = await facade.getRunAttention('r1');
+  const statusResult = await facade.getRunStatus('r1');
+  const watchResult = await facade.watchRunChanges({ runId: 'r1', cursor: 'c0' });
 
-  assert.deepEqual(calls[0], { method: 'observeRun', input: { runId: 'r1', timeoutMs: 1000 } });
-  assert.deepEqual(calls[1], { method: 'waitForAnyGate', input: { runIds: ['r1'], timeoutMs: 1000 } });
-  assert.deepEqual(calls[2], { method: 'watchRuns', input: { cursor: 'c1' } });
-  assert.equal(observeResult.nextAction, 'wait');
-  assert.equal(gateResult.transitions[0]?.runId, 'r1');
+  assert.deepEqual(calls[0], { method: 'getRunAttention', input: 'r1' });
+  assert.deepEqual(calls[1], { method: 'getRunStatus', input: 'r1' });
+  assert.deepEqual(calls[2], { method: 'watchRunChanges', input: { runId: 'r1', cursor: 'c0' } });
+  assert.equal(attentionResult.nextAction, 'ask_human');
+  assert.equal(statusResult.runStatus, 'running');
   assert.equal(watchResult.timedOut, true);
 });
 
 test('McpFacadeService lazily builds a poll-fallback watch when none is injected', async () => {
-  // Construct the facade the e2e/stdio path does (api only); the watch must still work over the api.
   const api = {
     async resolveRunState(runId: string) {
       return { runId, state: 'pending_gate', nextAction: 'approve', runStatus: 'running', workflowStatus: 'PENDING', inbox: { id: 'ix' } };
@@ -92,12 +97,13 @@ test('McpFacadeService lazily builds a poll-fallback watch when none is injected
   } as unknown as TaskControlPlaneApiService;
   const facade = new McpFacadeService(api);
 
-  const observed = await facade.observeRun({ runId: 'r1', timeoutMs: 0 });
-  const result = await facade.waitForAnyGate({ runIds: ['r1'], timeoutMs: 0 });
+  const attention = await facade.getRunAttention('r1');
+  const watchResult = await facade.watchRunChanges({ runId: 'r1', timeoutMs: 0 });
 
-  assert.equal(observed.transition?.runId, 'r1');
-  assert.equal(result.transitions[0]?.runId, 'r1');
-  assert.equal(result.transitions[0]?.inbox?.id, 'ix');
+  assert.equal(attention.runId, 'r1');
+  assert.equal(attention.nextAction, 'ask_human');
+  assert.equal(watchResult.transitions[0]?.runId, 'r1');
+  assert.equal(watchResult.transitions[0]?.inbox?.id, 'ix');
 });
 
 test('McpFacadeService delegates product operations to TaskControlPlaneApiService', async () => {

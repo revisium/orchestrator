@@ -9,9 +9,9 @@ import { AgentObservabilityError } from '../observability/types.js';
 import { CreateRunWorkflowError } from '../run/create-run.js';
 import {
   RunWatchService,
-  type ObserveRunInput,
-  type ObserveRunResult,
-  type WatchInput,
+  type RunAttentionResult,
+  type RunStatusResult,
+  type WatchRunChangesInput,
   type WatchResult,
 } from '../task-control-plane/run-watch.service.js';
 import { MCP_TOOL_NAMES } from './mcp-capabilities.js';
@@ -357,18 +357,21 @@ export class McpFacadeService {
         'Local stdio MCP server; no remote HTTP listener.',
         'Tools expose product operations, not generic Revisium row CRUD.',
         'Runs are driven by installed playbooks, pipeline catalogs, and execution profiles.',
-        'Normal run polling should use observe_run with its cursor; compatibility watch tools remain available for older clients and diagnostics.',
+        'Normal run polling: get_run_attention → resolve inbox/start/wait/inspect/done.',
       ],
       observation: {
+        primaryTool: 'get_run_attention',
+        supportingTools: ['get_run_status', 'get_run_digest', 'get_run_events', 'get_agent_activity', 'get_agent_log'],
+        deliveryTool: 'watch_run_changes',
+        diagnosticTools: ['get_run_digest', 'get_agent_log', 'get_run_events', 'get_agent_activity'],
         preferredOrder: [
-          'observe_run with cursor for normal observation',
-          'observe_run mode:"heartbeat" for explicit liveness checks',
-          'get_run_digest when observe_run.nextAction is "inspect_digest"',
-          'get_agent_log with offsetBytes/limitBytes or tailBytes when observe_run.nextAction is "inspect_log" or explicit debugging requires logs',
+          'get_run_attention for current attention state and next action',
+          'get_run_status for neutral dashboard or status checks',
+          'get_run_digest when nextAction is "inspect_digest"',
+          'get_agent_log with offsetBytes/limitBytes or tailBytes when nextAction is "inspect_log" or explicit debugging requires logs',
+          'watch_run_changes for bounded change delivery with cursor continuity',
           'avoid get_run(includeEvents:true) and raw agent logs in polling loops',
         ],
-        compatibilityTools: ['wait_for_run', 'wait_for_any_gate', 'watch_runs'],
-        diagnosticTools: ['get_run_digest', 'get_agent_log', 'get_run_events', 'get_agent_activity'],
       },
     };
   }
@@ -503,20 +506,16 @@ export class McpFacadeService {
     return this.api.getRunDigest(runId).then((digest) => compactRunDigest(digest) as JsonRecord);
   }
 
-  waitForRun(input: { runId: string; timeoutMs?: number; intervalMs?: number }) {
-    return this.api.waitForRun(input);
+  getRunAttention(runId: string): Promise<RunAttentionResult> {
+    return this.runWatch.getRunAttention(runId);
   }
 
-  observeRun(input: ObserveRunInput): Promise<ObserveRunResult> {
-    return this.runWatch.observeRun(input);
+  getRunStatus(runId: string): Promise<RunStatusResult> {
+    return this.runWatch.getRunStatus(runId);
   }
 
-  waitForAnyGate(input: WatchInput): Promise<WatchResult> {
-    return this.runWatch.waitForAnyGate(input);
-  }
-
-  watchRuns(input: WatchInput): Promise<WatchResult> {
-    return this.runWatch.watchRuns(input);
+  watchRunChanges(input: WatchRunChangesInput): Promise<WatchResult> {
+    return this.runWatch.watchRunChanges(input);
   }
 
   listInbox(filter?: { status?: 'pending' | 'resolved'; runId?: string; limit?: number }) {
