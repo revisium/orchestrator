@@ -22,6 +22,7 @@ export type RunAgent = (args: {
   attemptId: string;
   step: Step;
   reporter?: AgentActivityReporter;
+  acceptedVerdicts?: readonly string[];
 }) => Promise<AttemptResult>;
 
 export class RunAgentError extends Error {

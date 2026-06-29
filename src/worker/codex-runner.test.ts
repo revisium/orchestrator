@@ -168,6 +168,7 @@ async function runWith(
   roleOverrides: Parameters<typeof makeRole>[1] = {},
   profile: ModelProfile = PROFILE,
   reporter?: AgentActivityReporter,
+  acceptedVerdicts?: readonly string[],
 ) {
   const runner = createCodexRunner({
     executor,
@@ -182,6 +183,7 @@ async function runWith(
     attemptId: ATTEMPT_ID,
     step: BASE_STEP,
     reporter,
+    ...(acceptedVerdicts ? { acceptedVerdicts } : {}),
   });
 }
 
@@ -211,6 +213,27 @@ test('codex runner: builds documented codex exec invocation and writes schema fi
     const schema = JSON.parse(readFileSync(schemaPath, 'utf8')) as typeof CODEX_OUTPUT_SCHEMA;
     assert.deepEqual(schema.required, ['verdict', 'output', 'artifacts', 'nextSteps', 'needsHuman', 'lesson']);
     assert.equal(schema.additionalProperties, false);
+  });
+});
+
+test('codex runner: writes accepted verdicts into the output schema enum and prompt note', async () => {
+  await withTempRoot(async (root) => {
+    const captured: ExecRequest[] = [];
+    await runWith(
+      fakeExecutor(ok(jsonl({ type: 'turn.completed', output: finalResult() })), captured),
+      root,
+      {},
+      PROFILE,
+      undefined,
+      ['approved'],
+    );
+
+    const req = captured[0];
+    const schemaPath = req?.args[3] ?? '';
+    const schema = JSON.parse(readFileSync(schemaPath, 'utf8')) as { properties?: { verdict?: { enum?: unknown } } };
+    assert.deepEqual(schema.properties?.verdict?.enum, ['approved']);
+    assert.match(req?.input ?? '', /approved/, 'prompt note names the accepted token');
+    assert.doesNotMatch(req?.input ?? '', /clean/, 'prompt note must not advertise out-of-domain "clean"');
   });
 });
 

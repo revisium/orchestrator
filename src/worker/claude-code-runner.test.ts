@@ -487,6 +487,65 @@ test('claude-code runner: constrains output via --json-schema + a structured-res
   assert.ok(/verdict/.test(input), 'prompt must instruct the structured result (verdict field)');
 });
 
+test('claude-code runner: advertises ONLY the template accepted verdicts, never a wider global menu', async () => {
+  const captured: ExecRequest[] = [];
+  const runner = createClaudeCodeRunner({ executor: fakeExecutor(ok(structuredTransport()), captured), resolveCwd: async () => '/w', timeoutMs: 5_000 });
+  await runner({
+    role: makeRole('developer'),
+    profile: PROFILE,
+    context: 'ctx',
+    attemptId: ATTEMPT_ID,
+    step: BASE_STEP,
+    acceptedVerdicts: ['approved'],
+  });
+
+  const req = captured[0];
+  const schemaIdx = (req?.args.indexOf('--json-schema') ?? -1);
+  const schemaText = req?.args[schemaIdx + 1] ?? '';
+  const schema = JSON.parse(schemaText) as { properties?: { verdict?: { enum?: unknown; description?: string } } };
+  assert.deepEqual(schema.properties?.verdict?.enum, ['approved'], 'schema enum must match the template domain');
+  assert.match(schema.properties?.verdict?.description ?? '', /approved/, 'schema verdict description names the accepted token');
+  assert.doesNotMatch(schemaText, /clean/, 'schema must NOT advertise out-of-domain "clean"');
+  assert.doesNotMatch(schemaText, /dirty/, 'schema must NOT advertise out-of-domain "dirty"');
+
+  const prompt = req?.input ?? '';
+  assert.match(prompt, /approved/, 'prompt note names the accepted token');
+  assert.doesNotMatch(prompt, /clean/, 'prompt note must NOT advertise out-of-domain "clean"');
+  assert.doesNotMatch(prompt, /dirty/, 'prompt note must NOT advertise out-of-domain "dirty"');
+});
+
+test('claude-code runner: advertises every accepted verdict for a multi-token domain', async () => {
+  const captured: ExecRequest[] = [];
+  const runner = createClaudeCodeRunner({ executor: fakeExecutor(ok(structuredTransport()), captured), resolveCwd: async () => '/w', timeoutMs: 5_000 });
+  await runner({
+    role: makeRole('reviewer'),
+    profile: PROFILE,
+    context: 'ctx',
+    attemptId: ATTEMPT_ID,
+    step: BASE_STEP,
+    acceptedVerdicts: ['approved', 'changes_requested', 'blocker'],
+  });
+
+  const req = captured[0];
+  const schemaText = req?.args[(req?.args.indexOf('--json-schema') ?? -1) + 1] ?? '';
+  const schema = JSON.parse(schemaText) as { properties?: { verdict?: { enum?: unknown } } };
+  assert.deepEqual(schema.properties?.verdict?.enum, ['approved', 'changes_requested', 'blocker']);
+  for (const token of ['approved', 'changes_requested', 'blocker']) {
+    assert.match(schemaText, new RegExp(token), `schema advertises ${token}`);
+  }
+});
+
+test('claude-code runner: falls back to the global verdict menu when no domain is supplied', async () => {
+  const captured: ExecRequest[] = [];
+  await run(fakeExecutor(ok(structuredTransport()), captured));
+  const req = captured[0];
+  const schemaText = req?.args[(req?.args.indexOf('--json-schema') ?? -1) + 1] ?? '';
+  const schema = JSON.parse(schemaText) as { properties?: { verdict?: { enum?: unknown } } };
+  assert.equal(schema.properties?.verdict?.enum, undefined, 'fallback must not add a fake enum when domain is unknown');
+  assert.match(schemaText, /approved/, 'fallback still names verdict tokens so the field is described');
+  assert.match(schemaText, /clean/, 'fallback retains the historical global menu when domain is unknown');
+});
+
 test('claude-code runner: reads verdict + output from --json-schema structured_output', async () => {
   const stdout = structuredTransport({ verdict: 'approved', output: 'the plan' });
   const result = await run(fakeExecutor(ok(stdout), []));

@@ -99,6 +99,14 @@ const pipelines = JSON.parse(
 const roleCatalog = JSON.parse(readFileSync(join(catalogDir, 'roles.json'), 'utf8')) as Array<{ id: string }>;
 const declaredRoleIds = new Set(roleCatalog.map((r) => r.id));
 
+function pipelineTemplate(id: string): { verdicts?: { domain?: unknown } } {
+  const pipeline = pipelines.find((candidate) => candidate.id === id);
+  assert.ok(pipeline, `default pipeline ${id} exists`);
+  const template = pipeline.execution_policy.template_json;
+  assert.ok(template, `default pipeline ${id} carries execution_policy.template_json`);
+  return template as { verdicts?: { domain?: unknown } };
+}
+
 /** Walk a template's nodes and collect every `<kind>:<id>` capability handle referenced. */
 function capabilityRoleIds(template: { nodes: Record<string, Record<string, unknown>> }): string[] {
   // Built-in system scripts have no role of their own — they resolve to whichever binding runs the
@@ -148,6 +156,19 @@ for (const pipeline of pipelines) {
     }
   });
 }
+
+test('default playbook: verdict domains preserve local-change narrowness and feature-development breadth', () => {
+  assert.deepEqual(
+    pipelineTemplate('local-change').verdicts?.domain,
+    ['approved'],
+    'local-change must stay narrow; runner prompts adapt to this domain instead of widening it',
+  );
+  assert.deepEqual(
+    pipelineTemplate('feature-development').verdicts?.domain,
+    ['approved', 'clean', 'blocker', 'changes_requested', 'review_changes', 'ci_changes', 'fix', 'wontfix', 'question', 'recheck'],
+    'feature-development keeps the broad default domain used by plan/review/PR-feedback routing',
+  );
+});
 
 // ---------------------------------------------------------------------------
 // 4. seedDefaultPlaybook idempotency + benign-race tolerance.

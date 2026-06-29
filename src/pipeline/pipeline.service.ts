@@ -409,6 +409,7 @@ export function makeRunStep(deps: RunStepDeps) {
     resolvedRunnerId?: string,
     executionProfile?: ExecutionProfile,
     physicalAttempt?: RunStepPhysicalAttempt,
+    acceptedVerdicts?: readonly string[],
   ): Promise<AttemptResult> {
     const loadedRole = await loadRole(role);
 
@@ -467,7 +468,15 @@ export function makeRunStep(deps: RunStepDeps) {
     const startedAt = clock();
     let result: AttemptResult;
     try {
-      result = await runAgentWithReporterFlush(runAgent, { role: dispatchRole, profile, context, attemptId, step, reporter });
+      result = await runAgentWithReporterFlush(runAgent, {
+        role: dispatchRole,
+        profile,
+        context,
+        attemptId,
+        step,
+        reporter,
+        ...(acceptedVerdicts ? { acceptedVerdicts } : {}),
+      });
     } catch (err) {
       const durationMs = Math.max(0, clock() - startedAt);
       return handleRunnerFailure(appendEvent, appendAttempt, { runId, role, stepKey, attemptId, attemptNo, step, durationMs }, err);
@@ -516,6 +525,7 @@ export class PipelineService {
     resolvedRunnerId?: string,
     executionProfile?: ExecutionProfile,
     physicalAttempt?: RunStepPhysicalAttempt,
+    acceptedVerdicts?: readonly string[],
   ) => Promise<AttemptResult>;
 
 

@@ -19,6 +19,10 @@ or durable progress.
   protocol payload shapes.
 - External effects must be idempotent by run/step/attempt identity where replay can repeat the call.
 - Runners must respect role scope, allowed tools, and permission mode.
+- The verdict menu a runner advertises to the agent (result-schema description and prompt note) must be the
+  active template's accepted verdict domain. The engine fails a run terminally when an agent emits a verdict
+  outside that domain, so the runner must never offer a token the template would reject. The adapter threads
+  the domain into each agent step; when no domain is supplied the runner falls back to the union menu.
 - Code and diffs live in git, not Revisium payloads.
 - Failure output should include a concise lesson or reason for later context.
 - Developer roles must not change architecture or ADR decisions unless the selected pipeline explicitly routes
@@ -136,5 +140,7 @@ The exact dataflow contract lives in [specs/run-dataflow-v1.spec.md](./specs/run
 
 ## Changelog
 
+- 2026-06-29: Documented that the advertised verdict menu reconciles with the active template's accepted verdict
+  domain; the adapter threads the domain into each agent step so the runner never offers an out-of-domain token.
 - 2026-06-27: Documented adapter-level transient runner retry, physical attempt identity, retry policy env vars,
   and durable retry evidence.
