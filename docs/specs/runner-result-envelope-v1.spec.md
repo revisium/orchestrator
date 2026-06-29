@@ -10,7 +10,7 @@
 ## Scope
 
 This spec governs the canonical agent result envelope, the three structured-output tiers
-(`native-schema` | `tool-call` | `prompt-only`), the `submit_result` tool-call floor, how the engine harvests the
+(`native-schema` | `tool-call` | `prompt-only`), the `submit_result` tool-call mechanism, how the engine harvests the
 envelope per tier, and the existing validate seam those tiers ride. It does NOT govern verdict-vocabulary
 correctness (the membership of a verdict in a template's domain set — a separate concern, see #207) beyond noting
 the boundary.
@@ -23,8 +23,9 @@ Paths are `src/...` = the `@revisium/orchestrator` package root.
 
 ## Current Contract
 
-Today there is no tier model — every runner has a native schema flag, and the validate seam is already shipped.
-What ships:
+Today there is no tier model. Only the two live CLI AGENT runners (claude-code, codex) use native schema delivery;
+the deterministic `script`/`stub-agent` runner returns a typed `AttemptResult` directly (no schema flag). The
+validate seam is already shipped. What ships:
 
 - **Two concrete schemas, both native.** Claude: `AGENT_RESULT_SCHEMA` (`src/worker/result-envelope.ts:7-27`) —
   required `['verdict','output']`, `additionalProperties:false`; reconstructed by `agentResultFromStructured`
@@ -83,10 +84,11 @@ The `StdoutParser → AttemptResult` mapping MUST copy the envelope's top-level 
 o.verdict` (`src/worker/result-envelope.ts:62-69`, copy at `:64`). The whole floor depends on it: the validate seam
 reads ONLY `AttemptResult.verdict` (`domainVerdictOf`, `src/pipeline/data-driven-task.workflow.ts:435-440`), so a
 parser that harvests the envelope but fails to lift the verdict produces a node that ALWAYS fails to
-`revo.ResultInvalid`, no matter how well-formed the envelope was. The parser MUST also normalize the lifted
-`verdict` to **lowercase** (the engine does `.trim().toLowerCase()` at `:435-440`). The engine routes ONLY on the
-top-level `verdict`; prose output is never mined for routing (`src/worker/result-envelope.ts:5-6`,
-`src/pipeline/data-driven-task.workflow.ts:434-440`).
+`revo.ResultInvalid`, no matter how well-formed the envelope was. The parser lifts the verdict AS EMITTED — it does
+NOT lowercase. **Normalization (trim + lowercase) is the ENGINE's job**, applied later at routing/validation by
+`domainVerdictOf` (`.trim().toLowerCase()`, `src/pipeline/data-driven-task.workflow.ts:435-440`). The engine routes
+ONLY on the top-level `verdict`; prose output is never mined for routing (`src/worker/result-envelope.ts:5-6`,
+`src/pipeline/data-driven-task.workflow.ts:435-440`).
 
 ### The three structured-output tiers
 
@@ -97,7 +99,7 @@ produces the envelope, governing reliability and cost — not eligibility (every
   object on a known channel. Claude: `--json-schema <AGENT_RESULT_SCHEMA inline>`
   (`src/worker/claude-code-runner.ts:159`); the validated object arrives as the terminal `result` line's
   `structured_output` (`src/worker/result-envelope.ts:81-82,134`, consumed at `src/worker/claude-code-runner.ts:308`).
-  Codex: `--output-schema <file>` (`src/worker/codex-runner.ts:160-161`, file written at `:97-102`); harvested from
+  Codex: `--output-schema <file>` (`src/worker/codex-runner.ts:161-162`, file written at `:97-102`); harvested from
   the terminal `turn.completed` event (`:261-269`). Reliability ~100% (provider-enforced).
 - **`tool-call`.** The engine registers a `submit_result` tool whose `input_schema` is the envelope; the agent
   calls it and the call's arguments ARE the result. The call is forced via `tool_choice` so the agent cannot end
@@ -110,7 +112,8 @@ produces the envelope, governing reliability and cost — not eligibility (every
   StdoutParser extracts the structured object from the final text block. Reliability weakest; leans entirely on the
   verdict-presence validate seam to reject output with no usable verdict. Always available — it is the floor. A
   `prompt-only` parser MAY reuse the shipped whole-string-JSON algorithm (`parseJsonObjectText`,
-  `src/worker/codex-runner.ts:205-213`, over the final text block) and MUST then lift + lowercase the `verdict`.
+  `src/worker/codex-runner.ts:205-213`, over the final text block) and MUST then lift the `verdict` (the engine
+  normalizes it via `domainVerdictOf`).
 
   **Known limitation (whole-string JSON only).** `parseJsonObjectText` requires the candidate to be JSON
   end-to-end (trim, then `startsWith('{') && endsWith('}')`, then `JSON.parse`,
@@ -156,10 +159,12 @@ After harvest, ALL tiers pass through the same validate seam (the Current Contra
 floor" means a *verdict-presence floor*, not a full-schema guarantee. The tier only changes how often this seam
 FAILS a node:
 
-1. Map `structured` → `AttemptResult` (`src/worker/runner.ts:8-18`), lifting + lowercasing `verdict`.
-2. `resultVerdictProblem` — gated on `node.kind === 'agent'`; the top-level verdict must be present and a member of
+1. Map `structured` → `AttemptResult` (`src/worker/runner.ts:8-18`), lifting `verdict` AS EMITTED (no lowercasing
+   in the mapping — normalization happens at the validate seam below).
+2. `resultVerdictProblem` — gated on `node.kind === 'agent'`; the top-level verdict (normalized via `domainVerdictOf`,
+   `.trim().toLowerCase()`) must be present and a member of
    `template.verdicts.domain` (`src/pipeline/data-driven-task.workflow.ts:442-452`, source `domainVerdictOf`,
-   `:434-440`).
+   `:435-440`).
 3. `resultSatisfiesSchema` — a no-op when the node declares no `resultSchema` (`:461`); otherwise requires a
    non-empty output (`:460-467`).
 4. `roleValidationFailure` gathers (2)+(3) (`:1241-1256`); a failure → `revo.ResultInvalid` (`:240,243`), a
@@ -178,7 +183,7 @@ a missing `submit_result` call as an immediate hard failure. The degradation ord
 1. If a `submit_result` tool call arrives, harvest its arguments as `structured` (the `native-schema`-equivalent
    path) and validate.
 2. If NO `submit_result` call arrives, fall back to `prompt-only` extraction of the final text block (the
-   whole-string-JSON algorithm): parse, lift + lowercase the `verdict`, validate.
+   whole-string-JSON algorithm): parse, lift the `verdict` (engine normalizes via `domainVerdictOf`), validate.
 3. Only if step 2 ALSO yields no valid verdict does the node fail to `revo.ResultInvalid`.
 
 This is the explicit answer to "what happens when forcing isn't honored": a deterministic fall-through to the
@@ -196,8 +201,9 @@ does NOT guarantee the verdict is a VALID token for the role/template. Vocabular
 
 ## Validation
 
-- **Verdict-lift test per parser.** Each `stdoutParser` has a test proving it lifts + lowercases the envelope
-  `verdict` into `AttemptResult.verdict`; a parser that harvests but fails to lift is caught here.
+- **Verdict-lift test per parser.** Each `stdoutParser` has a test proving it lifts the envelope `verdict` (as
+  emitted) into `AttemptResult.verdict`; a parser that harvests but fails to lift is caught here. (Normalization is
+  the engine's job via `domainVerdictOf`, tested at the validate seam.)
 - **Tier-degradation test.** A `tool-call` runner whose provider drops the forced call falls through to
   `prompt-only` extraction within the same attempt, and only a no-usable-verdict result reaches `revo.ResultInvalid`.
 - **Fenced-JSON limitation test (regression marker).** A test asserts the current `prompt-only` extractor rejects

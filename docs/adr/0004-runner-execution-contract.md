@@ -62,9 +62,9 @@ number of runners.
 
 The four runner-id branch functions and the provider throw become declarative `capabilities` and `constraints`
 manifest data. `structuredOutput` becomes a three-tier capability (`native-schema` | `tool-call` | `prompt-only`),
-not a boolean; `prompt-only` is always a floor that leans on the engine's existing verdict-presence validate seam,
-so no runner is excluded. The result-envelope floor for a schema-less runner is an engine-injected `submit_result`
-tool whose call arguments are the structured result. The exact contracts are in the three specs.
+not a boolean; `prompt-only` is always the floor that leans on the engine's existing verdict-presence validate seam,
+so no runner is excluded. The result-envelope MECHANISM for a schema-less runner is an engine-injected `submit_result`
+tool (the `tool-call` tier) whose call arguments are the structured result. The exact contracts are in the three specs.
 
 This refines, but does not replace, the [runner contract](../runner-contract.md): the runner boundary, timeout
 policy, and transient-retry policy there are unchanged. ADR-0004 only relocates *which* runner facts are code

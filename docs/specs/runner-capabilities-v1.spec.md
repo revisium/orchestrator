@@ -127,7 +127,7 @@ Grounded in the two live adapters. These are the `capabilities` objects only; `k
   "authMode": "cli-session",
   "privacyClass": "external",
   "supportsWorkspaceWrite": true,                 // sandbox-enum workspace-write (codex-runner.ts:144-155)
-  "supportsStructuredOutput": "native-schema",    // --output-schema (codex-runner.ts:160-161)
+  "supportsStructuredOutput": "native-schema",    // --output-schema (codex-runner.ts:161-162)
   "needsLivePreflight": true,                     // route-contract.ts:117
   "performsMerge": false,
   "producesWorktreeChanges": true                 // data-driven-task.workflow.ts:359

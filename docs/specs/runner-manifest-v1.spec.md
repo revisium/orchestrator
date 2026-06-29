@@ -39,9 +39,11 @@ this spec relocates:
   `exec --json --output-schema <file path> -c approval_policy="never" --model … --sandbox <enum> --cd <cwd> … -`
   (`src/worker/codex-runner.ts:157-177`), schema file written at `src/worker/codex-runner.ts:97-102`, prompt on
   stdin with a trailing `-` terminator (`src/worker/codex-runner.ts:175`, `:541`).
-- **`--allowedTools` is dropped when empty.** Claude pushes the flag pair only when `role.allowedTools` is
-  non-empty (`src/worker/claude-code-runner.ts:161-163`); Codex joins identically
-  (`src/worker/codex-runner.ts:161-163`).
+- **`--allowedTools` is Claude-only and dropped when empty.** Claude pushes the comma-joined flag pair only when
+  `role.allowedTools` is non-empty (`args.push('--allowedTools', allowedTools.join(','))`,
+  `src/worker/claude-code-runner.ts:161-162`). Codex has NO `--allowedTools` flag at all — it expresses permission
+  via `--sandbox <enum>` (`src/worker/codex-runner.ts:167-168`), consistent with the PermissionStyle design (Codex =
+  `sandbox-enum`, Claude = `tool-allowlist`).
 - **Provider compatibility is a hard throw.** Codex rejects a non-OpenAI-compatible provider via
   `requireCompatibleProfile` (`src/worker/codex-runner.ts:179-186`, `isOpenAiCompatibleProvider` at `:109-112`),
   and guards a non-empty model id at `:180-182`.
@@ -86,7 +88,7 @@ axes — no bundled `family` id) and fills declarable fields.
 | `binary` | string | when `kind=cli` | Executable name or absolute path; feeds `ExecRequest.command` (`src/worker/process-executor.ts:13`). Replaces the literal default `'claude'` in code. |
 | `versionProbe` | object `{ args: string[], parse?: stdoutParserId }` | no | Argv to print a version (e.g. `['--version']`) for `needsLivePreflight`/doctor. **Absent → the version check is SKIPPED (not a failure)**; when `needsLivePreflight: true`, the clean/base preflight (auth + worktree state) still runs — only the binary-version probe is omitted. |
 | `argTemplate` | string[] | when `kind=cli` | Ordered argv with placeholders, substituted before spawn (see Placeholders). |
-| `schemaDelivery` | enum `inline-flag`\|`file-flag`\|`none` | yes | How the result schema reaches the runner. Claude=`inline-flag` (`src/worker/claude-code-runner.ts:159`), Codex=`file-flag` (`src/worker/codex-runner.ts:160-161`, file written at `:97-102`), OpenCode=`none`. |
+| `schemaDelivery` | enum `inline-flag`\|`file-flag`\|`none` | yes | How the result schema reaches the runner. Claude=`inline-flag` (`src/worker/claude-code-runner.ts:159`), Codex=`file-flag` (`src/worker/codex-runner.ts:161-162`, file written at `:97-102`), OpenCode=`none`. |
 | `promptDelivery` | enum `stdin`\|`stdin-dash`\|`arg` | yes | How the prompt reaches the runner. Claude pipes on stdin (`ExecRequest.input`, `src/worker/claude-code-runner.ts:254`); Codex uses stdin with a trailing `-` argv terminator (`src/worker/codex-runner.ts:175`, `:541`) → `stdin-dash`. |
 | `constraints` | object (see below) | no | Declarative provider/auth requirements. Replaces `requireCompatibleProfile` (`src/worker/codex-runner.ts:179-186`). |
 | `capabilities` | object (see [runner-capabilities-v1.spec.md](./runner-capabilities-v1.spec.md)) | yes | The fields that replace the four hardcoded branch functions plus the structured-output tier. `kind` is NOT under `capabilities`. |
@@ -132,7 +134,7 @@ defined; `file-flag` → only `{schemaPath}` is defined; `none` → neither.
 | `{model}` | `ModelProfile.modelId` (`src/control-plane/definitions.ts:47`) | always defined |
 | `{cwd}` | resolved worktree dir (`src/worker/claude-code-runner.ts:209`, `src/worker/codex-runner.ts:515`) | always defined |
 | `{schemaInline}` | the inline JSON-schema STRING (`AGENT_RESULT_SCHEMA` serialized, `src/worker/result-envelope.ts:7-27`), substituted as a flag value (`src/worker/claude-code-runner.ts:159`) | defined only when `schemaDelivery=inline-flag`; otherwise the pair is dropped |
-| `{schemaPath}` | path written when `schemaDelivery=file-flag` (`src/worker/codex-runner.ts:97-102`, used at `:160-161`) | defined only when `schemaDelivery=file-flag`; otherwise the pair is dropped |
+| `{schemaPath}` | path written when `schemaDelivery=file-flag` (`src/worker/codex-runner.ts:97-102`, used at `:161-162`) | defined only when `schemaDelivery=file-flag`; otherwise the pair is dropped |
 | `{allowedTools}` | `role.allowedTools` joined per `permissionStyle` (`src/worker/claude-code-runner.ts:161-163`) | rendered by the PermissionStyle; empty → pair dropped |
 | `{sandbox}` | the `sandbox-enum` level chosen by the PermissionStyle (`src/worker/codex-runner.ts:144-155`) | meaningful only for `sandbox-enum` style; **absent from `argTemplate` when `permissionStyle ≠ sandbox-enum`** (symmetry with the schema-placeholder unification) |
 | `{permissionMode}` | `role.permissionMode ?? 'default'` (`src/worker/claude-code-runner.ts:205`) | supplied by the `tool-allowlist` style; omit the pair if the runner has no permission-mode flag |
@@ -235,9 +237,9 @@ type PermissionStyleOutput = {
 A fragment value is a **`string`** for a single scalar token (`sandbox: "workspace-write"`,
 `permissionMode: "acceptEdits"`) or a **`string[]`** for a multi-valued list (`allowedTools: ["edit","write"]`).
 When a fragment is an array, the engine joins it into the single placeholder arg using the **separator the
-manifest/style declares for that fragment** — for `--allowedTools` today the separator is a comma
-(`role.allowedTools.join(',')`, `src/worker/codex-runner.ts:161-163`; Claude joins identically at
-`src/worker/claude-code-runner.ts:161-163`). An empty `string[]` triggers the placeholder drop rule.
+manifest/style declares for that fragment** — for `--allowedTools` (Claude-only) today the separator is a comma
+(`args.push('--allowedTools', allowedTools.join(','))`, `src/worker/claude-code-runner.ts:161-162`). An empty
+`string[]` triggers the placeholder drop rule.
 
 - **`tool-allowlist` (Claude).** Renders `{allowedTools}` as a `string[]` joined with `,`
   (`src/worker/claude-code-runner.ts:161-163`); empty list → omit the flag pair (most restrictive). Supplies
@@ -276,7 +278,8 @@ manifest/style declares for that fragment** — for `--allowedTools` today the s
   `{allowedTools}`/`{sandbox}`, delivers the schema per `schemaDelivery` and the prompt per `promptDelivery`, then
   builds an `ExecRequest` (`src/worker/process-executor.ts:12-24`) — unchanged.
 - **Parse-response:** the engine selects the manifest's `stdoutParser` and maps its output to `AttemptResult`
-  (`src/worker/runner.ts:8-18`), lifting + lowercasing the envelope `verdict` per the result-envelope spec.
+  (`src/worker/runner.ts:8-18`), lifting the envelope `verdict` AS EMITTED; the engine normalizes it later via
+  `domainVerdictOf` per the result-envelope spec.
 - The `switch (role.runner)` factory (`src/worker/runner-dispatch.ts:6-22`) becomes a registry lookup keyed by
   `runner.id` → manifest → `(stdoutParser, permissionStyle)` pair.
 
