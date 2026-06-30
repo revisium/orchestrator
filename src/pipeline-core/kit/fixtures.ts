@@ -251,6 +251,7 @@ export function featureDevelopmentPrReview(): Template {
         on(verdictEq('clean'), 'blockedEnd'),
         on(verdictEq('review_changes'), 'triage'),
         on(allOf(verdictEq('ci_changes'), counterLt('ciLoop', 3)), 'ciRework'),
+        on(verdictEq('recheck'), 'mergeReadiness'),
         otherwise('blockedEnd'),
       ]),
       node.script('confirmMerge', 'script:confirmMerge', 'mergedEnd', {

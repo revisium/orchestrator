@@ -1209,9 +1209,9 @@ export class TaskControlPlaneApiService {
       const resolvedBy = input.resolvedBy ?? 'mcp';
       return this.resolveLegacyGate(item, { decision: 'reject', resolvedBy }, resolvedBy, input.inboxId);
     }
-    const outcome = outcomes.filter((candidate) => candidate !== 'approved').at(-1) ?? outcomes.at(-1);
+    const outcome = outcomes.filter((candidate) => candidate !== 'approved').at(-1);
     if (!outcome) {
-      throw new ControlPlaneError('VALIDATION_FAILURE', `gate has no declared outcomes: ${input.inboxId}`);
+      throw new ControlPlaneError('VALIDATION_FAILURE', `gate has no declared rejection outcome: ${input.inboxId}`);
     }
     return this.resolveGate({ inboxId: input.inboxId, outcome, resolvedBy: input.resolvedBy });
   }

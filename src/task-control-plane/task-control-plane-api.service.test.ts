@@ -674,6 +674,31 @@ test('TaskControlPlaneApiService.resolveGate rejects unknown outcomes', async ()
   );
 });
 
+test('TaskControlPlaneApiService.rejectGate rejects named gates without a rejection outcome', async () => {
+  const signals: unknown[] = [];
+  const api = makeApi({
+    inboxService: {
+      async getInbox() {
+        return makeInboxItem({
+          context: { topic: 'plan', summary: { outcomes: ['approved'] } },
+          options: ['approved'],
+        });
+      },
+    },
+    dbosService: {
+      async signal(_workflowId, _topic, payload) {
+        signals.push(payload);
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => api.rejectGate({ inboxId: 'inbox-1', resolvedBy: 'tester' }),
+    (error: unknown) => error instanceof ControlPlaneError && error.code === 'VALIDATION_FAILURE',
+  );
+  assert.deepEqual(signals, [], 'single-outcome named gates must not be signaled as approved by rejectGate');
+});
+
 test('TaskControlPlaneApiService.resolveGate requires declared named outcomes for legacy gates', async () => {
   const api = makeApi({
     inboxService: {
