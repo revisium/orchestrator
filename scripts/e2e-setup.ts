@@ -74,7 +74,7 @@ async function resetHome(): Promise<void> {
 }
 
 async function ensurePlaybook(): Promise<void> {
-  const playbooks = new PlaybooksService(createClientTransport('head'));
+  let playbooks = new PlaybooksService(createClientTransport('head'));
   const installed = await playbooks.listPlaybooks();
   const existing = installed.find((p) => p.id === PLAYBOOK_ID);
   const expectedHash = playbookCatalogHash(PLAYBOOK_SOURCE, PLAYBOOK_ID);
@@ -83,7 +83,10 @@ async function ensurePlaybook(): Promise<void> {
     return;
   }
   if (existing) {
-    console.log('[e2e setup] playbook installed but stale or legacy — refreshing');
+    console.log('[e2e setup] playbook installed but stale or legacy — resetting test home before reinstall');
+    await resetHome();
+    await applyBootstrapAndDefaultSeed();
+    playbooks = new PlaybooksService(createClientTransport('head'));
   }
   try {
     const r = await playbooks.install({ source: PLAYBOOK_SOURCE, name: PLAYBOOK_ID, commit: true });
@@ -92,6 +95,18 @@ async function ensurePlaybook(): Promise<void> {
     if (!/not a draft|already|nothing to commit|ROW_CONFLICT/i.test(String(err))) throw err;
     console.log('[e2e setup] playbook install raced/duplicate — tolerated');
   }
+}
+
+async function applyBootstrapAndDefaultSeed(): Promise<void> {
+  const rt = readRuntime();
+  if (!rt) throw new Error('standalone runtime missing before bootstrap');
+  console.log('[e2e setup] applying bootstrap schema/seed freshness');
+  await bootstrapControlPlane(rt.httpPort);
+
+  await seedDefaultPlaybookBestEffort(
+    () => seedDefaultPlaybook(new PlaybooksService(createClientTransport('head'))),
+    (message) => console.log(`[e2e setup] ${message}`),
+  );
 }
 
 async function main(): Promise<void> {
@@ -104,17 +119,7 @@ async function main(): Promise<void> {
     await resetHome();
   }
 
-  const rt = readRuntime();
-  if (!rt) throw new Error('standalone runtime missing before bootstrap');
-  console.log('[e2e setup] applying bootstrap schema/seed freshness');
-  await bootstrapControlPlane(rt.httpPort);
-
-  // Group M e2e relies on the built-in default. Run the same idempotent freshness check on every
-  // e2e setup so reused homes pick up bundled catalog changes without requiring a full data-dir wipe.
-  await seedDefaultPlaybookBestEffort(
-    () => seedDefaultPlaybook(new PlaybooksService(createClientTransport('head'))),
-    (message) => console.log(`[e2e setup] ${message}`),
-  );
+  await applyBootstrapAndDefaultSeed();
 
   await ensurePlaybook();
 }

@@ -916,7 +916,7 @@ export function makeDataDrivenTask(
       lastResult: undefined,
     };
     let lastResult: LastResult | undefined;
-    let lastVerdict = ctx.lastVerdict;
+    let lastVerdict = '';
     let stepDelta = 0;
 
     for (let i = 0; i < MAX_STEPS; i++) {

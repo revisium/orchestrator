@@ -454,6 +454,28 @@ test('codex runner: accepts latest structured agent_message when turn.completed 
   });
 });
 
+test('codex runner: rejects latest structured agent_message when the turn never completes', async () => {
+  await withTempRoot(async (root) => {
+    const stdout = jsonl(
+      { type: 'thread.started', thread_id: 'thread_123' },
+      { type: 'turn.started' },
+      {
+        type: 'item.completed',
+        item: {
+          id: 'item_0',
+          type: 'agent_message',
+          text: JSON.stringify(finalResult({ output: 'partial stream' })),
+        },
+      },
+    );
+
+    await assert.rejects(
+      () => runWith(fakeExecutor(ok(stdout), []), root),
+      /codex structured result missing final schema output/,
+    );
+  });
+});
+
 test('codex runner: prefers nested content over nested result in final JSONL item', async () => {
   await withTempRoot(async (root) => {
     const stdout = jsonl({

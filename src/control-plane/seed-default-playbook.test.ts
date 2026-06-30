@@ -223,6 +223,21 @@ test('default playbook: every role model level has a bootstrap model profile', (
   }
 });
 
+test('default playbook: stuck code-review gates surface the latest code-change artifact', () => {
+  for (const pipelineId of ['feature-development', 'feature-development-codex-consensus']) {
+    const template = pipelineTemplate(pipelineId) as {
+      nodes?: Record<string, { gatedArtifact?: { node?: string; as?: string } }>;
+    };
+    const gatedArtifact = template.nodes?.['codeStuckGate']?.gatedArtifact;
+
+    assert.deepEqual(
+      gatedArtifact,
+      { node: 'reworkDeveloper', as: 'change' },
+      `${pipelineId} codeStuckGate must show the code change, not the plan`,
+    );
+  }
+});
+
 for (const pipeline of pipelines) {
   test(`default playbook: ${pipeline.id} template validates via validateTemplate (zero errors)`, () => {
     const template = pipeline.execution_policy.template_json as

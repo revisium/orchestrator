@@ -395,6 +395,35 @@ function parallelConsensusTemplate(): Template {
     .build();
 }
 
+function parallelConsensusAfterPreApprovedTemplate(): Template {
+  return template('parallel-consensus-after-pre-approved')
+    .specVersion('1.0')
+    .entry('precheck')
+    .domain('approved', 'clean', 'changes_requested', 'blocker')
+    .add(
+      node.agent('precheck', 'role:reviewer', 'fanout', {
+        resultSchema: 'schema:reviewVerdict',
+      }),
+      node.parallel('fanout', [
+        { id: 'primary', entry: 'primaryReview' },
+        { id: 'secondary', entry: 'secondaryBypass' },
+      ], 'reviewJoin'),
+      node.agent('primaryReview', 'role:reviewer', 'reviewJoin', {
+        resultSchema: 'schema:reviewVerdict',
+        produces: { name: 'review' },
+      }),
+      node.choice('secondaryBypass', [otherwise('reviewJoin')]),
+      node.join('reviewJoin', joinAll(), 'reviewRouter', {
+        merge: { reviews: 'appendByBranchOrder' },
+        verdictReducer: { kind: 'allIn', pass: ['approved', 'clean'], passVerdict: 'approved', failVerdict: 'changes_requested' },
+      }),
+      node.choice('reviewRouter', [on(verdictEq('approved'), 'done'), otherwise('blocked')]),
+      node.terminal('done', 'succeeded'),
+      node.terminal('blocked', 'blocked'),
+    )
+    .build();
+}
+
 function runnerFailedResult(reason: string, extraOutput: Record<string, unknown> = {}): AttemptResult {
   return {
     output: {
@@ -520,6 +549,35 @@ test('DD-parallel: consensus passes when reviewers return approved plus clean', 
   assert.deepEqual(joinProgress?.lastResult?.joinArrivals, [
     { branchId: 'primary', seq: 1, verdict: 'approved' },
     { branchId: 'secondary', seq: 2, verdict: 'clean' },
+  ]);
+});
+
+test('DD-parallel: branch without a verdict does not inherit the pre-fork verdict', async () => {
+  const route = {
+    ...makeRoute(),
+    pipelineId: 'parallel-consensus-after-pre-approved',
+    requiredRoles: ['reviewer'],
+    roles: ['reviewer'],
+    routeGates: [],
+    roleBindings: [binding('reviewer')],
+  };
+  const { run, rec } = buildAdapter({
+    template: parallelConsensusAfterPreApprovedTemplate(),
+    route,
+    verdicts: { precheck: 'approved', primaryReview: 'approved' },
+  });
+
+  const result = await run();
+
+  assert.equal(result.status, 'blocked');
+  const joinProgress = rec.progress.find((cursor) =>
+    cursor.activeNodeIds.length === 1 &&
+    cursor.activeNodeIds[0] === 'reviewJoin' &&
+    cursor.lastResult?.joinArrivals?.length === 2,
+  );
+  assert.deepEqual(joinProgress?.lastResult?.joinArrivals, [
+    { branchId: 'primary', seq: 1, verdict: 'approved' },
+    { branchId: 'secondary', seq: 2 },
   ]);
 });
 

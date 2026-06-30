@@ -1608,6 +1608,23 @@ test('pollPr: readiness reviewer triage still routes to review changes', async (
   }
 });
 
+test('pollPr: readiness developer_fix without failing checks routes to review changes', async () => {
+  const collect = async (): Promise<PollPrReadiness> =>
+    readiness({
+      evidence: ['Sonar issue requires code change'],
+      readinessVerdict: 'needs_work',
+      nextAction: 'developer_fix',
+    });
+
+  const r = await pollPr(POLL_INPUT, pollDeps(collect, { reviewGracePolls: 0 }));
+
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) {
+    assert.equal(r.verdict, 'review_changes');
+    assert.ok(r.evidence.some((item) => item.includes('readiness nextAction=developer_fix')));
+  }
+});
+
 test('pollPr: checks pending until terminal → polls then classifies', async () => {
   let calls = 0;
   const collect = async (): Promise<PollPrReadiness> => {

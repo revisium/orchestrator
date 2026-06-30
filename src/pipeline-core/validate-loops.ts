@@ -1,7 +1,7 @@
 import { isGuardedBranch } from './types.js';
 import type { Condition, Node, Scope, Template } from './types.js';
 import { DiagSink } from './validate-sink.js';
-import { backwardReach, cycleNodes, findBackEdges, forwardReach, guardConditionsOf, structuralEdges } from './validate-graph.js';
+import { backwardReach, branchSubgraph, cycleNodes, findBackEdges, forwardReach, guardConditionsOf } from './validate-graph.js';
 
 
 export function ruleLoopCap(template: Template, d: DiagSink): void {
@@ -173,16 +173,8 @@ function parallelBranchTouchesScope(
 
 function parallelBranchInterior(template: Template, parallelNode: Extract<Node, { kind: 'parallel' }>): Set<string> {
   const seen = new Set<string>();
-  const stack = parallelNode.branches.map((branch) => branch.entry);
-  while (stack.length) {
-    const id = stack.pop()!;
-    if (id === parallelNode.join || seen.has(id)) continue;
-    seen.add(id);
-    const node = template.nodes[id];
-    if (!node) continue;
-    for (const [, target] of structuralEdges(node)) {
-      if (target !== parallelNode.join && !seen.has(target)) stack.push(target);
-    }
+  for (const branch of parallelNode.branches) {
+    for (const id of branchSubgraph(template, branch.entry, parallelNode.join)) seen.add(id);
   }
   return seen;
 }

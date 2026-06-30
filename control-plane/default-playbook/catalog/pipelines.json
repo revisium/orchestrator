@@ -258,8 +258,8 @@
               }
             ],
             "gatedArtifact": {
-              "node": "analyst",
-              "as": "plan"
+              "node": "reworkDeveloper",
+              "as": "change"
             }
           },
           "reworkDeveloper": {
@@ -1049,8 +1049,8 @@
               }
             ],
             "gatedArtifact": {
-              "node": "analyst",
-              "as": "plan"
+              "node": "reworkDeveloper",
+              "as": "change"
             }
           },
           "reworkDeveloper": {

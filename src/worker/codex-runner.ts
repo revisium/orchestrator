@@ -422,7 +422,9 @@ function summarizeCodexEvents(events: Record<string, unknown>[]): CodexJsonlSumm
     applyFailureSummary(summary, event);
     applyStructuredSummary(summary, event);
   }
-  summary.finalStructured ??= summary.latestAgentMessageStructured;
+  if (events.some((event) => event.type === 'turn.completed')) {
+    summary.finalStructured ??= summary.latestAgentMessageStructured;
+  }
   return summary;
 }
 
