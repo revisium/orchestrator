@@ -72,7 +72,7 @@ and signals the parked workflow. The workflow then resumes and routes through th
 MCP tools:
 
 - `list_inbox`, `get_inbox_item`, `get_pending_decisions`
-- `approve_gate`, `reject_gate`, `answer_question`, `resolve_inbox_item`
+- `resolve_gate`, `approve_gate`, `reject_gate`, `answer_question`, `resolve_inbox_item`
 - `summarize_gate_risk`
 - `get_run_attention` (primary observation), `get_run_status` (neutral status)
 - `watch_run_changes` (advanced cursor-based delivery)
@@ -82,6 +82,7 @@ GraphQL mutations:
 
 - `approveGate`
 - `rejectGate`
+- `resolveGate`
 - `answerQuestion`
 - `resolveInboxItem`
 
@@ -187,7 +188,9 @@ The review-feedback loop is a pipeline tail pattern:
 ```text
 integrator -> pollPr
 pollPr clean -> mergeReadiness
+pollPr recheck -> pollPr
 mergeReadiness clean -> mergeGate
+mergeReadiness recheck -> mergeReadiness
 mergeReadiness ci_changes -> developer rework -> integrator
 mergeReadiness review_changes -> analyst triage
 pollPr ci_changes -> developer rework -> integrator
@@ -202,6 +205,8 @@ Contracts:
 - CI/Sonar failures route to developer rework.
 - Review comments route to analyst triage first.
 - Ambiguous comments route to a question gate.
+- Pending provider/check readiness stays internal as a `recheck` PR feedback verdict; it does not surface as clean or
+  terminally block while it can still be re-polled.
 - `respondThreads` replies to and resolves only the threads it triaged as `fix` or `wontfix`.
 - Resolved or reopened threads are detected by the next PR poll.
 - Thread maps and triage decisions ride `run_outputs`; no separate durable PR-thread table exists in v1.

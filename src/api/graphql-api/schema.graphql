@@ -272,6 +272,7 @@ type Mutation {
   approveGate(data: GateDecisionInput!): InboxResolutionModel!
   createRun(data: CreateRunInput!): CreateRunResultModel!
   rejectGate(data: GateDecisionInput!): InboxResolutionModel!
+  resolveGate(data: ResolveGateInput!): InboxResolutionModel!
   resolveInboxItem(data: ResolveInboxItemInput!): InboxResolutionModel!
 }
 
@@ -515,6 +516,12 @@ type RepositoryValidationModel {
   isDirectory: Boolean!
   path: String!
   remote: String!
+}
+
+input ResolveGateInput {
+  inboxId: ID!
+  outcome: String!
+  resolvedBy: String
 }
 
 input ResolveInboxItemInput {

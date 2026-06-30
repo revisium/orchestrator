@@ -79,6 +79,7 @@ test('A1: awaitHuman pushes inbox with deterministic id, emits gate_opened, retu
   // context carries topic.
   const ctx = call.item.context as Record<string, unknown>;
   assert.equal(ctx.topic, topic, 'context.topic must match the gate topic');
+  assert.deepEqual(call.item.options, ['approve', 'reject'], 'legacy gates keep compatibility options');
 
   // Deterministic id: inbox_ + 16 hex = 22 chars.
   const expectedId = `inbox_${fnv1a64Hex(`${runId}|${topic}`)}`;
@@ -97,6 +98,19 @@ test('A1: awaitHuman pushes inbox with deterministic id, emits gate_opened, retu
   // awaitDecision called with the topic.
   assert.equal(awaitDecisionTopics.length, 1);
   assert.equal(awaitDecisionTopics[0], topic);
+});
+
+test('A1b: awaitHuman exposes named gate outcomes as inbox options', async () => {
+  const { deps, pushInboxCalls } = makeDeps({ decision: { outcome: 'recheck' } });
+  const awaitHuman = makeAwaitHuman(deps);
+
+  const result = await awaitHuman('run-ah-outcomes', 'merge', 'merge-1', 'Merge approval', {
+    nodeId: 'mergeGate',
+    outcomes: ['approved', 'recheck'],
+  });
+
+  assert.equal(result.outcome, 'recheck');
+  assert.deepEqual(pushInboxCalls[0]?.item.options, ['approved', 'recheck']);
 });
 
 test('A1 (merge gate): awaitHuman works for merge topic too', async () => {

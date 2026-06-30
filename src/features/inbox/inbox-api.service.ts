@@ -3,6 +3,7 @@ import { CommandBus, QueryBus } from '@nestjs/cqrs';
 import { AnswerQuestionCommand, type AnswerQuestionCommandData } from './commands/impl/answer-question.command.js';
 import { ApproveGateCommand, type ApproveGateCommandData } from './commands/impl/approve-gate.command.js';
 import { RejectGateCommand, type RejectGateCommandData } from './commands/impl/reject-gate.command.js';
+import { ResolveGateCommand, type ResolveGateCommandData } from './commands/impl/resolve-gate.command.js';
 import { ResolveInboxItemCommand, type ResolveInboxItemCommandData } from './commands/impl/resolve-inbox-item.command.js';
 import { GetInboxItemQuery, type GetInboxItemQueryData } from './queries/impl/get-inbox-item.query.js';
 import { GetPendingDecisionsQuery, type GetPendingDecisionsQueryData } from './queries/impl/get-pending-decisions.query.js';
@@ -38,6 +39,10 @@ export class InboxApiService {
 
   rejectGate(data: RejectGateCommandData) {
     return this.commandBus.execute(new RejectGateCommand(data));
+  }
+
+  resolveGate(data: ResolveGateCommandData) {
+    return this.commandBus.execute(new ResolveGateCommand(data));
   }
 
   answerQuestion(data: AnswerQuestionCommandData) {

@@ -36,7 +36,7 @@ function gate(runId: string, inboxId = 'i1'): RunState {
   return {
     runId,
     state: 'pending_gate',
-    nextAction: 'resolve approval with approve_gate or reject_gate',
+    nextAction: 'resolve approval with resolve_gate, approve_gate, or reject_gate',
     runStatus: 'running',
     workflowStatus: 'PENDING',
     inbox: inbox({ id: inboxId, kind: 'approval', title: 'Plan approval' }),
@@ -517,7 +517,7 @@ test('getRunAttention compacts inbox for gate states', async () => {
   assert.equal(JSON.stringify(result).includes('context'), false, 'does not inline full inbox context');
   assert.equal(result.activeAttempt?.attemptId, 'attempt-1');
   assert.equal(result.requiresAttention, true);
-  assert.deepEqual(result.suggestedTools, ['get_inbox_item', 'approve_gate', 'reject_gate', 'answer_question']);
+  assert.deepEqual(result.suggestedTools, ['get_inbox_item', 'resolve_gate', 'approve_gate', 'reject_gate', 'answer_question']);
 });
 
 test('getRunAttention propagates ROW_NOT_FOUND for missing runs', async () => {

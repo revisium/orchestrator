@@ -5,6 +5,7 @@ import { GraphqlParamTypes } from '../share/graphql-param-types.js';
 import { AnswerQuestionInput } from './inputs/answer-question.input.js';
 import { GateDecisionInput } from './inputs/gate-decision.input.js';
 import { ListInboxInput } from './inputs/list-inbox.input.js';
+import { ResolveGateInput } from './inputs/resolve-gate.input.js';
 import { ResolveInboxItemInput } from './inputs/resolve-inbox-item.input.js';
 import { GateRiskModel } from './model/gate-risk.model.js';
 import { InboxConnection } from './model/inbox-connection.model.js';
@@ -49,6 +50,12 @@ export class InboxResolver {
   @GraphqlParamTypes(GateDecisionInput)
   rejectGate(@Args('data', { type: () => GateDecisionInput }) data: GateDecisionInput) {
     return this.api.rejectGate(data);
+  }
+
+  @Mutation(() => InboxResolutionModel)
+  @GraphqlParamTypes(ResolveGateInput)
+  resolveGate(@Args('data', { type: () => ResolveGateInput }) data: ResolveGateInput) {
+    return this.api.resolveGate(data);
   }
 
   @Mutation(() => InboxResolutionModel)

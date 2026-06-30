@@ -740,6 +740,13 @@
               {
                 "when": {
                   "op": "verdict.eq",
+                  "value": "recheck"
+                },
+                "goto": "pollPr"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
                   "value": "review_changes"
                 },
                 "goto": "triage"
@@ -797,6 +804,13 @@
                   "value": "clean"
                 },
                 "goto": "mergeGate"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "recheck"
+                },
+                "goto": "mergeReadiness"
               },
               {
                 "when": {

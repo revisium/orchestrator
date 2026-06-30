@@ -649,11 +649,44 @@ function readinessRequiresReview(readiness: PollPrReadiness): boolean {
     || (readiness.nextAction === 'developer_fix' && readiness.checks.fail.length === 0);
 }
 
+function readinessRequiresHumanDecision(readiness: PollPrReadiness): boolean {
+  return readiness.readinessVerdict === 'closed' || readiness.nextAction === 'human_decision';
+}
+
 function readinessEvidence(readiness: PollPrReadiness): string[] {
   return [
     readiness.readinessVerdict ? `readiness verdict=${readiness.readinessVerdict}` : undefined,
     readiness.nextAction ? `readiness nextAction=${readiness.nextAction}` : undefined,
   ].filter((item): item is string => item !== undefined);
+}
+
+function unsettledReadinessFeedback(
+  input: IntegratorInput,
+  readiness: PollPrReadiness,
+  reason: string,
+): PrFeedback {
+  const reviewThreads: PrReviewThread[] = readiness.reviewThreads.items.map((t) => ({
+    threadId: t.id,
+    path: t.path,
+    line: t.line,
+    author: t.author,
+    body: t.body,
+  }));
+  return {
+    prNumber: readiness.pr.number ?? null,
+    headSha: readiness.pr.headSha,
+    evidence: [
+      ...readiness.evidence,
+      ...readinessEvidence(readiness),
+      reason,
+      `PR headSha=${readiness.pr.headSha}`,
+      'pollPr verdict=recheck',
+    ],
+    ...(input.issueRef ? { issueRef: input.issueRef } : {}),
+    verdict: 'recheck',
+    ciFailures: ciFailuresFrom(readiness),
+    reviewThreads,
+  };
 }
 
 
@@ -679,18 +712,31 @@ export async function pollPr(
   const { ownerRepo } = ownerRepoResult;
 
   let readiness: PollPrReadiness | undefined;
+  let lastReadiness: PollPrReadiness | undefined;
   for (let i = 0; i < maxPolls; i++) {
     readiness = await collect(ownerRepo, branch, input.base, gh, input.issueRef);
+    lastReadiness = readiness;
     if (readiness.checks.pending.length === 0 && readiness.checks.list.length > 0) break;
     readiness = undefined;
     if (i < maxPolls - 1) await sleep(intervalMs);
   }
 
   if (!readiness) {
-    return {
-      needsHuman: true,
-      lesson: `pollPr timed out after ${maxPolls} polls — CI checks still pending or none registered for ${branch}`,
-    };
+    if (lastReadiness) {
+      const reason = `pollPr timed out after ${maxPolls} polls; readiness still pending or no checks registered for ${branch}`;
+      if (readinessRequiresHumanDecision(lastReadiness)) {
+        return {
+          needsHuman: true,
+          lesson: [...lastReadiness.evidence, ...readinessEvidence(lastReadiness), reason, `PR headSha=${lastReadiness.pr.headSha}`].join('; '),
+        };
+      }
+      return unsettledReadinessFeedback(
+        input,
+        lastReadiness,
+        reason,
+      );
+    }
+    return { needsHuman: true, lesson: `pollPr timed out after ${maxPolls} polls before reading PR readiness for ${branch}` };
   }
 
   let settled: PollPrReadiness = readiness;
@@ -713,11 +759,7 @@ export async function pollPr(
     const detail = settled.checks.pending.length > 0
       ? `pending checks: ${settled.checks.pending.join(', ')}`
       : 'no checks registered';
-    const evidence = settled.evidence.length > 0 ? ` Evidence: ${settled.evidence.join(' | ')}` : '';
-    return {
-      needsHuman: true,
-      lesson: `pollPr found unsettled readiness after readying ${branch} - ${detail}.${evidence}`,
-    };
+    return unsettledReadinessFeedback(input, settled, `pollPr found unsettled readiness after readying ${branch}: ${detail}`);
   }
 
   const reviewThreads: PrReviewThread[] = settled.reviewThreads.items.map((t) => ({

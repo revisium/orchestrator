@@ -172,6 +172,7 @@ type Mutation {
   installPlaybook(input: InstallPlaybookInput!): InstallPlaybookResult!
 
   resolveInboxItem(input: ResolveInboxItemInput!): InboxResolution!
+  resolveGate(input: ResolveGateInput!): InboxResolution!
   approveGate(input: GateDecisionInput!): InboxResolution!
   rejectGate(input: GateDecisionInput!): InboxResolution!
   answerQuestion(input: AnswerQuestionInput!): InboxResolution!
