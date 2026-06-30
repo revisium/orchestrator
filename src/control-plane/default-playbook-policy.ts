@@ -225,6 +225,12 @@ function checkMergeGateRecheckRouting(template: Template, sink: PolicySink): voi
     scope: 'ciLoop',
     value: 3,
   });
+  expectRoute(template, sink, {
+    code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
+    nodeId: 'mergeRecheckRouter',
+    verdict: 'recheck',
+    target: 'mergeReadiness',
+  });
   expectDefaultRoute(template, sink, {
     code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
     nodeId: 'mergeRecheckRouter',

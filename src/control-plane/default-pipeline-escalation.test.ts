@@ -88,4 +88,5 @@ test('#141: a merge-gate reject is evidence-driven — re-polls fresh readiness 
   // Recoverable verdicts rejoin the existing bounded loops instead of dead-ending.
   assert.equal(gotoForVerdict(router, 'review_changes'), 'triage', 'review_changes re-poll → triage (recoverable)');
   assert.equal(gotoForVerdict(router, 'ci_changes'), 'ciRework', 'ci_changes re-poll → ciRework (recoverable)');
+  assert.equal(gotoForVerdict(router, 'recheck'), 'mergeReadiness', 'recheck re-poll → mergeReadiness (continue polling)');
 });
