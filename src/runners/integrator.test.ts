@@ -1680,7 +1680,7 @@ test('pollPr: no review thread after the grace → clean (merge gate is the back
   assert.ok(!('needsHuman' in r) && r.verdict === 'clean', 'absent reviewer falls through to the human merge gate, not a block');
 });
 
-test('pollPr: a provider check pending during review grace blocks instead of declaring clean', async () => {
+test('pollPr: a provider check pending during review grace returns recheck instead of declaring clean', async () => {
   let calls = 0;
   const collect = async (): Promise<PollPrReadiness> => {
     calls++;
@@ -1696,8 +1696,10 @@ test('pollPr: a provider check pending during review grace blocks instead of dec
 
   const r = await pollPr(POLL_INPUT, pollDeps(collect, { reviewGracePolls: 1 }));
 
-  assert.ok('needsHuman' in r, 'pending provider state after PR ready is not merge-ready');
-  assert.match(r.lesson, /pending checks: CodeRabbit/);
+  assert.ok(!('needsHuman' in r), 'pending provider state remains pipeline-internal');
+  assert.equal(r.verdict, 'recheck');
+  assert.equal(r.headSha, 'green-head');
+  assert.ok(r.evidence.some((item) => item.includes('pending checks: CodeRabbit')));
 });
 
 test('pollPr: a required CI failure appearing during review grace routes to ci_changes', async () => {
@@ -1725,11 +1727,14 @@ test('pollPr: a required CI failure appearing during review grace routes to ci_c
   assert.deepEqual(r.evidence.slice(0, 1), ['Verify failed after PR was marked ready']);
 });
 
-test('pollPr: timeout with checks still pending → needsHuman (block)', async () => {
+test('pollPr: timeout with checks still pending → recheck PrFeedback', async () => {
   const collect = async (): Promise<PollPrReadiness> => readiness({ pending: ['build'], list: [{ name: 'build', result: 'IN_PROGRESS' }] });
   const r = await pollPr(POLL_INPUT, pollDeps(collect, { maxPolls: 2 }));
-  assert.ok('needsHuman' in r, 'a poll timeout with pending checks blocks for a human');
-  assert.ok(r.lesson.includes('timed out'), `lesson: ${r.lesson}`);
+  assert.ok(!('needsHuman' in r), 'a poll timeout with pending checks stays recoverable');
+  assert.equal(r.verdict, 'recheck');
+  assert.equal(r.headSha, 'sha5');
+  assert.ok(r.evidence.some((item) => item.includes('timed out after 2 polls')));
+  assert.ok(r.evidence.some((item) => item.includes('pollPr verdict=recheck')));
 });
 
 test('pollPr: unparseable origin → needsHuman (no poll)', async () => {

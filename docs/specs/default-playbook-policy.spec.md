@@ -41,7 +41,7 @@ The bundled `feature-development` policy verifier reports errors for these stati
 | --- | --- |
 | The verifier is applied only to `feature-development`. | `DEFAULT_POLICY_WRONG_PIPELINE` |
 | Developer/rework/CI/review-fix change producers expose `schema:change` outputs and downstream reviewer/integrator steps consume them. | `DEFAULT_POLICY_CHANGE_HANDOFF_MISSING` |
-| PR readiness flows through `pollPr`, then a fresh `mergeReadiness` poll, then `mergeGate`; the gate and `confirmMerge` use the `mergeReadiness` output. | `DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING` |
+| PR readiness flows through `pollPr`, then a fresh `mergeReadiness` poll, then `mergeGate`; the gate and `confirmMerge` use the `mergeReadiness` output. A `recheck` readiness verdict loops to the corresponding poll node instead of terminal-blocking. | `DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING` |
 | Merge-gate reject/non-approve routes to a fresh `mergeRecheck` `script:pollPr`, then the recheck router preserves recoverable `review_changes`/bounded `ci_changes` routes and explicit `clean`/default aborts. | `DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING` |
 | `review_changes` routes to triage, triage can ask a question, choose `fix`, or choose `wontfix`, and `fix` flows through developer rework before thread responses. | `DEFAULT_POLICY_REVIEW_CHANGES_ROUTE_MISSING` |
 | `ci_changes` routes from both PR routers to `ciRework` while `ciLoop < 3`, and `ciRework` returns to `integrator`. | `DEFAULT_POLICY_CI_CHANGES_ROUTE_MISSING` |
@@ -50,9 +50,10 @@ The bundled `feature-development` policy verifier reports errors for these stati
 
 ## Implemented #141 Rule
 
-The scoped policy requires the bundled `mergeGate` to expose `approved,recheck` outcomes. Because the runtime maps a
-gate approval to the first outcome and rejection to the last outcome, a merge-gate reject reaches `mergeRecheck`
-instead of terminal-blocking immediately.
+The scoped policy requires the bundled `mergeGate` to expose `approved,recheck` outcomes. The runtime accepts explicit
+named gate outcomes through `resolve_gate` / `resolveGate`; compatibility wrappers still map `approve_gate` to the
+approval outcome and `reject_gate` to the last non-approval outcome, so legacy merge-gate rejection reaches
+`mergeRecheck` instead of terminal-blocking immediately.
 
 `mergeRecheck` MUST be a `script:pollPr` step that produces `schema:prFeedback` and routes to `mergeRecheckRouter`.
 The router MUST send a still-clean recheck, or an unclassified/default recheck, to `blockedEnd` as an explicit
@@ -66,6 +67,7 @@ contract: the verifier does not prove that GitHub/provider state was fresh at ru
 ## Changelog
 
 - 2026-06-29: Normative-language / canon-discipline pass; no contract change.
+- 2026-06-30: Added named gate outcome and readiness `recheck` routing notes for #223.
 - 2026-06-28: Updated #141 from deferred to implemented in the default policy, including merge-gate recheck routing
   and recheck evidence handoff checks.
 - 2026-06-28: Added scoped default-playbook policy for #145 with static rules separated from runtime evidence checks

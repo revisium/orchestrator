@@ -4,11 +4,13 @@ import type { TaskControlPlaneApiService } from '../../../../task-control-plane/
 import { AnswerQuestionCommand } from '../impl/answer-question.command.js';
 import { ApproveGateCommand } from '../impl/approve-gate.command.js';
 import { RejectGateCommand } from '../impl/reject-gate.command.js';
+import { ResolveGateCommand } from '../impl/resolve-gate.command.js';
 import { ResolveInboxItemCommand } from '../impl/resolve-inbox-item.command.js';
 import {
   AnswerQuestionHandler,
   ApproveGateHandler,
   RejectGateHandler,
+  ResolveGateHandler,
   ResolveInboxItemHandler,
 } from './inbox-command.handlers.js';
 
@@ -23,6 +25,10 @@ test('inbox command handlers delegate through TaskControlPlaneApiService', async
       calls.push(`reject:${JSON.stringify(input)}`);
       return { inboxId: 'inbox_1', previousStatus: 'pending', answer: { decision: 'reject' }, signaled: true };
     },
+    async resolveGate(input: unknown) {
+      calls.push(`resolveGate:${JSON.stringify(input)}`);
+      return { inboxId: 'inbox_1', previousStatus: 'pending', answer: { outcome: 'recheck' }, signaled: true };
+    },
     async answerQuestion(input: unknown) {
       calls.push(`answer:${JSON.stringify(input)}`);
       return { inboxId: 'inbox_1', previousStatus: 'pending', answer: 'yes', signaled: false };
@@ -35,6 +41,7 @@ test('inbox command handlers delegate through TaskControlPlaneApiService', async
 
   assert.equal((await new ApproveGateHandler(api).execute(new ApproveGateCommand({ inboxId: 'inbox_1' }))).signaled, true);
   assert.equal((await new RejectGateHandler(api).execute(new RejectGateCommand({ inboxId: 'inbox_1' }))).signaled, true);
+  assert.equal((await new ResolveGateHandler(api).execute(new ResolveGateCommand({ inboxId: 'inbox_1', outcome: 'recheck' }))).signaled, true);
   assert.equal((await new AnswerQuestionHandler(api).execute(new AnswerQuestionCommand({ inboxId: 'inbox_1', answer: 'yes' }))).signaled, false);
   assert.equal(
     (await new ResolveInboxItemHandler(api).execute(new ResolveInboxItemCommand({ inboxId: 'inbox_1', answer: { decision: 'approve' } }))).signaled,
@@ -43,6 +50,7 @@ test('inbox command handlers delegate through TaskControlPlaneApiService', async
   assert.deepEqual(calls, [
     'approve:{"inboxId":"inbox_1"}',
     'reject:{"inboxId":"inbox_1"}',
+    'resolveGate:{"inboxId":"inbox_1","outcome":"recheck"}',
     'answer:{"inboxId":"inbox_1","answer":"yes"}',
     'resolve:{"inboxId":"inbox_1","answer":{"decision":"approve"}}',
   ]);

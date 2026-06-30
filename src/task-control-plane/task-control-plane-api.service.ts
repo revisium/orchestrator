@@ -144,6 +144,20 @@ function gateTopic(item: InboxItem): 'plan' | 'merge' | 'question' | null {
   return topic as 'plan' | 'merge' | 'question';
 }
 
+function gateDeclaredOutcomes(item: InboxItem): string[] {
+  const context = asRecord(item.context);
+  const summary = asRecord(context?.summary);
+  const outcomes = summary?.outcomes;
+  if (Array.isArray(outcomes)) {
+    return outcomes.filter((item): item is string => typeof item === 'string' && item.length > 0);
+  }
+  return [];
+}
+
+function gateOutcomes(item: InboxItem): string[] {
+  return gateDeclaredOutcomes(item);
+}
+
 async function git(cwd: string, args: string[]): Promise<GitResult> {
   try {
     const result = await execFileAsync('git', args, {
@@ -1083,7 +1097,7 @@ export class TaskControlPlaneApiService {
       return {
         runId,
         state: 'pending_gate',
-        nextAction: 'resolve approval with approve_gate or reject_gate',
+        nextAction: 'resolve approval with resolve_gate, approve_gate, or reject_gate',
         runStatus,
         workflowStatus,
         inbox: gate,
@@ -1174,37 +1188,68 @@ export class TaskControlPlaneApiService {
     return this.inbox.listInbox({ status: 'pending', runId, limit: 100 });
   }
 
-  approveGate(input: { inboxId: string; resolvedBy?: string }) {
-    const resolvedBy = input.resolvedBy ?? 'mcp';
-    return this.resolveGate(input.inboxId, { decision: 'approve', resolvedBy }, resolvedBy);
-  }
-
-  rejectGate(input: { inboxId: string; resolvedBy?: string }) {
-    const resolvedBy = input.resolvedBy ?? 'mcp';
-    return this.resolveGate(input.inboxId, { decision: 'reject', resolvedBy }, resolvedBy);
-  }
-
-  async answerQuestion(input: { inboxId: string; answer: unknown; resolvedBy?: string }) {
+  async approveGate(input: { inboxId: string; resolvedBy?: string }) {
     const item = await this.getInboxItem(input.inboxId);
-    if (gateTopic(item)) {
-      throw new ControlPlaneError(
-        'VALIDATION_FAILURE',
-        `inbox item is a gate; use approve_gate or reject_gate: ${input.inboxId}`,
-      );
+    const outcomes = gateDeclaredOutcomes(item);
+    if (outcomes.length === 0) {
+      const resolvedBy = input.resolvedBy ?? 'mcp';
+      return this.resolveLegacyGate(item, { decision: 'approve', resolvedBy }, resolvedBy, input.inboxId);
     }
-    return this.resolveInboxItem({
-      inboxId: input.inboxId,
-      answer: input.answer,
-      resolvedBy: input.resolvedBy ?? 'mcp',
-      signalGate: false,
-    });
+    const outcome = outcomes.includes('approved') ? 'approved' : outcomes[0];
+    if (!outcome) {
+      throw new ControlPlaneError('VALIDATION_FAILURE', `gate has no declared outcomes: ${input.inboxId}`);
+    }
+    return this.resolveGate({ inboxId: input.inboxId, outcome, resolvedBy: input.resolvedBy });
   }
 
-  private async resolveGate(inboxId: string, answer: unknown, resolvedBy: string) {
-    const item = await this.getInboxItem(inboxId);
+  async rejectGate(input: { inboxId: string; resolvedBy?: string }) {
+    const item = await this.getInboxItem(input.inboxId);
+    const outcomes = gateDeclaredOutcomes(item);
+    if (outcomes.length === 0) {
+      const resolvedBy = input.resolvedBy ?? 'mcp';
+      return this.resolveLegacyGate(item, { decision: 'reject', resolvedBy }, resolvedBy, input.inboxId);
+    }
+    const outcome = outcomes.filter((candidate) => candidate !== 'approved').at(-1) ?? outcomes.at(-1);
+    if (!outcome) {
+      throw new ControlPlaneError('VALIDATION_FAILURE', `gate has no declared outcomes: ${input.inboxId}`);
+    }
+    return this.resolveGate({ inboxId: input.inboxId, outcome, resolvedBy: input.resolvedBy });
+  }
+
+  async resolveGate(input: { inboxId: string; outcome: string; resolvedBy?: string }) {
+    const item = await this.getInboxItem(input.inboxId);
     const topic = gateTopic(item);
     if (!topic) {
-      throw new ControlPlaneError('VALIDATION_FAILURE', `inbox item is not a plan or merge gate: ${inboxId}`);
+      throw new ControlPlaneError('VALIDATION_FAILURE', `inbox item is not a plan or merge gate: ${input.inboxId}`);
+    }
+    const outcomes = gateOutcomes(item);
+    if (outcomes.length === 0) {
+      throw new ControlPlaneError('VALIDATION_FAILURE', `gate has no declared named outcomes: ${input.inboxId}`);
+    }
+    if (!outcomes.includes(input.outcome)) {
+      throw new ControlPlaneError(
+        'VALIDATION_FAILURE',
+        `invalid gate outcome ${input.outcome}; expected one of: ${outcomes.join(', ')}`,
+      );
+    }
+    const resolvedBy = input.resolvedBy ?? 'mcp';
+    const answer = { outcome: input.outcome, resolvedBy };
+    const result = await this.inbox.resolveInbox(input.inboxId, answer, resolvedBy);
+    await this.signalGate(item, topic, result.answer, input.inboxId);
+    return {
+      inboxId: input.inboxId,
+      previousStatus: result.status,
+      answer: result.answer,
+      signaled: true,
+      topic,
+      runId: item.runId,
+    };
+  }
+
+  private async resolveLegacyGate(item: InboxItem, answer: unknown, resolvedBy: string, inboxId: string) {
+    const topic = gateTopic(item);
+    if (!topic) {
+      throw new ControlPlaneError('VALIDATION_FAILURE', `inbox item is not a gate: ${inboxId}`);
     }
     const result = await this.inbox.resolveInbox(inboxId, answer, resolvedBy);
     await this.signalGate(item, topic, result.answer, inboxId);
@@ -1216,6 +1261,22 @@ export class TaskControlPlaneApiService {
       topic,
       runId: item.runId,
     };
+  }
+
+  async answerQuestion(input: { inboxId: string; answer: unknown; resolvedBy?: string }) {
+    const item = await this.getInboxItem(input.inboxId);
+    if (gateTopic(item)) {
+      throw new ControlPlaneError(
+        'VALIDATION_FAILURE',
+        `inbox item is a gate; use resolve_gate, approve_gate, or reject_gate: ${input.inboxId}`,
+      );
+    }
+    return this.resolveInboxItem({
+      inboxId: input.inboxId,
+      answer: input.answer,
+      resolvedBy: input.resolvedBy ?? 'mcp',
+      signalGate: false,
+    });
   }
 
   async resolveInboxItem(input: {

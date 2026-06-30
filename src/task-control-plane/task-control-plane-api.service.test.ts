@@ -67,8 +67,8 @@ function makeInboxItem(overrides: Partial<InboxItem> = {}): InboxItem {
     stepId: '',
     projectId: '',
     title: 'Plan approval',
-    context: { topic: 'plan' },
-    options: [],
+    context: { topic: 'plan', summary: { outcomes: ['approved', 'changes_requested'] } },
+    options: ['approved', 'changes_requested'],
     status: 'pending',
     answer: null,
     resolvedBy: '',
@@ -545,7 +545,7 @@ test('TaskControlPlaneApiService.approveGate records retryable signal state arou
       kind: 'signal',
       workflowId: 'run-1',
       topic: 'plan',
-      payload: { decision: 'approve', resolvedBy: 'tester' },
+      payload: { outcome: 'approved', resolvedBy: 'tester' },
       key: 'inbox-1',
     },
     {
@@ -637,6 +637,77 @@ test('TaskControlPlaneApiService.rejectGate signals merge gates without completi
 
   assert.equal(result.topic, 'merge');
   assert.deepEqual(completed, []);
+});
+
+test('TaskControlPlaneApiService.resolveGate signals explicit named outcomes', async () => {
+  const signals: unknown[] = [];
+  const api = makeApi({
+    inboxService: {
+      async getInbox() {
+        return makeInboxItem({
+          title: 'Merge approval',
+          context: { topic: 'merge', summary: { outcomes: ['approved', 'recheck'] } },
+          options: ['approved', 'recheck'],
+        });
+      },
+    },
+    dbosService: {
+      async signal(_workflowId, _topic, payload) {
+        signals.push(payload);
+      },
+    },
+  });
+
+  const result = await api.resolveGate({ inboxId: 'inbox-1', outcome: 'recheck', resolvedBy: 'tester' });
+
+  assert.equal(result.topic, 'merge');
+  assert.deepEqual(result.answer, { outcome: 'recheck', resolvedBy: 'tester' });
+  assert.deepEqual(signals, [{ outcome: 'recheck', resolvedBy: 'tester' }]);
+});
+
+test('TaskControlPlaneApiService.resolveGate rejects unknown outcomes', async () => {
+  const api = makeApi();
+
+  await assert.rejects(
+    () => api.resolveGate({ inboxId: 'inbox-1', outcome: 'recheck' }),
+    (error: unknown) => error instanceof ControlPlaneError && error.code === 'VALIDATION_FAILURE',
+  );
+});
+
+test('TaskControlPlaneApiService.resolveGate requires declared named outcomes for legacy gates', async () => {
+  const api = makeApi({
+    inboxService: {
+      async getInbox() {
+        return makeInboxItem({ context: { topic: 'plan' }, options: ['approve', 'reject'] });
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => api.resolveGate({ inboxId: 'inbox-1', outcome: 'approve' }),
+    (error: unknown) => error instanceof ControlPlaneError && error.code === 'VALIDATION_FAILURE',
+  );
+});
+
+test('TaskControlPlaneApiService wrappers preserve legacy approve/reject answers without declared outcomes', async () => {
+  const signals: unknown[] = [];
+  const api = makeApi({
+    inboxService: {
+      async getInbox() {
+        return makeInboxItem({ context: { topic: 'plan' }, options: ['approve', 'reject'] });
+      },
+    },
+    dbosService: {
+      async signal(_workflowId, _topic, payload) {
+        signals.push(payload);
+      },
+    },
+  });
+
+  const approved = await api.approveGate({ inboxId: 'inbox-1', resolvedBy: 'tester' });
+
+  assert.deepEqual(approved.answer, { decision: 'approve', resolvedBy: 'tester' });
+  assert.deepEqual(signals, [{ decision: 'approve', resolvedBy: 'tester' }]);
 });
 
 test('TaskControlPlaneApiService.approveGate does NOT call completeRun for plan gates', async () => {

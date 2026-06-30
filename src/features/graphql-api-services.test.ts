@@ -37,6 +37,7 @@ test('GraphQL facade services wrap query-bus requests', async () => {
   await new InboxApiService(queryBus, commandBus).gateRisk({ inboxId: 'inbox_1' });
   await new InboxApiService(queryBus, commandBus).approveGate({ inboxId: 'inbox_1' });
   await new InboxApiService(queryBus, commandBus).rejectGate({ inboxId: 'inbox_1' });
+  await new InboxApiService(queryBus, commandBus).resolveGate({ inboxId: 'inbox_1', outcome: 'recheck' });
   await new InboxApiService(queryBus, commandBus).answerQuestion({ inboxId: 'inbox_1', answer: 'yes' });
   await new InboxApiService(queryBus, commandBus).resolveInboxItem({ inboxId: 'inbox_1', answer: { decision: 'approve' } });
   await new MethodApiService(queryBus).listRoles({});
@@ -64,6 +65,7 @@ test('GraphQL facade services wrap query-bus requests', async () => {
     'SummarizeGateRiskQuery',
     'ApproveGateCommand',
     'RejectGateCommand',
+    'ResolveGateCommand',
     'AnswerQuestionCommand',
     'ResolveInboxItemCommand',
     'ListRolesQuery',

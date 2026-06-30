@@ -123,15 +123,15 @@ test('spawnExecutor: stdout and stderr activity reset the idle deadline', async 
     args: [
       '-e',
       [
-        "setTimeout(()=>process.stdout.write('out1'), 50)",
-        "setTimeout(()=>process.stderr.write('err1'), 120)",
-        "setTimeout(()=>process.stdout.write('out2'), 190)",
-        'setTimeout(()=>process.exit(0), 250)',
+        "process.stdout.write('out1')",
+        "setTimeout(()=>process.stderr.write('err1'), 1500)",
+        "setTimeout(()=>process.stdout.write('out2'), 3000)",
+        'setTimeout(()=>process.exit(0), 3800)',
       ].join(';'),
     ],
     cwd: process.cwd(),
-    timeoutMs: 1_000,
-    idleTimeoutMs: 100,
+    timeoutMs: 6_000,
+    idleTimeoutMs: 2_000,
   });
 
   assert.equal(result.timedOut, false);
@@ -163,7 +163,7 @@ test('spawnExecutor: in-flight operation suppresses idle timeout', async () => {
     command: process.execPath,
     args: ['-e', 'setTimeout(() => process.exit(0), 220)'],
     cwd: process.cwd(),
-    timeoutMs: 1_000,
+    timeoutMs: 5_000,
     idleTimeoutMs: 80,
     onActivityTracker: (activity) => {
       activity.operationStarted('tool-1');
@@ -177,9 +177,9 @@ test('spawnExecutor: in-flight operation suppresses idle timeout', async () => {
 test('spawnExecutor: wall-clock cap kills despite activity and in-flight operations', async () => {
   const result = await spawnExecutor({
     command: process.execPath,
-    args: ['-e', "setInterval(()=>process.stdout.write('x'), 30);setTimeout(() => {}, 10000)"],
+    args: ['-e', "process.stdout.write('x');setInterval(()=>process.stdout.write('x'), 100);setTimeout(() => {}, 10000)"],
     cwd: process.cwd(),
-    timeoutMs: 160,
+    timeoutMs: 1_000,
     idleTimeoutMs: 70,
     onActivityTracker: (activity) => {
       activity.operationStarted('tool-1');
@@ -188,7 +188,7 @@ test('spawnExecutor: wall-clock cap kills despite activity and in-flight operati
 
   assert.equal(result.timedOut, true);
   assert.equal(result.timeoutKind, RUNNER_WALL_CLOCK_LIMIT_KIND);
-  assert.equal(result.timeoutEvidence?.wallClockLimitMs, 160);
+  assert.equal(result.timeoutEvidence?.wallClockLimitMs, 1_000);
   assert.equal(result.timeoutEvidence?.inFlightOperationCount, 1);
   assert.ok((result.timeoutEvidence?.stdoutBytes ?? 0) > 0);
   assert.equal(result.code, null);

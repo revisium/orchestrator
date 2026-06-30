@@ -656,6 +656,35 @@ function readinessEvidence(readiness: PollPrReadiness): string[] {
   ].filter((item): item is string => item !== undefined);
 }
 
+function unsettledReadinessFeedback(
+  input: IntegratorInput,
+  readiness: PollPrReadiness,
+  reason: string,
+): PrFeedback {
+  const reviewThreads: PrReviewThread[] = readiness.reviewThreads.items.map((t) => ({
+    threadId: t.id,
+    path: t.path,
+    line: t.line,
+    author: t.author,
+    body: t.body,
+  }));
+  return {
+    prNumber: readiness.pr.number ?? null,
+    headSha: readiness.pr.headSha,
+    evidence: [
+      ...readiness.evidence,
+      ...readinessEvidence(readiness),
+      reason,
+      `PR headSha=${readiness.pr.headSha}`,
+      'pollPr verdict=recheck',
+    ],
+    ...(input.issueRef ? { issueRef: input.issueRef } : {}),
+    verdict: 'recheck',
+    ciFailures: ciFailuresFrom(readiness),
+    reviewThreads,
+  };
+}
+
 
 
 
@@ -679,18 +708,24 @@ export async function pollPr(
   const { ownerRepo } = ownerRepoResult;
 
   let readiness: PollPrReadiness | undefined;
+  let lastReadiness: PollPrReadiness | undefined;
   for (let i = 0; i < maxPolls; i++) {
     readiness = await collect(ownerRepo, branch, input.base, gh, input.issueRef);
+    lastReadiness = readiness;
     if (readiness.checks.pending.length === 0 && readiness.checks.list.length > 0) break;
     readiness = undefined;
     if (i < maxPolls - 1) await sleep(intervalMs);
   }
 
   if (!readiness) {
-    return {
-      needsHuman: true,
-      lesson: `pollPr timed out after ${maxPolls} polls — CI checks still pending or none registered for ${branch}`,
-    };
+    if (lastReadiness) {
+      return unsettledReadinessFeedback(
+        input,
+        lastReadiness,
+        `pollPr timed out after ${maxPolls} polls; readiness still pending or no checks registered for ${branch}`,
+      );
+    }
+    return { needsHuman: true, lesson: `pollPr timed out after ${maxPolls} polls before reading PR readiness for ${branch}` };
   }
 
   let settled: PollPrReadiness = readiness;
@@ -713,11 +748,7 @@ export async function pollPr(
     const detail = settled.checks.pending.length > 0
       ? `pending checks: ${settled.checks.pending.join(', ')}`
       : 'no checks registered';
-    const evidence = settled.evidence.length > 0 ? ` Evidence: ${settled.evidence.join(' | ')}` : '';
-    return {
-      needsHuman: true,
-      lesson: `pollPr found unsettled readiness after readying ${branch} - ${detail}.${evidence}`,
-    };
+    return unsettledReadinessFeedback(input, settled, `pollPr found unsettled readiness after readying ${branch}: ${detail}`);
   }
 
   const reviewThreads: PrReviewThread[] = settled.reviewThreads.items.map((t) => ({

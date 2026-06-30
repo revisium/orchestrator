@@ -22,7 +22,8 @@ import type { AppendEventInput } from '../run/append-event.js';
 
 
 export type Decision = {
-  decision: 'approve' | 'reject';
+  decision?: 'approve' | 'reject';
+  outcome?: string;
   answer?: unknown;
   resolvedBy?: string;
 };
@@ -55,6 +56,9 @@ export function makeAwaitHuman(deps: AwaitHumanDeps) {
   ): Promise<Decision> {
     const inboxKey = `${runId}|${gateKey}`;
     const inboxId = `inbox_${fnv1a64Hex(inboxKey)}`;
+    const outcomes = summary && typeof summary === 'object' && 'outcomes' in summary && Array.isArray(summary.outcomes)
+      ? summary.outcomes.filter((item): item is string => typeof item === 'string' && item.length > 0)
+      : [];
 
     await pushInbox(
       {
@@ -62,7 +66,7 @@ export function makeAwaitHuman(deps: AwaitHumanDeps) {
         runId,
         title,
         context: { topic, summary },
-        options: ['approve', 'reject'],
+        options: outcomes.length > 0 ? outcomes : ['approve', 'reject'],
       },
       inboxId,
     );

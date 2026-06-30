@@ -960,7 +960,7 @@ function featureDevelopmentPrReviewWithMergeRecheck(): Template {
   // re-poll evidence, not the stale pre-gate readiness.
   for (const nodeId of ['triage', 'ciRework']) {
     const recovery = t.nodes[nodeId];
-    if (recovery.kind === 'agent') {
+    if (recovery.kind === 'agent' && !recovery.consumes?.some((consume) => consume.node === 'mergeRecheck' && consume.as === 'recheckFeedback')) {
       recovery.consumes = [
         ...(recovery.consumes ?? []),
         { node: 'mergeRecheck', as: 'recheckFeedback', optional: true, staleOk: true },
@@ -989,6 +989,40 @@ test('DD-issue-141 (abort): merge reject + a still-clean re-poll routes to block
   assert.equal(rec.confirmMergeCalls, 0, 'confirmMerge never ran (the reject aborted instead of merging)');
   assert.equal(rec.pollPrCalls, 3, 'pollPr → mergeReadiness → mergeRecheck (the reject re-polled fresh readiness)');
   assert.deepEqual(rec.gates, ['plan', 'merge'], 'the merge gate opened once, then the reject re-polled rather than re-gating');
+});
+
+test('DD-issue-223: named merge gate recheck outcome re-polls readiness', async () => {
+  const { run, rec } = buildAdapter({
+    template: featureDevelopmentPrReviewWithMergeRecheck(),
+    verdicts: { codeReview: 'approved' },
+    gate: (topic) => (topic === 'merge' ? { outcome: 'recheck' } : { outcome: 'approved' }),
+  });
+
+  const result = await run();
+
+  assert.equal(result.status, 'blocked', 'a clean named recheck still aborts after the fresh readiness poll');
+  assert.equal(rec.pollPrCalls, 3, 'pollPr -> mergeReadiness -> mergeRecheck');
+  assert.equal(rec.confirmMergeCalls, 0);
+});
+
+test('DD-issue-223: pollPr recheck verdict loops inside readiness polling', async () => {
+  let polls = 0;
+  const { run, rec } = buildAdapter({
+    template: featureDevelopmentPrReview(),
+    verdicts: { codeReview: 'approved' },
+    pollPr: () => {
+      polls++;
+      if (polls === 1) {
+        return { prNumber: 1, headSha: 'pending', evidence: ['provider pending'], verdict: 'recheck' as const, ciFailures: [], reviewThreads: [] };
+      }
+      return { prNumber: 1, headSha: `clean-${polls}`, evidence: [`poll ${polls}: clean`], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
+    },
+  });
+
+  const result = await run();
+
+  assert.equal(result.status, 'succeeded');
+  assert.equal(rec.pollPrCalls, 3, 'first pollPr recheck repeats pollPr, then mergeReadiness runs');
 });
 
 test('DD-issue-141 (reroute): merge reject + a review_changes re-poll reroutes to triage (recoverable), NOT blocked', async () => {

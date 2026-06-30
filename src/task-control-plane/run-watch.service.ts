@@ -508,7 +508,7 @@ function suggestedTools(state: Pick<RunState, 'state' | 'runStatus'>, activity: 
   const nextAction = deriveRunAttentionNextAction(state, activity);
   if (nextAction === 'inspect_log') return ['get_agent_log'];
   if (nextAction === 'inspect_digest') return ['get_run_digest'];
-  if (nextAction === 'ask_human') return ['get_inbox_item', 'approve_gate', 'reject_gate', 'answer_question'];
+  if (nextAction === 'ask_human') return ['get_inbox_item', 'resolve_gate', 'approve_gate', 'reject_gate', 'answer_question'];
   if (nextAction === 'start_run') return ['start_run'];
   return [];
 }

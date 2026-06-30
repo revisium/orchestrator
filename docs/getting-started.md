@@ -136,6 +136,7 @@ Use MCP for agent-driven work:
 - `get_run_status` — neutral status for dashboards (no prescriptive actions)
 - `watch_run_changes` — bounded long-poll with cursor for advanced change delivery
 - `list_inbox`
+- `resolve_gate`
 - `approve_gate`
 - `reject_gate`
 - `answer_question`
@@ -143,6 +144,7 @@ Use MCP for agent-driven work:
 Use GraphQL for UI/script flows:
 
 - `inbox(data: ...)`
+- `resolveGate(data: ...)`
 - `approveGate(data: ...)`
 - `rejectGate(data: ...)`
 - `answerQuestion(data: ...)`
