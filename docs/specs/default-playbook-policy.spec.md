@@ -53,7 +53,10 @@ The bundled `feature-development` policy verifier reports errors for these stati
 The scoped policy requires the bundled `mergeGate` to expose `approved,recheck` outcomes. The runtime accepts explicit
 named gate outcomes through `resolve_gate` / `resolveGate`; compatibility wrappers still map `approve_gate` to the
 approval outcome and `reject_gate` to the last non-approval outcome, so legacy merge-gate rejection reaches
-`mergeRecheck` instead of terminal-blocking immediately.
+`mergeRecheck` instead of terminal-blocking immediately. If a named gate declares no non-approval outcome, `reject_gate`
+emits the legacy reject decision rather than falling back to `approved`, so the template can route the non-approved
+decision through its default branch. Single-outcome `approved` gates keep legacy approve/reject payloads for wrapper
+idempotency, while `resolve_gate` remains the explicit named-outcome surface.
 
 `mergeRecheck` MUST be a `script:pollPr` step that produces `schema:prFeedback` and routes to `mergeRecheckRouter`.
 The router MUST send a still-clean recheck, or an unclassified/default recheck, to `blockedEnd` as an explicit

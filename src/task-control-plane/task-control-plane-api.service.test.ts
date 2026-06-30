@@ -674,7 +674,7 @@ test('TaskControlPlaneApiService.resolveGate rejects unknown outcomes', async ()
   );
 });
 
-test('TaskControlPlaneApiService.rejectGate rejects named gates without a rejection outcome', async () => {
+test('TaskControlPlaneApiService.rejectGate uses legacy reject when named gates have no rejection outcome', async () => {
   const signals: unknown[] = [];
   const api = makeApi({
     inboxService: {
@@ -692,11 +692,34 @@ test('TaskControlPlaneApiService.rejectGate rejects named gates without a reject
     },
   });
 
-  await assert.rejects(
-    () => api.rejectGate({ inboxId: 'inbox-1', resolvedBy: 'tester' }),
-    (error: unknown) => error instanceof ControlPlaneError && error.code === 'VALIDATION_FAILURE',
-  );
-  assert.deepEqual(signals, [], 'single-outcome named gates must not be signaled as approved by rejectGate');
+  const rejected = await api.rejectGate({ inboxId: 'inbox-1', resolvedBy: 'tester' });
+
+  assert.deepEqual(rejected.answer, { decision: 'reject', resolvedBy: 'tester' });
+  assert.deepEqual(signals, [{ decision: 'reject', resolvedBy: 'tester' }]);
+});
+
+test('TaskControlPlaneApiService.approveGate keeps legacy payloads for single-outcome approval gates', async () => {
+  const signals: unknown[] = [];
+  const api = makeApi({
+    inboxService: {
+      async getInbox() {
+        return makeInboxItem({
+          context: { topic: 'plan', summary: { outcomes: ['approved'] } },
+          options: ['approved'],
+        });
+      },
+    },
+    dbosService: {
+      async signal(_workflowId, _topic, payload) {
+        signals.push(payload);
+      },
+    },
+  });
+
+  const approved = await api.approveGate({ inboxId: 'inbox-1', resolvedBy: 'tester' });
+
+  assert.deepEqual(approved.answer, { decision: 'approve', resolvedBy: 'tester' });
+  assert.deepEqual(signals, [{ decision: 'approve', resolvedBy: 'tester' }]);
 });
 
 test('TaskControlPlaneApiService.resolveGate requires declared named outcomes for legacy gates', async () => {
