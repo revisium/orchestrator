@@ -43,6 +43,7 @@ test('inbox command handlers delegate through TaskControlPlaneApiService', async
   assert.equal((await new RejectGateHandler(api).execute(new RejectGateCommand({ inboxId: 'inbox_1' }))).signaled, true);
   assert.equal((await new ResolveGateHandler(api).execute(new ResolveGateCommand({ inboxId: 'inbox_1', outcome: 'recheck' }))).signaled, true);
   assert.equal((await new AnswerQuestionHandler(api).execute(new AnswerQuestionCommand({ inboxId: 'inbox_1', answer: 'yes' }))).signaled, false);
+  assert.equal((await new ResolveGateHandler(api).execute(new ResolveGateCommand({ inboxId: 'inbox_1', outcome: 'rework' }))).signaled, true);
   assert.equal(
     (await new ResolveInboxItemHandler(api).execute(new ResolveInboxItemCommand({ inboxId: 'inbox_1', answer: { decision: 'approve' } }))).signaled,
     true,
@@ -52,6 +53,7 @@ test('inbox command handlers delegate through TaskControlPlaneApiService', async
     'reject:{"inboxId":"inbox_1"}',
     'resolveGate:{"inboxId":"inbox_1","outcome":"recheck"}',
     'answer:{"inboxId":"inbox_1","answer":"yes"}',
+    'resolveGate:{"inboxId":"inbox_1","outcome":"rework"}',
     'resolve:{"inboxId":"inbox_1","answer":{"decision":"approve"}}',
   ]);
 });

@@ -107,20 +107,26 @@ test('L4: a produced plan is persisted and hydrated into the consuming developer
 // recovery.e2e.test.ts: the crash must happen BEFORE any long-lived harness exists, else a competing
 // host on the shared DBOS queue could steal + run the recovered workflow with the wrong agent.
 
-test('L3: reviewer blocker x cap drives the bounded rework loop to blocked (counter cap is DATA)', { skip: e2eSkip }, async () => {
+test('L3: reviewer blocker x cap opens stuck gate, then abort blocks the run (counter cap is DATA)', { skip: e2eSkip }, async () => {
   // The template's codeReviewRouter routes blocker → reworkDeveloper while counter.lt(codeReviewLoop,3);
-  // reworkDeveloper increments the scope. After the cap the guard is false → default → blockedEnd.
-  // A reviewer that always emits the domain `blocker` exhausts the cap and the run blocks.
+  // reworkDeveloper increments the scope. After the cap the guard is false and the run parks at the
+  // named codeStuckGate. A reviewer that always emits `blocker` exhausts the cap; an explicit abort
+  // outcome then drives the terminal blocked path.
   const blockerReviewer: AgentSpec = {
     byRole: { reviewer: { kind: 'verdict', verdict: 'blocker' }, watcher: { kind: 'domainVerdict', verdict: 'clean' } },
   };
   const run = await startDataDrivenRun(h, target, specs, blockerReviewer);
 
-  // Approve the plan gate; the run then loops codeReview↔reworkDeveloper and blocks before the merge gate.
+  // Approve the plan gate; the run then loops codeReview↔reworkDeveloper and parks before the merge gate.
   const plan = await waitForGate(h.api, run.runId, 'plan');
   await h.api.approveGate({ inboxId: plan.inboxId, resolvedBy: 'e2e' });
-  await waitState(h.api, run.runId);
+  const stuck = await waitState(h.api, run.runId);
+  assert.equal(stuck.state, 'pending_gate', 'review-loop exhaustion must open codeStuckGate');
+  assert.ok(stuck.inbox, 'stuck gate state must surface the inbox item');
+  assert.deepEqual(stuck.inbox.options, ['approve_anyway', 'rework', 'abort']);
 
+  await h.api.resolveGate({ inboxId: stuck.inbox.id, outcome: 'abort', resolvedBy: 'e2e' });
+  await waitState(h.api, run.runId);
   await assertBlocked(h.api, run.runId);
   // The cap is 3 (codeReviewLoop): the developer reworks until the guard fails, so the developer ran
   // more than its single first pass (the rework loop fired). The interpreter — not the agent — caps it.

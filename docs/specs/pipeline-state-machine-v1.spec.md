@@ -117,6 +117,14 @@ defense-in-depth; it is not a substitute for giving the runner the active domain
   3. `onFailure: 'route'` requires a matching catch and is invalid otherwise.
   4. `onFailure: 'escalate'` routes to `escalateTo`.
 
+## Stuck Review Recovery
+
+The default codex consensus feature-development pipeline uses explicit stuck-review gate outcomes:
+`approve_anyway`, `rework`, and `abort`. `approve_anyway` is a human override to the integrator, `rework` routes
+through a separate `stuckReworkDeveloper` node, and `abort` blocks the run. The stuck recovery loop is capped by its
+own scope and MUST NOT reset or extend `codeReviewLoop`; after the bounded recovery attempt, failed consensus routes
+to a final stuck gate that allows only explicit `approve_anyway` or `abort`.
+
 ## Fork and Join
 
 `parallel` branches are named and enter global node ids. A branch MUST route only within itself or to the matching

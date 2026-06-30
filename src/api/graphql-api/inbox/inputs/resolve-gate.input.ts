@@ -9,5 +9,8 @@ export class ResolveGateInput {
   outcome!: string;
 
   @Field(() => String, { nullable: true })
+  note?: string;
+
+  @Field(() => String, { nullable: true })
   resolvedBy?: string;
 }

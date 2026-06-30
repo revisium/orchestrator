@@ -63,6 +63,7 @@ export const node = {
       timeout?: HumanGateNode['timeout'];
       displayName?: string;
       incrementCounters?: string[];
+      produces?: HumanGateNode['produces'];
       gatedArtifact?: HumanGateNode['gatedArtifact'];
       verdictFrom?: HumanGateNode['verdictFrom'];
     } = {},
@@ -75,6 +76,7 @@ export const node = {
       branches,
       ...(opts.timeout ? { timeout: opts.timeout } : {}),
       ...(opts.incrementCounters ? { incrementCounters: opts.incrementCounters } : {}),
+      ...(opts.produces ? { produces: opts.produces } : {}),
       ...(opts.displayName ? { displayName: opts.displayName } : {}),
       ...(opts.gatedArtifact ? { gatedArtifact: opts.gatedArtifact } : {}),
       ...(opts.verdictFrom ? { verdictFrom: opts.verdictFrom } : {}),
