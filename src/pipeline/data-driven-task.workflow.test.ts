@@ -1875,6 +1875,30 @@ test('verification environment needsHuman opens recovery gate and records non-ad
   assert.match(String(summary['policy']), /must not apply, copy, cherry-pick, stage, commit, or push/);
 });
 
+test('runner_failed verification environment block opens recovery gate before transient routing', async () => {
+  const { run, rec } = buildAdapter({
+    template: singleDeveloperTemplate('verification-recovery-runner-failed-env'),
+    results: {
+      developer: runnerFailedResult(
+        'pnpm verify failed: EPERM open /Users/anton/.revisium-orchestrator/run-artifacts/runtime.json; EPERM listen 127.0.0.1',
+        { artifactRef: 'attempt:attempt-1' },
+      ),
+    },
+    gate: () => ({ outcome: 'continue_in_revo' }),
+  });
+
+  const result = await run();
+
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(rec.gates, ['question']);
+  assert.equal(rec.blocked[0]?.reason, 'verification-recovery-decision:continue_in_revo');
+  assert.equal(rec.events.includes('runner_retry_scheduled:developer'), false);
+  assert.equal(rec.events.includes('runner_retry_exhausted:developer'), false);
+  const summary = rec.gateSummaries[0] as Record<string, unknown>;
+  assert.equal(summary['topic'], 'verification_recovery');
+  assert.equal(summary['reason'], 'verification-environment-blocked');
+});
+
 test('code verification needsHuman does not open environment recovery gate', async () => {
   const { run, rec } = buildAdapter({
     template: singleDeveloperTemplate('verification-recovery-code'),

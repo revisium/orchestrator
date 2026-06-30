@@ -73,7 +73,13 @@ export function validateManualAdoptionAudit(input: unknown, item: InboxItem): Ma
   }
 
   const contextRunId = adoptionAuditContextRunId(item);
-  if (contextRunId && normalized.runId !== contextRunId) {
+  if (!contextRunId) {
+    throw new ControlPlaneError(
+      'VALIDATION_FAILURE',
+      'adopt_patch_manually requires a gate runId to validate adoptionAudit.runId',
+    );
+  }
+  if (normalized.runId !== contextRunId) {
     throw new ControlPlaneError(
       'VALIDATION_FAILURE',
       `adopt_patch_manually adoptionAudit.runId must match gate runId ${contextRunId}`,
@@ -94,4 +100,3 @@ export function validateManualAdoptionAudit(input: unknown, item: InboxItem): Ma
     ...(worktreeRef ? { worktreeRef } : {}),
   };
 }
-

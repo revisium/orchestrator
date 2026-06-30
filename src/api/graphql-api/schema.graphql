@@ -267,6 +267,20 @@ input ListRunsInput {
   status: String
 }
 
+input ManualAdoptionAuditInput {
+  actor: String!
+  artifactRef: String
+  risk: String!
+  role: String!
+  runId: String!
+  scope: String!
+  step: String!
+  targetBranch: String!
+  targetRepo: String!
+  verificationResponsibility: String!
+  worktreeRef: String
+}
+
 type Mutation {
   answerQuestion(data: AnswerQuestionInput!): InboxResolutionModel!
   approveGate(data: GateDecisionInput!): InboxResolutionModel!
@@ -519,7 +533,7 @@ type RepositoryValidationModel {
 }
 
 input ResolveGateInput {
-  adoptionAudit: JSON
+  adoptionAudit: ManualAdoptionAuditInput
   inboxId: ID!
   note: String
   outcome: String!

@@ -195,8 +195,11 @@ Mutation resolvers MUST enforce the auth/principal seam before the API can bind 
   `IssueRefModel` metadata.
 - These projections MUST NOT project arbitrary run params.
 
-`ResolveGateInput` accepts optional `adoptionAudit: JSON` for the `adopt_patch_manually` recovery outcome. The
-resolver MUST reject that outcome unless the audit is complete and matches the gate run id.
+`ResolveGateInput` accepts optional `adoptionAudit: ManualAdoptionAuditInput` for the `adopt_patch_manually`
+recovery outcome. The resolver MUST reject that outcome unless the audit is complete and matches the gate run id.
+`ManualAdoptionAuditInput` contains required string fields `runId`, `step`, `role`, `targetRepo`, `targetBranch`,
+`actor`, `scope`, `risk`, and `verificationResponsibility`, plus optional `artifactRef` and `worktreeRef`; at least
+one artifact/worktree reference is required by the resolver.
 
 `PrReadinessInput` also accepts optional `issueRef` with the same shape. For issue-bound runs, readiness reports a
 human-decision item when branch/title linkage is missing. The link policy is reference-only: it MUST NOT emit

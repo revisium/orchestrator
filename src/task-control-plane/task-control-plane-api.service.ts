@@ -1332,8 +1332,14 @@ export class TaskControlPlaneApiService {
     const item = await this.getInboxItem(input.inboxId);
     const topic = gateTopic(item);
     let answerToResolve = input.answer;
+    const answer = asRecord(input.answer);
+    if (typeof answer?.outcome === 'string') {
+      const rawOutcome = answer.outcome.trim();
+      if (rawOutcome === 'adopt_patch_manually' && !topic) {
+        validateManualAdoptionAudit(answer.adoptionAudit, item);
+      }
+    }
     if (topic) {
-      const answer = asRecord(input.answer);
       if (typeof answer?.outcome === 'string') {
         const outcome = answer.outcome.trim();
         if (!outcome) {

@@ -1219,29 +1219,33 @@ export function makeDataDrivenTask(
   ): Promise<NeedsHumanRoleResult> {
     const { result, node, physicalAttempt, binding, stepKey } = input;
     if (result.needsHuman) {
-      const transient = transientRunnerFailure(result);
-      if (transient === undefined) {
-        const safeLesson = String(redactEventPayload(result.lesson ?? `agent ${node.id} reported needsHuman`));
-        const recoveryBlock = verificationEnvironmentBlock(result, node.id);
+      const safeLesson = String(redactEventPayload(result.lesson ?? `agent ${node.id} reported needsHuman`));
+      const recoveryBlock = verificationEnvironmentBlock(result, node.id);
+      if (recoveryBlock) {
         return {
           blocked: true,
-          reason: recoveryBlock?.reason ?? 'agent-needs-human',
-          lesson: recoveryBlock?.lesson ?? safeLesson,
-          ...(recoveryBlock
-            ? {
-              recovery: {
-                classification: 'verification_environment',
-                nodeId: node.id,
-                stepKey,
-                role: binding.rowId,
-                runner: binding.resolvedRunnerId,
-                reason: recoveryBlock.reason,
-                lesson: recoveryBlock.lesson,
-                attemptId: physicalAttempt.attemptId,
-                ...(artifactRefFromResult(result) ? { artifactRef: artifactRefFromResult(result) } : {}),
-              },
-            }
-            : {}),
+          reason: recoveryBlock.reason,
+          lesson: recoveryBlock.lesson,
+          recovery: {
+            classification: 'verification_environment',
+            nodeId: node.id,
+            stepKey,
+            role: binding.rowId,
+            runner: binding.resolvedRunnerId,
+            reason: recoveryBlock.reason,
+            lesson: recoveryBlock.lesson,
+            attemptId: physicalAttempt.attemptId,
+            ...(artifactRefFromResult(result) ? { artifactRef: artifactRefFromResult(result) } : {}),
+          },
+          attemptsMade: physicalAttempt.attemptNo,
+        };
+      }
+      const transient = transientRunnerFailure(result);
+      if (transient === undefined) {
+        return {
+          blocked: true,
+          reason: 'agent-needs-human',
+          lesson: safeLesson,
           attemptsMade: physicalAttempt.attemptNo,
         };
       }

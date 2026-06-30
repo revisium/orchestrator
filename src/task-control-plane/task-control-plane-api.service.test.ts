@@ -742,6 +742,33 @@ test('TaskControlPlaneApiService.resolveGate requires complete audit for adopt_p
   );
 });
 
+test('TaskControlPlaneApiService.resolveInboxItem requires gate runId before adopting a manual patch', async () => {
+  const api = makeApi({
+    inboxService: {
+      async getInbox() {
+        return makeInboxItem({
+          runId: '',
+          options: ['rerun_with_permissions', 'continue_in_revo', 'adopt_patch_manually', 'abort'],
+          context: {
+            topic: 'question',
+            summary: { outcomes: ['rerun_with_permissions', 'continue_in_revo', 'adopt_patch_manually', 'abort'] },
+          },
+        });
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => api.resolveInboxItem({
+      inboxId: 'inbox-1',
+      answer: { outcome: 'adopt_patch_manually', adoptionAudit: completeAdoptionAudit },
+      resolvedBy: 'human',
+      signalGate: false,
+    }),
+    /requires a gate runId/,
+  );
+});
+
 test('TaskControlPlaneApiService.resolveGate persists adoptionAudit for adopt_patch_manually', async () => {
   const resolvedAnswers: unknown[] = [];
   const api = makeApi({
