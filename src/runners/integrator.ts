@@ -649,6 +649,10 @@ function readinessRequiresReview(readiness: PollPrReadiness): boolean {
     || (readiness.nextAction === 'developer_fix' && readiness.checks.fail.length === 0);
 }
 
+function readinessRequiresHumanDecision(readiness: PollPrReadiness): boolean {
+  return readiness.readinessVerdict === 'closed' || readiness.nextAction === 'human_decision';
+}
+
 function readinessEvidence(readiness: PollPrReadiness): string[] {
   return [
     readiness.readinessVerdict ? `readiness verdict=${readiness.readinessVerdict}` : undefined,
@@ -719,10 +723,17 @@ export async function pollPr(
 
   if (!readiness) {
     if (lastReadiness) {
+      const reason = `pollPr timed out after ${maxPolls} polls; readiness still pending or no checks registered for ${branch}`;
+      if (readinessRequiresHumanDecision(lastReadiness)) {
+        return {
+          needsHuman: true,
+          lesson: [...lastReadiness.evidence, ...readinessEvidence(lastReadiness), reason, `PR headSha=${lastReadiness.pr.headSha}`].join('; '),
+        };
+      }
       return unsettledReadinessFeedback(
         input,
         lastReadiness,
-        `pollPr timed out after ${maxPolls} polls; readiness still pending or no checks registered for ${branch}`,
+        reason,
       );
     }
     return { needsHuman: true, lesson: `pollPr timed out after ${maxPolls} polls before reading PR readiness for ${branch}` };

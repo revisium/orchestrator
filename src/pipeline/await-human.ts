@@ -21,12 +21,14 @@ import type { NewInboxItem } from '../control-plane/inbox.js';
 import type { AppendEventInput } from '../run/append-event.js';
 
 
-export type Decision = {
-  decision?: 'approve' | 'reject';
-  outcome?: string;
+type DecisionMeta = {
   answer?: unknown;
   resolvedBy?: string;
 };
+
+export type Decision =
+  | ({ decision: 'approve' | 'reject'; outcome?: never } & DecisionMeta)
+  | ({ outcome: string; decision?: never } & DecisionMeta);
 
 
 export type AwaitHumanDeps = {

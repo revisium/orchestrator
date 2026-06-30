@@ -1690,7 +1690,7 @@ test('pollPr: a provider check pending during review grace returns recheck inste
           headSha: 'green-head',
           pending: ['CodeRabbit'],
           list: [{ name: 'CodeRabbit', result: 'IN_PROGRESS' }],
-          evidence: ['Pending checks: CodeRabbit'],
+          evidence: ['pending checks: CodeRabbit'],
         });
   };
 
@@ -1735,6 +1735,23 @@ test('pollPr: timeout with checks still pending → recheck PrFeedback', async (
   assert.equal(r.headSha, 'sha5');
   assert.ok(r.evidence.some((item) => item.includes('timed out after 2 polls')));
   assert.ok(r.evidence.some((item) => item.includes('pollPr verdict=recheck')));
+});
+
+test('pollPr: timeout with human-decision readiness blocks instead of rechecking', async () => {
+  const collect = async (): Promise<PollPrReadiness> =>
+    readiness({
+      pending: ['review'],
+      list: [{ name: 'review', result: 'IN_PROGRESS' }],
+      readinessVerdict: 'needs_human',
+      nextAction: 'human_decision',
+      evidence: ['PR review decision is unresolved'],
+    });
+
+  const r = await pollPr(POLL_INPUT, pollDeps(collect, { maxPolls: 2 }));
+
+  assert.ok('needsHuman' in r, 'terminal human-decision readiness must not become a recoverable recheck');
+  assert.match(r.lesson, /readiness nextAction=human_decision/);
+  assert.match(r.lesson, /timed out after 2 polls/);
 });
 
 test('pollPr: unparseable origin → needsHuman (no poll)', async () => {
