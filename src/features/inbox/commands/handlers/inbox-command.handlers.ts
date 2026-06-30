@@ -4,6 +4,7 @@ import { TaskControlPlaneApiService } from '../../../../task-control-plane/task-
 import { AnswerQuestionCommand } from '../impl/answer-question.command.js';
 import { ApproveGateCommand } from '../impl/approve-gate.command.js';
 import { RejectGateCommand } from '../impl/reject-gate.command.js';
+import { ResolveGateCommand } from '../impl/resolve-gate.command.js';
 import { ResolveInboxItemCommand } from '../impl/resolve-inbox-item.command.js';
 
 @CommandHandler(ApproveGateCommand)
@@ -21,6 +22,15 @@ export class RejectGateHandler implements ICommandHandler<RejectGateCommand> {
 
   execute(command: RejectGateCommand) {
     return this.api.rejectGate(command.data);
+  }
+}
+
+@CommandHandler(ResolveGateCommand)
+export class ResolveGateHandler implements ICommandHandler<ResolveGateCommand> {
+  constructor(@Inject(TaskControlPlaneApiService) private readonly api: TaskControlPlaneApiService) {}
+
+  execute(command: ResolveGateCommand) {
+    return this.api.resolveGate(command.data);
   }
 }
 

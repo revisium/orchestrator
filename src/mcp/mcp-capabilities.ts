@@ -27,6 +27,7 @@ export const MCP_TOOL_NAMES = [
   'get_pending_decisions',
   'approve_gate',
   'reject_gate',
+  'resolve_gate',
   'answer_question',
   'resolve_inbox_item',
   'summarize_gate_risk',
@@ -58,7 +59,7 @@ Use these tools to manage tasks end-to-end from your coding agent:
 task_monitoring_loop — default agent algorithm for monitoring a run:
 1. Call get_run_attention(runId): answers "what currently requires attention?" with requiresAttention, nextAction, and suggestedTools.
 2. nextAction "wait" → sleep/backoff, re-call get_run_attention.
-3. nextAction "ask_human" → inspect and resolve the inbox item with approve_gate/reject_gate/answer_question.
+3. nextAction "ask_human" → inspect and resolve the inbox item with resolve_gate/approve_gate/reject_gate/answer_question.
 4. nextAction "inspect_digest" → call get_run_digest once; nextAction "inspect_log" → call get_agent_log once.
 5. nextAction "done" → stop. nextAction "start_run" → call start_run.
 Use get_run_status for neutral dashboard or status checks that must not prescribe actions.

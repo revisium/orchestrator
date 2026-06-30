@@ -529,6 +529,7 @@ function progressCursor(state: RunState, lastResult: LastResult | undefined): Da
 
 
 function gateVerdict(decision: GateDecision, outcomes: string[]): string | undefined {
+  if (decision.outcome) return outcomes.includes(decision.outcome) ? decision.outcome : undefined;
   if (decision.decision === 'approve') return outcomes[0];
   return outcomes.length > 1 ? outcomes.at(-1) : undefined;
 }

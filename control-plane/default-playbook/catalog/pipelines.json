@@ -493,6 +493,13 @@
               {
                 "when": {
                   "op": "verdict.eq",
+                  "value": "recheck"
+                },
+                "goto": "pollPr"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
                   "value": "review_changes"
                 },
                 "goto": "triage"
@@ -513,13 +520,6 @@
                   ]
                 },
                 "goto": "ciRework"
-              },
-              {
-                "when": {
-                  "op": "verdict.eq",
-                  "value": "recheck"
-                },
-                "goto": "mergeReadiness"
               },
               {
                 "default": "blockedEnd"
@@ -561,6 +561,13 @@
               {
                 "when": {
                   "op": "verdict.eq",
+                  "value": "recheck"
+                },
+                "goto": "mergeReadiness"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
                   "value": "review_changes"
                 },
                 "goto": "triage"
@@ -581,13 +588,6 @@
                   ]
                 },
                 "goto": "ciRework"
-              },
-              {
-                "when": {
-                  "op": "verdict.eq",
-                  "value": "recheck"
-                },
-                "goto": "mergeReadiness"
               },
               {
                 "default": "blockedEnd"
@@ -1295,6 +1295,13 @@
               {
                 "when": {
                   "op": "verdict.eq",
+                  "value": "recheck"
+                },
+                "goto": "pollPr"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
                   "value": "review_changes"
                 },
                 "goto": "triage"
@@ -1352,6 +1359,13 @@
                   "value": "clean"
                 },
                 "goto": "mergeGate"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "recheck"
+                },
+                "goto": "mergeReadiness"
               },
               {
                 "when": {

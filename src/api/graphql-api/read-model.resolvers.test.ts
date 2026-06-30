@@ -30,6 +30,7 @@ test('read-model resolvers delegate to domain api services', async () => {
     gateRisk: (data: unknown) => (calls.push(`risk:${JSON.stringify(data)}`), 'risk'),
     approveGate: (data: unknown) => (calls.push(`approve:${JSON.stringify(data)}`), 'approve'),
     rejectGate: (data: unknown) => (calls.push(`reject:${JSON.stringify(data)}`), 'reject'),
+    resolveGate: (data: unknown) => (calls.push(`resolveGate:${JSON.stringify(data)}`), 'resolveGate'),
     answerQuestion: (data: unknown) => (calls.push(`answer:${JSON.stringify(data)}`), 'answer'),
     resolveInboxItem: (data: unknown) => (calls.push(`resolve:${JSON.stringify(data)}`), 'resolve'),
   };
@@ -64,6 +65,7 @@ test('read-model resolvers delegate to domain api services', async () => {
   assert.equal(new InboxResolver(inboxApi as never).gateRisk('inbox_1'), 'risk');
   assert.equal(new InboxResolver(inboxApi as never).approveGate({ inboxId: 'inbox_1' }), 'approve');
   assert.equal(new InboxResolver(inboxApi as never).rejectGate({ inboxId: 'inbox_1' }), 'reject');
+  assert.equal(new InboxResolver(inboxApi as never).resolveGate({ inboxId: 'inbox_1', outcome: 'recheck' }), 'resolveGate');
   assert.equal(new InboxResolver(inboxApi as never).answerQuestion({ inboxId: 'inbox_1', answer: 'yes' }), 'answer');
   assert.equal(new InboxResolver(inboxApi as never).resolveInboxItem({ inboxId: 'inbox_1', answer: { decision: 'approve' } }), 'resolve');
   assert.equal(new MethodResolver(methodApi as never).roles(), 'roles');
