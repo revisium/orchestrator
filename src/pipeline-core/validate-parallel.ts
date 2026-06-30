@@ -99,10 +99,25 @@ function buildBranchMembership(
         });
       }
       memberOf.set(m, branch.id);
+      checkBranchMemberDoesNotTerminateBeforeJoin(template, branch, m, joinId, d);
     }
     checkAllJoinReachable(template, branch, joinId, d);
   }
   return memberOf;
+}
+
+function checkBranchMemberDoesNotTerminateBeforeJoin(
+  template: Template,
+  branch: { id: string; entry: string },
+  member: string,
+  joinId: string,
+  d: DiagSink,
+): void {
+  const node = template.nodes[member];
+  if (node?.kind !== 'terminal') return;
+  d.error('BRANCH_TERMINAL_BEFORE_JOIN', `branch "${branch.id}" can terminate at ${member} before join ${joinId}`, {
+    nodeId: member,
+  });
 }
 
 

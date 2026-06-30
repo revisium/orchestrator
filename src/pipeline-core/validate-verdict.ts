@@ -1,4 +1,4 @@
-import { CORE_VERDICTS } from './types.js';
+import { CORE_VERDICTS, JOIN_VERDICT_REDUCER_KINDS } from './types.js';
 import type { Condition, Node, Template } from './types.js';
 import { DiagSink } from './validate-sink.js';
 import { guardConditionsOf } from './validate-graph.js';
@@ -18,6 +18,7 @@ export function ruleVerdictClosure(template: Template, d: DiagSink): void {
   for (const node of Object.values(template.nodes)) {
     checkGuardVerdictLabels(node, core, domainSet, used, d);
     checkGateOutcomesSubset(node, domainSet, used, d);
+    checkJoinVerdictReducer(node, domainSet, used, d);
   }
 
   for (const label of domain) {
@@ -60,6 +61,58 @@ function checkGateOutcomesSubset(node: Node, domainSet: Set<string>, used: Set<s
       });
     }
   }
+}
+
+/** 9e — a join verdictReducer forwards only declared domain labels. */
+function checkJoinVerdictReducer(node: Node, domainSet: Set<string>, used: Set<string>, d: DiagSink): void {
+  if (node.kind !== 'join' || node.verdictReducer === undefined) return;
+  const reducer = node.verdictReducer as unknown;
+  if (!isRecord(reducer)) {
+    d.error('VERDICT_REDUCER_BAD_SHAPE', `join ${node.id} verdictReducer must be an object`, {
+      nodeId: node.id,
+      path: 'verdictReducer',
+    });
+    return;
+  }
+  const kind = reducer.kind;
+  if (typeof kind !== 'string' || !(JOIN_VERDICT_REDUCER_KINDS as readonly string[]).includes(kind)) {
+    d.error('VERDICT_REDUCER_BAD_KIND', `join ${node.id} verdictReducer kind "${String(kind)}" is not allowed`, {
+      nodeId: node.id,
+      path: 'verdictReducer.kind',
+    });
+    return;
+  }
+  if (kind !== 'allIn') return;
+
+  const pass = reducer.pass;
+  const passVerdict = reducer.passVerdict;
+  const failVerdict = reducer.failVerdict;
+  if (
+    !Array.isArray(pass) ||
+    !pass.every((label): label is string => typeof label === 'string') ||
+    typeof passVerdict !== 'string' ||
+    typeof failVerdict !== 'string'
+  ) {
+    d.error('VERDICT_REDUCER_BAD_SHAPE', `join ${node.id} verdictReducer allIn shape is invalid`, {
+      nodeId: node.id,
+      path: 'verdictReducer',
+    });
+    return;
+  }
+
+  const labels = [...pass, passVerdict, failVerdict];
+  for (const label of labels) {
+    used.add(label);
+    if (!domainSet.has(label)) {
+      d.error('VERDICT_UNDECLARED', `join ${node.id} verdictReducer uses undeclared verdict "${label}"`, {
+        nodeId: node.id,
+      });
+    }
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 function collectVerdictLabels(cond: Condition, visit: (label: string) => void): void {

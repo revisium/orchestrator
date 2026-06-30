@@ -2204,5 +2204,124 @@
         "Data-driven (0015): the pipeline graph is DATA — see template_json (pipeline-core spec)."
       ]
     }
+  },
+  {
+    "id": "parallel-review-consensus-e2e",
+    "path": "stub.md",
+    "triggers": [
+      "parallel consensus review",
+      "fanout review"
+    ],
+    "required_roles": [
+      "reviewer"
+    ],
+    "alternative_roles": [],
+    "optional_roles": [],
+    "route_gates": [],
+    "platform_invocation": "canonical-only",
+    "execution_policy": {
+      "template_json": {
+        "specVersion": "1.0",
+        "pipelineId": "parallel-review-consensus-e2e",
+        "entry": "reviewFanout",
+        "verdicts": {
+          "domain": [
+            "approved",
+            "clean",
+            "changes_requested",
+            "blocker"
+          ]
+        },
+        "nodes": {
+          "reviewFanout": {
+            "id": "reviewFanout",
+            "kind": "parallel",
+            "branches": [
+              {
+                "id": "primary",
+                "entry": "primaryReview"
+              },
+              {
+                "id": "secondary",
+                "entry": "secondaryReview"
+              }
+            ],
+            "join": "reviewJoin"
+          },
+          "primaryReview": {
+            "id": "primaryReview",
+            "kind": "agent",
+            "roleRef": "role:reviewer",
+            "next": "reviewJoin",
+            "onFailure": "abort",
+            "resultSchema": "schema:reviewVerdict",
+            "produces": {
+              "name": "review"
+            }
+          },
+          "secondaryReview": {
+            "id": "secondaryReview",
+            "kind": "agent",
+            "roleRef": "role:reviewer",
+            "next": "reviewJoin",
+            "onFailure": "abort",
+            "resultSchema": "schema:reviewVerdict",
+            "produces": {
+              "name": "review"
+            }
+          },
+          "reviewJoin": {
+            "id": "reviewJoin",
+            "kind": "join",
+            "joinMode": {
+              "kind": "all"
+            },
+            "verdictReducer": {
+              "kind": "allIn",
+              "pass": [
+                "approved",
+                "clean"
+              ],
+              "passVerdict": "approved",
+              "failVerdict": "changes_requested"
+            },
+            "next": "reviewRouter",
+            "merge": {
+              "reviews": "appendByBranchOrder"
+            }
+          },
+          "reviewRouter": {
+            "id": "reviewRouter",
+            "kind": "choice",
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "approved"
+                },
+                "goto": "doneEnd"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ]
+          },
+          "doneEnd": {
+            "id": "doneEnd",
+            "kind": "terminal",
+            "status": "succeeded"
+          },
+          "blockedEnd": {
+            "id": "blockedEnd",
+            "kind": "terminal",
+            "status": "blocked"
+          }
+        },
+        "title": "E2E parallel consensus review fan-out"
+      },
+      "raw": [
+        "E2E fixture: two reviewer branches must both execute and return two independent results before the join."
+      ]
+    }
   }
 ]

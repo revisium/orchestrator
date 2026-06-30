@@ -61,5 +61,59 @@
     "allowed_tools": ["Read", "Grep", "Glob", "Bash"],
     "default_model_level": "deep",
     "runner_id": "claude-code"
+  },
+  {
+    "id": "orchestrator-codex",
+    "path": "prompts/orchestrator.md",
+    "surface": "any",
+    "rights": "read-only",
+    "allowed_tools": ["Read", "Grep", "Glob"],
+    "default_model_level": "codex-deep",
+    "runner_id": "codex"
+  },
+  {
+    "id": "analyst-codex",
+    "path": "prompts/analyst.md",
+    "surface": "any",
+    "rights": "read-only",
+    "allowed_tools": ["Read", "Grep", "Glob"],
+    "default_model_level": "codex-deep",
+    "runner_id": "codex"
+  },
+  {
+    "id": "reviewer-codex",
+    "path": "prompts/reviewer.md",
+    "surface": "any",
+    "rights": "read-only",
+    "allowed_tools": ["Read", "Grep", "Glob"],
+    "default_model_level": "codex-deep",
+    "runner_id": "codex"
+  },
+  {
+    "id": "developer-codex",
+    "path": "prompts/developer.md",
+    "surface": "any",
+    "rights": "write-working-tree",
+    "allowed_tools": ["Read", "Grep", "Glob", "Edit", "Write", "Bash"],
+    "default_model_level": "codex-standard",
+    "runner_id": "codex"
+  },
+  {
+    "id": "watcher-codex",
+    "path": "prompts/watcher.md",
+    "surface": "repo",
+    "rights": "read-only",
+    "allowed_tools": ["Read", "Grep", "Glob", "Bash"],
+    "default_model_level": "codex-cheap",
+    "runner_id": "codex"
+  },
+  {
+    "id": "triager-codex",
+    "path": "prompts/triager.md",
+    "surface": "repo",
+    "rights": "read-only",
+    "allowed_tools": ["Read", "Grep", "Glob", "Bash"],
+    "default_model_level": "codex-deep",
+    "runner_id": "codex"
   }
 ]

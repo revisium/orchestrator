@@ -42,6 +42,7 @@ type CodexAgentResult = {
 
 type CodexJsonlSummary = {
   finalStructured?: unknown;
+  latestAgentMessageStructured?: unknown;
   failedMessage?: string;
   permissionBlocked: boolean;
   costUsd?: number;
@@ -68,27 +69,39 @@ export const CODEX_OUTPUT_SCHEMA = {
       description: 'the single routing token for the role, lowercase',
     },
     output: {
-      description: 'the structured or textual output consumed by the orchestrator',
+      type: 'string',
+      description: 'the textual output consumed by the orchestrator; encode structured payloads as JSON text',
     },
     artifacts: {
-      description: 'nullable JSON artifacts; use null when there are no artifacts',
+      type: ['string', 'null'],
+      description: 'nullable artifact payload; encode structured artifacts as JSON text, or use null',
     },
     nextSteps: {
-      anyOf: [
-        {
-          type: 'array',
-          description: 'follow-up step specs; use [] when no follow-up work is needed',
-          items: { type: 'object' },
+      type: ['array', 'null'],
+      description: 'follow-up step specs; use [] when no follow-up work is needed',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          taskId: { type: ['string', 'null'] },
+          role: { type: ['string', 'null'] },
+          kind: { type: ['string', 'null'] },
+          input: { type: ['string', 'null'] },
+          modelProfile: { type: ['string', 'null'] },
+          priority: { type: ['number', 'null'] },
+          maxAttempts: { type: ['number', 'null'] },
+          dependsOn: { type: ['array', 'null'], items: { type: 'string' } },
+          runAfter: { type: ['string', 'null'] },
         },
-        { type: 'null' },
-      ],
+        required: ['taskId', 'role', 'kind', 'input', 'modelProfile', 'priority', 'maxAttempts', 'dependsOn', 'runAfter'],
+      },
     },
     needsHuman: {
-      anyOf: [{ type: 'boolean' }, { type: 'null' }],
+      type: ['boolean', 'null'],
       description: 'true only when a human must intervene; null is normalized to false',
     },
     lesson: {
-      anyOf: [{ type: 'string' }, { type: 'null' }],
+      type: ['string', 'null'],
       description: 'nullable one-line lesson for a future attempt',
     },
   },
@@ -115,6 +128,7 @@ function structuredResultNote(acceptedVerdicts: readonly string[] | undefined): 
 Return only JSON matching the provided output schema as your final answer.
 All fields are required: verdict, output, artifacts, nextSteps, needsHuman, lesson.
 "verdict" must be exactly one of: ${verdictMenu(acceptedVerdicts)}. Use no other token.
+Output must be a string. Encode structured payloads as JSON text inside output/artifacts when needed.
 Use null for nullable fields when they do not apply. Do not put the result only in prose.
 `;
 }
@@ -253,6 +267,7 @@ const TERMINAL_STRUCTURED_KEYS = ['structured_output', 'structuredOutput', 'fina
 const TERMINAL_OBJECT_KEYS = ['output', 'result'] as const;
 const TERMINAL_CONTENT_HOLDER_KEYS = ['output'] as const;
 const TERMINAL_TEXT_KEYS = ['output_text', 'text', 'result'] as const;
+const AGENT_MESSAGE_TEXT_KEYS = ['text', 'message', 'output_text', 'result'] as const;
 
 function structuredCandidateFromObjectKeys(
   source: Record<string, unknown>,
@@ -273,8 +288,11 @@ function structuredCandidateFromContentHolder(value: unknown): unknown {
   return outputCandidate ?? candidateFromContentArray(obj.content);
 }
 
-function structuredCandidateFromTextKeys(source: Record<string, unknown>): unknown {
-  for (const key of TERMINAL_TEXT_KEYS) {
+function structuredCandidateFromTextKeys(
+  source: Record<string, unknown>,
+  keys: readonly string[] = TERMINAL_TEXT_KEYS,
+): unknown {
+  for (const key of keys) {
     const value = readString(source[key]);
     if (!value) continue;
     const parsed = parseJsonObjectText(value);
@@ -291,6 +309,22 @@ function structuredCandidateFromTerminalEvent(event: Record<string, unknown>): u
     ?? structuredCandidateFromContentHolder(event.item)
     ?? structuredCandidateFromContentHolder(event.message)
     ?? structuredCandidateFromTextKeys(event);
+}
+
+function structuredCandidateFromAgentMessagePayload(payload: Record<string, unknown>): unknown {
+  return structuredCandidateFromObjectKeys(payload, TERMINAL_STRUCTURED_KEYS)
+    ?? candidateFromContentArray(payload.content)
+    ?? structuredCandidateFromTextKeys(payload, AGENT_MESSAGE_TEXT_KEYS);
+}
+
+function structuredCandidateFromAgentMessageEvent(event: Record<string, unknown>): unknown {
+  const type = readString(event.type);
+  if (type === 'agent_message') return structuredCandidateFromAgentMessagePayload(event);
+
+  if (type !== 'item.completed') return undefined;
+  const item = maybeObject(event.item);
+  if (!item || readString(item.type) !== 'agent_message') return undefined;
+  return structuredCandidateFromAgentMessagePayload(item);
 }
 
 function eventFailureMessage(event: Record<string, unknown>): string | undefined {
@@ -371,7 +405,13 @@ function applyFailureSummary(summary: CodexJsonlSummary, event: Record<string, u
 
 function applyStructuredSummary(summary: CodexJsonlSummary, event: Record<string, unknown>): void {
   const structured = structuredCandidateFromTerminalEvent(event);
-  if (structured !== undefined) summary.finalStructured = structured;
+  if (structured !== undefined) {
+    summary.finalStructured = structured;
+    return;
+  }
+
+  const agentMessageStructured = structuredCandidateFromAgentMessageEvent(event);
+  if (agentMessageStructured !== undefined) summary.latestAgentMessageStructured = agentMessageStructured;
 }
 
 function summarizeCodexEvents(events: Record<string, unknown>[]): CodexJsonlSummary {
@@ -382,6 +422,7 @@ function summarizeCodexEvents(events: Record<string, unknown>[]): CodexJsonlSumm
     applyFailureSummary(summary, event);
     applyStructuredSummary(summary, event);
   }
+  summary.finalStructured ??= summary.latestAgentMessageStructured;
   return summary;
 }
 
@@ -479,6 +520,12 @@ function fieldTypeIssues(obj: Record<string, unknown>): SchemaValidationIssue[] 
   const issues: SchemaValidationIssue[] = [];
   if ('verdict' in obj && (typeof obj.verdict !== 'string' || obj.verdict.trim().length === 0)) {
     issues.push({ path: '$.verdict', message: 'must be a non-empty string' });
+  }
+  if ('output' in obj && typeof obj.output !== 'string') {
+    issues.push({ path: '$.output', message: 'must be a string' });
+  }
+  if ('artifacts' in obj && obj.artifacts !== null && typeof obj.artifacts !== 'string') {
+    issues.push({ path: '$.artifacts', message: 'must be a string or null' });
   }
   if ('nextSteps' in obj && obj.nextSteps !== null && !Array.isArray(obj.nextSteps)) {
     issues.push({ path: '$.nextSteps', message: 'must be an array or null' });

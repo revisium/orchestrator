@@ -703,7 +703,7 @@
           "level": {
             "type": "string",
             "default": "",
-            "description": "cheap|standard|deep"
+            "description": "cheap|standard|deep|codex-cheap|codex-standard|codex-deep"
           },
           "provider": {
             "type": "string",
@@ -1014,6 +1014,48 @@
         "params": "{}",
         "cost_per_input": 15.0,
         "cost_per_output": 75.0,
+        "updated_at": "2026-06-03T00:00:00.000Z"
+      }
+    },
+    {
+      "tableId": "model_profiles",
+      "rowId": "codex-standard",
+      "data": {
+        "id": "codex-standard",
+        "level": "codex-standard",
+        "provider": "openai",
+        "model_id": "gpt-5.5",
+        "params": "{}",
+        "cost_per_input": 2.0,
+        "cost_per_output": 8.0,
+        "updated_at": "2026-06-03T00:00:00.000Z"
+      }
+    },
+    {
+      "tableId": "model_profiles",
+      "rowId": "codex-cheap",
+      "data": {
+        "id": "codex-cheap",
+        "level": "codex-cheap",
+        "provider": "openai",
+        "model_id": "gpt-5.5",
+        "params": "{}",
+        "cost_per_input": 2.0,
+        "cost_per_output": 8.0,
+        "updated_at": "2026-06-03T00:00:00.000Z"
+      }
+    },
+    {
+      "tableId": "model_profiles",
+      "rowId": "codex-deep",
+      "data": {
+        "id": "codex-deep",
+        "level": "codex-deep",
+        "provider": "openai",
+        "model_id": "gpt-5.5",
+        "params": "{}",
+        "cost_per_input": 2.0,
+        "cost_per_output": 8.0,
         "updated_at": "2026-06-03T00:00:00.000Z"
       }
     },

@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { PlaybookError } from './errors.js';
 import type { PlaybookManifest } from './manifest.js';
 import { resolvePathInside } from './source-resolver.js';
+import type { ModelLevel } from '../control-plane/definitions.js';
 
 export type RoleCatalogRecord = {
   id: string;
@@ -9,7 +10,7 @@ export type RoleCatalogRecord = {
   surface: string;
   rights: string;
   allowedTools: string[];
-  defaultModelLevel: 'cheap' | 'standard' | 'deep';
+  defaultModelLevel: ModelLevel;
   runnerId: string;
   wrappers: Record<string, string>;
 };
@@ -37,7 +38,14 @@ export type PlaybookCatalogs = {
   pipelines: PipelineCatalogRecord[];
 };
 
-const MODEL_LEVELS = new Set(['cheap', 'standard', 'deep']);
+const MODEL_LEVELS = new Set<ModelLevel>([
+  'cheap',
+  'standard',
+  'deep',
+  'codex-cheap',
+  'codex-standard',
+  'codex-deep',
+]);
 const PRODUCTION_BLOCKED_RUNNERS = new Set(['stub-agent']);
 
 function asRecord(value: unknown, context: string): Record<string, unknown> {
@@ -113,7 +121,7 @@ function parseRole(value: unknown, index: number, root: string): RoleCatalogReco
   const context = `roles[${index}]`;
   const record = asRecord(value, context);
   const modelLevel = stringField(record, 'default_model_level', context);
-  if (!MODEL_LEVELS.has(modelLevel)) {
+  if (!MODEL_LEVELS.has(modelLevel as ModelLevel)) {
     throw new PlaybookError('PLAYBOOK_INVALID_CATALOG', `${context}.default_model_level is invalid: ${modelLevel}`);
   }
   const path = stringField(record, 'path', context);

@@ -43,7 +43,7 @@ export async function assertEventsPresent(api: Api, runId: string, types: string
   }
   // Deterministic fallback for terminal events: under load the run-row status can become visible before
   // the event query sees the terminal event. The run STATUS is the authoritative signal observed by
-  // `wait_for_run`/`approveUntilTerminal`, so accept matching terminal statuses after the event poll.
+  // terminal waiters, so accept matching terminal statuses after the event poll.
   let terminalStatus = '';
   const terminalFallbacks = new Map<string, string>([
     ['run_completed', 'completed'],

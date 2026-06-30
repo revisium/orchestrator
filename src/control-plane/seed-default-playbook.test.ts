@@ -7,7 +7,8 @@
  *
  * Assertions:
  *   1. The default playbook installs via the REAL PlaybookInstaller (fake access) as `revisium-default`
- *      with the expected roles + pipelines (feature-development + local-change).
+ *      with the expected roles + pipelines (feature-development, feature-development-codex-consensus,
+ *      and local-change).
  *   2. Every pipeline carries a data-driven `template_json` that passes `pipeline-core.validateTemplate`
  *      (zero errors) — the authoritative validator.
  *   3. Every `roleRef`/`scriptRef` a template references is covered by the pipeline's required_roles
@@ -58,7 +59,7 @@ function fakeAccess() {
 // ---------------------------------------------------------------------------
 // 1. The default playbook installs cleanly with the expected shape.
 // ---------------------------------------------------------------------------
-test('default playbook: installs as revisium-default with feature-development + local-change', async () => {
+test('default playbook: installs as revisium-default with feature-development + codex-consensus + local-change', async () => {
   const fake = fakeAccess();
   const installer = new PlaybookInstaller({ access: fake.access });
   const result = await installer.install({
@@ -69,8 +70,8 @@ test('default playbook: installs as revisium-default with feature-development + 
 
   assert.equal(result.playbookId, DEFAULT_PLAYBOOK_ID);
   assert.equal(result.committed, true);
-  assert.equal(result.roles, 7, `expected exactly 7 default roles (got ${result.roles})`);
-  assert.equal(result.pipelines, 2, 'feature-development + local-change');
+  assert.equal(result.roles, 13, `expected exactly 13 default roles (got ${result.roles})`);
+  assert.equal(result.pipelines, 3, 'feature-development + feature-development-codex-consensus + local-change');
 
   const pipelineRowIds = fake.rows.filter((r) => r.table === 'pipelines').map((r) => r.rowId);
   assert.ok(
@@ -80,6 +81,10 @@ test('default playbook: installs as revisium-default with feature-development + 
   assert.ok(
     pipelineRowIds.includes('revisium-default-local-change'),
     'local-change pipeline row is written (scoped by playbook id)',
+  );
+  assert.ok(
+    pipelineRowIds.includes('revisium-default-feature-development-codex-consensus'),
+    'Codex consensus feature-development pipeline row is written (scoped by playbook id)',
   );
 });
 
@@ -98,6 +103,9 @@ const pipelines = JSON.parse(
 ) as PipelineCatalogEntry[];
 const roleCatalog = JSON.parse(readFileSync(join(catalogDir, 'roles.json'), 'utf8')) as Array<{ id: string }>;
 const declaredRoleIds = new Set(roleCatalog.map((r) => r.id));
+const bootstrapSeed = JSON.parse(
+  readFileSync(join(DEFAULT_PLAYBOOK_SOURCE, '..', 'bootstrap.config.json'), 'utf8'),
+) as { rows?: Array<{ tableId: string; rowId: string }> };
 
 function pipelineTemplate(id: string): { verdicts?: { domain?: unknown } } {
   const pipeline = pipelines.find((candidate) => candidate.id === id);
@@ -131,6 +139,89 @@ function capabilityRoleIds(template: { nodes: Record<string, Record<string, unkn
   }
   return [...ids];
 }
+
+test('default playbook: Codex consensus pipeline is Codex-bound and fans out plan + code review', () => {
+  const pipeline = pipelines.find((item) => item.id === 'feature-development-codex-consensus');
+  assert.ok(pipeline, 'feature-development-codex-consensus is declared');
+  assert.deepEqual(pipeline.required_roles, [
+    'orchestrator-codex',
+    'analyst-codex',
+    'reviewer-codex',
+    'triager-codex',
+    'developer-codex',
+    'integrator',
+    'watcher-codex',
+  ]);
+
+  const roles = new Map(
+    (roleCatalog as Array<{ id: string; runner_id?: string; default_model_level?: string }>).map((role) => [role.id, role]),
+  );
+  for (const roleId of ['orchestrator-codex', 'analyst-codex', 'reviewer-codex', 'triager-codex', 'developer-codex', 'watcher-codex']) {
+    const role = roles.get(roleId);
+    assert.equal(role?.runner_id, 'codex', `${roleId} runs on Codex`);
+    assert.match(role?.default_model_level ?? '', /^codex-/, `${roleId} uses a Codex-compatible model profile`);
+  }
+
+  const template = pipeline.execution_policy.template_json as { nodes: Record<string, Record<string, unknown>>; pipelineId?: string };
+  const nodes = template.nodes;
+  assert.equal(template.pipelineId, 'feature-development-codex-consensus');
+  assert.equal(nodes['analyst']?.roleRef, 'role:analyst-codex');
+  assert.equal(nodes['developer']?.roleRef, 'role:developer-codex');
+  assert.equal(nodes['reworkDeveloper']?.roleRef, 'role:developer-codex');
+  assert.equal(nodes['ciRework']?.roleRef, 'role:developer-codex');
+  assert.equal(nodes['reviewRework']?.roleRef, 'role:developer-codex');
+  assert.equal(nodes['triage']?.roleRef, 'role:triager-codex');
+
+  assert.equal(nodes['analyst']?.next, 'planReviewFanout');
+  assert.deepEqual(nodes['planReviewFanout']?.branches, [
+    { id: 'primary', entry: 'planReviewPrimary' },
+    { id: 'secondary', entry: 'planReviewSecondary' },
+  ]);
+  assert.equal(nodes['planReviewFanout']?.join, 'planReviewJoin');
+  assert.equal(nodes['planReviewPrimary']?.roleRef, 'role:reviewer-codex');
+  assert.equal(nodes['planReviewSecondary']?.roleRef, 'role:reviewer-codex');
+  assert.equal(nodes['planReviewJoin']?.next, 'planReviewRouter');
+  assert.deepEqual(nodes['planReviewJoin']?.verdictReducer, {
+    kind: 'allIn',
+    pass: ['approved', 'clean'],
+    passVerdict: 'approved',
+    failVerdict: 'changes_requested',
+  });
+
+  assert.equal(nodes['developer']?.next, 'codeReviewFanout');
+  assert.equal(nodes['reworkDeveloper']?.next, 'codeReviewFanout');
+  assert.deepEqual(nodes['codeReviewFanout']?.branches, [
+    { id: 'primary', entry: 'codeReviewPrimary' },
+    { id: 'secondary', entry: 'codeReviewSecondary' },
+  ]);
+  assert.equal(nodes['codeReviewFanout']?.join, 'codeReviewJoin');
+  assert.equal(nodes['codeReviewPrimary']?.roleRef, 'role:reviewer-codex');
+  assert.equal(nodes['codeReviewSecondary']?.roleRef, 'role:reviewer-codex');
+  assert.equal(nodes['codeReviewJoin']?.next, 'codeReviewRouter');
+  assert.deepEqual(nodes['codeReviewJoin']?.verdictReducer, {
+    kind: 'allIn',
+    pass: ['approved', 'clean'],
+    passVerdict: 'approved',
+    failVerdict: 'changes_requested',
+  });
+});
+
+test('default playbook: every role model level has a bootstrap model profile', () => {
+  const profileRowIds = new Set(
+    (bootstrapSeed.rows ?? [])
+      .filter((row) => row.tableId === 'model_profiles')
+      .map((row) => row.rowId),
+  );
+  const modelLevels = new Set(
+    (roleCatalog as Array<{ default_model_level?: string }>)
+      .map((role) => role.default_model_level)
+      .filter((level): level is string => typeof level === 'string' && level.length > 0),
+  );
+
+  for (const modelLevel of modelLevels) {
+    assert.ok(profileRowIds.has(modelLevel), `bootstrap model_profiles row is missing for default model level ${modelLevel}`);
+  }
+});
 
 for (const pipeline of pipelines) {
   test(`default playbook: ${pipeline.id} template validates via validateTemplate (zero errors)`, () => {
@@ -196,8 +287,8 @@ const STUB_RESULT: PlaybookInstallResult = {
   name: 'Revisium Default Playbook',
   version: '0.1.0',
   source: 'local:default',
-  roles: 6,
-  pipelines: 2,
+  roles: 13,
+  pipelines: 3,
   operations: [],
   committed: true,
   dryRun: false,

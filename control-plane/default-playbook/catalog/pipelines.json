@@ -822,6 +822,937 @@
     }
   },
   {
+    "id": "feature-development-codex-consensus",
+    "path": "prompts/orchestrator.md",
+    "triggers": [
+      "codex feature",
+      "codex consensus feature",
+      "codex task-to-PR work"
+    ],
+    "required_roles": [
+      "orchestrator-codex",
+      "analyst-codex",
+      "reviewer-codex",
+      "triager-codex",
+      "developer-codex",
+      "integrator",
+      "watcher-codex"
+    ],
+    "alternative_roles": [],
+    "optional_roles": [],
+    "route_gates": [
+      "task spec approval",
+      "merge approval"
+    ],
+    "platform_invocation": "canonical-only",
+    "execution_policy": {
+      "raw": [
+        "Built-in Codex default: same feature-development control flow, but Codex-bound plan/development roles and parallel reviewer consensus for plan + code review.",
+        "analyst-codex -> reviewer-codex[plan fanout x2] -> developer-codex -> reviewer-codex[code fanout x2] (bounded rework, cap 3) -> integrator(script) -> watcher-codex[post-integrator] -> merge gate."
+      ],
+      "template_json": {
+        "specVersion": "1.0",
+        "pipelineId": "feature-development-codex-consensus",
+        "entry": "analyst",
+        "verdicts": {
+          "domain": [
+            "approved",
+            "clean",
+            "blocker",
+            "changes_requested",
+            "review_changes",
+            "ci_changes",
+            "fix",
+            "wontfix",
+            "question",
+            "recheck"
+          ]
+        },
+        "nodes": {
+          "analyst": {
+            "id": "analyst",
+            "kind": "agent",
+            "roleRef": "role:analyst-codex",
+            "next": "planReviewFanout",
+            "onFailure": "abort",
+            "resultSchema": "schema:plan",
+            "produces": {
+              "name": "plan"
+            }
+          },
+          "planReviewRouter": {
+            "id": "planReviewRouter",
+            "kind": "choice",
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.in",
+                  "value": [
+                    "approved",
+                    "clean"
+                  ]
+                },
+                "goto": "planGate"
+              },
+              {
+                "when": {
+                  "op": "all",
+                  "of": [
+                    {
+                      "op": "verdict.in",
+                      "value": [
+                        "blocker",
+                        "changes_requested"
+                      ]
+                    },
+                    {
+                      "op": "counter.lt",
+                      "scope": "planReviewLoop",
+                      "value": 4
+                    }
+                  ]
+                },
+                "goto": "analyst"
+              },
+              {
+                "default": "planStuckGate"
+              }
+            ],
+            "incrementCounters": [
+              "planReviewLoop"
+            ]
+          },
+          "planStuckGate": {
+            "id": "planStuckGate",
+            "kind": "humanGate",
+            "reason": "plan-stuck",
+            "outcomes": [
+              "approved"
+            ],
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "approved"
+                },
+                "goto": "developer"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ],
+            "gatedArtifact": {
+              "node": "analyst",
+              "as": "plan"
+            }
+          },
+          "planGate": {
+            "id": "planGate",
+            "kind": "humanGate",
+            "reason": "plan-review",
+            "outcomes": [
+              "approved"
+            ],
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "approved"
+                },
+                "goto": "developer"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ],
+            "gatedArtifact": {
+              "node": "analyst",
+              "as": "plan"
+            }
+          },
+          "developer": {
+            "id": "developer",
+            "kind": "agent",
+            "roleRef": "role:developer-codex",
+            "next": "codeReviewFanout",
+            "onFailure": "abort",
+            "resultSchema": "schema:change",
+            "consumes": [
+              {
+                "node": "analyst",
+                "as": "plan"
+              }
+            ],
+            "produces": {
+              "name": "change"
+            }
+          },
+          "codeReviewRouter": {
+            "id": "codeReviewRouter",
+            "kind": "choice",
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.in",
+                  "value": [
+                    "approved",
+                    "clean"
+                  ]
+                },
+                "goto": "integrator"
+              },
+              {
+                "when": {
+                  "op": "all",
+                  "of": [
+                    {
+                      "op": "verdict.in",
+                      "value": [
+                        "blocker",
+                        "changes_requested"
+                      ]
+                    },
+                    {
+                      "op": "counter.lt",
+                      "scope": "codeReviewLoop",
+                      "value": 4
+                    }
+                  ]
+                },
+                "goto": "reworkDeveloper"
+              },
+              {
+                "default": "codeStuckGate"
+              }
+            ],
+            "incrementCounters": [
+              "codeReviewLoop"
+            ]
+          },
+          "codeStuckGate": {
+            "id": "codeStuckGate",
+            "kind": "humanGate",
+            "reason": "code-review-stuck",
+            "outcomes": [
+              "approved"
+            ],
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "approved"
+                },
+                "goto": "integrator"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ],
+            "gatedArtifact": {
+              "node": "analyst",
+              "as": "plan"
+            }
+          },
+          "reworkDeveloper": {
+            "id": "reworkDeveloper",
+            "kind": "agent",
+            "roleRef": "role:developer-codex",
+            "next": "codeReviewFanout",
+            "onFailure": "abort",
+            "resultSchema": "schema:change",
+            "produces": {
+              "name": "change"
+            }
+          },
+          "integrator": {
+            "id": "integrator",
+            "kind": "script",
+            "scriptRef": "script:integrator",
+            "next": "pollPr",
+            "catch": [
+              {
+                "onError": "revo.ScriptBlocked",
+                "goto": "blockedEnd"
+              },
+              {
+                "onError": "revo.ScriptFailed",
+                "goto": "failedEnd"
+              }
+            ],
+            "onFailure": "route",
+            "resultSchema": "schema:integration",
+            "consumes": [
+              {
+                "node": "developer",
+                "as": "developerChange",
+                "staleOk": true
+              },
+              {
+                "node": "reworkDeveloper",
+                "as": "reworkChange",
+                "optional": true
+              },
+              {
+                "node": "ciRework",
+                "as": "ciChange",
+                "optional": true,
+                "staleOk": true
+              }
+            ]
+          },
+          "mergeGate": {
+            "id": "mergeGate",
+            "kind": "humanGate",
+            "reason": "merge-review",
+            "outcomes": [
+              "approved",
+              "recheck"
+            ],
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "approved"
+                },
+                "goto": "confirmMerge"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "recheck"
+                },
+                "goto": "mergeRecheck"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ],
+            "gatedArtifact": {
+              "node": "mergeReadiness",
+              "as": "prFeedback"
+            }
+          },
+          "mergeRecheck": {
+            "id": "mergeRecheck",
+            "kind": "script",
+            "scriptRef": "script:pollPr",
+            "next": "mergeRecheckRouter",
+            "onFailure": "route",
+            "resultSchema": "schema:prFeedback",
+            "produces": {
+              "name": "prFeedback"
+            },
+            "catch": [
+              {
+                "onError": "revo.ScriptBlocked",
+                "goto": "blockedEnd"
+              },
+              {
+                "onError": "revo.ScriptFailed",
+                "goto": "failedEnd"
+              }
+            ]
+          },
+          "mergeRecheckRouter": {
+            "id": "mergeRecheckRouter",
+            "kind": "choice",
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "clean"
+                },
+                "goto": "blockedEnd"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "review_changes"
+                },
+                "goto": "triage"
+              },
+              {
+                "when": {
+                  "op": "all",
+                  "of": [
+                    {
+                      "op": "verdict.eq",
+                      "value": "ci_changes"
+                    },
+                    {
+                      "op": "counter.lt",
+                      "scope": "ciLoop",
+                      "value": 3
+                    }
+                  ]
+                },
+                "goto": "ciRework"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ]
+          },
+          "confirmMerge": {
+            "id": "confirmMerge",
+            "kind": "script",
+            "scriptRef": "script:confirmMerge",
+            "next": "mergedEnd",
+            "catch": [
+              {
+                "onError": "revo.ScriptBlocked",
+                "goto": "blockedEnd"
+              },
+              {
+                "onError": "revo.ScriptFailed",
+                "goto": "failedEnd"
+              }
+            ],
+            "onFailure": "route",
+            "resultSchema": "schema:integration",
+            "consumes": [
+              {
+                "node": "mergeReadiness",
+                "as": "mergeReadiness"
+              }
+            ]
+          },
+          "mergedEnd": {
+            "id": "mergedEnd",
+            "kind": "terminal",
+            "status": "succeeded"
+          },
+          "failedEnd": {
+            "id": "failedEnd",
+            "kind": "terminal",
+            "status": "failed"
+          },
+          "blockedEnd": {
+            "id": "blockedEnd",
+            "kind": "terminal",
+            "status": "blocked"
+          },
+          "pollPr": {
+            "id": "pollPr",
+            "kind": "script",
+            "scriptRef": "script:pollPr",
+            "next": "prRouter",
+            "onFailure": "route",
+            "resultSchema": "schema:prFeedback",
+            "produces": {
+              "name": "prFeedback"
+            },
+            "catch": [
+              {
+                "onError": "revo.ScriptBlocked",
+                "goto": "blockedEnd"
+              },
+              {
+                "onError": "revo.ScriptFailed",
+                "goto": "failedEnd"
+              }
+            ]
+          },
+          "prRouter": {
+            "id": "prRouter",
+            "kind": "choice",
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "clean"
+                },
+                "goto": "mergeReadiness"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "review_changes"
+                },
+                "goto": "triage"
+              },
+              {
+                "when": {
+                  "op": "all",
+                  "of": [
+                    {
+                      "op": "verdict.eq",
+                      "value": "ci_changes"
+                    },
+                    {
+                      "op": "counter.lt",
+                      "scope": "ciLoop",
+                      "value": 3
+                    }
+                  ]
+                },
+                "goto": "ciRework"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ]
+          },
+          "mergeReadiness": {
+            "id": "mergeReadiness",
+            "kind": "script",
+            "scriptRef": "script:pollPr",
+            "next": "mergeReadinessRouter",
+            "onFailure": "route",
+            "resultSchema": "schema:prFeedback",
+            "produces": {
+              "name": "prFeedback"
+            },
+            "catch": [
+              {
+                "onError": "revo.ScriptBlocked",
+                "goto": "blockedEnd"
+              },
+              {
+                "onError": "revo.ScriptFailed",
+                "goto": "failedEnd"
+              }
+            ]
+          },
+          "mergeReadinessRouter": {
+            "id": "mergeReadinessRouter",
+            "kind": "choice",
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "clean"
+                },
+                "goto": "mergeGate"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "review_changes"
+                },
+                "goto": "triage"
+              },
+              {
+                "when": {
+                  "op": "all",
+                  "of": [
+                    {
+                      "op": "verdict.eq",
+                      "value": "ci_changes"
+                    },
+                    {
+                      "op": "counter.lt",
+                      "scope": "ciLoop",
+                      "value": 3
+                    }
+                  ]
+                },
+                "goto": "ciRework"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ]
+          },
+          "ciRework": {
+            "id": "ciRework",
+            "kind": "agent",
+            "roleRef": "role:developer-codex",
+            "next": "integrator",
+            "onFailure": "abort",
+            "resultSchema": "schema:change",
+            "incrementCounters": [
+              "ciLoop"
+            ],
+            "produces": {
+              "name": "change"
+            },
+            "consumes": [
+              {
+                "node": "pollPr",
+                "as": "feedback"
+              },
+              {
+                "node": "mergeReadiness",
+                "as": "mergeFeedback",
+                "optional": true,
+                "staleOk": true
+              },
+              {
+                "node": "mergeRecheck",
+                "as": "recheckFeedback",
+                "optional": true,
+                "staleOk": true
+              }
+            ]
+          },
+          "triage": {
+            "id": "triage",
+            "kind": "agent",
+            "roleRef": "role:triager-codex",
+            "next": "triageRouter",
+            "onFailure": "abort",
+            "resultSchema": "schema:triage",
+            "produces": {
+              "name": "triage"
+            },
+            "consumes": [
+              {
+                "node": "analyst",
+                "as": "plan",
+                "staleOk": true
+              },
+              {
+                "node": "pollPr",
+                "as": "feedback"
+              },
+              {
+                "node": "mergeReadiness",
+                "as": "mergeFeedback",
+                "optional": true,
+                "staleOk": true
+              },
+              {
+                "node": "mergeRecheck",
+                "as": "recheckFeedback",
+                "optional": true,
+                "staleOk": true
+              }
+            ]
+          },
+          "triageRouter": {
+            "id": "triageRouter",
+            "kind": "choice",
+            "branches": [
+              {
+                "when": {
+                  "op": "all",
+                  "of": [
+                    {
+                      "op": "verdict.eq",
+                      "value": "question"
+                    },
+                    {
+                      "op": "counter.lt",
+                      "scope": "questionLoop",
+                      "value": 3
+                    }
+                  ]
+                },
+                "goto": "questionGate"
+              },
+              {
+                "when": {
+                  "op": "all",
+                  "of": [
+                    {
+                      "op": "verdict.eq",
+                      "value": "fix"
+                    },
+                    {
+                      "op": "counter.lt",
+                      "scope": "reviewLoop",
+                      "value": 3
+                    }
+                  ]
+                },
+                "goto": "reviewRework"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "wontfix"
+                },
+                "goto": "respondThreads"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ]
+          },
+          "questionGate": {
+            "id": "questionGate",
+            "kind": "humanGate",
+            "reason": "review-question",
+            "outcomes": [
+              "approved",
+              "changes_requested"
+            ],
+            "incrementCounters": [
+              "questionLoop"
+            ],
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "approved"
+                },
+                "goto": "triage"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ],
+            "gatedArtifact": {
+              "node": "triage",
+              "as": "triage"
+            }
+          },
+          "reviewRework": {
+            "id": "reviewRework",
+            "kind": "agent",
+            "roleRef": "role:developer-codex",
+            "next": "reviewIntegrator",
+            "onFailure": "abort",
+            "resultSchema": "schema:change",
+            "incrementCounters": [
+              "reviewLoop"
+            ],
+            "produces": {
+              "name": "change"
+            },
+            "consumes": [
+              {
+                "node": "triage",
+                "as": "triage"
+              }
+            ]
+          },
+          "reviewIntegrator": {
+            "id": "reviewIntegrator",
+            "kind": "script",
+            "scriptRef": "script:integrator",
+            "next": "respondThreads",
+            "onFailure": "route",
+            "resultSchema": "schema:integration",
+            "consumes": [
+              {
+                "node": "reviewRework",
+                "as": "reviewChange"
+              }
+            ],
+            "catch": [
+              {
+                "onError": "revo.ScriptBlocked",
+                "goto": "blockedEnd"
+              },
+              {
+                "onError": "revo.ScriptFailed",
+                "goto": "failedEnd"
+              }
+            ]
+          },
+          "respondThreads": {
+            "id": "respondThreads",
+            "kind": "script",
+            "scriptRef": "script:respondThreads",
+            "next": "pollPr",
+            "onFailure": "route",
+            "resultSchema": "schema:respond",
+            "consumes": [
+              {
+                "node": "triage",
+                "as": "triage"
+              }
+            ],
+            "catch": [
+              {
+                "onError": "revo.ScriptBlocked",
+                "goto": "blockedEnd"
+              },
+              {
+                "onError": "revo.ScriptFailed",
+                "goto": "failedEnd"
+              }
+            ]
+          },
+          "planReviewFanout": {
+            "id": "planReviewFanout",
+            "kind": "parallel",
+            "branches": [
+              {
+                "id": "primary",
+                "entry": "planReviewPrimary"
+              },
+              {
+                "id": "secondary",
+                "entry": "planReviewSecondary"
+              }
+            ],
+            "join": "planReviewJoin"
+          },
+          "planReviewPrimary": {
+            "id": "planReviewPrimary",
+            "kind": "agent",
+            "roleRef": "role:reviewer-codex",
+            "next": "planReviewJoin",
+            "onFailure": "abort",
+            "resultSchema": "schema:reviewVerdict",
+            "consumes": [
+              {
+                "node": "analyst",
+                "as": "plan"
+              }
+            ],
+            "produces": {
+              "name": "review"
+            }
+          },
+          "planReviewSecondary": {
+            "id": "planReviewSecondary",
+            "kind": "agent",
+            "roleRef": "role:reviewer-codex",
+            "next": "planReviewJoin",
+            "onFailure": "abort",
+            "resultSchema": "schema:reviewVerdict",
+            "consumes": [
+              {
+                "node": "analyst",
+                "as": "plan"
+              }
+            ],
+            "produces": {
+              "name": "review"
+            }
+          },
+          "planReviewJoin": {
+            "id": "planReviewJoin",
+            "kind": "join",
+            "joinMode": {
+              "kind": "all"
+            },
+            "verdictReducer": {
+              "kind": "allIn",
+              "pass": [
+                "approved",
+                "clean"
+              ],
+              "passVerdict": "approved",
+              "failVerdict": "changes_requested"
+            },
+            "merge": {
+              "reviews": "appendByBranchOrder"
+            },
+            "next": "planReviewRouter"
+          },
+          "codeReviewFanout": {
+            "id": "codeReviewFanout",
+            "kind": "parallel",
+            "branches": [
+              {
+                "id": "primary",
+                "entry": "codeReviewPrimary"
+              },
+              {
+                "id": "secondary",
+                "entry": "codeReviewSecondary"
+              }
+            ],
+            "join": "codeReviewJoin"
+          },
+          "codeReviewPrimary": {
+            "id": "codeReviewPrimary",
+            "kind": "agent",
+            "roleRef": "role:reviewer-codex",
+            "next": "codeReviewJoin",
+            "onFailure": "abort",
+            "resultSchema": "schema:reviewVerdict",
+            "consumes": [
+              {
+                "node": "developer",
+                "as": "developerChange",
+                "staleOk": true
+              },
+              {
+                "node": "reworkDeveloper",
+                "as": "reworkChange",
+                "optional": true
+              }
+            ],
+            "produces": {
+              "name": "review"
+            }
+          },
+          "codeReviewSecondary": {
+            "id": "codeReviewSecondary",
+            "kind": "agent",
+            "roleRef": "role:reviewer-codex",
+            "next": "codeReviewJoin",
+            "onFailure": "abort",
+            "resultSchema": "schema:reviewVerdict",
+            "consumes": [
+              {
+                "node": "developer",
+                "as": "developerChange",
+                "staleOk": true
+              },
+              {
+                "node": "reworkDeveloper",
+                "as": "reworkChange",
+                "optional": true
+              }
+            ],
+            "produces": {
+              "name": "review"
+            }
+          },
+          "codeReviewJoin": {
+            "id": "codeReviewJoin",
+            "kind": "join",
+            "joinMode": {
+              "kind": "all"
+            },
+            "verdictReducer": {
+              "kind": "allIn",
+              "pass": [
+                "approved",
+                "clean"
+              ],
+              "passVerdict": "approved",
+              "failVerdict": "changes_requested"
+            },
+            "merge": {
+              "reviews": "appendByBranchOrder"
+            },
+            "next": "codeReviewRouter"
+          }
+        },
+        "title": "Codex feature development with parallel review consensus",
+        "policy": {
+          "conflicts": [
+            [
+              "developer-codex",
+              "reviewer-codex"
+            ]
+          ],
+          "enforcement": "strict"
+        },
+        "scopes": {
+          "planReviewLoop": {
+            "cap": 4,
+            "parent": null
+          },
+          "codeReviewLoop": {
+            "cap": 4,
+            "parent": null
+          },
+          "ciLoop": {
+            "cap": 3,
+            "parent": null
+          },
+          "reviewLoop": {
+            "cap": 3,
+            "parent": null
+          },
+          "questionLoop": {
+            "cap": 3,
+            "parent": null
+          }
+        }
+      }
+    }
+  },
+  {
     "id": "local-change",
     "path": "prompts/orchestrator.md",
     "triggers": [

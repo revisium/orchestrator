@@ -14,8 +14,8 @@ const INSTALL_RESULT: PlaybookInstallResult = {
   name: 'Revisium Default Playbook',
   version: '0.1.0',
   source: 'local:default',
-  roles: 6,
-  pipelines: 2,
+  roles: 13,
+  pipelines: 3,
   operations: [],
   committed: true,
   dryRun: false,
@@ -32,7 +32,7 @@ test('seedDefaultPlaybookBestEffort: logs an install summary on a fresh install'
   const outcome: SeedDefaultPlaybookResult = { status: 'installed', result: INSTALL_RESULT };
   await seedDefaultPlaybookBestEffort(async () => outcome, out.log);
   assert.equal(out.lines.length, 1);
-  assert.match(out.lines[0], /Seeded default playbook revisium-default \(6 roles, 2 pipelines\)\./);
+  assert.match(out.lines[0], /Seeded default playbook revisium-default \(13 roles, 3 pipelines\)\./);
 });
 
 test('seedDefaultPlaybookBestEffort: logs a skip when the playbook is already installed', async () => {

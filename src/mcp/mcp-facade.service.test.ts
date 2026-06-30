@@ -577,19 +577,19 @@ test('McpFacadeService.getPrReadiness strips raw GitHub comment metadata while p
         reviewDecision: 'CHANGES_REQUESTED',
         reviewThreads: { included: true, unresolvedCount: 0, items: [] },
         providerState: {},
-        sonar: { configured: false, issues: [], hotspots: [], unavailable: false },
-        nextAction: 'human_decision',
+        sonar: { configured: true, issues: [{ key: 'S1', message: 'Fix null handling', severity: 'MAJOR' }], hotspots: [], unavailable: false },
+        nextAction: 'reviewer_triage',
         evidence: ['checks pass=1 fail=0 pending=0'],
         feedback: {
           developerFixes: [],
-          reviewerQuestions: [],
+          reviewerQuestions: [{ source: 'human_comment', summary: 'Can you explain the migration?', author: 'reviewer', path: 'src/a.ts', line: 42 }],
           providerWait: [],
           humanDecisions: [{ source: 'github_review_decision', summary: 'Review decision is CHANGES_REQUESTED' }],
           ignoredNoise: [{
             source: 'sonarqubecloud[bot]',
             summary: '## Quality Gate passed ' + 'noise '.repeat(500),
           }],
-          residualRisks: [],
+          residualRisks: ['Review threads were not requested.'],
         },
         ciSummary: {
           ci_passed: true,
@@ -604,19 +604,22 @@ test('McpFacadeService.getPrReadiness strips raw GitHub comment metadata while p
             performed_via_github_app: { permissions: { contents: 'write' } },
             reactions: { total_count: 0 },
           }],
-          sonar_issues: [],
-          sonar_hotspots_to_review: [],
+          sonar_issues: [{ key: 'S1', message: 'Fix null handling', severity: 'MAJOR' }],
+          sonar_hotspots_to_review: [{ key: 'H1', message: 'Review hotspot', vulnerabilityProbability: 'HIGH' }],
         },
-      };
-    },
+	      };
+	    },
   } as unknown as TaskControlPlaneApiService;
   const facade = new McpFacadeService(api);
 
   const readiness = await facade.getPrReadiness({ repo: 'o/r', prNumber: 10, includeComments: true });
   const feedback = readiness.feedback as {
     humanDecisions: Array<{ summary?: string }>;
+    reviewerQuestions: Array<{ summary?: string; path?: string; line?: number }>;
     ignoredNoise: Array<{ summary?: string }>;
+    residualRisks: string[];
   };
+  const ciSummary = readiness.ciSummary as { sonar_issues?: number; sonar_hotspots_to_review?: number };
   const serialized = JSON.stringify(readiness);
 
   assert.equal(serialized.includes('performed_via_github_app'), false);
@@ -624,6 +627,12 @@ test('McpFacadeService.getPrReadiness strips raw GitHub comment metadata while p
   assert.equal(serialized.includes('full raw bot body'), false);
   assert.equal(serialized.includes('permissions'), false);
   assert.equal(feedback.humanDecisions[0]?.summary, 'Review decision is CHANGES_REQUESTED');
+  assert.equal(feedback.reviewerQuestions[0]?.summary, 'Can you explain the migration?');
+  assert.equal(feedback.reviewerQuestions[0]?.path, 'src/a.ts');
+  assert.equal(feedback.reviewerQuestions[0]?.line, 42);
+  assert.deepEqual(feedback.residualRisks, ['Review threads were not requested.']);
+  assert.equal(ciSummary.sonar_issues, 1);
+  assert.equal(ciSummary.sonar_hotspots_to_review, 1);
   assert.ok((feedback.ignoredNoise[0]?.summary?.length ?? 0) <= 240);
   assert.ok(Buffer.byteLength(serialized, 'utf8') < 5_000, 'MCP readiness response stays compact');
 });

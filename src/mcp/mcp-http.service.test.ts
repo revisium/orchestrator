@@ -9,7 +9,7 @@ import type { McpFacadeService } from './mcp-facade.service.js';
 const tick = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /**
- * The full production abort chain, end to end over a real socket: a held long-poll (wait_for_any_gate)
+ * The full production abort chain, end to end over a real socket: a held long-poll tool call
  * is torn down when the client disconnects. McpHttpService registers `res.on('close') → server.close()`;
  * the SDK's protocol _onclose() then aborts the in-flight request's AbortController, which surfaces as
  * the tool handler's `extra.signal`. This is the link the unit tests (which fire a manual

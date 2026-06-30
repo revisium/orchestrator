@@ -67,11 +67,15 @@ function isBenignInstallRace(err: unknown): boolean {
 
 
 
-export function bundledCatalogHash(source: string): string {
+export function playbookCatalogHash(source: string, nameOverride = DEFAULT_PLAYBOOK_ID): string {
   const resolved = resolvePlaybookSource(source);
   const manifest = readPlaybookManifest(resolved.root);
   const catalogs = loadPlaybookCatalogs(resolved.root, manifest);
-  return mapPlaybookRows({ root: resolved.root, source: resolved, manifest, catalogs, nameOverride: DEFAULT_PLAYBOOK_ID }).catalogHash;
+  return mapPlaybookRows({ root: resolved.root, source: resolved, manifest, catalogs, nameOverride }).catalogHash;
+}
+
+export function bundledCatalogHash(source: string): string {
+  return playbookCatalogHash(source, DEFAULT_PLAYBOOK_ID);
 }
 
 

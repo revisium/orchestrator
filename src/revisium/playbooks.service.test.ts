@@ -76,6 +76,23 @@ test('PlaybooksService.resolvePlaybook prefers revisium-default when multiple pl
   assert.equal(playbook.id, 'revisium-default');
 });
 
+test('PlaybooksService.listPlaybooks exposes catalogHash for seed freshness checks', async () => {
+  const svc = new PlaybooksService(fakeHeadTransport([], [
+    makeRow('revisium-default', {
+      name: 'Revisium Default Playbook',
+      package_name: '@revisium/orchestrator-default-playbook',
+      version: '0.1.1',
+      source: 'local:@revisium/orchestrator-default-playbook@0.1.1',
+      schema_version: 2,
+      catalog_hash: 'abc123',
+    }),
+  ]));
+
+  const playbooks = await svc.listPlaybooks();
+
+  assert.equal(playbooks[0]?.catalogHash, 'abc123');
+});
+
 // --- slice 144 B2: a committed install must invalidate the cached HEAD read-scope -----------------
 
 /** Head transport that records invalidate() calls; the read methods are unused by these tests. */

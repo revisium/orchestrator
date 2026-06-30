@@ -50,6 +50,48 @@ test('loadRole: deserializes a roles row', async () => {
   assert.deepEqual(role.scopeRules, { allow: ['src'] });
 });
 
+test('loadRole: accepts Codex-specific model levels', async () => {
+  const transport = makeTransport({
+    'roles/developer-codex': {
+      id: 'developer-codex',
+      name: 'developer-codex',
+      system_prompt: 'Implement with Codex.',
+      model_level: 'codex-standard',
+      effort: 'high',
+      runner: 'codex',
+      allowed_tools: ['Read', 'Edit', 'Write', 'Bash'],
+      scope_rules: '',
+      updated_at: '2026-06-03T00:00:00.000Z',
+    },
+  });
+
+  const role = await loadRole('developer-codex', transport);
+
+  assert.equal(role.modelLevel, 'codex-standard');
+  assert.equal(role.runner, 'codex');
+});
+
+test('loadModelProfile: accepts Codex-specific model profiles', async () => {
+  const transport = makeTransport({
+    'model_profiles/codex-standard': {
+      id: 'codex-standard',
+      level: 'codex-standard',
+      provider: 'openai',
+      model_id: 'gpt-5.5',
+      params: '{}',
+      cost_per_input: 2,
+      cost_per_output: 8,
+      updated_at: '2026-06-03T00:00:00.000Z',
+    },
+  });
+
+  const profile = await loadModelProfile('codex-standard', transport);
+
+  assert.equal(profile.level, 'codex-standard');
+  assert.equal(profile.provider, 'openai');
+  assert.equal(profile.modelId, 'gpt-5.5');
+});
+
 test('loadRole: empty scope_rules deserializes to {}', async () => {
   const transport = makeTransport({
     'roles/developer': {

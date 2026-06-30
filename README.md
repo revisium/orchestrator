@@ -131,6 +131,7 @@ data directory, and DBOS database.
 
 ```sh
 pnpm install
+pnpm run build
 pnpm run revo -- start --profile dev
 pnpm run revo -- status --profile dev
 pnpm run revo -- doctor --profile dev
@@ -202,7 +203,7 @@ revo doctor
 
 Restart the Codex session so MCP tool schemas are reloaded. `get_capabilities` should list:
 `get_run_attention`, `get_run_status`, `get_run_digest`, `get_run_events`, `get_agent_activity`,
-`get_agent_log`, `watch_run_changes`. `observe_run` is not present in the current contract.
+`get_agent_log`, `watch_run_changes`. Legacy observation tools are absent from the current contract.
 
 If Codex cannot expose `mcp__revo` tools after restart, check `~/.codex/config.toml`: use an absolute path to
 the active `revo` binary, for example `command = "<active-node-prefix>/bin/revo"`, rather than
@@ -213,10 +214,27 @@ the active `revo` binary, for example `command = "<active-node-prefix>/bin/revo"
 `revo mcp` is the agent front door. It is a local stdio bridge to the daemon and exposes product-level tools for
 runs, gates, repository diagnostics, method discovery, and PR readiness.
 
+For source-iteration MCP testing, point the MCP client at the `pnpm run revo` script:
+
 ```sh
 codex mcp add --env REVO_PROFILE=dev revo-dev -- pnpm --dir /abs/path/to/orchestrator run revo -- mcp
 claude mcp add -e REVO_PROFILE=dev revo-dev -- pnpm --dir /abs/path/to/orchestrator run revo -- mcp
 ```
+
+For testing the same built entrypoint that the package uses, point the MCP client at `bin/revo.js`:
+
+```sh
+pnpm run build
+REVO_PROFILE=dev ./bin/revo.js restart --profile dev
+REVO_PROFILE=dev ./bin/revo.js doctor --profile dev
+codex mcp add --env REVO_PROFILE=dev revo-dev -- /abs/path/to/orchestrator/bin/revo.js mcp
+claude mcp add -e REVO_PROFILE=dev revo-dev -- /abs/path/to/orchestrator/bin/revo.js mcp
+```
+
+`bin/revo.js` imports `dist/cli/index.js`, so it does not see source edits until `pnpm run build` runs. After
+changing MCP tools or capabilities, rebuild, restart the `dev` stack, and reconnect or restart the MCP client session
+so the client refreshes its tool list. A built MCP smoke should confirm `get_capabilities.tools` contains
+`get_run_attention`, `get_run_status`, and `watch_run_changes`, with no legacy observation tools.
 
 For the `dev` profile, GraphQL is available at `http://127.0.0.1:19623/graphql`.
 

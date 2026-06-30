@@ -151,11 +151,19 @@ export const JOIN_MODE_KINDS = ['all', 'any', 'quorum'] as const;
 export type MergeReducer = 'overwrite' | 'appendByBranchOrder';
 export const MERGE_REDUCERS = ['overwrite', 'appendByBranchOrder'] as const;
 
+export type JoinVerdictReducer = {
+  kind: 'allIn';
+  pass: string[];
+  passVerdict: string;
+  failVerdict: string;
+};
+export const JOIN_VERDICT_REDUCER_KINDS = ['allIn'] as const;
 
 export type JoinNode = NodeEnvelope & {
   kind: 'join';
   joinMode: JoinMode;
   merge?: Record<string, MergeReducer>;
+  verdictReducer?: JoinVerdictReducer;
   next: string;
 };
 
@@ -287,6 +295,7 @@ export const DIAGNOSTIC_CODES = [
   'JOIN_MULTIPLE_PARALLELS',
   'BRANCH_MEMBERSHIP',
   'BRANCH_CROSS_GOTO',
+  'BRANCH_TERMINAL_BEFORE_JOIN',
   'JOIN_UNREACHABLE_BRANCH',
   'QUORUM_K_GT_N',
   'MERGE_MISSING',
@@ -295,6 +304,8 @@ export const DIAGNOSTIC_CODES = [
   'VERDICT_CORE_IN_GUARD',
   'VERDICT_DOMAIN_SHADOWS_CORE',
   'VERDICT_DECLARED_UNUSED',
+  'VERDICT_REDUCER_BAD_KIND',
+  'VERDICT_REDUCER_BAD_SHAPE',
   'GATE_OUTCOME_NOT_SUBSET',
   'CONFLICT_SAME_ACTOR',
   'CONFLICT_REF_INVALID',

@@ -22,7 +22,7 @@ const ATTEMPT_ID = 'attempt_20260101T000000000Z_abc12345';
 const PROFILE: ModelProfile = {
   level: 'standard',
   provider: 'openai',
-  modelId: 'gpt-5-codex',
+  modelId: 'gpt-5.5',
   params: {},
   costPerInput: 2,
   costPerOutput: 8,
@@ -200,7 +200,7 @@ test('codex runner: builds documented codex exec invocation and writes schema fi
       req.args.slice(req.args.indexOf('-c'), req.args.indexOf('-c') + 2),
       ['-c', 'approval_policy="never"'],
     );
-    assert.deepEqual(req.args.slice(req.args.indexOf('--model'), req.args.indexOf('--model') + 2), ['--model', 'gpt-5-codex']);
+    assert.deepEqual(req.args.slice(req.args.indexOf('--model'), req.args.indexOf('--model') + 2), ['--model', 'gpt-5.5']);
     assert.deepEqual(req.args.slice(req.args.indexOf('--sandbox'), req.args.indexOf('--sandbox') + 2), ['--sandbox', 'workspace-write']);
     assert.deepEqual(req.args.slice(req.args.indexOf('--cd'), req.args.indexOf('--cd') + 2), ['--cd', '/workspace/repo']);
     assert.equal(req.args.at(-1), '-', 'prompt is read from stdin');
@@ -213,6 +213,14 @@ test('codex runner: builds documented codex exec invocation and writes schema fi
     const schema = JSON.parse(readFileSync(schemaPath, 'utf8')) as typeof CODEX_OUTPUT_SCHEMA;
     assert.deepEqual(schema.required, ['verdict', 'output', 'artifacts', 'nextSteps', 'needsHuman', 'lesson']);
     assert.equal(schema.additionalProperties, false);
+    for (const [key, property] of Object.entries(schema.properties)) {
+      assert.ok('type' in property, `Codex/OpenAI strict schema requires properties.${key}.type`);
+    }
+    assert.equal(schema.properties.output.type, 'string');
+    assert.deepEqual(schema.properties.artifacts.type, ['string', 'null']);
+    assert.deepEqual(schema.properties.nextSteps.type, ['array', 'null']);
+    assert.deepEqual(schema.properties.needsHuman.type, ['boolean', 'null']);
+    assert.deepEqual(schema.properties.lesson.type, ['string', 'null']);
   });
 });
 
@@ -358,7 +366,7 @@ test('codex runner: parses strict structured final result from JSON text in fina
       {
         type: 'turn.completed',
         item: {
-          content: [{ type: 'output_text', text: JSON.stringify(finalResult({ output: { ok: true }, artifacts: { path: 'a' } })) }],
+          content: [{ type: 'output_text', text: JSON.stringify(finalResult({ output: '{"ok":true}', artifacts: '{"path":"a"}' })) }],
         },
         usage: { input_tokens: 100, output_tokens: 25 },
       },
@@ -366,9 +374,9 @@ test('codex runner: parses strict structured final result from JSON text in fina
 
     const result = await runWith(fakeExecutor(ok(stdout), []), root);
     assert.equal(result.verdict, 'approved');
-    assert.deepEqual(result.output, { ok: true });
+    assert.equal(result.output, '{"ok":true}');
     assert.deepEqual(result.artifacts, {
-      path: 'a',
+      agent: '{"path":"a"}',
       process: { ref: `${BASE_STEP.runId}/${ATTEMPT_ID}`, stdoutTail: '', stderrTail: '' },
     });
     assert.equal(result.needsHuman, false);
@@ -394,6 +402,55 @@ test('codex runner: current JSONL fixtures mark parsed events as activity withou
     await runWith(streamingExecutor, root);
 
     assert.deepEqual(activityCalls, ['activity:event', 'activity:event']);
+  });
+});
+
+test('codex runner: accepts latest structured agent_message when turn.completed only carries usage', async () => {
+  await withTempRoot(async (root) => {
+    const stdout = jsonl(
+      { type: 'thread.started', thread_id: 'thread_123' },
+      { type: 'turn.started' },
+      {
+        type: 'item.completed',
+        item: {
+          id: 'item_0',
+          type: 'agent_message',
+          text: JSON.stringify(finalResult({ output: 'intermediate progress' })),
+        },
+      },
+      {
+        type: 'item.completed',
+        item: {
+          id: 'item_1',
+          type: 'command_execution',
+          command: 'rg package.json .',
+          exit_code: 2,
+          status: 'failed',
+        },
+      },
+      {
+        type: 'item.completed',
+        item: {
+          id: 'item_2',
+          type: 'agent_message',
+          text: JSON.stringify(finalResult({ output: 'final plan', artifacts: '{"file":"README.md"}' })),
+        },
+      },
+      {
+        type: 'turn.completed',
+        usage: { input_tokens: 100, output_tokens: 25 },
+      },
+    );
+
+    const result = await runWith(fakeExecutor(ok(stdout), []), root);
+
+    assert.equal(result.output, 'final plan');
+    assert.deepEqual(result.artifacts, {
+      agent: '{"file":"README.md"}',
+      process: { ref: `${BASE_STEP.runId}/${ATTEMPT_ID}`, stdoutTail: '', stderrTail: '' },
+    });
+    assert.equal(result.costs[0]?.inputTokens, 100);
+    assert.equal(result.costs[0]?.outputTokens, 25);
   });
 });
 
@@ -425,6 +482,14 @@ test('codex runner: rejects malformed JSONL and missing or invalid structured ou
     await assert.rejects(
       () => runWith(fakeExecutor(ok(jsonl({ type: 'turn.completed', output: { ...finalResult(), nextSteps: {} } })), []), root),
       /nextSteps must be an array or null/,
+    );
+    await assert.rejects(
+      () => runWith(fakeExecutor(ok(jsonl({ type: 'turn.completed', output: finalResult({ output: { ok: true } }) })), []), root),
+      /output must be a string/,
+    );
+    await assert.rejects(
+      () => runWith(fakeExecutor(ok(jsonl({ type: 'turn.completed', output: finalResult({ artifacts: { ok: true } }) })), []), root),
+      /artifacts must be a string or null/,
     );
     await assert.rejects(
       () => runWith(fakeExecutor(ok(jsonl({ type: 'turn.completed', output: finalResult({ nextSteps: ['bad'] }) })), []), root),
@@ -497,7 +562,7 @@ test('codex runner: stderr is diagnostic and nonfatal on successful structured o
 test('codex runner: reports lifecycle, streamed parsed events, and process artifact tails', async () => {
   await withTempRoot(async (root) => {
     const events: CapturedReporterEvent[] = [];
-    const stdout = jsonl({ type: 'turn.completed', output: finalResult({ artifacts: { keep: true } }) });
+    const stdout = jsonl({ type: 'turn.completed', output: finalResult({ artifacts: '{"keep":true}' }) });
     const result = await runWith(
       async (req) => {
         req.onSpawn?.(123);
@@ -512,7 +577,7 @@ test('codex runner: reports lifecycle, streamed parsed events, and process artif
     );
 
     assert.deepEqual(result.artifacts, {
-      keep: true,
+      agent: '{"keep":true}',
       process: {
         ref: `${BASE_STEP.runId}/${ATTEMPT_ID}`,
         stdoutTail: stdout,

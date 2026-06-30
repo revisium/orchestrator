@@ -31,7 +31,10 @@ import {
   initialState,
   validateTemplate,
   InterpretError,
+  selectJoinWinner,
+  reduceJoinVerdict,
   type Decision,
+  type JoinArrival,
   type LastResult,
   type Node,
   type RunState,
@@ -769,7 +772,7 @@ export function makeDataDrivenTask(
       }
 
       const eff = await applyDecision(decision, {
-        runId, template, bindingByRef, executionProfile, taskId, title, base, issueRef,
+        runId, template, state, bindingByRef, executionProfile, taskId, title, base, issueRef,
         effectOrdinalByNode, outputsByNode, runnerRetryPolicy,
         live,
         lastVerdict,
@@ -784,6 +787,10 @@ export function makeDataDrivenTask(
           stepCount,
           eff.terminal.retry,
         );
+      }
+      if (eff.stateOverride) {
+        state = eff.stateOverride;
+        await deps.setProgress?.(runId, progressCursor(state, eff.lastResult));
       }
       lastResult = eff.lastResult;
       if (eff.lastVerdict !== undefined) lastVerdict = eff.lastVerdict;
@@ -811,10 +818,12 @@ export function makeDataDrivenTask(
     failureReason?: string;
     stepDelta: number;
     terminal?: { status: 'blocked'; reason: string; lesson: string; retry?: RunnerRetryBlockPayload };
+    stateOverride?: RunState;
   };
   type EffectCtx = {
     runId: string;
     template: Template;
+    state: RunState;
     bindingByRef: Map<string, RouteRoleBinding>;
     executionProfile: ExecutionProfile;
     taskId: string;
@@ -827,6 +836,12 @@ export function makeDataDrivenTask(
     runnerRetryPolicy: RunnerTransientRetryPolicy;
     lastVerdict: string;
   };
+  type ForkDecision = Extract<Decision, { type: 'fork' }>;
+  type BranchExecutionResult = {
+    arrival?: JoinArrival;
+    terminal?: DecisionEffect['terminal'];
+    stepDelta: number;
+  };
   type InvokeRoleAttemptInput = {
     runId: string;
     decision: Extract<Decision, { type: 'invokeRole' }>;
@@ -838,8 +853,108 @@ export function makeDataDrivenTask(
   };
   type NeedsHumanRoleResult = 'retry' | InvokeRoleBlockedResult | undefined;
 
+  function branchTemplateForJoin(template: Template, joinId: string): Template {
+    const join = resolveNode(template, joinId);
+    if (join.kind !== 'join') throw new InterpretError(`fork target ${joinId} is not a join (${join.kind})`);
+    return {
+      ...template,
+      nodes: {
+        ...template.nodes,
+        [joinId]: { id: joinId, kind: 'terminal', status: 'succeeded' },
+      },
+    };
+  }
 
+  async function executeForkBranches(
+    decision: ForkDecision,
+    ctx: EffectCtx,
+  ): Promise<DecisionEffect> {
+    const branchTemplate = branchTemplateForJoin(ctx.template, decision.joinId);
+    const results = await Promise.all(
+      decision.branches.map((branch, idx) => executeForkBranch(branchTemplate, decision, branch, idx + 1, ctx)),
+    );
+    const stepDelta = results.reduce((sum, result) => sum + result.stepDelta, 0);
+    const terminal = results.find((result) => result.terminal)?.terminal;
+    if (terminal) return { lastResult: undefined, terminal, stepDelta };
 
+    const arrivals = results.flatMap((result) => result.arrival ? [result.arrival] : []);
+    if (arrivals.length !== decision.branches.length) {
+      throw new InterpretError(
+        `fork ${decision.nodeId} expected ${decision.branches.length} branch arrivals, got ${arrivals.length}`,
+      );
+    }
+    const lastResult: LastResult = { joinArrivals: arrivals };
+    const winner = selectJoinWinner(decision.mode, arrivals, decision.joinId);
+    const join = resolveNode(ctx.template, decision.joinId);
+    if (join.kind !== 'join') throw new InterpretError(`fork target ${decision.joinId} is not a join (${join.kind})`);
+    const verdict = reduceJoinVerdict(join, arrivals, winner);
+    return {
+      lastResult,
+      ...(verdict !== undefined ? { lastVerdict: verdict } : {}),
+      stateOverride: {
+        ...ctx.state,
+        activeNodeIds: new Set([decision.joinId]),
+        status: 'running',
+        lastResult,
+      },
+      stepDelta,
+    };
+  }
+
+  async function executeForkBranch(
+    branchTemplate: Template,
+    decision: ForkDecision,
+    branch: ForkDecision['branches'][number],
+    seq: number,
+    ctx: EffectCtx,
+  ): Promise<BranchExecutionResult> {
+    let state: RunState = {
+      ...ctx.state,
+      activeNodeIds: new Set([branch.entry]),
+      scopedCounters: { ...ctx.state.scopedCounters },
+      status: 'running',
+      lastResult: undefined,
+    };
+    let lastResult: LastResult | undefined;
+    let lastVerdict = ctx.lastVerdict;
+    let stepDelta = 0;
+
+    for (let i = 0; i < MAX_STEPS; i++) {
+      const next = coreStep(branchTemplate, state, lastResult);
+      state = next.state;
+      if (next.decision.type === 'complete') {
+        if (next.decision.status !== 'succeeded') {
+          throw new InterpretError(
+            `fork ${decision.nodeId} branch ${branch.id} completed ${next.decision.status} before join ${decision.joinId}`,
+          );
+        }
+        return {
+          arrival: {
+            branchId: branch.id,
+            seq,
+            ...(lastVerdict ? { verdict: lastVerdict } : {}),
+          },
+          stepDelta,
+        };
+      }
+
+      const eff = await applyDecision(next.decision, {
+        ...ctx,
+        template: branchTemplate,
+        state,
+        lastVerdict,
+      });
+      stepDelta += eff.stepDelta;
+      if (eff.terminal) return { terminal: eff.terminal, stepDelta };
+      if (eff.stateOverride) state = eff.stateOverride;
+      lastResult = eff.lastResult;
+      if (eff.lastVerdict !== undefined) lastVerdict = eff.lastVerdict;
+    }
+
+    throw new InterpretError(
+      `fork ${decision.nodeId} branch ${branch.id} did not reach join ${decision.joinId} within ${MAX_STEPS} steps`,
+    );
+  }
 
   async function applyDecision(
     decision: Exclude<Decision, { type: 'complete' }>,
@@ -932,10 +1047,7 @@ export function makeDataDrivenTask(
           type: 'pipeline_fork',
           payload: { nodeId: decision.nodeId, branches: decision.branches.map((b) => b.id), joinId: decision.joinId },
         });
-        return {
-          lastResult: { joinArrivals: decision.branches.map((b, idx) => ({ branchId: b.id, seq: idx + 1 })) },
-          stepDelta: 0,
-        };
+        return executeForkBranches(decision, ctx);
       }
       case 'startTimer':
         return { lastResult: {}, stepDelta: 0 };

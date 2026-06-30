@@ -130,7 +130,8 @@ function routeFrom(
     case 'join': {
       const arrivals = lastResult?.joinArrivals ?? [];
       const winner = selectJoinWinner(node.joinMode, arrivals, node.id);
-      const forward = winner?.verdict === undefined ? undefined : { verdict: winner.verdict };
+      const verdict = reduceJoinVerdict(node, arrivals, winner);
+      const forward = verdict === undefined ? undefined : { verdict };
       return enter(template, node.next, state, forward);
     }
 
@@ -362,7 +363,7 @@ export function selectJoinWinner(
   arrivals: readonly JoinArrival[],
   joinId: string,
 ): JoinArrival | undefined {
-  const ordered = [...arrivals].sort((a, b) => a.seq - b.seq || cmp(a.branchId, b.branchId));
+  const ordered = orderedJoinArrivals(arrivals);
   if (mode.kind === 'any') return ordered[0];
   if (mode.kind === 'quorum') {
     if (ordered.length < mode.count) {
@@ -373,6 +374,27 @@ export function selectJoinWinner(
     return ordered[mode.count - 1];
   }
   return ordered.at(-1);
+}
+
+export function reduceJoinVerdict(
+  node: Extract<Node, { kind: 'join' }>,
+  arrivals: readonly JoinArrival[],
+  winner: JoinArrival | undefined,
+): string | undefined {
+  if (!node.verdictReducer) return winner?.verdict;
+  const reducer = node.verdictReducer;
+  if (reducer.kind === 'allIn') {
+    const pass = new Set(reducer.pass);
+    const ordered = orderedJoinArrivals(arrivals);
+    return ordered.length > 0 && ordered.every((arrival) => arrival.verdict !== undefined && pass.has(arrival.verdict))
+      ? reducer.passVerdict
+      : reducer.failVerdict;
+  }
+  throw new InterpretError(`join ${node.id} has unknown verdictReducer "${String((reducer as { kind?: unknown }).kind)}"`);
+}
+
+function orderedJoinArrivals(arrivals: readonly JoinArrival[]): JoinArrival[] {
+  return [...arrivals].sort((a, b) => a.seq - b.seq || cmp(a.branchId, b.branchId));
 }
 
 function cmp(a: string, b: string): number {

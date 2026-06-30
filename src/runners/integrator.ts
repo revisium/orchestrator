@@ -644,10 +644,8 @@ function ciFailuresFrom(readiness: PollPrReadiness): CiFailure[] {
 
 function readinessRequiresReview(readiness: PollPrReadiness): boolean {
   return readiness.readinessVerdict === 'needs_human'
-    || readiness.readinessVerdict === 'needs_work'
     || readiness.nextAction === 'human_decision'
-    || readiness.nextAction === 'reviewer_triage'
-    || readiness.nextAction === 'developer_fix';
+    || readiness.nextAction === 'reviewer_triage';
 }
 
 function readinessEvidence(readiness: PollPrReadiness): string[] {
