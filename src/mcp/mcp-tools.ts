@@ -162,7 +162,7 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
     'get_run_attention',
     {
       description:
-        'Primary run observation: return what currently requires attention for a run. Single-shot, no cursor. Normal loop: poll until nextAction is "done"; resolve inbox on "ask_human", call start_run on "start_run", check digest/log on inspect actions.',
+        'Default/primary tool for agents monitoring a run: answers "what currently requires attention?" Single-shot, no cursor. task_monitoring_loop: re-poll on "wait"; resolve inbox on "ask_human"; call start_run on "start_run"; use get_run_digest/get_agent_log once on inspect actions; stop on "done".',
       inputSchema: { runId: runIdSchema },
       annotations: { readOnlyHint: true },
     },
@@ -184,7 +184,7 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
     'watch_run_changes',
     {
       description:
-        'Advanced bounded long-poll: block until a run transitions to an actionable or terminal state, returning the transition and a resume cursor. Re-call with the returned cursor to continue without re-delivering prior transitions.',
+        'Not for normal task monitoring — use get_run_attention. Advanced bounded long-poll for UI/change-stream/long-poll consumers that explicitly need cursor-based transition delivery: blocks until an actionable or terminal transition, returns a resume cursor; re-call with the cursor to continue without re-delivering prior transitions.',
       inputSchema: {
         runId: runIdSchema,
         cursor: watchCursorSchema.optional().describe('Resume cursor from a prior call'),

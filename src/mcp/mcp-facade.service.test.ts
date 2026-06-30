@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { McpFacadeService } from './mcp-facade.service.js';
-import { MCP_TOOL_NAMES } from './mcp-capabilities.js';
+import { MCP_TOOL_NAMES, MCP_INSTRUCTIONS } from './mcp-capabilities.js';
 import type { TaskControlPlaneApiService } from '../task-control-plane/task-control-plane-api.service.js';
 import { ControlPlaneError } from '../control-plane/errors.js';
 import { AgentObservabilityError } from '../observability/types.js';
@@ -53,6 +53,23 @@ test('McpFacadeService.getCapabilities exposes the MCP transport surface', () =>
   assert.equal('compatibilityTools' in capabilities.observation, false, 'no compatibilityTools in new surface');
   assert.equal(capabilities.observation.preferredOrder[0]?.startsWith('get_run_attention'), true);
   assert.ok(capabilities.observation.preferredOrder.some((item) => item.includes('avoid get_run(includeEvents:true)')));
+  assert.ok(
+    capabilities.observation.preferredOrder[0]?.includes('change-stream consumer'),
+    'preferredOrder[0] must carry the "unless implementing a change-stream consumer" rule',
+  );
+  assert.ok(
+    capabilities.observation.preferredOrder.some((item) => item.includes('watch_run_changes') && item.toLowerCase().includes('not for normal task monitoring')),
+    'watch_run_changes entry must carry "not for normal task monitoring"',
+  );
+});
+
+test('MCP_INSTRUCTIONS contains task_monitoring_loop algorithm', () => {
+  assert.ok(MCP_INSTRUCTIONS.includes('task_monitoring_loop'), 'MCP_INSTRUCTIONS must contain task_monitoring_loop');
+  assert.ok(MCP_INSTRUCTIONS.includes('get_run_attention'), 'MCP_INSTRUCTIONS must reference get_run_attention');
+  assert.ok(
+    MCP_INSTRUCTIONS.toLowerCase().includes('not for normal task monitoring'),
+    'MCP_INSTRUCTIONS must state watch_run_changes is not for normal task monitoring',
+  );
 });
 
 test('McpFacadeService delegates attention/status/watch primitives to the injected RunWatchService', async () => {
