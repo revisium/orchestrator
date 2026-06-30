@@ -4,6 +4,7 @@ import {
   type RepositoryContext,
   type RepositoryValidation,
 } from '../task-control-plane/task-control-plane-api.service.js';
+import type { ManualAdoptionAuditInput } from '../control-plane/manual-adoption-audit.js';
 import { ControlPlaneError } from '../control-plane/errors.js';
 import { AgentObservabilityError } from '../observability/types.js';
 import { CreateRunWorkflowError } from '../run/create-run.js';
@@ -541,7 +542,13 @@ export class McpFacadeService {
     return this.api.rejectGate(input);
   }
 
-  resolveGate(input: { inboxId: string; outcome: string; note?: string; resolvedBy?: string }) {
+  resolveGate(input: {
+    inboxId: string;
+    outcome: string;
+    note?: string;
+    resolvedBy?: string;
+    adoptionAudit?: ManualAdoptionAuditInput;
+  }) {
     return this.api.resolveGate(input);
   }
 

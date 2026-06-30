@@ -16,6 +16,7 @@ import type {
 } from '../observability/types.js';
 import { ControlPlaneError } from '../control-plane/errors.js';
 import type { InboxItem } from '../control-plane/inbox.js';
+import { validateManualAdoptionAudit, type ManualAdoptionAuditInput } from '../control-plane/manual-adoption-audit.js';
 import { fnv1a64Hex } from '../control-plane/steps.js';
 import { DbosService } from '../engine/dbos.service.js';
 import { PipelineService, type RunnerMode } from '../pipeline/pipeline.service.js';
@@ -1219,7 +1220,13 @@ export class TaskControlPlaneApiService {
     return this.resolveGate({ inboxId: input.inboxId, outcome, resolvedBy: input.resolvedBy });
   }
 
-  async resolveGate(input: { inboxId: string; outcome: string; note?: string; resolvedBy?: string }) {
+  async resolveGate(input: {
+    inboxId: string;
+    outcome: string;
+    note?: string;
+    resolvedBy?: string;
+    adoptionAudit?: ManualAdoptionAuditInput;
+  }) {
     const item = await this.getInboxItem(input.inboxId);
     const topic = gateTopic(item);
     if (!topic) {
@@ -1240,10 +1247,14 @@ export class TaskControlPlaneApiService {
     if (outcome === 'approve_anyway' && !note) {
       throw new ControlPlaneError('VALIDATION_FAILURE', 'approve_anyway requires a non-empty note');
     }
+    const adoptionAudit = outcome === 'adopt_patch_manually'
+      ? validateManualAdoptionAudit(input.adoptionAudit, item)
+      : undefined;
     const resolvedBy = input.resolvedBy ?? 'mcp';
     const answer = {
       outcome,
       ...(note ? { note } : {}),
+      ...(adoptionAudit ? { adoptionAudit } : {}),
       resolvedBy,
       resolvedAt: new Date().toISOString(),
       inboxId: input.inboxId,
@@ -1321,7 +1332,7 @@ export class TaskControlPlaneApiService {
     const item = await this.getInboxItem(input.inboxId);
     const topic = gateTopic(item);
     let answerToResolve = input.answer;
-    if (topic && input.signalGate !== false) {
+    if (topic) {
       const answer = asRecord(input.answer);
       if (typeof answer?.outcome === 'string') {
         const outcome = answer.outcome.trim();
@@ -1333,10 +1344,14 @@ export class TaskControlPlaneApiService {
         if (outcome === 'approve_anyway' && !note) {
           throw new ControlPlaneError('VALIDATION_FAILURE', 'approve_anyway requires a non-empty note');
         }
+        const adoptionAudit = outcome === 'adopt_patch_manually'
+          ? validateManualAdoptionAudit(answer.adoptionAudit, item)
+          : undefined;
         answerToResolve = {
           ...answer,
           outcome,
           ...(typeof answer.note === 'string' ? { note } : {}),
+          ...(adoptionAudit ? { adoptionAudit } : {}),
         };
       }
     }

@@ -1,4 +1,6 @@
 import { Field, ID, InputType } from '@nestjs/graphql';
+import { GraphQLJSON } from 'graphql-scalars';
+import type { ManualAdoptionAuditInput } from '../../../../control-plane/manual-adoption-audit.js';
 
 @InputType()
 export class ResolveGateInput {
@@ -13,4 +15,7 @@ export class ResolveGateInput {
 
   @Field(() => String, { nullable: true })
   resolvedBy?: string;
+
+  @Field(() => GraphQLJSON, { nullable: true })
+  adoptionAudit?: ManualAdoptionAuditInput;
 }

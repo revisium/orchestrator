@@ -128,6 +128,13 @@ Timeout failure output is structured. The synthetic runner-failure envelope incl
 data-driven pipeline maps the structured failure kinds to exact blocked reasons `runner-idle-timeout` and
 `runner-wall-clock-limit`; legacy free-text runner failures still use the old regex fallback.
 
+Verification failures are classified before opening a recovery gate. Sandbox, permission, read-only filesystem,
+loopback/socket, missing-capability, and other environment-only verification blocks route to a durable human recovery
+gate with `nextAction: ask_human` and outcomes `rerun_with_permissions`, `continue_in_revo`,
+`adopt_patch_manually`, and `abort`. Code/test/lint failures without those environment indicators stay on the normal
+developer rework/failure path and must not use the recovery gate. Worker verification should use sandbox-safe data
+directories and no-socket or capability-gated tests when the role sandbox cannot provide loopback/socket access.
+
 ## Output
 
 Runner output is split:

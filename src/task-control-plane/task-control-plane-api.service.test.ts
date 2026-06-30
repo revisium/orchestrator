@@ -698,6 +698,80 @@ test('TaskControlPlaneApiService.resolveGate rejects invalid outcome and approve
   await assert.rejects(() => api.resolveGate({ inboxId: 'inbox-1', outcome: 'approve_anyway', resolvedBy: 'human' }), /requires a non-empty note/);
 });
 
+const completeAdoptionAudit = {
+  runId: 'run-1',
+  step: 'developer',
+  role: 'developer-codex',
+  artifactRef: 'attempt:attempt-1',
+  targetRepo: '/repo',
+  targetBranch: 'feature/x',
+  actor: 'anton',
+  scope: 'apply generated patch only',
+  risk: 'manual conflict resolution may change behavior',
+  verificationResponsibility: 'main session must run pnpm verify',
+};
+
+test('TaskControlPlaneApiService.resolveGate requires complete audit for adopt_patch_manually', async () => {
+  const api = makeApi({
+    inboxService: {
+      async getInbox() {
+        return makeInboxItem({
+          options: ['rerun_with_permissions', 'continue_in_revo', 'adopt_patch_manually', 'abort'],
+          context: {
+            topic: 'question',
+            runId: 'run-1',
+            summary: { outcomes: ['rerun_with_permissions', 'continue_in_revo', 'adopt_patch_manually', 'abort'] },
+          },
+        });
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => api.resolveGate({ inboxId: 'inbox-1', outcome: 'adopt_patch_manually', resolvedBy: 'human' }),
+    /requires adoptionAudit/,
+  );
+  await assert.rejects(
+    () => api.resolveGate({
+      inboxId: 'inbox-1',
+      outcome: 'adopt_patch_manually',
+      resolvedBy: 'human',
+      adoptionAudit: { ...completeAdoptionAudit, runId: 'other-run' },
+    }),
+    /must match gate runId run-1/,
+  );
+});
+
+test('TaskControlPlaneApiService.resolveGate persists adoptionAudit for adopt_patch_manually', async () => {
+  const resolvedAnswers: unknown[] = [];
+  const api = makeApi({
+    inboxService: {
+      async getInbox() {
+        return makeInboxItem({
+          options: ['rerun_with_permissions', 'continue_in_revo', 'adopt_patch_manually', 'abort'],
+          context: {
+            topic: 'question',
+            summary: { outcomes: ['rerun_with_permissions', 'continue_in_revo', 'adopt_patch_manually', 'abort'] },
+          },
+        });
+      },
+      async resolveInbox(_id, answer) {
+        resolvedAnswers.push(answer);
+        return { status: 'pending' as const, answer };
+      },
+    },
+  });
+
+  await api.resolveGate({
+    inboxId: 'inbox-1',
+    outcome: 'adopt_patch_manually',
+    resolvedBy: 'human',
+    adoptionAudit: completeAdoptionAudit,
+  });
+
+  assert.deepEqual((resolvedAnswers[0] as { adoptionAudit: unknown }).adoptionAudit, completeAdoptionAudit);
+});
+
 test('TaskControlPlaneApiService.resolveInboxItem normalizes named gate outcome before persist and signal', async () => {
   const resolvedAnswers: unknown[] = [];
   const signals: unknown[] = [];
@@ -730,6 +804,42 @@ test('TaskControlPlaneApiService.resolveInboxItem normalizes named gate outcome 
   assert.deepEqual(resolvedAnswers, [{ outcome: 'rework', note: 'fix the review finding' }]);
   assert.deepEqual(signals, [{ outcome: 'rework', note: 'fix the review finding' }]);
   assert.deepEqual(result.answer, { outcome: 'rework', note: 'fix the review finding' });
+});
+
+test('TaskControlPlaneApiService.resolveInboxItem requires adoption audit for adopt_patch_manually', async () => {
+  const api = makeApi({
+    inboxService: {
+      async getInbox() {
+        return makeInboxItem({
+          options: ['rerun_with_permissions', 'continue_in_revo', 'adopt_patch_manually', 'abort'],
+          context: {
+            topic: 'question',
+            summary: { outcomes: ['rerun_with_permissions', 'continue_in_revo', 'adopt_patch_manually', 'abort'] },
+          },
+        });
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => api.resolveInboxItem({ inboxId: 'inbox-1', answer: { outcome: 'adopt_patch_manually' } }),
+    /requires adoptionAudit/,
+  );
+  await assert.rejects(
+    () => api.resolveInboxItem({
+      inboxId: 'inbox-1',
+      answer: { outcome: 'adopt_patch_manually' },
+      signalGate: false,
+    }),
+    /requires adoptionAudit/,
+  );
+  await assert.rejects(
+    () => api.resolveInboxItem({
+      inboxId: 'inbox-1',
+      answer: { outcome: 'adopt_patch_manually', adoptionAudit: { ...completeAdoptionAudit, artifactRef: ' ' } },
+    }),
+    /requires artifactRef or worktreeRef/,
+  );
 });
 
 test('TaskControlPlaneApiService.resolveInboxItem rejects blank named gate outcome', async () => {

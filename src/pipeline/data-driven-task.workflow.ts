@@ -139,6 +139,7 @@ type InvokeRoleBlockedResult = {
   reason: string;
   lesson: string;
   retry?: RunnerRetryBlockPayload;
+  recovery?: VerificationEnvironmentRecovery;
   attemptsMade: number;
 };
 
@@ -151,6 +152,18 @@ type InvokeRoleSucceededResult = {
 };
 
 type InvokeRoleResult = InvokeRoleFailedResult | InvokeRoleBlockedResult | InvokeRoleSucceededResult;
+
+type VerificationEnvironmentRecovery = {
+  classification: 'verification_environment';
+  nodeId: string;
+  stepKey: string;
+  role: string;
+  runner: string;
+  reason: string;
+  lesson: string;
+  attemptId: string;
+  artifactRef?: string;
+};
 
 function readPositiveIntegerEnv(
   env: NodeJS.ProcessEnv,
@@ -408,6 +421,26 @@ function transientKind(reason: string): TransientRunnerFailure['transientKind'] 
   if (/\b429\b|rate.?limit|session limit/i.test(reason)) return 'rate_limit';
   if (isLegacyRetryableCrashReason(reason)) return 'crash';
   return 'unknown';
+}
+
+function verificationEnvironmentBlock(result: AttemptResult, nodeId: string): { reason: string; lesson: string } | undefined {
+  const text = [
+    result.verdict,
+    result.lesson,
+    typeof result.output === 'string' ? result.output : undefined,
+    isRecord(result.output) ? result.output.reason : undefined,
+    isRecord(result.output) ? result.output.error : undefined,
+  ]
+    .filter((value): value is string => typeof value === 'string')
+    .join('\n');
+  if (!/\b(verification|verify|test|lint|check|socket|loopback|sandbox|permission|capability|read.?only)\b/i.test(text)) {
+    return undefined;
+  }
+  if (!/\b(sandbox|permission|denied|read.?only|eperm|eacces|operation not permitted|socket|loopback|listen eaddrnotavail|missing capability|capability|network access|filesystem|fs sandbox)\b/i.test(text)) {
+    return undefined;
+  }
+  const lesson = String(redactEventPayload(result.lesson ?? text.trim() ?? `agent ${nodeId} verification is environment-blocked`));
+  return { reason: 'verification-environment-blocked', lesson };
 }
 
 function isLegacyRetryableCrashReason(reason: string): boolean {
@@ -989,6 +1022,18 @@ export function makeDataDrivenTask(
         }
         const result = await invokeRole(runId, decision, node, ctx, resolved.inputs, stepKey);
         if ('blocked' in result) {
+          if (result.recovery) {
+            const recovery = await awaitVerificationRecoveryGate(runId, ctx, result.recovery);
+            return {
+              lastResult: undefined,
+              terminal: {
+                status: 'blocked',
+                reason: recovery.reason,
+                lesson: recovery.lesson,
+              },
+              stepDelta: result.attemptsMade,
+            };
+          }
           return {
             lastResult: undefined,
             terminal: {
@@ -1172,12 +1217,33 @@ export function makeDataDrivenTask(
       result: AttemptResult;
     },
   ): Promise<NeedsHumanRoleResult> {
-    const { result, node, physicalAttempt } = input;
+    const { result, node, physicalAttempt, binding, stepKey } = input;
     if (result.needsHuman) {
       const transient = transientRunnerFailure(result);
       if (transient === undefined) {
         const safeLesson = String(redactEventPayload(result.lesson ?? `agent ${node.id} reported needsHuman`));
-        return { blocked: true, reason: 'agent-needs-human', lesson: safeLesson, attemptsMade: physicalAttempt.attemptNo };
+        const recoveryBlock = verificationEnvironmentBlock(result, node.id);
+        return {
+          blocked: true,
+          reason: recoveryBlock?.reason ?? 'agent-needs-human',
+          lesson: recoveryBlock?.lesson ?? safeLesson,
+          ...(recoveryBlock
+            ? {
+              recovery: {
+                classification: 'verification_environment',
+                nodeId: node.id,
+                stepKey,
+                role: binding.rowId,
+                runner: binding.resolvedRunnerId,
+                reason: recoveryBlock.reason,
+                lesson: recoveryBlock.lesson,
+                attemptId: physicalAttempt.attemptId,
+                ...(artifactRefFromResult(result) ? { artifactRef: artifactRefFromResult(result) } : {}),
+              },
+            }
+            : {}),
+          attemptsMade: physicalAttempt.attemptNo,
+        };
       }
       return handleTransientRoleResult({ ...input, transient });
     }
@@ -1341,6 +1407,46 @@ export function makeDataDrivenTask(
         ...retry,
       },
     });
+  }
+
+  async function awaitVerificationRecoveryGate(
+    runId: string,
+    ctx: EffectCtx,
+    recovery: VerificationEnvironmentRecovery,
+  ): Promise<{ reason: string; lesson: string }> {
+    const outcomes = ['rerun_with_permissions', 'continue_in_revo', 'adopt_patch_manually', 'abort'];
+    const decision = await awaitHuman(
+      runId,
+      'question',
+      `verificationRecovery:${recovery.stepKey}`,
+      'Verification blocked by local environment',
+      {
+        topic: 'verification_recovery',
+        runId,
+        taskId: ctx.taskId,
+        nodeId: recovery.nodeId,
+        step: recovery.stepKey,
+        role: recovery.role,
+        runner: recovery.runner,
+        verdict: 'verification-blocked',
+        reason: recovery.reason,
+        lesson: recovery.lesson,
+        attemptId: recovery.attemptId,
+        ...(recovery.artifactRef ? { artifactRef: recovery.artifactRef } : {}),
+        policy:
+          'Revo-owned role work remains owned by Revo. The main session may inspect artifacts but must not apply, copy, cherry-pick, stage, commit, or push Revo worktree changes unless this gate is resolved with adopt_patch_manually and a complete adoptionAudit.',
+        outcomes,
+      },
+      outcomes,
+    );
+    const outcome = decision.outcome ?? (decision.decision === 'approve' ? 'continue_in_revo' : 'abort');
+    if (outcome === 'abort') {
+      return { reason: 'verification-recovery-aborted', lesson: recovery.lesson };
+    }
+    return {
+      reason: `verification-recovery-decision:${outcome}`,
+      lesson: `Human selected ${outcome}; recovery is recorded but no Revo worktree patch was adopted by the main session.`,
+    };
   }
 
 

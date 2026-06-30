@@ -519,6 +519,7 @@ type RepositoryValidationModel {
 }
 
 input ResolveGateInput {
+  adoptionAudit: JSON
   inboxId: ID!
   note: String
   outcome: String!

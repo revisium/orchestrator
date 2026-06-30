@@ -185,6 +185,49 @@ test('get_agent_log MCP tool validates conflicting bounded read inputs before fa
   assert.deepEqual(calls, [{ runId: 'run-1', stream: 'combined', tailBytes: 65_536 }]);
 });
 
+test('resolve_gate MCP schema and handler require adoption audit before facade delegation', async () => {
+  const { z } = await import('zod');
+  const { server, tools } = makeServer();
+  const calls: unknown[] = [];
+  const adoptionAudit = {
+    runId: 'run-1',
+    step: 'developer',
+    role: 'developer-codex',
+    artifactRef: 'attempt:attempt-1',
+    targetRepo: '/repo',
+    targetBranch: 'feature/x',
+    actor: 'anton',
+    scope: 'apply generated patch only',
+    risk: 'manual patch adoption',
+    verificationResponsibility: 'main session runs pnpm verify',
+  };
+  const facade = {
+    async resolveGate(input: unknown) {
+      calls.push(input);
+      return { ok: true };
+    },
+  } as unknown as McpFacadeService;
+
+  registerRevoMcpTools(server as never, facade);
+  const tool = tools.find((registered) => registered.name === 'resolve_gate');
+  assert.ok(tool);
+  const schema = z.object(tool.config.inputSchema as Record<string, never>);
+  assert.equal(schema.safeParse({ inboxId: 'inbox-1', outcome: 'adopt_patch_manually', adoptionAudit }).success, true);
+  assert.equal(
+    schema.safeParse({ inboxId: 'inbox-1', outcome: 'adopt_patch_manually', adoptionAudit: { ...adoptionAudit, artifactRef: '' } }).success,
+    false,
+  );
+
+  await assert.rejects(
+    () => Promise.resolve(tool.handler({ inboxId: 'inbox-1', outcome: 'adopt_patch_manually' } as never)),
+    /VALIDATION_FAILURE: adopt_patch_manually requires complete adoptionAudit/,
+  );
+  assert.deepEqual(calls, []);
+
+  await tool.handler({ inboxId: 'inbox-1', outcome: 'adopt_patch_manually', adoptionAudit } as never);
+  assert.deepEqual(calls, [{ inboxId: 'inbox-1', outcome: 'adopt_patch_manually', adoptionAudit }]);
+});
+
 test('get_run_attention description marks it as default/primary monitoring tool and answers "what currently requires attention?"', () => {
   const { server, tools } = makeServer();
   registerRevoMcpTools(server as never, {} as McpFacadeService);
