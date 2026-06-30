@@ -95,6 +95,14 @@ for `approve_anyway`. `approve_gate` and `reject_gate` remain compatibility wrap
 they reject multi-outcome stuck gates instead of silently mapping approve to `approve_anyway` or reject to a recovery
 or abort outcome.
 
+Verification environment blocks open a recovery gate with outcomes `rerun_with_permissions`, `continue_in_revo`,
+`adopt_patch_manually`, and `abort`. Revo-owned work remains owned by Revo unless the selected outcome is
+`adopt_patch_manually` and every public resolver path persists a complete `adoptionAudit`. The audit payload requires
+non-empty `runId`, `step`, `role`, `targetRepo`, `targetBranch`, `actor`, `scope`, `risk`,
+`verificationResponsibility`, and either `artifactRef` or `worktreeRef`; when the inbox row has a run id, the audit
+`runId` must match it. `resolve_gate` / `resolveGate` carries this payload as `adoptionAudit`; `resolve_inbox_item` /
+`resolveInboxItem` carries it inside the arbitrary answer object.
+
 GraphQL subscriptions:
 
 - `inboxItemAdded`

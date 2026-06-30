@@ -22,6 +22,21 @@ const agentStreamSchema = z.enum(['stdout', 'stderr', 'events', 'combined']);
 const agentLogByteSchema = z.number().int().positive().max(1048576).optional();
 const agentLogOffsetSchema = z.number().int().nonnegative().max(1048576).optional();
 const paramsSchema = z.record(z.string(), z.unknown()).optional();
+const manualAdoptionAuditSchema = z.object({
+  runId: z.string().trim().min(1),
+  step: z.string().trim().min(1),
+  role: z.string().trim().min(1),
+  targetRepo: z.string().trim().min(1),
+  targetBranch: z.string().trim().min(1),
+  actor: z.string().trim().min(1),
+  scope: z.string().trim().min(1),
+  risk: z.string().trim().min(1),
+  verificationResponsibility: z.string().trim().min(1),
+  artifactRef: z.string().trim().min(1).optional(),
+  worktreeRef: z.string().trim().min(1).optional(),
+}).refine((value) => value.artifactRef !== undefined || value.worktreeRef !== undefined, {
+  message: 'artifactRef or worktreeRef is required',
+});
 const issueRefSchema = z.object({
   repo: z.string().min(1),
   number: z.number().int().positive(),
@@ -43,6 +58,14 @@ const prReadinessInputSchema = {
 function assertValidAgentLogRange(input: { offsetBytes?: number; limitBytes?: number; tailBytes?: number }): void {
   if (input.tailBytes !== undefined && (input.offsetBytes !== undefined || input.limitBytes !== undefined)) {
     throw new Error('VALIDATION_FAILURE: tailBytes cannot be combined with offsetBytes or limitBytes');
+  }
+}
+
+function assertValidResolveGateInput(input: { outcome: string; adoptionAudit?: unknown }): void {
+  if (input.outcome.trim() !== 'adopt_patch_manually') return;
+  const parsed = manualAdoptionAuditSchema.safeParse(input.adoptionAudit);
+  if (!parsed.success) {
+    throw new Error(`VALIDATION_FAILURE: adopt_patch_manually requires complete adoptionAudit (${parsed.error.issues[0]?.message ?? 'invalid'})`);
   }
 }
 
@@ -422,10 +445,14 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
         outcome: z.string().min(1),
         note: z.string().optional(),
         resolvedBy: z.string().optional(),
+        adoptionAudit: manualAdoptionAuditSchema.optional(),
       },
       annotations: { readOnlyHint: false },
     },
-    async (input) => json(await facade.resolveGate(input)),
+    async (input) => {
+      assertValidResolveGateInput(input);
+      return json(await facade.resolveGate(input));
+    },
   );
 
   server.registerTool(
