@@ -148,6 +148,66 @@ pnpm run revo -- stop --profile dev
 Explicit environment variables override the profile: `REVO_DATA_DIR`, `REVO_PORT`, `REVO_PG_PORT`,
 `REVO_GRAPHQL_PORT`, and `REVO_DBOS_DB`.
 
+### Build and globally install a local Revo
+
+This workflow is for local development/testing of the CLI and MCP server, **not** for publishing a release.
+
+**Build from the orchestrator checkout:**
+
+```sh
+pnpm install --frozen-lockfile
+pnpm run build
+```
+
+**Pack a tarball** (preferred over a directory-symlink install):
+
+```sh
+npm pack --pack-destination /private/tmp
+```
+
+This emits `/private/tmp/revisium-orchestrator-0.0.0.tgz` (filename tracks `package.json` `version`).
+
+**Identify the active Node prefix that owns the `revo` binary:**
+
+```sh
+which revo
+```
+
+Resolve the symlink and pick the prefix that contains both `bin/revo` and
+`lib/node_modules/@revisium/orchestrator`. `npm prefix -g` may point to a *different* prefix than the active
+`revo` binary (common under nvm), so derive the prefix from `which revo`, not from `npm prefix -g`.
+
+**Install the tarball globally into that prefix:**
+
+```sh
+npm install -g --prefix <active-node-prefix> /private/tmp/revisium-orchestrator-0.0.0.tgz
+```
+
+For nvm installs, the active prefix is usually the parent directory that contains both `bin/revo` and
+`lib/node_modules/@revisium/orchestrator`. Use that prefix consistently for both `npm` and `revo`.
+
+> **Warning:** do not use `npm install -g <local-dir>` from a temporary worktree. npm may install a symlink to
+> that directory; if the worktree is later removed, the global `revo` binary breaks. The tarball install copies
+> files and avoids this.
+
+**Restart and verify health:**
+
+```sh
+revo restart
+revo status
+revo doctor
+```
+
+**Verify the MCP tool surface after a global tool/schema change:**
+
+Restart the Codex session so MCP tool schemas are reloaded. `get_capabilities` should list:
+`get_run_attention`, `get_run_status`, `get_run_digest`, `get_run_events`, `get_agent_activity`,
+`get_agent_log`, `watch_run_changes`. `observe_run` is not present in the current contract.
+
+If Codex cannot expose `mcp__revo` tools after restart, check `~/.codex/config.toml`: use an absolute path to
+the active `revo` binary, for example `command = "<active-node-prefix>/bin/revo"`, rather than
+`command = "revo"` — the Codex process PATH may not include nvm.
+
 ## Front Doors
 
 `revo mcp` is the agent front door. It is a local stdio bridge to the daemon and exposes product-level tools for
