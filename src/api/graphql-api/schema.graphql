@@ -520,6 +520,7 @@ type RepositoryValidationModel {
 
 input ResolveGateInput {
   inboxId: ID!
+  note: String
   outcome: String!
   resolvedBy: String
 }

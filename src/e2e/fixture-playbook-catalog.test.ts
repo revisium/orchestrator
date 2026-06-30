@@ -68,7 +68,7 @@ test('e2e fixture: feature-development-dd preserves produced-change dataflow fro
   );
 
   const defaultDeveloperChangeInputs = effectNode(defaultFeature, 'integrator').consumes?.filter((input) =>
-    input.node === 'developer' || input.node === 'reworkDeveloper',
+    input.node === 'developer' || input.node === 'reworkDeveloper' || input.node === 'stuckReworkDeveloper',
   ) satisfies ConsumesRef[] | undefined;
   assert.deepEqual(effectNode(fixtureFeatureDd, 'integrator').consumes, defaultDeveloperChangeInputs);
 });

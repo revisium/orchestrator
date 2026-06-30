@@ -323,7 +323,7 @@ function changeWithRunIssueRef(change: ProducedChangeArtifact, issueRef?: IssueR
 }
 
 function producedChangeFromInputs(inputs: Record<string, unknown>): ProducedChangeArtifact | undefined {
-  for (const key of ['reviewChange', 'ciChange', 'reworkChange', 'developerChange', 'change']) {
+  for (const key of ['reviewChange', 'ciChange', 'stuckReworkChange', 'reworkChange', 'developerChange', 'change']) {
     const artifact = producedChangeArtifact(inputs[key]);
     if (artifact) return artifact;
   }
@@ -470,6 +470,7 @@ export type DataDrivenTaskDeps = {
     gateKey: string,
     title: string,
     summary: unknown,
+    options?: string[],
   ) => Promise<GateDecision>;
   completeRun: (
     runId: string,
@@ -532,6 +533,17 @@ function gateVerdict(decision: GateDecision, outcomes: string[]): string | undef
   if (decision.outcome) return outcomes.includes(decision.outcome) ? decision.outcome : undefined;
   if (decision.decision === 'approve') return outcomes[0];
   return outcomes.length > 1 ? outcomes.at(-1) : undefined;
+}
+
+function gateResolutionOutput(decision: GateDecision, verdict: string | undefined, fallbackInboxId: string): Record<string, unknown> {
+  return {
+    outcome: decision.outcome ?? verdict ?? decision.decision,
+    ...(decision.note !== undefined ? { note: decision.note } : {}),
+    resolvedBy: decision.resolvedBy ?? '',
+    resolvedAt: decision.resolvedAt ?? '',
+    inboxId: decision.inboxId ?? fallbackInboxId,
+    ...(decision.decision ? { decision: decision.decision } : {}),
+  };
 }
 
 
@@ -1035,8 +1047,17 @@ export function makeDataDrivenTask(
           stepKeyFor(decision.nodeId, ordinal),
           `${decision.reason} approval`,
           buildGateSummary(decision, ctx.outputsByNode, ctx.lastVerdict),
+          decision.outcomes,
         );
         const verdict = gateVerdict(human, decision.outcomes);
+        await recordOutput(
+          runId,
+          resolveNode(template, decision.nodeId),
+          ordinal,
+          stepKeyFor(decision.nodeId, ordinal),
+          gateResolutionOutput(human, verdict, stepKeyFor(decision.nodeId, ordinal)),
+          ctx.outputsByNode,
+        );
         return { lastResult: verdict ? { verdict } : {}, ...(verdict ? { lastVerdict: verdict } : {}), stepDelta: 0 };
       }
       case 'fork': {

@@ -1987,7 +1987,10 @@
             "changes_requested",
             "blocker",
             "clean",
-            "dirty"
+            "dirty",
+            "approve_anyway",
+            "rework",
+            "abort"
           ]
         },
         "nodes": {
@@ -2064,8 +2067,16 @@
                 "node": "reworkDeveloper",
                 "as": "reworkChange",
                 "optional": true
+              },
+              {
+                "node": "stuckReworkDeveloper",
+                "as": "stuckReworkChange",
+                "optional": true
               }
-            ]
+            ],
+            "produces": {
+              "name": "review"
+            }
           },
           "codeReviewRouter": {
             "id": "codeReviewRouter",
@@ -2099,7 +2110,15 @@
                 "goto": "reworkDeveloper"
               },
               {
-                "default": "blockedEnd"
+                "when": {
+                  "op": "counter.gte",
+                  "scope": "codeStuckRecoveryLoop",
+                  "value": 1
+                },
+                "goto": "codeFinalStuckGate"
+              },
+              {
+                "default": "codeStuckGate"
               }
             ]
           },
@@ -2139,6 +2158,11 @@
               {
                 "node": "reworkDeveloper",
                 "as": "reworkChange",
+                "optional": true
+              },
+              {
+                "node": "stuckReworkDeveloper",
+                "as": "stuckReworkChange",
                 "optional": true
               }
             ]
@@ -2202,6 +2226,129 @@
             "id": "blockedEnd",
             "kind": "terminal",
             "status": "blocked"
+          },
+          "stuckReworkDeveloper": {
+            "id": "stuckReworkDeveloper",
+            "kind": "agent",
+            "roleRef": "role:developer",
+            "next": "codeReview",
+            "onFailure": "abort",
+            "resultSchema": "schema:change",
+            "incrementCounters": [
+              "codeStuckRecoveryLoop"
+            ],
+            "produces": {
+              "name": "change"
+            },
+            "consumes": [
+              {
+                "node": "developer",
+                "as": "initialChange",
+                "iteration": "latest",
+                "optional": true,
+                "staleOk": true
+              },
+              {
+                "node": "reworkDeveloper",
+                "as": "latestRework",
+                "iteration": "latest",
+                "optional": true,
+                "staleOk": true
+              },
+              {
+                "node": "codeReview",
+                "as": "reviewFindings",
+                "iteration": "latest",
+                "optional": true,
+                "staleOk": true
+              },
+              {
+                "node": "codeStuckGate",
+                "as": "gateResolution",
+                "iteration": "latest"
+              }
+            ]
+          },
+          "codeFinalStuckGate": {
+            "id": "codeFinalStuckGate",
+            "kind": "humanGate",
+            "reason": "code-review-final-stuck",
+            "outcomes": [
+              "approve_anyway",
+              "abort"
+            ],
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "approve_anyway"
+                },
+                "goto": "integrator"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ],
+            "gatedArtifact": {
+              "node": "stuckReworkDeveloper",
+              "as": "change"
+            },
+            "produces": {
+              "name": "gateResolution"
+            }
+          },
+          "codeStuckGate": {
+            "id": "codeStuckGate",
+            "kind": "humanGate",
+            "reason": "code-review-stuck",
+            "outcomes": [
+              "approve_anyway",
+              "rework",
+              "abort"
+            ],
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "approve_anyway"
+                },
+                "goto": "integrator"
+              },
+              {
+                "when": {
+                  "op": "all",
+                  "of": [
+                    {
+                      "op": "verdict.eq",
+                      "value": "rework"
+                    },
+                    {
+                      "op": "counter.lt",
+                      "scope": "codeStuckRecoveryLoop",
+                      "value": 1
+                    }
+                  ]
+                },
+                "goto": "stuckReworkDeveloper"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "rework"
+                },
+                "goto": "codeFinalStuckGate"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ],
+            "gatedArtifact": {
+              "node": "reworkDeveloper",
+              "as": "change"
+            },
+            "produces": {
+              "name": "gateResolution"
+            }
           }
         },
         "title": "Feature development with plan + merge gates and bounded rework",
@@ -2217,6 +2364,10 @@
         "scopes": {
           "codeReviewLoop": {
             "cap": 3,
+            "parent": null
+          },
+          "codeStuckRecoveryLoop": {
+            "cap": 1,
             "parent": null
           }
         }

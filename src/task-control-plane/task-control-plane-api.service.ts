@@ -1191,6 +1191,7 @@ export class TaskControlPlaneApiService {
   async approveGate(input: { inboxId: string; resolvedBy?: string }) {
     const item = await this.getInboxItem(input.inboxId);
     const outcomes = gateDeclaredOutcomes(item);
+    this.assertLegacyGateWrapperAllowed(input.inboxId, outcomes);
     if (outcomes.length === 0 || (outcomes.length === 1 && outcomes[0] === 'approved')) {
       const resolvedBy = input.resolvedBy ?? 'mcp';
       return this.resolveLegacyGate(item, { decision: 'approve', resolvedBy }, resolvedBy, input.inboxId);
@@ -1205,6 +1206,7 @@ export class TaskControlPlaneApiService {
   async rejectGate(input: { inboxId: string; resolvedBy?: string }) {
     const item = await this.getInboxItem(input.inboxId);
     const outcomes = gateDeclaredOutcomes(item);
+    this.assertLegacyGateWrapperAllowed(input.inboxId, outcomes);
     if (outcomes.length === 0) {
       const resolvedBy = input.resolvedBy ?? 'mcp';
       return this.resolveLegacyGate(item, { decision: 'reject', resolvedBy }, resolvedBy, input.inboxId);
@@ -1217,7 +1219,7 @@ export class TaskControlPlaneApiService {
     return this.resolveGate({ inboxId: input.inboxId, outcome, resolvedBy: input.resolvedBy });
   }
 
-  async resolveGate(input: { inboxId: string; outcome: string; resolvedBy?: string }) {
+  async resolveGate(input: { inboxId: string; outcome: string; note?: string; resolvedBy?: string }) {
     const item = await this.getInboxItem(input.inboxId);
     const topic = gateTopic(item);
     if (!topic) {
@@ -1227,14 +1229,25 @@ export class TaskControlPlaneApiService {
     if (outcomes.length === 0) {
       throw new ControlPlaneError('VALIDATION_FAILURE', `gate has no declared named outcomes: ${input.inboxId}`);
     }
-    if (!outcomes.includes(input.outcome)) {
+    const outcome = input.outcome.trim();
+    if (!outcomes.includes(outcome)) {
       throw new ControlPlaneError(
         'VALIDATION_FAILURE',
-        `invalid gate outcome ${input.outcome}; expected one of: ${outcomes.join(', ')}`,
+        `invalid gate outcome ${outcome}; expected one of: ${outcomes.join(', ')}`,
       );
     }
+    const note = input.note?.trim();
+    if (outcome === 'approve_anyway' && !note) {
+      throw new ControlPlaneError('VALIDATION_FAILURE', 'approve_anyway requires a non-empty note');
+    }
     const resolvedBy = input.resolvedBy ?? 'mcp';
-    const answer = { outcome: input.outcome, resolvedBy };
+    const answer = {
+      outcome,
+      ...(note ? { note } : {}),
+      resolvedBy,
+      resolvedAt: new Date().toISOString(),
+      inboxId: input.inboxId,
+    };
     const result = await this.inbox.resolveInbox(input.inboxId, answer, resolvedBy);
     await this.signalGate(item, topic, result.answer, input.inboxId);
     return {
@@ -1245,6 +1258,25 @@ export class TaskControlPlaneApiService {
       topic,
       runId: item.runId,
     };
+  }
+
+  private assertLegacyGateWrapperAllowed(inboxId: string, outcomes: string[]) {
+    if (outcomes.length > 2 || outcomes.includes('approve_anyway')) {
+      throw new ControlPlaneError(
+        'VALIDATION_FAILURE',
+        `inbox item has named gate outcomes; use resolve_gate with an explicit outcome: ${inboxId}`,
+      );
+    }
+  }
+
+  private assertGateOutcome(item: InboxItem, outcome: string) {
+    const outcomes = gateOutcomes(item);
+    if (!outcomes.includes(outcome)) {
+      throw new ControlPlaneError(
+        'VALIDATION_FAILURE',
+        `invalid gate outcome ${outcome}; expected one of: ${outcomes.join(', ')}`,
+      );
+    }
   }
 
   private async resolveLegacyGate(item: InboxItem, answer: unknown, resolvedBy: string, inboxId: string) {
@@ -1288,7 +1320,27 @@ export class TaskControlPlaneApiService {
   }) {
     const item = await this.getInboxItem(input.inboxId);
     const topic = gateTopic(item);
-    const result = await this.inbox.resolveInbox(input.inboxId, input.answer, input.resolvedBy ?? 'mcp');
+    let answerToResolve = input.answer;
+    if (topic && input.signalGate !== false) {
+      const answer = asRecord(input.answer);
+      if (typeof answer?.outcome === 'string') {
+        const outcome = answer.outcome.trim();
+        if (!outcome) {
+          throw new ControlPlaneError('VALIDATION_FAILURE', 'gate outcome must be non-empty');
+        }
+        this.assertGateOutcome(item, outcome);
+        const note = typeof answer?.note === 'string' ? answer.note.trim() : '';
+        if (outcome === 'approve_anyway' && !note) {
+          throw new ControlPlaneError('VALIDATION_FAILURE', 'approve_anyway requires a non-empty note');
+        }
+        answerToResolve = {
+          ...answer,
+          outcome,
+          ...(typeof answer.note === 'string' ? { note } : {}),
+        };
+      }
+    }
+    const result = await this.inbox.resolveInbox(input.inboxId, answerToResolve, input.resolvedBy ?? 'mcp');
     const shouldSignal = input.signalGate !== false && topic !== null;
     if (shouldSignal) {
       await this.signalGate(item, topic, result.answer, input.inboxId);

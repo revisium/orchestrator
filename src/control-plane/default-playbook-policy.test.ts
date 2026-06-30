@@ -358,3 +358,54 @@ test('default playbook policy: loop exhaustion must not dead-end directly at blo
   assert.equal(diagnostic.nodeId, 'codeReviewRouter');
   assert.match(diagnostic.expected ?? '', /codeStuckGate/);
 });
+
+test('default playbook policy: codeStuckGate rework must route to stuckReworkDeveloper', () => {
+  const diagnostic = assertDiagnostic(
+    mutateTemplate((template) => {
+      guardedBranchContaining(template, 'codeStuckGate', 'rework').goto = 'codeFinalStuckGate';
+    }),
+    'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
+  );
+
+  assert.equal(diagnostic.nodeId, 'codeStuckGate');
+  assert.match(diagnostic.expected ?? '', /rework -> stuckReworkDeveloper/);
+});
+
+test('default playbook policy: codeFinalStuckGate approve_anyway must preserve override route', () => {
+  const diagnostic = assertDiagnostic(
+    mutateTemplate((template) => {
+      guardedBranchContaining(template, 'codeFinalStuckGate', 'approve_anyway').goto = 'blockedEnd';
+    }),
+    'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
+  );
+
+  assert.equal(diagnostic.nodeId, 'codeFinalStuckGate');
+  assert.match(diagnostic.expected ?? '', /approve_anyway -> integrator/);
+});
+
+test('default playbook policy: codeFinalStuckGate default must block', () => {
+  const diagnostic = assertDiagnostic(
+    mutateTemplate((template) => {
+      defaultBranch(template, 'codeFinalStuckGate').default = 'integrator';
+    }),
+    'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
+  );
+
+  assert.equal(diagnostic.nodeId, 'codeFinalStuckGate');
+  assert.match(diagnostic.expected ?? '', /default -> blockedEnd/);
+});
+
+test('default playbook policy: final stuck gate outcome diagnostics identify the final gate', () => {
+  const diagnostic = assertDiagnostic(
+    mutateTemplate((template) => {
+      const gate = template.nodes['codeFinalStuckGate'];
+      const outcomes = gate['outcomes'] as string[];
+      outcomes.push('rework');
+    }),
+    'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
+  );
+
+  assert.equal(diagnostic.nodeId, 'codeFinalStuckGate');
+  assert.equal(diagnostic.path, 'outcomes');
+  assert.equal(diagnostic.actual, 'approve_anyway,abort,rework');
+});

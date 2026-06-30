@@ -730,7 +730,51 @@ test('DD-default-codex: repeated plan consensus failures hit planStuckGate at th
   assert.deepEqual(rec.gateSummaries.map((summary) => summary.nodeId), ['planStuckGate']);
 });
 
-test('DD-default-codex: repeated code consensus failures hit codeStuckGate at the cap', async () => {
+test('DD-default-codex: codeStuckGate rework runs bounded recovery then returns to consensus review', async () => {
+  let planTopicGates = 0;
+  const { run, rec } = buildAdapter({
+    template: defaultCodexConsensusTemplate(),
+    route: makeCodexConsensusRoute(),
+    verdicts: {
+      planReviewPrimary: 'approved',
+      planReviewSecondary: 'approved',
+      codeReviewPrimary: 'approved',
+      codeReviewSecondary: ['changes_requested', 'changes_requested', 'changes_requested', 'changes_requested', 'approved'],
+    },
+    gate: (topic) => {
+      if (topic !== 'plan') return { decision: 'approve' };
+      planTopicGates++;
+      if (planTopicGates === 1) return { decision: 'approve' };
+      return { decision: 'reject', outcome: 'rework', note: 'Address the remaining review findings.' };
+    },
+  });
+
+  const result = await run();
+
+  assert.equal(result.status, 'succeeded');
+  assert.equal(attemptCount(rec, 'developer'), 1);
+  assert.equal(attemptCount(rec, 'reworkDeveloper'), 3);
+  assert.equal(attemptCount(rec, 'stuckReworkDeveloper'), 1);
+  assert.equal(attemptCount(rec, 'codeReviewPrimary'), 5);
+  assert.equal(attemptCount(rec, 'codeReviewSecondary'), 5);
+  assert.equal(rec.integrateCalls, 1, 'integrator runs only after the human-directed recovery passes consensus');
+  assert.match(
+    rec.integratorInputs[0]?.change?.headSha ?? '',
+    /^sha-stuckReworkDeveloper-/,
+    'integrator must receive the human-directed stuck rework head',
+  );
+  assert.deepEqual(rec.gateSummaries.map((summary) => summary.nodeId), ['planGate', 'codeStuckGate', 'mergeGate']);
+  assert.deepEqual(rec.outputs.find((output) => output.nodeId === 'codeStuckGate')?.payload, {
+    outcome: 'rework',
+    note: 'Address the remaining review findings.',
+    resolvedBy: '',
+    resolvedAt: '',
+    inboxId: 'codeStuckGate',
+    decision: 'reject',
+  });
+});
+
+test('DD-default-codex: failed stuck rework routes to final stuck gate without another implicit rework', async () => {
   let planTopicGates = 0;
   const { run, rec } = buildAdapter({
     template: defaultCodexConsensusTemplate(),
@@ -744,19 +788,20 @@ test('DD-default-codex: repeated code consensus failures hit codeStuckGate at th
     gate: (topic) => {
       if (topic !== 'plan') return { decision: 'approve' };
       planTopicGates++;
-      return planTopicGates === 1 ? { decision: 'approve' } : { decision: 'reject' };
+      if (planTopicGates === 1) return { decision: 'approve' };
+      if (planTopicGates === 2) return { decision: 'reject', outcome: 'rework', note: 'Try one bounded recovery.' };
+      return { decision: 'reject', outcome: 'abort', note: 'Stop after failed recovery.' };
     },
   });
 
   const result = await run();
 
   assert.equal(result.status, 'blocked');
-  assert.equal(attemptCount(rec, 'developer'), 1);
-  assert.equal(attemptCount(rec, 'reworkDeveloper'), 3);
-  assert.equal(attemptCount(rec, 'codeReviewPrimary'), 4);
-  assert.equal(attemptCount(rec, 'codeReviewSecondary'), 4);
-  assert.equal(rec.integrateCalls, 0, 'integrator never runs before code consensus is unstuck');
-  assert.deepEqual(rec.gateSummaries.map((summary) => summary.nodeId), ['planGate', 'codeStuckGate']);
+  assert.equal(attemptCount(rec, 'stuckReworkDeveloper'), 1);
+  assert.equal(attemptCount(rec, 'codeReviewPrimary'), 5);
+  assert.equal(attemptCount(rec, 'codeReviewSecondary'), 5);
+  assert.equal(rec.integrateCalls, 0);
+  assert.deepEqual(rec.gateSummaries.map((summary) => summary.nodeId), ['planGate', 'codeStuckGate', 'codeFinalStuckGate']);
 });
 
 test('DD1b: adapter publishes graph progress cursors through its sealed dep', async () => {

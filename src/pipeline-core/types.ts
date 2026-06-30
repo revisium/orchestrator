@@ -125,6 +125,7 @@ export type HumanGateNode = NodeEnvelope & {
   branches: Branch[];
   timeout?: GateTimeout;
   incrementCounters?: string[];
+  produces?: ProducesDecl;
   gatedArtifact?: GateArtifactRef;
   verdictFrom?: GateVerdictRef;
 };

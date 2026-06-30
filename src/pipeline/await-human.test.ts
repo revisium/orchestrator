@@ -113,6 +113,22 @@ test('A1b: awaitHuman exposes named gate outcomes as inbox options', async () =>
   assert.deepEqual(pushInboxCalls[0]?.item.options, ['approved', 'recheck']);
 });
 
+test('A1c: awaitHuman falls back from empty explicit options to named outcomes', async () => {
+  const { deps, pushInboxCalls } = makeDeps({ decision: { outcome: 'rework' } });
+  const awaitHuman = makeAwaitHuman(deps);
+
+  await awaitHuman(
+    'run-ah-empty-options',
+    'merge',
+    'codeStuckGate',
+    'Code review stuck',
+    { nodeId: 'codeStuckGate', outcomes: ['approve_anyway', 'rework', 'abort'] },
+    [],
+  );
+
+  assert.deepEqual(pushInboxCalls[0]?.item.options, ['approve_anyway', 'rework', 'abort']);
+});
+
 test('A1 (merge gate): awaitHuman works for merge topic too', async () => {
   const runId = 'run-ah-a1m';
   const topic = 'merge' as const;
@@ -136,8 +152,23 @@ test('A2: awaitDecision returns null → awaitHuman returns fail-closed reject (
   const result = await awaitHuman(runId, 'plan', 'plan', 'Plan approval', {});
 
   assert.equal(result.decision, 'reject', 'null recv must produce reject (fail-closed)');
+  assert.equal(result.outcome, undefined, 'timeout fallback must not select a named outcome');
   const answer = result.answer as Record<string, unknown> | undefined;
   assert.equal(answer?.reason, 'gate-timeout', 'timeout reason must be gate-timeout');
+});
+
+test('A2b: named gate timeout does not approve or abort by selecting the last outcome', async () => {
+  const { deps, pushInboxCalls } = makeDeps({ decision: null });
+  const awaitHuman = makeAwaitHuman(deps);
+
+  const result = await awaitHuman('run-ah-named-timeout', 'plan', 'codeStuckGate', 'Code review stuck', {
+    nodeId: 'codeStuckGate',
+    outcomes: ['approve_anyway', 'rework', 'abort'],
+  });
+
+  assert.deepEqual(pushInboxCalls[0]?.item.options, ['approve_anyway', 'rework', 'abort']);
+  assert.equal(result.decision, 'reject');
+  assert.equal(result.outcome, undefined);
 });
 
 // ─── A3 (G11): replay — pushInbox returns SAME id on both calls, awaitHuman proceeds ──
