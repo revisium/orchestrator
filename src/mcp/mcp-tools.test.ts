@@ -185,6 +185,30 @@ test('get_agent_log MCP tool validates conflicting bounded read inputs before fa
   assert.deepEqual(calls, [{ runId: 'run-1', stream: 'combined', tailBytes: 65_536 }]);
 });
 
+test('get_run_attention description marks it as default/primary monitoring tool and answers "what currently requires attention?"', () => {
+  const { server, tools } = makeServer();
+  registerRevoMcpTools(server as never, {} as McpFacadeService);
+  const tool = tools.find((registered) => registered.name === 'get_run_attention');
+  assert.ok(tool);
+  assert.ok(
+    tool.config.description?.toLowerCase().includes('default') || tool.config.description?.toLowerCase().includes('primary'),
+    'description must mention default or primary',
+  );
+  assert.ok(tool.config.description?.includes('what currently requires attention'), 'description must include "what currently requires attention"');
+});
+
+test('watch_run_changes description states it is not for normal task monitoring and is a change-stream/cursor tool', () => {
+  const { server, tools } = makeServer();
+  registerRevoMcpTools(server as never, {} as McpFacadeService);
+  const tool = tools.find((registered) => registered.name === 'watch_run_changes');
+  assert.ok(tool);
+  assert.ok(tool.config.description?.toLowerCase().includes('not for normal task monitoring'), 'description must say "not for normal task monitoring"');
+  assert.ok(
+    tool.config.description?.toLowerCase().includes('change-stream') || tool.config.description?.toLowerCase().includes('cursor'),
+    'description must mention change-stream or cursor',
+  );
+});
+
 test('registerRevoMcpTools registers the 3 new observation tools and not the 4 old ones', () => {
   const { server, tools } = makeServer();
   registerRevoMcpTools(server as never, {} as McpFacadeService);

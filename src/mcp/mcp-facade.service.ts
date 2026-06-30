@@ -357,7 +357,7 @@ export class McpFacadeService {
         'Local stdio MCP server; no remote HTTP listener.',
         'Tools expose product operations, not generic Revisium row CRUD.',
         'Runs are driven by installed playbooks, pipeline catalogs, and execution profiles.',
-        'Normal run polling: get_run_attention → resolve inbox/start/wait/inspect/done.',
+        'Agent run monitoring: follow task_monitoring_loop — poll get_run_attention, react to nextAction.',
       ],
       observation: {
         primaryTool: 'get_run_attention',
@@ -365,11 +365,11 @@ export class McpFacadeService {
         deliveryTool: 'watch_run_changes',
         diagnosticTools: ['get_run_digest', 'get_agent_log', 'get_run_events', 'get_agent_activity'],
         preferredOrder: [
-          'get_run_attention for current attention state and next action',
+          'get_run_attention for current attention state and next action — agents poll this UNLESS explicitly implementing a change-stream consumer',
           'get_run_status for neutral dashboard or status checks',
           'get_run_digest when nextAction is "inspect_digest"',
           'get_agent_log with offsetBytes/limitBytes or tailBytes when nextAction is "inspect_log" or explicit debugging requires logs',
-          'watch_run_changes for bounded change delivery with cursor continuity',
+          'watch_run_changes for UI/change-stream consumers needing cursor-based transition delivery; not for normal task monitoring',
           'avoid get_run(includeEvents:true) and raw agent logs in polling loops',
         ],
       },
