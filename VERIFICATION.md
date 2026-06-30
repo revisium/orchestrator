@@ -16,6 +16,37 @@ Runs in order: `typecheck` → `lint:ci` → `test:cov`. All must pass before me
 | `pnpm test:e2e` | Full end-to-end stack (requires a live Revisium + DBOS env) |
 | `pnpm ci:local:sonar` | Static analysis — run before opening a PR that touches architecture boundaries |
 
+## TDD and e2e test quality (HARD RULE)
+
+Behavior changes must start with a failing test before implementation changes. Prefer e2e first when the behavior
+crosses a public boundary: MCP tools, GraphQL, CLI, DBOS/Revisium workflow state, runner dispatch, playbook
+installation, default pipelines, or real host lifecycle. Add focused unit tests after the e2e test to pin pure
+reducers, validators, classifiers, and edge cases.
+
+Do not accept tests that pass only because their fixtures are incomplete. Fixtures must be production-shaped for every
+field the code reads, including derived fields such as `readinessVerdict`, `nextAction`, workflow cursors, compacted
+MCP payloads, join arrivals, retry metadata, and default-playbook route bindings. If a test intentionally omits a
+field, assert that omission is the behavior being tested.
+
+Every e2e or integration test for a decision path must assert the reason, not only the terminal status. Check the
+verdict/action/evidence, emitted event, gate summary, compact response field, or persisted output that caused the
+route. A test that only asserts `succeeded`, `blocked`, or "returned something" is incomplete for new behavior.
+
+Consensus, branching, and approval flows must cover positive and negative cases:
+
+- all reviewers approve or return allowed pass verdicts;
+- exactly one reviewer rejects, blocks, or asks a question;
+- both reviewers reject, block, or ask questions;
+- branch order does not change the verdict;
+- every branch output that should reach the join is recorded before routing.
+
+MCP and GraphQL compact-response tests must prove both sides of the contract: large/raw payloads are removed, and
+actionable semantic fields remain visible. When compacting readiness or feedback, preserve the fields that explain
+`verdict` and `nextAction`.
+
+Tests for removed or deprecated tools must assert absence from the registered surface and update specs/docs in the same
+change. Do not leave README/spec references to tools that are no longer registered.
+
 ## Comment policy (HARD RULE)
 
 DELETE BY DEFAULT. A comment is justified only when it carries information the code cannot convey on its own.

@@ -16,7 +16,11 @@ import 'reflect-metadata';
 import { rmSync } from 'node:fs';
 import { ensureRevisium } from '../src/host/ensure-revisium.js';
 import { bootstrapControlPlane } from '../src/control-plane/bootstrap.js';
-import { seedDefaultPlaybook, seedDefaultPlaybookBestEffort } from '../src/control-plane/seed-default-playbook.js';
+import {
+  playbookCatalogHash,
+  seedDefaultPlaybook,
+  seedDefaultPlaybookBestEffort,
+} from '../src/control-plane/seed-default-playbook.js';
 import { createClientTransport } from '../src/control-plane/client-transport.js';
 import { ControlPlaneError } from '../src/control-plane/errors.js';
 import { getConfig, readRuntime, removeRuntime, isAlive } from '../src/config.js';
@@ -70,11 +74,19 @@ async function resetHome(): Promise<void> {
 }
 
 async function ensurePlaybook(): Promise<void> {
-  const playbooks = new PlaybooksService(createClientTransport('head'));
+  let playbooks = new PlaybooksService(createClientTransport('head'));
   const installed = await playbooks.listPlaybooks();
-  if (installed.some((p) => p.id === PLAYBOOK_ID)) {
-    console.log('[e2e setup] playbook already installed — skipping');
+  const existing = installed.find((p) => p.id === PLAYBOOK_ID);
+  const expectedHash = playbookCatalogHash(PLAYBOOK_SOURCE, PLAYBOOK_ID);
+  if (existing?.catalogHash === expectedHash) {
+    console.log('[e2e setup] playbook already installed and current — skipping');
     return;
+  }
+  if (existing) {
+    console.log('[e2e setup] playbook installed but stale or legacy — resetting test home before reinstall');
+    await resetHome();
+    await applyBootstrapAndDefaultSeed();
+    playbooks = new PlaybooksService(createClientTransport('head'));
   }
   try {
     const r = await playbooks.install({ source: PLAYBOOK_SOURCE, name: PLAYBOOK_ID, commit: true });
@@ -83,6 +95,18 @@ async function ensurePlaybook(): Promise<void> {
     if (!/not a draft|already|nothing to commit|ROW_CONFLICT/i.test(String(err))) throw err;
     console.log('[e2e setup] playbook install raced/duplicate — tolerated');
   }
+}
+
+async function applyBootstrapAndDefaultSeed(): Promise<void> {
+  const rt = readRuntime();
+  if (!rt) throw new Error('standalone runtime missing before bootstrap');
+  console.log('[e2e setup] applying bootstrap schema/seed freshness');
+  await bootstrapControlPlane(rt.httpPort);
+
+  await seedDefaultPlaybookBestEffort(
+    () => seedDefaultPlaybook(new PlaybooksService(createClientTransport('head'))),
+    (message) => console.log(`[e2e setup] ${message}`),
+  );
 }
 
 async function main(): Promise<void> {
@@ -95,16 +119,7 @@ async function main(): Promise<void> {
     await resetHome();
   }
 
-  if (!(await isBootstrapped())) {
-    console.log('[e2e setup] bootstrapping control-plane');
-    const rt = readRuntime();
-    if (!rt) throw new Error('standalone runtime missing before bootstrap');
-    await bootstrapControlPlane(rt.httpPort);
-    // Seed the built-in default playbook (Group M e2e relies on this), best-effort like `revo bootstrap`.
-    await seedDefaultPlaybookBestEffort(() =>
-      seedDefaultPlaybook(new PlaybooksService(createClientTransport('head'))),
-    );
-  }
+  await applyBootstrapAndDefaultSeed();
 
   await ensurePlaybook();
 }

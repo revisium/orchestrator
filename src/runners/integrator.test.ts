@@ -1472,11 +1472,15 @@ function readiness(opts: {
   pending?: string[];
   headSha?: string;
   evidence?: string[];
+  readinessVerdict?: PollPrReadiness['readinessVerdict'];
+  nextAction?: PollPrReadiness['nextAction'];
 }): PollPrReadiness {
   return {
     pr: { number: 5, headSha: opts.headSha ?? 'sha5' },
     checks: { pending: opts.pending ?? [], fail: opts.fail ?? [], list: opts.list ?? [{ name: 'build', result: 'SUCCESS' }] },
     reviewThreads: { items: opts.threads ?? [] },
+    ...(opts.readinessVerdict ? { readinessVerdict: opts.readinessVerdict } : {}),
+    ...(opts.nextAction ? { nextAction: opts.nextAction } : {}),
     evidence: opts.evidence ?? [`PR head ${opts.headSha ?? 'sha5'}`],
   };
 }
@@ -1526,7 +1530,12 @@ test('pollPr: CI failures with no review threads → ci_changes', async () => {
 
 test('pollPr: a failing NON-required (advisory) check → clean, NOT ci_changes (PR #135 fix)', async () => {
   const collect = async (): Promise<PollPrReadiness> =>
-    readiness({ fail: ['SonarCloud'], list: [{ name: 'Verify', result: 'SUCCESS' }, { name: 'SonarCloud', result: 'FAILURE' }] });
+    readiness({
+      fail: ['SonarCloud'],
+      list: [{ name: 'Verify', result: 'SUCCESS' }, { name: 'SonarCloud', result: 'FAILURE' }],
+      readinessVerdict: 'needs_work',
+      nextAction: 'developer_fix',
+    });
   // Only "Verify" is required; the failing "SonarCloud" is advisory → must NOT trigger a ciRework loop.
   const r = await pollPr(POLL_INPUT, pollDeps(collect, { requiredChecks: () => new Set(['Verify', 'E2E', 'Required checks']) }));
   assert.ok(!('needsHuman' in r));
@@ -1579,6 +1588,40 @@ test('pollPr: readiness human decision is not classified as clean', async () => 
   if (!('needsHuman' in r)) {
     assert.equal(r.verdict, 'review_changes', 'human review decisions must route away from the merge gate');
     assert.ok(r.evidence.some((item) => item.includes('readiness nextAction=human_decision')));
+  }
+});
+
+test('pollPr: readiness reviewer triage still routes to review changes', async () => {
+  const collect = async (): Promise<PollPrReadiness> =>
+    readiness({
+      evidence: ['Reviewer asked a question'],
+      readinessVerdict: 'needs_human',
+      nextAction: 'reviewer_triage',
+    });
+
+  const r = await pollPr(POLL_INPUT, pollDeps(collect, { reviewGracePolls: 0 }));
+
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) {
+    assert.equal(r.verdict, 'review_changes');
+    assert.ok(r.evidence.some((item) => item.includes('readiness nextAction=reviewer_triage')));
+  }
+});
+
+test('pollPr: readiness developer_fix without failing checks routes to review changes', async () => {
+  const collect = async (): Promise<PollPrReadiness> =>
+    readiness({
+      evidence: ['Sonar issue requires code change'],
+      readinessVerdict: 'needs_work',
+      nextAction: 'developer_fix',
+    });
+
+  const r = await pollPr(POLL_INPUT, pollDeps(collect, { reviewGracePolls: 0 }));
+
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) {
+    assert.equal(r.verdict, 'review_changes');
+    assert.ok(r.evidence.some((item) => item.includes('readiness nextAction=developer_fix')));
   }
 });
 

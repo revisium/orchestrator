@@ -1,7 +1,7 @@
 import { isGuardedBranch } from './types.js';
 import type { Condition, Node, Scope, Template } from './types.js';
 import { DiagSink } from './validate-sink.js';
-import { backwardReach, cycleNodes, findBackEdges, forwardReach, guardConditionsOf } from './validate-graph.js';
+import { backwardReach, branchSubgraph, cycleNodes, findBackEdges, forwardReach, guardConditionsOf } from './validate-graph.js';
 
 
 export function ruleLoopCap(template: Template, d: DiagSink): void {
@@ -131,16 +131,52 @@ function checkScopeStrictAncestry(template: Template, scopeId: string, d: DiagSi
 
 
 function checkScopeDoesNotSpanParallel(template: Template, scopeId: string, d: DiagSink): void {
-  const region = scopeRegionBetween(template, nodesIncrementing(template, scopeId), nodesReadingScope(template, scopeId));
+  const incrementSites = nodesIncrementing(template, scopeId);
+  const readers = nodesReadingScope(template, scopeId);
+  const region = scopeRegionBetween(template, incrementSites, readers);
+  const endpoints = new Set([...incrementSites, ...readers]);
   for (const id of region) {
     const node = template.nodes[id];
-    if (node && (node.kind === 'parallel' || node.kind === 'join')) {
+    if (node?.kind === 'parallel' && parallelBranchTouchesScope(template, node, endpoints)) {
       d.error('SCOPE_SPANS_PARALLEL', `scope "${scopeId}" spans a ${node.kind} boundary (${id})`, {
         nodeId: id,
         scope: scopeId,
       });
+    } else if (node?.kind === 'join') {
+      const owners = Object.values(template.nodes).filter((candidate) =>
+        candidate.kind === 'parallel' && candidate.join === id && region.has(candidate.id),
+      );
+      const safeJoin =
+        owners.length > 0 &&
+        owners.every((owner) => owner.kind === 'parallel' && !parallelBranchTouchesScope(template, owner, endpoints));
+      if (!safeJoin) {
+        d.error('SCOPE_SPANS_PARALLEL', `scope "${scopeId}" spans a ${node.kind} boundary (${id})`, {
+          nodeId: id,
+          scope: scopeId,
+        });
+      }
     }
   }
+}
+
+function parallelBranchTouchesScope(
+  template: Template,
+  parallelNode: Extract<Node, { kind: 'parallel' }>,
+  endpoints: Set<string>,
+): boolean {
+  const interior = parallelBranchInterior(template, parallelNode);
+  for (const endpoint of endpoints) {
+    if (interior.has(endpoint)) return true;
+  }
+  return false;
+}
+
+function parallelBranchInterior(template: Template, parallelNode: Extract<Node, { kind: 'parallel' }>): Set<string> {
+  const seen = new Set<string>();
+  for (const branch of parallelNode.branches) {
+    for (const id of branchSubgraph(template, branch.entry, parallelNode.join)) seen.add(id);
+  }
+  return seen;
 }
 
 

@@ -92,13 +92,19 @@ export const node = {
   parallel(id: string, branches: ParallelBranch[], join: string, opts: { displayName?: string } = {}): ParallelNode {
     return { id, kind: 'parallel', branches, join, ...(opts.displayName ? { displayName: opts.displayName } : {}) };
   },
-  join(id: string, joinMode: JoinMode, next: string, opts: { merge?: JoinNode['merge']; displayName?: string } = {}): JoinNode {
+  join(
+    id: string,
+    joinMode: JoinMode,
+    next: string,
+    opts: { merge?: JoinNode['merge']; verdictReducer?: JoinNode['verdictReducer']; displayName?: string } = {},
+  ): JoinNode {
     return {
       id,
       kind: 'join',
       joinMode,
       next,
       ...(opts.merge ? { merge: opts.merge } : {}),
+      ...(opts.verdictReducer ? { verdictReducer: opts.verdictReducer } : {}),
       ...(opts.displayName ? { displayName: opts.displayName } : {}),
     };
   },

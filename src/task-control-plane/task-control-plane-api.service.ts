@@ -1152,7 +1152,7 @@ export class TaskControlPlaneApiService {
     return {
       runId,
       state: 'running',
-      nextAction: 'wait_for_run again or inspect get_run_digest',
+      nextAction: 'wait for run state change or inspect get_run_digest',
       runStatus,
       workflowStatus,
       ...issueRefPart,

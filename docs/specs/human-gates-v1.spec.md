@@ -130,7 +130,7 @@ type RunStatusResult = {
   latestEventType?: string;
   inbox?: { id: string; kind: string; title: string; status: string; stepId?: string; optionCount: number };
   blockedReason?: string;
-  activity?: ObserveRunActivitySignal;
+  activity?: RunStatusActivitySummary;
 };
 ```
 
@@ -208,11 +208,11 @@ Contracts:
 
 ## Changelog
 
-- 2026-06-29: Replaced observe_run/wait_for_run/wait_for_any_gate/watch_runs with get_run_attention (primary),
-  get_run_status (neutral), and watch_run_changes (advanced delivery). Cursor moves to watch_run_changes only.
+- 2026-06-29: Replaced legacy run-observation tools with get_run_attention (primary), get_run_status
+  (neutral), and watch_run_changes (advanced delivery). Cursor moves to watch_run_changes only.
 - 2026-06-27: Documented that runner retry evidence uses existing observation surfaces without adding a new
-  observe_run state.
-- 2026-06-26: Added canonical `observe_run` low-context observation contract and documented older watch tools as
-  compatibility/diagnostic surfaces.
+  retry-specific state.
+- 2026-06-26: Added the initial low-context run-observation contract and documented older watch tools as
+  compatibility surfaces.
 - 2026-06-26: Initial spec extracted from current inbox/gate implementation, former inbox doc, and former
   plan 0018.

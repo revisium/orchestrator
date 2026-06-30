@@ -10,6 +10,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { makeDataDrivenTask, resolveRunnerTransientRetryPolicy, type DataDrivenProgressCursor, type DataDrivenTaskDeps, type GateSummary, type RunnerTransientRetryPolicy } from './data-driven-task.workflow.js';
 import { templateFromExecutionPolicy } from './data-driven-template.js';
 import { featureDevelopment, featureDevelopmentPrReview, confirmMergeFlow, localChange } from '../pipeline-core/kit/fixtures.js';
@@ -27,11 +28,20 @@ import type {
   RespondThreadsOutput,
   ProducedChangeArtifact,
 } from '../runners/integrator.js';
-import { template, node, on, otherwise, verdictEq, allOf, counterLt } from '../pipeline-core/kit/index.js';
+import { template, node, on, otherwise, verdictEq, allOf, counterLt, joinAll } from '../pipeline-core/kit/index.js';
 import { RUNNER_IDLE_TIMEOUT_KIND, RUNNER_WALL_CLOCK_LIMIT_KIND } from '../worker/process-executor.js';
 import type { IssueRef } from '../run/issue-ref.js';
 
 const RUN_ID = 'run-dd-001';
+
+type PipelineCatalogEntry = {
+  id: string;
+  execution_policy: unknown;
+};
+
+const defaultPlaybookPipelines = JSON.parse(
+  readFileSync(new URL('../../control-plane/default-playbook/catalog/pipelines.json', import.meta.url), 'utf8'),
+) as PipelineCatalogEntry[];
 
 function binding(roleId: string, resolvedRunnerId = 'script'): RouteRoleBinding {
   return { roleId, rowId: roleId, modelLevel: 'standard', runnerId: 'claude-code', resolvedRunnerId, runnerSource: 'playbook' };
@@ -58,6 +68,47 @@ function makeRoute(options: { developerRunnerId?: string; integratorRunnerId?: s
       binding('integrator', options.integratorRunnerId ?? 'revo-integrator'), // real-integrator runner → script:integrator resolves here
       binding('watcher'),
     ],
+    params: {},
+  };
+}
+
+function defaultCodexConsensusTemplate(): Template {
+  const pipeline = defaultPlaybookPipelines.find((candidate) => candidate.id === 'feature-development-codex-consensus');
+  assert.ok(pipeline, 'bundled feature-development-codex-consensus pipeline exists');
+  const parsed = templateFromExecutionPolicy(pipeline.execution_policy);
+  assert.ok(parsed, 'bundled feature-development-codex-consensus carries a valid template_json');
+  return parsed;
+}
+
+function codexBinding(roleId: string): RouteRoleBinding {
+  if (roleId === 'integrator') {
+    return { roleId, rowId: roleId, modelLevel: 'standard', runnerId: 'revo-integrator', resolvedRunnerId: 'revo-integrator', runnerSource: 'playbook' };
+  }
+  return { roleId, rowId: roleId, modelLevel: 'codex-standard', runnerId: 'codex', resolvedRunnerId: 'codex', runnerSource: 'playbook' };
+}
+
+function makeCodexConsensusRoute(): RouteDecision {
+  const roles = [
+    'orchestrator-codex',
+    'analyst-codex',
+    'reviewer-codex',
+    'triager-codex',
+    'developer-codex',
+    'integrator',
+    'watcher-codex',
+  ];
+  return {
+    playbookId: 'revisium-default',
+    pipelineId: 'feature-development-codex-consensus',
+    pipelineRowId: 'revisium-default-feature-development-codex-consensus',
+    source: 'explicit',
+    roles,
+    requiredRoles: roles,
+    optionalRoles: [],
+    routeGates: ['plan', 'merge'],
+    executionPolicy: {},
+    executionProfile: { id: 'test', runnerOverrides: {} },
+    roleBindings: roles.map(codexBinding),
     params: {},
   };
 }
@@ -292,6 +343,14 @@ function buildAdapter(opts: {
   };
 }
 
+function baseStepKey(stepKey: string): string {
+  return stepKey.includes('#') ? stepKey.slice(0, stepKey.indexOf('#')) : stepKey;
+}
+
+function attemptCount(rec: Recorder, nodeId: string): number {
+  return rec.runStepAttempts.filter((attempt) => baseStepKey(attempt.stepKey) === nodeId).length;
+}
+
 function singleDeveloperTemplate(pipelineId: string): Template {
   return template(pipelineId)
     .specVersion('1.0')
@@ -303,6 +362,64 @@ function singleDeveloperTemplate(pipelineId: string): Template {
         produces: { name: 'change' },
       }),
       node.terminal('done', 'succeeded'),
+    )
+    .build();
+}
+
+function parallelConsensusTemplate(): Template {
+  return template('parallel-consensus')
+    .specVersion('1.0')
+    .entry('fanout')
+    .domain('approved', 'clean', 'changes_requested', 'blocker')
+    .add(
+      node.parallel('fanout', [
+        { id: 'primary', entry: 'primaryReview' },
+        { id: 'secondary', entry: 'secondaryReview' },
+      ], 'reviewJoin'),
+      node.agent('primaryReview', 'role:reviewer', 'reviewJoin', {
+        resultSchema: 'schema:reviewVerdict',
+        produces: { name: 'review' },
+      }),
+      node.agent('secondaryReview', 'role:reviewer', 'reviewJoin', {
+        resultSchema: 'schema:reviewVerdict',
+        produces: { name: 'review' },
+      }),
+      node.join('reviewJoin', joinAll(), 'reviewRouter', {
+        merge: { reviews: 'appendByBranchOrder' },
+        verdictReducer: { kind: 'allIn', pass: ['approved', 'clean'], passVerdict: 'approved', failVerdict: 'changes_requested' },
+      }),
+      node.choice('reviewRouter', [on(verdictEq('approved'), 'done'), otherwise('blocked')]),
+      node.terminal('done', 'succeeded'),
+      node.terminal('blocked', 'blocked'),
+    )
+    .build();
+}
+
+function parallelConsensusAfterPreApprovedTemplate(): Template {
+  return template('parallel-consensus-after-pre-approved')
+    .specVersion('1.0')
+    .entry('precheck')
+    .domain('approved', 'clean', 'changes_requested', 'blocker')
+    .add(
+      node.agent('precheck', 'role:reviewer', 'fanout', {
+        resultSchema: 'schema:reviewVerdict',
+      }),
+      node.parallel('fanout', [
+        { id: 'primary', entry: 'primaryReview' },
+        { id: 'secondary', entry: 'secondaryBypass' },
+      ], 'reviewJoin'),
+      node.agent('primaryReview', 'role:reviewer', 'reviewJoin', {
+        resultSchema: 'schema:reviewVerdict',
+        produces: { name: 'review' },
+      }),
+      node.choice('secondaryBypass', [otherwise('reviewJoin')]),
+      node.join('reviewJoin', joinAll(), 'reviewRouter', {
+        merge: { reviews: 'appendByBranchOrder' },
+        verdictReducer: { kind: 'allIn', pass: ['approved', 'clean'], passVerdict: 'approved', failVerdict: 'changes_requested' },
+      }),
+      node.choice('reviewRouter', [on(verdictEq('approved'), 'done'), otherwise('blocked')]),
+      node.terminal('done', 'succeeded'),
+      node.terminal('blocked', 'blocked'),
     )
     .build();
 }
@@ -365,6 +482,281 @@ test('DD1: happy path — analyst→plan→developer→review→integrate→poll
   );
   assert.equal(rec.blocked.length, 0);
   assert.equal(rec.failed.length, 0);
+});
+
+test('DD-parallel: fork executes both reviewer branches and feeds two join arrivals', async () => {
+  const route = {
+    ...makeRoute(),
+    pipelineId: 'parallel-consensus',
+    requiredRoles: ['reviewer'],
+    roles: ['reviewer'],
+    routeGates: [],
+    roleBindings: [binding('reviewer')],
+  };
+  const { run, rec } = buildAdapter({
+    template: parallelConsensusTemplate(),
+    route,
+    verdicts: { primaryReview: 'approved', secondaryReview: 'approved' },
+  });
+
+  const result = await run();
+  assert.equal(result.status, 'succeeded');
+  assert.deepEqual(
+    rec.runStepAttempts.map((attempt) => attempt.stepKey).sort(),
+    ['primaryReview', 'secondaryReview'],
+  );
+  assert.deepEqual(
+    rec.outputs.map((o) => ({ nodeId: o.nodeId, ordinal: o.ordinal, name: o.name })).sort((a, b) => a.nodeId.localeCompare(b.nodeId)),
+    [
+      { nodeId: 'primaryReview', ordinal: 1, name: 'review' },
+      { nodeId: 'secondaryReview', ordinal: 1, name: 'review' },
+    ],
+  );
+  const joinProgress = rec.progress.find((cursor) =>
+    cursor.activeNodeIds.length === 1 &&
+    cursor.activeNodeIds[0] === 'reviewJoin' &&
+    cursor.lastResult?.joinArrivals?.length === 2,
+  );
+  assert.deepEqual(joinProgress?.lastResult?.joinArrivals, [
+    { branchId: 'primary', seq: 1, verdict: 'approved' },
+    { branchId: 'secondary', seq: 2, verdict: 'approved' },
+  ]);
+});
+
+test('DD-parallel: consensus passes when reviewers return approved plus clean', async () => {
+  const route = {
+    ...makeRoute(),
+    pipelineId: 'parallel-consensus',
+    requiredRoles: ['reviewer'],
+    roles: ['reviewer'],
+    routeGates: [],
+    roleBindings: [binding('reviewer')],
+  };
+  const { run, rec } = buildAdapter({
+    template: parallelConsensusTemplate(),
+    route,
+    verdicts: { primaryReview: 'approved', secondaryReview: 'clean' },
+  });
+
+  const result = await run();
+
+  assert.equal(result.status, 'succeeded');
+  const joinProgress = rec.progress.find((cursor) =>
+    cursor.activeNodeIds.length === 1 &&
+    cursor.activeNodeIds[0] === 'reviewJoin' &&
+    cursor.lastResult?.joinArrivals?.length === 2,
+  );
+  assert.deepEqual(joinProgress?.lastResult?.joinArrivals, [
+    { branchId: 'primary', seq: 1, verdict: 'approved' },
+    { branchId: 'secondary', seq: 2, verdict: 'clean' },
+  ]);
+});
+
+test('DD-parallel: branch without a verdict does not inherit the pre-fork verdict', async () => {
+  const route = {
+    ...makeRoute(),
+    pipelineId: 'parallel-consensus-after-pre-approved',
+    requiredRoles: ['reviewer'],
+    roles: ['reviewer'],
+    routeGates: [],
+    roleBindings: [binding('reviewer')],
+  };
+  const { run, rec } = buildAdapter({
+    template: parallelConsensusAfterPreApprovedTemplate(),
+    route,
+    verdicts: { precheck: 'approved', primaryReview: 'approved' },
+  });
+
+  const result = await run();
+
+  assert.equal(result.status, 'blocked');
+  const joinProgress = rec.progress.find((cursor) =>
+    cursor.activeNodeIds.length === 1 &&
+    cursor.activeNodeIds[0] === 'reviewJoin' &&
+    cursor.lastResult?.joinArrivals?.length === 2,
+  );
+  assert.deepEqual(joinProgress?.lastResult?.joinArrivals, [
+    { branchId: 'primary', seq: 1, verdict: 'approved' },
+    { branchId: 'secondary', seq: 2 },
+  ]);
+});
+
+test('DD-parallel: consensus blocks when either reviewer is non-approved, regardless of branch order', async () => {
+  const cases: Array<{ name: string; verdicts: Record<string, string> }> = [
+    {
+      name: 'primary requests changes, secondary approves',
+      verdicts: { primaryReview: 'changes_requested', secondaryReview: 'approved' },
+    },
+    {
+      name: 'primary approves, secondary requests changes',
+      verdicts: { primaryReview: 'approved', secondaryReview: 'changes_requested' },
+    },
+    {
+      name: 'primary approves, secondary blocks',
+      verdicts: { primaryReview: 'approved', secondaryReview: 'blocker' },
+    },
+    {
+      name: 'primary is clean, secondary requests changes',
+      verdicts: { primaryReview: 'clean', secondaryReview: 'changes_requested' },
+    },
+  ];
+
+  for (const c of cases) {
+    const route = {
+      ...makeRoute(),
+      pipelineId: 'parallel-consensus',
+      requiredRoles: ['reviewer'],
+      roles: ['reviewer'],
+      routeGates: [],
+      roleBindings: [binding('reviewer')],
+    };
+    const { run, rec } = buildAdapter({
+      template: parallelConsensusTemplate(),
+      route,
+      verdicts: c.verdicts,
+    });
+
+    const result = await run();
+
+    assert.equal(result.status, 'blocked', c.name);
+    assert.deepEqual(
+      rec.outputs.map((o) => ({ nodeId: o.nodeId, name: o.name })).sort((a, b) => a.nodeId.localeCompare(b.nodeId)),
+      [
+        { nodeId: 'primaryReview', name: 'review' },
+        { nodeId: 'secondaryReview', name: 'review' },
+      ],
+      `${c.name}: both reviewer outputs are still recorded before the consensus verdict routes`,
+    );
+  }
+});
+
+test('DD-parallel: consensus blocks when both reviewers are non-approved', async () => {
+  const route = {
+    ...makeRoute(),
+    pipelineId: 'parallel-consensus',
+    requiredRoles: ['reviewer'],
+    roles: ['reviewer'],
+    routeGates: [],
+    roleBindings: [binding('reviewer')],
+  };
+  const { run, rec } = buildAdapter({
+    template: parallelConsensusTemplate(),
+    route,
+    verdicts: { primaryReview: 'changes_requested', secondaryReview: 'blocker' },
+  });
+
+  const result = await run();
+
+  assert.equal(result.status, 'blocked');
+  const joinProgress = rec.progress.find((cursor) =>
+    cursor.activeNodeIds.length === 1 &&
+    cursor.activeNodeIds[0] === 'reviewJoin' &&
+    cursor.lastResult?.joinArrivals?.length === 2,
+  );
+  assert.deepEqual(joinProgress?.lastResult?.joinArrivals, [
+    { branchId: 'primary', seq: 1, verdict: 'changes_requested' },
+    { branchId: 'secondary', seq: 2, verdict: 'blocker' },
+  ]);
+});
+
+test('DD-default-codex: plan consensus reworks when one reviewer is non-approved, then proceeds after both pass', async () => {
+  const { run, rec } = buildAdapter({
+    template: defaultCodexConsensusTemplate(),
+    route: makeCodexConsensusRoute(),
+    verdicts: {
+      planReviewPrimary: ['changes_requested', 'approved'],
+      planReviewSecondary: ['approved', 'clean'],
+      codeReviewPrimary: 'approved',
+      codeReviewSecondary: 'approved',
+    },
+    gate: () => ({ decision: 'approve' }),
+  });
+
+  const result = await run();
+
+  assert.equal(result.status, 'succeeded');
+  assert.equal(attemptCount(rec, 'analyst'), 2, 'plan rework reruns the analyst once');
+  assert.equal(attemptCount(rec, 'planReviewPrimary'), 2);
+  assert.equal(attemptCount(rec, 'planReviewSecondary'), 2);
+  assert.equal(attemptCount(rec, 'developer'), 1, 'developer starts only after plan consensus passes');
+  assert.equal(attemptCount(rec, 'codeReviewPrimary'), 1);
+  assert.equal(rec.integrateCalls, 1);
+  assert.deepEqual(rec.gateSummaries.map((summary) => summary.nodeId), ['planGate', 'mergeGate']);
+});
+
+test('DD-default-codex: code consensus reworks when one reviewer is non-approved, then integrates after both pass', async () => {
+  const { run, rec } = buildAdapter({
+    template: defaultCodexConsensusTemplate(),
+    route: makeCodexConsensusRoute(),
+    verdicts: {
+      planReviewPrimary: 'approved',
+      planReviewSecondary: 'approved',
+      codeReviewPrimary: ['approved', 'clean'],
+      codeReviewSecondary: ['blocker', 'approved'],
+    },
+    gate: () => ({ decision: 'approve' }),
+  });
+
+  const result = await run();
+
+  assert.equal(result.status, 'succeeded');
+  assert.equal(attemptCount(rec, 'developer'), 1);
+  assert.equal(attemptCount(rec, 'reworkDeveloper'), 1, 'code consensus failure routes through developer rework');
+  assert.equal(attemptCount(rec, 'codeReviewPrimary'), 2);
+  assert.equal(attemptCount(rec, 'codeReviewSecondary'), 2);
+  assert.equal(rec.integrateCalls, 1, 'integrator runs only after the reworked code consensus passes');
+  assert.deepEqual(rec.gateSummaries.map((summary) => summary.nodeId), ['planGate', 'mergeGate']);
+});
+
+test('DD-default-codex: repeated plan consensus failures hit planStuckGate at the cap', async () => {
+  const { run, rec } = buildAdapter({
+    template: defaultCodexConsensusTemplate(),
+    route: makeCodexConsensusRoute(),
+    verdicts: {
+      planReviewPrimary: 'changes_requested',
+      planReviewSecondary: 'approved',
+    },
+    gate: () => ({ decision: 'reject' }),
+  });
+
+  const result = await run();
+
+  assert.equal(result.status, 'blocked');
+  assert.equal(attemptCount(rec, 'analyst'), 4);
+  assert.equal(attemptCount(rec, 'planReviewPrimary'), 4);
+  assert.equal(attemptCount(rec, 'planReviewSecondary'), 4);
+  assert.equal(attemptCount(rec, 'developer'), 0, 'developer never runs before plan consensus is unstuck');
+  assert.equal(rec.integrateCalls, 0);
+  assert.deepEqual(rec.gateSummaries.map((summary) => summary.nodeId), ['planStuckGate']);
+});
+
+test('DD-default-codex: repeated code consensus failures hit codeStuckGate at the cap', async () => {
+  let planTopicGates = 0;
+  const { run, rec } = buildAdapter({
+    template: defaultCodexConsensusTemplate(),
+    route: makeCodexConsensusRoute(),
+    verdicts: {
+      planReviewPrimary: 'approved',
+      planReviewSecondary: 'approved',
+      codeReviewPrimary: 'approved',
+      codeReviewSecondary: 'changes_requested',
+    },
+    gate: (topic) => {
+      if (topic !== 'plan') return { decision: 'approve' };
+      planTopicGates++;
+      return planTopicGates === 1 ? { decision: 'approve' } : { decision: 'reject' };
+    },
+  });
+
+  const result = await run();
+
+  assert.equal(result.status, 'blocked');
+  assert.equal(attemptCount(rec, 'developer'), 1);
+  assert.equal(attemptCount(rec, 'reworkDeveloper'), 3);
+  assert.equal(attemptCount(rec, 'codeReviewPrimary'), 4);
+  assert.equal(attemptCount(rec, 'codeReviewSecondary'), 4);
+  assert.equal(rec.integrateCalls, 0, 'integrator never runs before code consensus is unstuck');
+  assert.deepEqual(rec.gateSummaries.map((summary) => summary.nodeId), ['planGate', 'codeStuckGate']);
 });
 
 test('DD1b: adapter publishes graph progress cursors through its sealed dep', async () => {

@@ -4,7 +4,7 @@ import { createClientTransport, type ControlPlaneTransport } from './client-tran
 export type Role = {
   name: string;
   systemPrompt: string;
-  modelLevel: 'cheap' | 'standard' | 'deep';
+  modelLevel: ModelLevel;
   effort: string;
   runner: string;
   allowedTools: string[];
@@ -40,7 +40,7 @@ export const DEFAULT_PIPELINE_POLICY: PipelinePolicy = {
 };
 
 export type ModelProfile = {
-  level: 'cheap' | 'standard' | 'deep';
+  level: ModelLevel;
   provider: string;
   modelId: string;
   params: unknown;
@@ -48,7 +48,16 @@ export type ModelProfile = {
   costPerOutput: number;
 };
 
-const VALID_MODEL_LEVELS = ['cheap', 'standard', 'deep'] as const;
+export const VALID_MODEL_LEVELS = [
+  'cheap',
+  'standard',
+  'deep',
+  'codex-cheap',
+  'codex-standard',
+  'codex-deep',
+] as const;
+
+export type ModelLevel = (typeof VALID_MODEL_LEVELS)[number];
 
 function toModelLevel(raw: unknown): Role['modelLevel'] {
   const s = toStr(raw) || 'standard';

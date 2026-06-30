@@ -73,7 +73,7 @@ function question(runId: string, inboxId = 'q1'): RunState {
 const running = (runId: string): RunState => ({
   runId,
   state: 'running',
-  nextAction: 'wait_for_run again',
+  nextAction: 'wait for run state change',
   runStatus: 'running',
   workflowStatus: 'PENDING',
 });

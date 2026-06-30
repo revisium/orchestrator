@@ -230,6 +230,57 @@ test('join all forwards the last recorded arrival; the fork→join→router path
   assert.deepEqual(result.path, ['fanout', 'doneEnd']);
 });
 
+test('join verdictReducer allIn blocks when an earlier branch is non-passing even if the last arrival passes', () => {
+  const t = parallelReview('all');
+  const reviewJoin = t.nodes['reviewJoin'];
+  assert.equal(reviewJoin?.kind, 'join');
+  if (reviewJoin?.kind !== 'join') throw new Error('unreachable');
+  t.nodes['reviewJoin'] = { ...reviewJoin, verdictReducer: { kind: 'allIn', pass: ['clean'], passVerdict: 'clean', failVerdict: 'dirty' } };
+  const result = drive(t, {
+    reviewJoin: { joinArrivals: [{ branchId: 'sec', seq: 1, verdict: 'dirty' }, { branchId: 'perf', seq: 2, verdict: 'clean' }] },
+  });
+  assertReachesTerminal(result, 'blocked');
+});
+
+test('join verdictReducer allIn passes approved plus clean when both are in the pass set', () => {
+  const t = parallelReview('all');
+  const reviewJoin = t.nodes['reviewJoin'];
+  assert.equal(reviewJoin?.kind, 'join');
+  if (reviewJoin?.kind !== 'join') throw new Error('unreachable');
+  t.nodes['reviewJoin'] = {
+    ...reviewJoin,
+    verdictReducer: { kind: 'allIn', pass: ['approved', 'clean'], passVerdict: 'clean', failVerdict: 'dirty' },
+  };
+  const result = drive(t, {
+    reviewJoin: { joinArrivals: [{ branchId: 'sec', seq: 1, verdict: 'approved' }, { branchId: 'perf', seq: 2, verdict: 'clean' }] },
+  });
+  assertReachesTerminal(result, 'succeeded');
+});
+
+test('join verdictReducer allIn blocks when the last branch is non-passing', () => {
+  const t = parallelReview('all');
+  const reviewJoin = t.nodes['reviewJoin'];
+  assert.equal(reviewJoin?.kind, 'join');
+  if (reviewJoin?.kind !== 'join') throw new Error('unreachable');
+  t.nodes['reviewJoin'] = { ...reviewJoin, verdictReducer: { kind: 'allIn', pass: ['clean'], passVerdict: 'clean', failVerdict: 'dirty' } };
+  const result = drive(t, {
+    reviewJoin: { joinArrivals: [{ branchId: 'sec', seq: 1, verdict: 'clean' }, { branchId: 'perf', seq: 2, verdict: 'dirty' }] },
+  });
+  assertReachesTerminal(result, 'blocked');
+});
+
+test('join verdictReducer allIn treats a missing branch verdict as non-passing', () => {
+  const t = parallelReview('all');
+  const reviewJoin = t.nodes['reviewJoin'];
+  assert.equal(reviewJoin?.kind, 'join');
+  if (reviewJoin?.kind !== 'join') throw new Error('unreachable');
+  t.nodes['reviewJoin'] = { ...reviewJoin, verdictReducer: { kind: 'allIn', pass: ['clean'], passVerdict: 'clean', failVerdict: 'dirty' } };
+  const result = drive(t, {
+    reviewJoin: { joinArrivals: [{ branchId: 'sec', seq: 1, verdict: 'clean' }, { branchId: 'perf', seq: 2 }] },
+  });
+  assertReachesTerminal(result, 'blocked');
+});
+
 test('selectJoinWinner: any picks lowest recorded seq (branchId tie-break)', () => {
   const arrivals: JoinArrival[] = [
     { branchId: 'perf', seq: 5, verdict: 'dirty' },

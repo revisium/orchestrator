@@ -115,7 +115,7 @@ function mapRole(root: string, playbookId: string, role: RoleCatalogRecord, now:
       name: role.id,
       system_prompt: prompt.prompt || `Code-backed role imported from playbook role ${role.id}.`,
       model_level: role.defaultModelLevel,
-      effort: role.defaultModelLevel === 'cheap' ? 'low' : 'high',
+      effort: role.defaultModelLevel.endsWith('cheap') ? 'low' : 'high',
       runner: role.runnerId,
       runner_id: role.runnerId,
       allowed_tools: [...role.allowedTools],

@@ -22,8 +22,9 @@ import { validateTemplate } from '../pipeline-core/index.js';
 //
 // Distinct from Groups A–L, which install the e2e FIXTURE playbook (`revisium-agent-playbook`). This
 // group proves the SHIPPED DEFAULT: a fresh `revo bootstrap` seeds `revisium-default` (committed under
-// control-plane/default-playbook/) so the control-plane has a working `feature-development` +
-// `local-change` pipeline out-of-the-box — no external agent-playbook repo, no fixture override.
+// control-plane/default-playbook/) so the control-plane has working `feature-development`,
+// `feature-development-codex-consensus`, and `local-change` pipelines out-of-the-box — no external
+// agent-playbook repo, no fixture override.
 //
 // The bootstrap in scripts/e2e-setup.ts already seeds the default; givenSeededDefaultPlaybook only
 // self-heals a reused test home that predates this slice (and never installs the fixture). The agent
@@ -48,18 +49,30 @@ test('M0: the bootstrap-seeded default playbook + pipelines are present and vali
   const playbooks = await h.api.listPlaybooks();
   assert.ok(playbooks.some((p) => p.id === DEFAULT_PLAYBOOK_ID), 'the seeded default playbook is installed');
 
-  // Both seeded pipelines exist under the default playbook and carry a data-driven template that
+  // Seeded pipelines exist under the default playbook and carry a data-driven template that
   // passes the AUTHORITATIVE validator (pipeline-core.validateTemplate) with zero errors.
-  for (const pipelineId of ['feature-development', 'local-change']) {
+  for (const pipelineId of ['feature-development', 'feature-development-codex-consensus', 'local-change']) {
     const route = (await h.api.simulateRoute({
       title: 'route',
       pipeline: pipelineId,
       playbookId: DEFAULT_PLAYBOOK_ID,
     })) as unknown as {
       pipelineId: string;
+      roles?: string[];
       executionPolicy: { template_json?: { specVersion?: string; nodes?: Record<string, unknown> } };
     };
     assert.equal(route.pipelineId, pipelineId);
+    if (pipelineId === 'feature-development-codex-consensus') {
+      assert.deepEqual(route.roles, [
+        'orchestrator-codex',
+        'analyst-codex',
+        'reviewer-codex',
+        'triager-codex',
+        'developer-codex',
+        'integrator',
+        'watcher-codex',
+      ]);
+    }
     const template = route.executionPolicy.template_json;
     assert.ok(template?.specVersion === '1.0' && template.nodes, `${pipelineId} carries a state-machine template`);
     const errors = validateTemplate(template as never).filter((d) => d.severity === 'error');
@@ -96,6 +109,32 @@ test('M1: a seeded feature-development run drives plan→merge to completed on r
   const roles = executedRoles(h, run.runId).map(([role]) => role);
   for (const roleId of ['analyst', 'developer', 'reviewer']) {
     assert.ok(roles.includes(roleId), `${roleId} executed via its resolved capability handle`);
+  }
+});
+
+test('M1b: a seeded Codex consensus run executes both plan and code reviewer branches', { skip: e2eSkip }, async () => {
+  const run = await h.api.createRun({
+    repo: process.cwd(),
+    title: 'E2E seeded default Codex consensus run',
+    description: 'Group M — Codex-bound default feature pipeline with plan + code consensus.',
+    scope: 'seeded-default codex consensus e2e',
+    playbookId: DEFAULT_PLAYBOOK_ID,
+    pipelineId: 'feature-development-codex-consensus',
+    executionProfile: { runnerOverrides: { codex: 'stub-agent', 'revo-integrator': 'stub-agent' } },
+    start: true,
+  });
+  if (!('workflow' in run)) throw new Error('start:true must return workflow metadata');
+  assert.equal((run.workflow as { engine?: string }).engine, 'data-driven', 'the Codex seeded pipeline routes to the data-driven engine');
+
+  const terminal = await approveUntilTerminal(h.api, run.runId);
+  assert.equal(terminal.state, 'completed');
+  assert.deepEqual(terminal.approvedTopics, ['plan', 'merge'], 'both seeded humanGate nodes opened in order');
+  await assertEventsPresent(h.api, run.runId, ['pipeline_fork', 'run_completed']);
+
+  const roles = executedRoles(h, run.runId).map(([role]) => role);
+  assert.equal(roles.filter((role) => role === 'reviewer-codex').length, 4, 'two plan reviewers + two code reviewers executed');
+  for (const roleId of ['analyst-codex', 'developer-codex', 'reviewer-codex']) {
+    assert.ok(roles.includes(roleId), `${roleId} executed via the Codex-bound route binding`);
   }
 });
 

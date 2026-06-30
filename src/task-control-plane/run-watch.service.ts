@@ -30,7 +30,7 @@ export type WatchResult = {
   timedOut: boolean;
 };
 
-export type ObserveRunNextAction = 'start_run' | 'wait' | 'ask_human' | 'inspect_digest' | 'inspect_log' | 'done';
+export type RunAttentionNextAction = 'start_run' | 'wait' | 'ask_human' | 'inspect_digest' | 'inspect_log' | 'done';
 
 export type ObservedInboxSummary = {
   id: string;
@@ -41,7 +41,7 @@ export type ObservedInboxSummary = {
   optionCount: number;
 };
 
-export type ObserveRunActivitySignal = {
+export type RunStatusActivitySummary = {
   aggregateStatus: string;
   latestActivityAt: string;
   latestOutputAt?: string;
@@ -54,7 +54,7 @@ export type RunAttentionResult = {
   runId: string;
   state: RunState['state'];
   requiresAttention: boolean;
-  nextAction: ObserveRunNextAction;
+  nextAction: RunAttentionNextAction;
   issueRef?: RunState['issueRef'];
   inbox?: ObservedInboxSummary;
   blockedReason?: string;
@@ -72,7 +72,7 @@ export type RunStatusResult = {
   latestEventType?: string;
   inbox?: ObservedInboxSummary;
   blockedReason?: string;
-  activity?: ObserveRunActivitySignal;
+  activity?: RunStatusActivitySummary;
 };
 
 export type WatchRunChangesInput = {
@@ -101,7 +101,7 @@ const WAKEUP_DEBOUNCE_MS = 75;
 const POLL_INTERVAL_MS = 500;
 const ACTIVITY_READ_TIMEOUT_MS = 250;
 
-const OBSERVE_TRANSITION_STATES: ReadonlySet<RunState['state']> = new Set([
+const WATCH_TRANSITION_STATES: ReadonlySet<RunState['state']> = new Set([
   'ready',
   'pending_gate',
   'question',
@@ -111,7 +111,7 @@ const OBSERVE_TRANSITION_STATES: ReadonlySet<RunState['state']> = new Set([
   'retrying',
 ]);
 const TERMINAL_RUN_STATUS: ReadonlySet<string> = new Set(['completed', 'failed', 'cancelled']);
-const REQUIRES_ATTENTION: ReadonlySet<ObserveRunNextAction> = new Set(['start_run', 'ask_human', 'inspect_digest', 'inspect_log']);
+const REQUIRES_ATTENTION: ReadonlySet<RunAttentionNextAction> = new Set(['start_run', 'ask_human', 'inspect_digest', 'inspect_log']);
 
 const MAX_CURSOR_ENTRIES = 200;
 export const MAX_WATCH_CURSOR_CHARS = 8_192;
@@ -189,7 +189,7 @@ export class RunWatchService {
       this.readActivitySignal(runId),
     ]);
     const activity = shouldExposeActivitySignal(state, rawActivity) ? rawActivity : undefined;
-    const nextAction = observeNextAction(state, activity);
+    const nextAction = deriveRunAttentionNextAction(state, activity);
     const activeAttempt = shouldExposeActiveAttempt(state, activity) ? activity?.attempt : undefined;
     const inbox = compactInbox(state.inbox);
     return {
@@ -235,7 +235,7 @@ export class RunWatchService {
         timeoutMs: input.timeoutMs,
         signal: input.signal,
       },
-      OBSERVE_TRANSITION_STATES,
+      WATCH_TRANSITION_STATES,
     );
   }
 
@@ -469,10 +469,10 @@ function shouldExposeActivitySignal(
   return state.state !== 'completed';
 }
 
-function observeNextAction(
+function deriveRunAttentionNextAction(
   state: Pick<RunState, 'state' | 'runStatus'>,
   activity: CanonicalActivitySignal | undefined,
-): ObserveRunNextAction {
+): RunAttentionNextAction {
   switch (state.state) {
     case 'ready':
       return 'start_run';
@@ -492,7 +492,7 @@ function observeNextAction(
   }
 }
 
-function compactActivity(activity: CanonicalActivitySignal | undefined): ObserveRunActivitySignal | undefined {
+function compactActivity(activity: CanonicalActivitySignal | undefined): RunStatusActivitySummary | undefined {
   if (!activity) return undefined;
   return {
     aggregateStatus: activity.aggregateStatus,
@@ -505,7 +505,7 @@ function compactActivity(activity: CanonicalActivitySignal | undefined): Observe
 }
 
 function suggestedTools(state: Pick<RunState, 'state' | 'runStatus'>, activity: CanonicalActivitySignal | undefined): string[] {
-  const nextAction = observeNextAction(state, activity);
+  const nextAction = deriveRunAttentionNextAction(state, activity);
   if (nextAction === 'inspect_log') return ['get_agent_log'];
   if (nextAction === 'inspect_digest') return ['get_run_digest'];
   if (nextAction === 'ask_human') return ['get_inbox_item', 'approve_gate', 'reject_gate', 'answer_question'];

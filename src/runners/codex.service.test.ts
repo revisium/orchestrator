@@ -35,7 +35,7 @@ function codexOutput(output: Record<string, unknown>): string {
     type: 'turn.completed',
     output: {
       verdict: 'approved',
-      output,
+      output: JSON.stringify(output),
       artifacts: null,
       nextSteps: [],
       needsHuman: false,
@@ -72,7 +72,7 @@ test('CodexService uses injected fake ProcessExecutor and resolves cwd from RunS
     profile: {
       level: 'standard',
       provider: 'openai',
-      modelId: 'gpt-5-codex',
+      modelId: 'gpt-5.5',
       params: {},
       costPerInput: 2,
       costPerOutput: 8,
@@ -102,7 +102,7 @@ test('CodexService uses injected fake ProcessExecutor and resolves cwd from RunS
   assert.equal(spawnCalled, true, 'fake executor must be called');
   assert.equal(capturedCommand, 'codex');
   assert.equal(capturedCwd, '/tmp', 'cwd must be resolved from tasks.repo_ref via RunService');
-  assert.deepEqual(result.output, { echo: 'test output' });
+  assert.equal(result.output, '{"echo":"test output"}');
 });
 
 test('CodexService.run is an arrow property and safe to pass unbound', () => {

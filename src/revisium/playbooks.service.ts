@@ -16,6 +16,7 @@ export type PlaybookSummary = {
   version: string;
   source: string;
   schemaVersion: number;
+  catalogHash?: string;
 };
 
 export type PipelineSummary = {
@@ -121,6 +122,7 @@ export class PlaybooksService {
         version: str(data.version),
         source: str(data.source),
         schemaVersion: num(data.schema_version),
+        ...(str(data.catalog_hash) ? { catalogHash: str(data.catalog_hash) } : {}),
       }];
     });
   }
@@ -141,6 +143,7 @@ export class PlaybooksService {
       version: str(data.version),
       source: str(data.source),
       schemaVersion: num(data.schema_version),
+      ...(str(data.catalog_hash) ? { catalogHash: str(data.catalog_hash) } : {}),
     };
   }
 

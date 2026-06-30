@@ -254,6 +254,7 @@ function compactFeedbackItems(value: unknown): JsonRecord[] {
     summary: compactText(item.summary),
     severity: asString(item.severity),
     path: asString(item.path),
+    location: asString(item.location),
     line: asNumber(item.line),
     author: asString(item.author),
     provider: asString(item.provider),
@@ -269,9 +270,11 @@ function compactFeedback(value: unknown): unknown {
   if (!feedback) return value;
   return definedEntries({
     developerFixes: compactFeedbackItems(feedback.developerFixes),
+    reviewerQuestions: compactFeedbackItems(feedback.reviewerQuestions),
     humanDecisions: compactFeedbackItems(feedback.humanDecisions),
     providerWait: compactFeedbackItems(feedback.providerWait),
     ignoredNoise: compactFeedbackItems(feedback.ignoredNoise),
+    residualRisks: compactStringArray(feedback.residualRisks),
   });
 }
 
@@ -302,8 +305,8 @@ function compactCiSummary(value: unknown): unknown {
     reviewDecision: asString(summary.reviewDecision),
     mergeable: asString(summary.mergeable),
     issueRef: summary.issueRef,
-    sonar_issues: asNumber(summary.sonar_issues),
-    sonar_hotspots_to_review: asNumber(summary.sonar_hotspots_to_review),
+    sonar_issues: compactRecordArray(summary.sonar_issues).length,
+    sonar_hotspots_to_review: compactRecordArray(summary.sonar_hotspots_to_review).length,
     sonar_unavailable: summary.sonar_unavailable,
     humanReviewCount: compactRecordArray(summary.human_reviews).length,
     humanCommentCount: compactRecordArray(summary.human_comments).length,

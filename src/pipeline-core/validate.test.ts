@@ -220,19 +220,38 @@ test('rule 7: a parent cycle in scopes → SCOPE_CYCLE', () => {
   assertHasDiagnostic(t, 'SCOPE_CYCLE');
 });
 
-test('rule 7: a counter incremented before a fan-out and read after the join → SCOPE_SPANS_PARALLEL', () => {
-  const t = template('inv')
+test('rule 7: a counter loop may wrap fan-out when branch bodies do not touch that scope', () => {
+  const t = template('valid')
     .specVersion('1.0')
-    .entry('inc')
+    .entry('fanout')
     .domain('again', 'done')
     .scope('L', { cap: 2, parent: null })
     .add(
-      node.agent('inc', 'role:x', 'fanout', { incrementCounters: ['L'] }),
       node.parallel('fanout', [{ id: 'a', entry: 'aw' }, { id: 'b', entry: 'bw' }], 'j'),
       node.agent('aw', 'role:y', 'j'),
       node.agent('bw', 'role:z', 'j'),
       node.join('j', joinAll(), 'router', { merge: { f: 'overwrite' } }),
-      node.choice('router', [on(counterLt('L', 2), 'inc'), otherwise('doneEnd')]),
+      node.choice('router', [on(counterLt('L', 2), 'fanout'), otherwise('doneEnd')], {
+        incrementCounters: ['L'],
+      }),
+      node.terminal('doneEnd', 'succeeded'),
+    )
+    .build();
+  assertValid(t);
+});
+
+test('rule 7: a counter used inside a fan-out branch and read after the join → SCOPE_SPANS_PARALLEL', () => {
+  const t = template('inv')
+    .specVersion('1.0')
+    .entry('fanout')
+    .domain('again', 'done')
+    .scope('L', { cap: 2, parent: null })
+    .add(
+      node.parallel('fanout', [{ id: 'a', entry: 'aw' }, { id: 'b', entry: 'bw' }], 'j'),
+      node.agent('aw', 'role:y', 'j', { incrementCounters: ['L'] }),
+      node.agent('bw', 'role:z', 'j'),
+      node.join('j', joinAll(), 'router', { merge: { f: 'overwrite' } }),
+      node.choice('router', [on(counterLt('L', 2), 'fanout'), otherwise('doneEnd')]),
       node.terminal('doneEnd', 'succeeded'),
     )
     .build();
@@ -249,6 +268,23 @@ test('rule 8: quorum K > N → QUORUM_K_GT_N', () => {
 
 test('rule 8: a cross-branch goto → BRANCH_CROSS_GOTO', () => {
   assertHasDiagnostic(invalidCrossBranchGoto(), 'BRANCH_CROSS_GOTO');
+});
+
+test('rule 8: a branch that can terminate before its join → BRANCH_TERMINAL_BEFORE_JOIN', () => {
+  const t = template('inv')
+    .entry('fanout')
+    .domain('approved')
+    .add(
+      node.parallel('fanout', [{ id: 'a', entry: 'aw' }, { id: 'b', entry: 'bw' }], 'j'),
+      node.choice('aw', [on(verdictEq('approved'), 'j'), otherwise('earlyEnd')]),
+      node.agent('bw', 'role:y', 'j'),
+      node.join('j', joinAll(), 'end', { merge: { f: 'overwrite' } }),
+      node.terminal('earlyEnd', 'blocked'),
+      node.terminal('end', 'succeeded'),
+    )
+    .build();
+
+  assertHasDiagnostic(t, 'BRANCH_TERMINAL_BEFORE_JOIN');
 });
 
 test('rule 8: a multi-writer fan-out with no merge → MERGE_MISSING', () => {
@@ -294,6 +330,41 @@ test('rule 9: a domain label shadowing a core label → VERDICT_DOMAIN_SHADOWS_C
 
 test('rule 9: a gate outcome outside domain → GATE_OUTCOME_NOT_SUBSET', () => {
   assertDiagnostics(invalidGateOutcomeNotSubset(), ['GATE_OUTCOME_NOT_SUBSET']);
+});
+
+test('rule 9: a join verdictReducer label outside domain → VERDICT_UNDECLARED', () => {
+  const t = parallelReview('all');
+  (t.nodes['reviewJoin'] as {
+    verdictReducer?: { kind: 'allIn'; pass: string[]; passVerdict: string; failVerdict: string };
+  }).verdictReducer = {
+    kind: 'allIn',
+    pass: ['clean'],
+    passVerdict: 'approved',
+    failVerdict: 'changes_requested',
+  };
+  assertHasDiagnostic(t, 'VERDICT_UNDECLARED');
+});
+
+test('rule 9: a join verdictReducer with an unknown kind → VERDICT_REDUCER_BAD_KIND', () => {
+  const t = parallelReview('all');
+  (t.nodes['reviewJoin'] as { verdictReducer?: unknown }).verdictReducer = {
+    kind: 'some',
+    pass: ['clean'],
+    passVerdict: 'clean',
+    failVerdict: 'dirty',
+  };
+  assertHasDiagnostic(t, 'VERDICT_REDUCER_BAD_KIND');
+});
+
+test('rule 9: a malformed join verdictReducer allIn shape → VERDICT_REDUCER_BAD_SHAPE', () => {
+  const t = parallelReview('all');
+  (t.nodes['reviewJoin'] as { verdictReducer?: unknown }).verdictReducer = {
+    kind: 'allIn',
+    pass: 'clean',
+    passVerdict: 'clean',
+    failVerdict: 'dirty',
+  };
+  assertHasDiagnostic(t, 'VERDICT_REDUCER_BAD_SHAPE');
 });
 
 test('rule 9: a declared-but-unused domain label → VERDICT_DECLARED_UNUSED (warning)', () => {
