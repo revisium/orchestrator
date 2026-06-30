@@ -1191,11 +1191,7 @@ export class TaskControlPlaneApiService {
   async approveGate(input: { inboxId: string; resolvedBy?: string }) {
     const item = await this.getInboxItem(input.inboxId);
     const outcomes = gateDeclaredOutcomes(item);
-    if (outcomes.length === 0) {
-      const resolvedBy = input.resolvedBy ?? 'mcp';
-      return this.resolveLegacyGate(item, { decision: 'approve', resolvedBy }, resolvedBy, input.inboxId);
-    }
-    if (outcomes.length === 1 && outcomes[0] === 'approved') {
+    if (outcomes.length === 0 || (outcomes.length === 1 && outcomes[0] === 'approved')) {
       const resolvedBy = input.resolvedBy ?? 'mcp';
       return this.resolveLegacyGate(item, { decision: 'approve', resolvedBy }, resolvedBy, input.inboxId);
     }
