@@ -601,6 +601,26 @@ test('rule 14: two nodes producing the same name → PRODUCES_NAME_DUP (warning)
   assert.equal(assertHasDiagnostic(t, 'PRODUCES_NAME_DUP').severity, 'warning');
 });
 
+test('rule 14: a human gate and an effect node producing the same name → PRODUCES_NAME_DUP (warning)', () => {
+  const t = template('df')
+    .specVersion('1.0')
+    .entry('a')
+    .domain('approved', 'abort')
+    .add(
+      node.agent('a', 'role:x', 'g', { produces: { name: 'gateResolution' } }),
+      node.humanGate(
+        'g',
+        'approval',
+        ['approved', 'abort'],
+        [on(verdictEq('approved'), 'done'), otherwise('done')],
+        { produces: { name: 'gateResolution' } },
+      ),
+      node.terminal('done', 'succeeded'),
+    )
+    .build();
+  assert.equal(assertHasDiagnostic(t, 'PRODUCES_NAME_DUP').severity, 'warning');
+});
+
 const dfLoop = (ref: ConsumesRef) =>
   template('df')
     .specVersion('1.0')

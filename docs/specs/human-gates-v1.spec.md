@@ -22,6 +22,7 @@ type HumanGateNode = {
   branches: Branch[];
   timeout?: { after: string; goto: string };
   incrementCounters?: string[];
+  produces?: { name: string };
   gatedArtifact?: {
     node: string;
     as?: string;
@@ -40,6 +41,8 @@ Rules:
 - Branch guards route on the human verdict.
 - A missing timeout means the gate can wait indefinitely.
 - `gatedArtifact` and `verdictFrom` enrich the inbox row; they do not change routing semantics.
+- A gate may `produce` a gate-resolution artifact for downstream nodes. The adapter payload includes
+  `outcome`, optional `note`, `resolvedBy`, `resolvedAt`, `inboxId`, and the legacy `decision`.
 
 ## Inbox Contract
 
@@ -72,7 +75,7 @@ and signals the parked workflow. The workflow then resumes and routes through th
 MCP tools:
 
 - `list_inbox`, `get_inbox_item`, `get_pending_decisions`
-- `resolve_gate`, `approve_gate`, `reject_gate`, `answer_question`, `resolve_inbox_item`
+- `approve_gate`, `reject_gate`, `resolve_gate`, `answer_question`, `resolve_inbox_item`
 - `summarize_gate_risk`
 - `get_run_attention` (primary observation), `get_run_status` (neutral status)
 - `watch_run_changes` (advanced cursor-based delivery)
@@ -85,6 +88,12 @@ GraphQL mutations:
 - `resolveGate`
 - `answerQuestion`
 - `resolveInboxItem`
+
+`resolve_gate` / `resolveGate` is the named-outcome resolver for gates whose `options` are not simply
+approve/reject. It validates that `outcome` is one of the pending inbox row options and requires a non-empty note
+for `approve_anyway`. `approve_gate` and `reject_gate` remain compatibility wrappers for simple two-way gates, but
+they reject multi-outcome stuck gates instead of silently mapping approve to `approve_anyway` or reject to a recovery
+or abort outcome.
 
 GraphQL subscriptions:
 

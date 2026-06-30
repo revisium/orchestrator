@@ -1,6 +1,7 @@
 export type ResolveGateCommandData = {
   inboxId: string;
   outcome: string;
+  note?: string;
   resolvedBy?: string;
 };
 

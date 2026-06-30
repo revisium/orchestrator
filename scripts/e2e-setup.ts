@@ -13,7 +13,7 @@
 // Bootstrap + default-playbook seed run IN-PROCESS (the same path `revo start` uses on the daemon) —
 // the `revo bootstrap`/`revo revisium` CLI commands were removed (ADR 0006: CLI is lifecycle-only).
 import 'reflect-metadata';
-import { rmSync } from 'node:fs';
+import { mkdirSync, rmSync } from 'node:fs';
 import { ensureRevisium } from '../src/host/ensure-revisium.js';
 import { bootstrapControlPlane } from '../src/control-plane/bootstrap.js';
 import {
@@ -70,6 +70,7 @@ async function resetHome(): Promise<void> {
   }
   removeRuntime();
   rmSync(getConfig().dataDir, { recursive: true, force: true });
+  mkdirSync(getConfig().dataDir, { recursive: true });
   await ensureRevisium(); // fresh spawn recreates the data dir + embedded Postgres
 }
 

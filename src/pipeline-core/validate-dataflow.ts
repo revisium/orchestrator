@@ -10,6 +10,8 @@ import {
 
 
 type EffectNode = Extract<Node, { kind: 'agent' | 'script' }>;
+type ProducerCapableNode = Extract<Node, { kind: 'agent' | 'script' | 'humanGate' }>;
+type ProducerNode = ProducerCapableNode & { produces: NonNullable<ProducerCapableNode['produces']> };
 
 interface DataflowCtx {
   nodes: Template['nodes'];
@@ -71,8 +73,7 @@ function analyse(template: Template, ids: Set<string>): DataflowCtx {
 function flagDuplicateProduces(template: Template, d: DiagSink): void {
   const producedNames = new Map<string, string>();
   for (const node of Object.values(template.nodes)) {
-    if (node.kind !== 'agent' && node.kind !== 'script') continue;
-    if (!node.produces) continue;
+    if (!isEffectProducer(node)) continue;
     const prev = producedNames.get(node.produces.name);
     if (prev && prev !== node.id) {
       d.warn('PRODUCES_NAME_DUP', `nodes "${prev}" and "${node.id}" both produce "${node.produces.name}"`, {
@@ -122,8 +123,8 @@ function checkConsumeRef(
   checkCrossParallel(node, ref, path, ctx, d);
 }
 
-function isEffectProducer(node: Node): node is EffectNode {
-  return (node.kind === 'agent' || node.kind === 'script') && !!node.produces;
+function isEffectProducer(node: Node): node is ProducerNode {
+  return (node.kind === 'agent' || node.kind === 'script' || node.kind === 'humanGate') && !!node.produces;
 }
 
 

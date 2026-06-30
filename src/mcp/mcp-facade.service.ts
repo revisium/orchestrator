@@ -541,7 +541,7 @@ export class McpFacadeService {
     return this.api.rejectGate(input);
   }
 
-  resolveGate(input: { inboxId: string; outcome: string; resolvedBy?: string }) {
+  resolveGate(input: { inboxId: string; outcome: string; note?: string; resolvedBy?: string }) {
     return this.api.resolveGate(input);
   }
 

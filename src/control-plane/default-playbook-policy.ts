@@ -88,7 +88,7 @@ function checkBlockedTerminal(template: Template, sink: PolicySink): void {
 }
 
 function checkProducedChangeHandoff(template: Template, sink: PolicySink): void {
-  for (const nodeId of ['developer', 'reworkDeveloper', 'ciRework', 'reviewRework']) {
+  for (const nodeId of ['developer', 'reworkDeveloper', 'stuckReworkDeveloper', 'ciRework', 'reviewRework']) {
     expectChangeProducer(template, sink, nodeId);
   }
 
@@ -118,6 +118,13 @@ function checkProducedChangeHandoff(template: Template, sink: PolicySink): void 
     consumerId: 'integrator',
     producerId: 'reworkDeveloper',
     as: 'reworkChange',
+    optional: true,
+  });
+  expectConsume(template, sink, {
+    code: 'DEFAULT_POLICY_CHANGE_HANDOFF_MISSING',
+    consumerId: 'integrator',
+    producerId: 'stuckReworkDeveloper',
+    as: 'stuckReworkChange',
     optional: true,
   });
   expectConsume(template, sink, {
@@ -365,6 +372,39 @@ function checkLoopExhaustionEscalation(template: Template, sink: PolicySink): vo
     routerId: 'codeReviewRouter',
     gateId: 'codeStuckGate',
     approveTarget: 'integrator',
+    approveVerdict: 'approve_anyway',
+  });
+  expectNodeNext(template, sink, {
+    code: 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
+    nodeId: 'stuckReworkDeveloper',
+    target: template.nodes['codeReviewFanout'] ? 'codeReviewFanout' : 'codeReview',
+  });
+  expectRoute(template, sink, {
+    code: 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
+    nodeId: 'codeStuckGate',
+    verdict: 'rework',
+    target: 'stuckReworkDeveloper',
+  });
+  expectRoute(template, sink, {
+    code: 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
+    nodeId: 'codeFinalStuckGate',
+    verdict: 'approve_anyway',
+    target: 'integrator',
+  });
+  expectDefaultRoute(template, sink, {
+    code: 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
+    nodeId: 'codeFinalStuckGate',
+    target: 'blockedEnd',
+  });
+  expectHumanGateOutcomes(template, sink, {
+    code: 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
+    nodeId: 'codeStuckGate',
+    outcomes: ['approve_anyway', 'rework', 'abort'],
+  });
+  expectHumanGateOutcomes(template, sink, {
+    code: 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
+    nodeId: 'codeFinalStuckGate',
+    outcomes: ['approve_anyway', 'abort'],
   });
 }
 
@@ -626,10 +666,28 @@ function expectGateArtifact(
   });
 }
 
+function expectHumanGateOutcomes(
+  template: Template,
+  sink: PolicySink,
+  rule: { code: DefaultPlaybookPolicyDiagnosticCode; nodeId: string; outcomes: string[] },
+): void {
+  const node = template.nodes[rule.nodeId];
+  const expected = rule.outcomes.join(',');
+  const actual = node?.kind === 'humanGate' ? node.outcomes.join(',') : describeNode(node);
+  if (actual === expected) return;
+
+  sink.error(rule.code, `gate ${rule.nodeId} must declare explicit outcomes ${expected}`, {
+    nodeId: rule.nodeId,
+    path: 'outcomes',
+    expected,
+    actual,
+  });
+}
+
 function expectRouterDefaultGate(
   template: Template,
   sink: PolicySink,
-  rule: { routerId: string; gateId: string; approveTarget: string },
+  rule: { routerId: string; gateId: string; approveTarget: string; approveVerdict?: string },
 ): void {
   const router = routingNode(template, rule.routerId);
   const defaultTarget = router ? defaultBranchTarget(router) : undefined;
@@ -648,7 +706,8 @@ function expectRouterDefaultGate(
   }
 
   const gate = routingNode(template, rule.gateId);
-  const approveTarget = gate ? guardedTargetForVerdict(gate, 'approved') : undefined;
+  const approveVerdict = rule.approveVerdict ?? 'approved';
+  const approveTarget = gate ? guardedTargetForVerdict(gate, approveVerdict) : undefined;
   const gateDefault = gate ? defaultBranchTarget(gate) : undefined;
   if (gate?.kind === 'humanGate' && approveTarget === rule.approveTarget && gateDefault === 'blockedEnd') return;
 
@@ -658,8 +717,8 @@ function expectRouterDefaultGate(
     {
       nodeId: rule.gateId,
       path: 'branches',
-      expected: `humanGate approved -> ${rule.approveTarget}, default -> blockedEnd`,
-      actual: gate ? `kind=${gate.kind} approved=${approveTarget ?? 'missing'} default=${gateDefault ?? 'missing'}` : 'missing gate',
+      expected: `humanGate ${approveVerdict} -> ${rule.approveTarget}, default -> blockedEnd`,
+      actual: gate ? `kind=${gate.kind} ${approveVerdict}=${approveTarget ?? 'missing'} default=${gateDefault ?? 'missing'}` : 'missing gate',
     },
   );
 }

@@ -545,7 +545,12 @@ test('TaskControlPlaneApiService.approveGate records retryable signal state arou
       kind: 'signal',
       workflowId: 'run-1',
       topic: 'plan',
-      payload: { outcome: 'approved', resolvedBy: 'tester' },
+      payload: {
+        outcome: 'approved',
+        resolvedBy: 'tester',
+        resolvedAt: (calls[1]?.kind === 'signal' ? (calls[1].payload as { resolvedAt: string }).resolvedAt : ''),
+        inboxId: 'inbox-1',
+      },
       key: 'inbox-1',
     },
     {
@@ -639,15 +644,14 @@ test('TaskControlPlaneApiService.rejectGate signals merge gates without completi
   assert.deepEqual(completed, []);
 });
 
-test('TaskControlPlaneApiService.resolveGate signals explicit named outcomes', async () => {
+test('TaskControlPlaneApiService.resolveGate validates named outcomes and propagates human note', async () => {
   const signals: unknown[] = [];
   const api = makeApi({
     inboxService: {
       async getInbox() {
         return makeInboxItem({
-          title: 'Merge approval',
-          context: { topic: 'merge', summary: { outcomes: ['approved', 'recheck'] } },
-          options: ['approved', 'recheck'],
+          options: ['approve_anyway', 'rework', 'abort'],
+          context: { topic: 'plan', summary: { nodeId: 'codeStuckGate', outcomes: ['approve_anyway', 'rework', 'abort'] } },
         });
       },
     },
@@ -658,20 +662,108 @@ test('TaskControlPlaneApiService.resolveGate signals explicit named outcomes', a
     },
   });
 
-  const result = await api.resolveGate({ inboxId: 'inbox-1', outcome: 'recheck', resolvedBy: 'tester' });
+  const result = await api.resolveGate({
+    inboxId: 'inbox-1',
+    outcome: 'rework',
+    note: 'Please fix the cited issue.',
+    resolvedBy: 'human',
+  });
 
-  assert.equal(result.topic, 'merge');
-  assert.deepEqual(result.answer, { outcome: 'recheck', resolvedBy: 'tester' });
-  assert.deepEqual(signals, [{ outcome: 'recheck', resolvedBy: 'tester' }]);
+  assert.equal(result.signaled, true);
+  assert.deepEqual(signals, [
+    {
+      outcome: 'rework',
+      note: 'Please fix the cited issue.',
+      resolvedBy: 'human',
+      resolvedAt: (signals[0] as { resolvedAt: string }).resolvedAt,
+      inboxId: 'inbox-1',
+    },
+  ]);
+  assert.match((signals[0] as { resolvedAt: string }).resolvedAt, /^\d{4}-\d{2}-\d{2}T/);
 });
 
-test('TaskControlPlaneApiService.resolveGate rejects unknown outcomes', async () => {
-  const api = makeApi();
+test('TaskControlPlaneApiService.resolveGate rejects invalid outcome and approve_anyway without note', async () => {
+  const api = makeApi({
+    inboxService: {
+      async getInbox() {
+        return makeInboxItem({
+          options: ['approve_anyway', 'rework', 'abort'],
+          context: { topic: 'plan', summary: { outcomes: ['approve_anyway', 'rework', 'abort'] } },
+        });
+      },
+    },
+  });
+
+  await assert.rejects(() => api.resolveGate({ inboxId: 'inbox-1', outcome: 'approved', resolvedBy: 'human' }), /invalid gate outcome/);
+  await assert.rejects(() => api.resolveGate({ inboxId: 'inbox-1', outcome: 'approve_anyway', resolvedBy: 'human' }), /requires a non-empty note/);
+});
+
+test('TaskControlPlaneApiService.resolveInboxItem normalizes named gate outcome before persist and signal', async () => {
+  const resolvedAnswers: unknown[] = [];
+  const signals: unknown[] = [];
+  const api = makeApi({
+    inboxService: {
+      async getInbox() {
+        return makeInboxItem({
+          options: ['approve_anyway', 'rework', 'abort'],
+          context: { topic: 'plan', summary: { outcomes: ['approve_anyway', 'rework', 'abort'] } },
+        });
+      },
+      async resolveInbox(_id, answer) {
+        resolvedAnswers.push(answer);
+        return { status: 'pending' as const, answer };
+      },
+    },
+    dbosService: {
+      async signal(_workflowId, _topic, payload) {
+        signals.push(payload);
+      },
+    },
+  });
+
+  const result = await api.resolveInboxItem({
+    inboxId: 'inbox-1',
+    answer: { outcome: ' rework ', note: ' fix the review finding ' },
+    resolvedBy: 'human',
+  });
+
+  assert.deepEqual(resolvedAnswers, [{ outcome: 'rework', note: 'fix the review finding' }]);
+  assert.deepEqual(signals, [{ outcome: 'rework', note: 'fix the review finding' }]);
+  assert.deepEqual(result.answer, { outcome: 'rework', note: 'fix the review finding' });
+});
+
+test('TaskControlPlaneApiService.resolveInboxItem rejects blank named gate outcome', async () => {
+  const api = makeApi({
+    inboxService: {
+      async getInbox() {
+        return makeInboxItem({
+          options: ['approve_anyway', 'rework', 'abort'],
+          context: { topic: 'plan', summary: { outcomes: ['approve_anyway', 'rework', 'abort'] } },
+        });
+      },
+    },
+  });
 
   await assert.rejects(
-    () => api.resolveGate({ inboxId: 'inbox-1', outcome: 'recheck' }),
-    (error: unknown) => error instanceof ControlPlaneError && error.code === 'VALIDATION_FAILURE',
+    () => api.resolveInboxItem({ inboxId: 'inbox-1', answer: { outcome: '   ' }, resolvedBy: 'human' }),
+    /gate outcome must be non-empty/,
   );
+});
+
+test('TaskControlPlaneApiService approve/reject wrappers reject ambiguous named stuck gates', async () => {
+  const api = makeApi({
+    inboxService: {
+      async getInbox() {
+        return makeInboxItem({
+          options: ['approve_anyway', 'rework', 'abort'],
+          context: { topic: 'plan', summary: { outcomes: ['approve_anyway', 'rework', 'abort'] } },
+        });
+      },
+    },
+  });
+
+  await assert.rejects(() => api.approveGate({ inboxId: 'inbox-1' }), /use resolve_gate/);
+  await assert.rejects(() => api.rejectGate({ inboxId: 'inbox-1' }), /use resolve_gate/);
 });
 
 test('TaskControlPlaneApiService.rejectGate uses legacy reject when named gates have no rejection outcome', async () => {

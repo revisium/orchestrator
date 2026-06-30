@@ -416,10 +416,11 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
   server.registerTool(
     'resolve_gate',
     {
-      description: 'Resolve a plan, merge, or question gate with an explicit named outcome.',
+      description: 'Resolve a gate with an explicit named outcome and optional human note.',
       inputSchema: {
         inboxId: inboxIdSchema,
         outcome: z.string().min(1),
+        note: z.string().optional(),
         resolvedBy: z.string().optional(),
       },
       annotations: { readOnlyHint: false },
