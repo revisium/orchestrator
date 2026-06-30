@@ -11,6 +11,8 @@ Run dataflow defines how step outputs move from producer nodes to later consumer
 state-machine routing signal. It covers produced artifacts, prompt hydration, validation, storage, and replay
 safety.
 
+The key words MUST, MUST NOT, SHOULD, SHOULD NOT, MAY are to be interpreted as in RFC 2119 / BCP 14.
+
 ## Layers
 
 | Layer | Carries | Owner |
@@ -45,8 +47,8 @@ Defaults:
 
 - `iteration` defaults to `latest`.
 - `optional` defaults to `false`.
-- Missing required input is a fail-loud runtime error.
-- `staleOk` only suppresses a freshness warning; it does not change hydration behavior.
+- Missing required input MUST be a fail-loud runtime error.
+- `staleOk` only suppresses a freshness warning; it MUST NOT change hydration behavior.
 
 ## Runtime Contract
 
@@ -78,7 +80,7 @@ Uses:
 - `run_outputs.ordinal`.
 - deterministic output row id based on `(runId, nodeId, ordinal)`.
 
-Do not compute ordinals by counting live Revisium rows or by time.
+Ordinals MUST NOT be computed by counting live Revisium rows or by time.
 
 ## `run_outputs`
 
@@ -101,15 +103,15 @@ run_outputs {
 
 Rules:
 
-- Runtime/draft scope; rows are never committed as versioned meaning.
-- Append-only; do not update or delete rows.
+- Runtime/draft scope; rows MUST NOT be committed as versioned meaning.
+- Append-only: rows MUST NOT be updated or deleted.
 - One row per node execution that declares `produces`.
 - For retried runner attempts, `attempt_id` and over-cap `payload_ref` point at the winning physical attempt id,
   not the logical `stepKey`.
 - Latest output is `max(ordinal)` per `(run_id, node_id)`.
 - Payload is serialized JSON, secret-redacted, and size-capped.
 - Oversized content spills by reference in `payload_ref`.
-- Code and diffs are not copied into Revisium; downstream nodes receive pointers such as branch/head/PR metadata.
+- Code and diffs MUST NOT be copied into Revisium; downstream nodes receive pointers such as branch/head/PR metadata.
 
 ### `schema:change` Produced Artifact
 
@@ -127,16 +129,20 @@ type ProducedChangeArtifact = {
 ```
 
 The adapter captures this pointer after the role succeeds and before reviewer or integrator handoff. Integrator
-script nodes consume the latest relevant change pointer and push that exact `headSha`; they do not inspect the
-shared/base checkout when a produced change is available. A "nothing to integrate" no-op is valid only when the
+script nodes consume the latest relevant change pointer and push that exact `headSha`. When a produced change is
+available, they MUST NOT inspect the shared/base checkout. A "nothing to integrate" no-op is valid only when the
 produced `headSha` already equals the open PR head.
 
-Issue-bound runs carry their canonical issue traceability metadata through `issueRef`. It is copied from the run
-context into produced change artifacts and integrator inputs so branch, commit, PR title, and readiness checks use
-the same issue reference while preserving the produced artifact's authoritative `branch`. Publication uses
-reference-only issue linkage: branch names contain `issue-<number>`, commits and PR titles may include a non-closing
-`#<number>` same-repo reference or `owner/repo#<number>` cross-repo reference, PR bodies may remain empty for
-compatibility with existing publication behavior, and issue closure stays manual/out-of-band.
+Issue-bound runs carry their canonical issue traceability metadata through `issueRef`. The propagation rules:
+
+- `issueRef` is copied from the run context into produced change artifacts and integrator inputs, so branch,
+  commit, PR title, and readiness checks use the same issue reference.
+- Copying `issueRef` MUST preserve the produced artifact's authoritative `branch`.
+- Publication uses reference-only issue linkage: branch names contain `issue-<number>`.
+- Commits and PR titles MAY include a non-closing `#<number>` same-repo reference or `owner/repo#<number>`
+  cross-repo reference.
+- PR bodies MAY remain empty for compatibility with existing publication behavior.
+- Issue closure stays manual/out-of-band.
 
 ## Static Validation
 
@@ -157,6 +163,7 @@ guards still catch dynamic skips and stale paths.
 
 ## Changelog
 
+- 2026-06-29: Normative-language / canon-discipline pass; no contract change.
 - 2026-06-27: Added issueRef propagation to produced change artifacts and integrator handoff.
 - 2026-06-27: Clarified that produced run outputs for retried runner nodes reference the winning physical attempt.
 - 2026-06-26: Initial spec extracted from former plan 0016 and `pipeline-core` dataflow types.

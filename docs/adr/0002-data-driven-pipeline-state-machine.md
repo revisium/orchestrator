@@ -20,17 +20,14 @@ reviewable and versioned as data while the engine remains generic.
 
 Represent each pipeline as a versioned graph template and execute it with a generic state-machine engine.
 
-The engine is split in two:
+The engine is split in two: a pure, deterministic core that validates templates, interprets the graph, updates the
+cursor, and emits one decision at a time; and a DBOS adapter that loads the pinned template, persists progress,
+executes decisions through runners, scripts, and inbox waits, records outputs, and feeds recorded results back into
+the core.
 
-- `src/pipeline-core/` is pure and deterministic. It validates templates, interprets the graph, updates the
-  cursor, and emits one decision at a time.
-- `src/pipeline/data-driven-task.workflow.ts` is the DBOS adapter. It loads the pinned template, persists
-  progress, executes decisions through runners/scripts/inbox waits, records outputs, and feeds recorded results
-  back into the core.
-
-The template grammar is closed and typed: agent, script, humanGate, choice, parallel, join, wait, and terminal
-nodes; explicit transitions; tagged guard conditions; domain verdicts; scoped counters; and install-time
-validation.
+The template grammar is closed and typed, with explicit transitions, tagged guard conditions, domain verdicts,
+scoped counters, and install-time validation. Node grammar and module layout: see
+[pipeline-state-machine-v1.spec.md](../specs/pipeline-state-machine-v1.spec.md).
 
 ## Examples
 

@@ -35,86 +35,21 @@ Subscriptions follow two patterns: append-log streams push appended items, and s
 
 ## Examples
 
-```graphql
-query RunScreen($id: ID!) {
-  run(id: $id) {
-    id
-    status
-    progress {
-      status
-      executionPosition
-    }
-    progressSummary {
-      done
-      total
-    }
-    workflow {
-      nodes {
-        id
-        kind
-        status
-      }
-      edges {
-        from
-        to
-      }
-    }
-    inbox(status: PENDING, first: 20) {
-      edges {
-        node {
-          id
-          kind
-          status
-          risk {
-            level
-          }
-        }
-      }
-    }
-    cost(first: 20) {
-      edges {
-        node {
-          amount
-          currency
-        }
-      }
-    }
-    usage {
-      totalCost
-      totalTokens
-    }
-    agent {
-      activity(first: 20) {
-        edges {
-          node {
-            message
-          }
-        }
-      }
-    }
-  }
-}
-```
+- A run screen renders from a single `run(id)` query that selects workflow, progress, events, inbox, attempts,
+  agent observability, cost, and usage as fields on `Run`.
+- A state change pushes a thin `runChanged(runId)` token, and the client refetches the `run(id)` fields it already
+  renders.
 
-```graphql
-subscription RunScreenChanged($runId: ID!) {
-  runChanged(runId: $runId) {
-    runId
-    changedAt
-    kind
-  }
-}
-```
+Query and subscription documents: see [graphql-admin-api-v1.spec.md](../specs/graphql-admin-api-v1.spec.md).
 
 ## Boundaries
 
-- Use clean domain names such as `Run`, `InboxItem`, and `WorkflowNode`.
-- Use enums for closed sets such as run status, run priority, inbox kind/status, and workflow node kind.
-- Keep open vocabularies such as `RunEvent.type` as `String`.
-- Keep lifecycle mutations to `createRun`, `startRun`, `cancelRun`, and `installPlaybook`; continuation after
-  human input is driven by inbox resolution, not a separate resume mutation.
-- State performance expectations as query-shape and source-ownership rules. Batching and fan-out reduction are
+- Lifecycle mutations stay narrow — `createRun`, `startRun`, `cancelRun`, `installPlaybook` — and continuation
+  after human input is driven by inbox resolution rather than a separate resume mutation.
+- Performance is stated as query-shape and source-ownership rules. Batching and fan-out reduction are
   service-layer concerns, not schema guarantees.
+- Naming, enum vocabularies, and the full type contract: see
+  [graphql-admin-api-v1.spec.md](../specs/graphql-admin-api-v1.spec.md).
 
 ## Consequences
 
