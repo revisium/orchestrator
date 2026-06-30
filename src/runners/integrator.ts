@@ -581,7 +581,7 @@ export type PrFeedback = {
   evidence: string[];
   issueRef?: IssueRef;
 
-  verdict: 'review_changes' | 'ci_changes' | 'clean';
+  verdict: 'review_changes' | 'ci_changes' | 'recheck' | 'clean';
   ciFailures: CiFailure[];
   reviewThreads: PrReviewThread[];
 };

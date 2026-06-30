@@ -923,7 +923,8 @@ test('DD4-issue-143b: mergeReadiness ci_changes routes to ciRework with fresh fe
  * the data-only JSON edit (default + e2e fixture catalogs): the merge gate gains a `recheck` outcome that
  * routes a REJECT (via gateVerdict's reject→last-outcome rule) to a dedicated `mergeRecheck` re-poll, whose
  * router routes on the FRESH verdict — clean→blockedEnd (explicit abort), review_changes→triage, ci_changes
- * (<ciLoop)→ciRework. No runtime code changes; the routing lives entirely in the template (§8).
+ * (<ciLoop)→ciRework, recheck→mergeReadiness. No runtime code changes; the routing lives entirely in the
+ * template (§8).
  */
 function featureDevelopmentPrReviewWithMergeRecheck(): Template {
   const t = featureDevelopmentPrReview();
@@ -951,6 +952,7 @@ function featureDevelopmentPrReviewWithMergeRecheck(): Template {
     on(verdictEq('clean'), 'blockedEnd'),
     on(verdictEq('review_changes'), 'triage'),
     on(allOf(verdictEq('ci_changes'), counterLt('ciLoop', 3)), 'ciRework'),
+    on(verdictEq('recheck'), 'mergeReadiness'),
     otherwise('blockedEnd'),
   ]);
   // Mirror the JSON catalogs: the recovery nodes also consume the FRESH mergeRecheck feedback (optional +
@@ -1042,6 +1044,46 @@ test('DD-issue-141 (reroute): merge reject + a review_changes re-poll reroutes t
   );
   assert.equal(rec.blocked.length, 0, 'the run never hit blockRun — the reject was rerouted, not aborted');
   assert.equal(mergeSeen, 2, 'the merge gate opened twice (reject→reroute→recover→re-gate→approve)');
+});
+
+test('DD-issue-223: merge reject + a recheck re-poll continues readiness polling, NOT blocked', async () => {
+  // The merge gate opens after pollPr(clean)→mergeReadiness(clean). A human REJECT re-polls; if that fresh
+  // result is still unsettled (recheck), the merge-recheck router must continue through mergeReadiness instead
+  // of falling through to blockedEnd.
+  let polls = 0;
+  let mergeSeen = 0;
+  const { run, rec } = buildAdapter({
+    template: featureDevelopmentPrReviewWithMergeRecheck(),
+    verdicts: { codeReview: 'approved' },
+    gate: (topic) => {
+      if (topic !== 'merge') return { decision: 'approve' };
+      mergeSeen++;
+      return mergeSeen === 1 ? { decision: 'reject' } : { decision: 'approve' };
+    },
+    pollPr: () => {
+      polls++;
+      if (polls === 3) {
+        return {
+          prNumber: 1,
+          headSha: 'recheck-pending',
+          evidence: ['merge-reject re-poll found pending readiness'],
+          verdict: 'recheck' as const,
+          ciFailures: [],
+          reviewThreads: [],
+        };
+      }
+      return { prNumber: 1, headSha: `poll-${polls}`, evidence: [`poll ${polls}: clean`], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
+    },
+  });
+
+  const result = await run();
+
+  assert.equal(result.status, 'succeeded', 'the unsettled merge recheck loops through readiness polling, then merges');
+  assert.equal(rec.blocked.length, 0, 'the recheck verdict did not terminal-block the run');
+  assert.equal(rec.completed.length, 1, 'the run completes after the later merge approval');
+  assert.equal(rec.pollPrCalls, 4, 'pollPr → mergeReadiness → mergeRecheck(recheck) → mergeReadiness(clean)');
+  assert.equal(mergeSeen, 2, 'the merge gate re-opened after the extra readiness poll');
+  assert.equal(rec.confirmMergeCalls, 1, 'confirmMerge only ran after the later merge approval');
 });
 
 test('DD4-issue-140: code-review changes_requested rework hands the latest produced change to integrator', async () => {

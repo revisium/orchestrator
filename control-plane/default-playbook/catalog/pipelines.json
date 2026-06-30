@@ -401,6 +401,13 @@
                 "goto": "ciRework"
               },
               {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "recheck"
+                },
+                "goto": "mergeReadiness"
+              },
+              {
                 "default": "blockedEnd"
               }
             ]
@@ -508,6 +515,13 @@
                 "goto": "ciRework"
               },
               {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "recheck"
+                },
+                "goto": "mergeReadiness"
+              },
+              {
                 "default": "blockedEnd"
               }
             ]
@@ -567,6 +581,13 @@
                   ]
                 },
                 "goto": "ciRework"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "recheck"
+                },
+                "goto": "mergeReadiness"
               },
               {
                 "default": "blockedEnd"
@@ -1187,6 +1208,13 @@
                   ]
                 },
                 "goto": "ciRework"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "recheck"
+                },
+                "goto": "mergeReadiness"
               },
               {
                 "default": "blockedEnd"
