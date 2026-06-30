@@ -183,11 +183,8 @@ Resolve the symlink and pick the prefix that contains both `bin/revo` and
 npm install -g --prefix <active-node-prefix> /private/tmp/revisium-orchestrator-0.0.0.tgz
 ```
 
-Concrete example (verified on this machine):
-
-- active binary: `/Users/anton/.nvm/versions/node/v24.14.1/bin/revo`
-- active prefix: `/Users/anton/.nvm/versions/node/v24.14.1`
-- command: `/Users/anton/.nvm/versions/node/v24.14.1/bin/npm install -g --prefix /Users/anton/.nvm/versions/node/v24.14.1 /private/tmp/revisium-orchestrator-0.0.0.tgz`
+For nvm installs, the active prefix is usually the parent directory that contains both `bin/revo` and
+`lib/node_modules/@revisium/orchestrator`. Use that prefix consistently for both `npm` and `revo`.
 
 > **Warning:** do not use `npm install -g <local-dir>` from a temporary worktree. npm may install a symlink to
 > that directory; if the worktree is later removed, the global `revo` binary breaks. The tarball install copies
@@ -208,7 +205,7 @@ Restart the Codex session so MCP tool schemas are reloaded. `get_capabilities` s
 `get_agent_log`, `watch_run_changes`. `observe_run` is not present in the current contract.
 
 If Codex cannot expose `mcp__revo` tools after restart, check `~/.codex/config.toml`: use an absolute path to
-the active `revo` binary (`command = "/Users/anton/.nvm/versions/node/v24.14.1/bin/revo"`) rather than
+the active `revo` binary, for example `command = "<active-node-prefix>/bin/revo"`, rather than
 `command = "revo"` — the Codex process PATH may not include nvm.
 
 ## Front Doors
