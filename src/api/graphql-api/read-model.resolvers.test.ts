@@ -65,7 +65,19 @@ test('read-model resolvers delegate to domain api services', async () => {
   assert.equal(new InboxResolver(inboxApi as never).gateRisk('inbox_1'), 'risk');
   assert.equal(new InboxResolver(inboxApi as never).approveGate({ inboxId: 'inbox_1' }), 'approve');
   assert.equal(new InboxResolver(inboxApi as never).rejectGate({ inboxId: 'inbox_1' }), 'reject');
-  assert.equal(new InboxResolver(inboxApi as never).resolveGate({ inboxId: 'inbox_1', outcome: 'recheck' }), 'resolveGate');
+  const adoptionAudit = {
+    runId: 'run_1',
+    step: 'developer',
+    role: 'developer-codex',
+    artifactRef: 'attempt:attempt-1',
+    targetRepo: '/repo',
+    targetBranch: 'feature/x',
+    actor: 'anton',
+    scope: 'manual adoption',
+    risk: 'manual verification required',
+    verificationResponsibility: 'main session',
+  };
+  assert.equal(new InboxResolver(inboxApi as never).resolveGate({ inboxId: 'inbox_1', outcome: 'recheck', adoptionAudit }), 'resolveGate');
   assert.equal(new InboxResolver(inboxApi as never).answerQuestion({ inboxId: 'inbox_1', answer: 'yes' }), 'answer');
   assert.equal(new InboxResolver(inboxApi as never).resolveInboxItem({ inboxId: 'inbox_1', answer: { decision: 'approve' } }), 'resolve');
   assert.equal(new MethodResolver(methodApi as never).roles(), 'roles');
@@ -83,5 +95,6 @@ test('read-model resolvers delegate to domain api services', async () => {
   assert.equal(calls.filter((call) => call === 'progress:{"runId":"run_1"}').length, 2);
   assert.ok(calls.some((call) => call === 'create:{"title":"Build","repo":"."}'));
   assert.ok(calls.some((call) => call === 'approve:{"inboxId":"inbox_1"}'));
+  assert.ok(calls.some((call) => call === `resolveGate:${JSON.stringify({ inboxId: 'inbox_1', outcome: 'recheck', adoptionAudit })}`));
   assert.ok(calls.some((call) => call === 'resolve:{"inboxId":"inbox_1","answer":{"decision":"approve"}}'));
 });

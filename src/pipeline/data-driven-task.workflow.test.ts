@@ -1843,6 +1843,84 @@ test('DD8: an integrator that THROWS fails the run (revo.ScriptFailed → failed
   assert.equal(rec.blocked.length, 0);
 });
 
+test('verification environment needsHuman opens recovery gate and records non-adoption decision', async () => {
+  const { run, rec } = buildAdapter({
+    template: singleDeveloperTemplate('verification-recovery-env'),
+    results: {
+      developer: {
+        output: { from: 'developer', reason: 'verification failed: sandbox denied loopback socket listen' },
+        verdict: 'blocker',
+        nextSteps: [],
+        costs: [],
+        needsHuman: true,
+        lesson: 'pnpm verify blocked by sandbox permission: listen EACCES on loopback socket',
+        artifacts: { process: { ref: 'attempt:attempt-1' } },
+      },
+    },
+    gate: () => ({ outcome: 'continue_in_revo' }),
+  });
+
+  const result = await run();
+
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(rec.gates, ['question']);
+  assert.equal(rec.blocked[0]?.reason, 'verification-recovery-decision:continue_in_revo');
+  const summary = rec.gateSummaries[0] as Record<string, unknown>;
+  assert.equal(summary['topic'], 'verification_recovery');
+  assert.equal(summary['runId'], RUN_ID);
+  assert.equal(summary['step'], 'developer');
+  assert.equal(summary['role'], 'developer');
+  assert.equal(summary['artifactRef'], 'attempt:attempt-1');
+  assert.deepEqual(summary['outcomes'], ['rerun_with_permissions', 'continue_in_revo', 'adopt_patch_manually', 'abort']);
+  assert.match(String(summary['policy']), /must not apply, copy, cherry-pick, stage, commit, or push/);
+});
+
+test('runner_failed verification environment block opens recovery gate before transient routing', async () => {
+  const { run, rec } = buildAdapter({
+    template: singleDeveloperTemplate('verification-recovery-runner-failed-env'),
+    results: {
+      developer: runnerFailedResult(
+        'pnpm verify failed: EPERM open /Users/anton/.revisium-orchestrator/run-artifacts/runtime.json; EPERM listen 127.0.0.1',
+        { artifactRef: 'attempt:attempt-1' },
+      ),
+    },
+    gate: () => ({ outcome: 'continue_in_revo' }),
+  });
+
+  const result = await run();
+
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(rec.gates, ['question']);
+  assert.equal(rec.blocked[0]?.reason, 'verification-recovery-decision:continue_in_revo');
+  assert.equal(rec.events.includes('runner_retry_scheduled:developer'), false);
+  assert.equal(rec.events.includes('runner_retry_exhausted:developer'), false);
+  const summary = rec.gateSummaries[0] as Record<string, unknown>;
+  assert.equal(summary['topic'], 'verification_recovery');
+  assert.equal(summary['reason'], 'verification-environment-blocked');
+});
+
+test('code verification needsHuman does not open environment recovery gate', async () => {
+  const { run, rec } = buildAdapter({
+    template: singleDeveloperTemplate('verification-recovery-code'),
+    results: {
+      developer: {
+        output: { from: 'developer', reason: 'verification failed: expected 1 got 2' },
+        verdict: 'blocker',
+        nextSteps: [],
+        costs: [],
+        needsHuman: true,
+        lesson: 'pnpm test failed: assertion expected 1 got 2',
+      },
+    },
+  });
+
+  const result = await run();
+
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(rec.gates, []);
+  assert.equal(rec.blocked[0]?.reason, 'agent-needs-human');
+});
+
 test('DD9: a live preflight that needsHuman blocks the run BEFORE the graph runs (no steps)', async () => {
   const { run, rec } = buildAdapter({
     template: integratorTemplate(),
