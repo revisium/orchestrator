@@ -185,6 +185,7 @@ test('default playbook policy: merge recheck recovery routes are diagnostic when
         op: 'verdict.eq',
         value: 'ci_changes',
       };
+      guardedBranchContaining(template, 'mergeRecheckRouter', 'recheck').goto = 'blockedEnd';
     }),
   ).filter((diagnostic) => diagnostic.code === 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING');
 
@@ -202,6 +203,13 @@ test('default playbook policy: merge recheck recovery routes are diagnostic when
       /conjunctiveBound=false/.test(diagnostic.actual ?? ''),
     ),
     'ci_changes recheck route must recover through bounded ciRework',
+  );
+  assert.ok(
+    diagnostics.some((diagnostic) =>
+      diagnostic.nodeId === 'mergeRecheckRouter' &&
+      /recheck -> mergeReadiness/.test(diagnostic.expected ?? ''),
+    ),
+    'recheck verdict must continue through readiness polling',
   );
 });
 
