@@ -8,6 +8,7 @@ export type CreateRunCommandData = {
   pipelineId?: string;
   params?: unknown;
   issueRef?: unknown;
+  issueAction?: unknown;
   start?: boolean;
 };
 

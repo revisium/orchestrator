@@ -2291,7 +2291,7 @@ test('TaskControlPlaneApiService.createRun normalizes issueRef into public param
     issueRef,
   });
 
-  assert.deepEqual(persistedParams, { ticket: 'RV-147', issueRef });
+  assert.deepEqual(persistedParams, { ticket: 'RV-147', issueRef, issueAction: 'close' });
 });
 
 test('TaskControlPlaneApiService.createRun rejects conflicting top-level and params issueRef', async () => {

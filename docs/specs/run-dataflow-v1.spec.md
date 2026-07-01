@@ -133,16 +133,21 @@ script nodes consume the latest relevant change pointer and push that exact `hea
 available, they MUST NOT inspect the shared/base checkout. A "nothing to integrate" no-op is valid only when the
 produced `headSha` already equals the open PR head.
 
-Issue-bound runs carry their canonical issue traceability metadata through `issueRef`. The propagation rules:
+Issue-bound runs carry their canonical issue traceability metadata through `issueRef` and the linkage policy through
+`issueAction`. The propagation rules:
 
-- `issueRef` is copied from the run context into produced change artifacts and integrator inputs, so branch,
-  commit, PR title, and readiness checks use the same issue reference.
+- `issueRef` and `issueAction` are copied from the run context into produced change artifacts and integrator inputs,
+  so branch, commit, PR title/body, readiness checks, and merge confirmation use the same issue contract.
+- `issueAction` is `close`, `refs`, or `none`; issue-bound runs default to `close`.
 - Copying `issueRef` MUST preserve the produced artifact's authoritative `branch`.
-- Publication uses reference-only issue linkage: branch names contain `issue-<number>`.
-- Commits and PR titles MAY include a non-closing `#<number>` same-repo reference or `owner/repo#<number>`
-  cross-repo reference.
-- PR bodies MAY remain empty for compatibility with existing publication behavior.
-- Issue closure stays manual/out-of-band.
+- Branch names may contain `issue-<number>` for issue-bound work.
+- For `close` and `refs`, commits and PR titles MAY include a non-closing `#<number>` same-repo reference or
+  `owner/repo#<number>` cross-repo reference.
+- For `close`, PR bodies MUST contain one closing reference for the canonical issue and merge confirmation MUST
+  verify GitHub reports the issue in `closingIssuesReferences`.
+- For `refs`, PR bodies and titles preserve non-closing references without adding closing keywords.
+- For `none`, publication MUST NOT inject issue tokens into commit messages, PR titles, or PR bodies.
+- The host does not call issue-close endpoints directly.
 
 ## Static Validation
 

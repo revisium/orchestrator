@@ -129,6 +129,7 @@ test('stores canonical issueRef in task_runs params from top-level input', async
   assert.deepEqual(byTable(rows, 'task_runs').data.params, {
     ticket: 'RV-147',
     issueRef,
+    issueAction: 'close',
   });
   assert.ok(!('issueRef' in byTable(rows, 'tasks').data), 'issueRef is not stored as a task column');
 });

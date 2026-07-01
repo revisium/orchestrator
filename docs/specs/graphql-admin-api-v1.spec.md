@@ -186,11 +186,16 @@ resolution; the public contract does not define a separate resume mutation.
 Mutation resolvers MUST enforce the auth/principal seam before the API can bind outside loopback.
 
 `CreateRunInput` accepts optional `issueRef: IssueRefInput` traceability metadata with shape
-`{ repo: String!, number: positive Int!, url: String! }`. The reconciliation rules:
+`{ repo: String!, number: positive Int!, url: String! }` and optional `issueAction: "close" | "refs" | "none"`.
+The reconciliation rules:
 
 - The canonical value is stored in public run params as `params.issueRef`.
+- `params.issueAction` is stored with the canonical action. It defaults to `close` when `issueRef` is present and no
+  explicit action is supplied.
 - If `CreateRunInput.issueRef` and `CreateRunInput.params.issueRef` are both present and differ, the mutation MUST
   reject the input deterministically.
+- If top-level `issueAction` and `params.issueAction` are both present and differ, the mutation MUST reject the
+  input deterministically.
 - `Run.issueRef`, run digest/read projections, and PR readiness results project only this structured
   `IssueRefModel` metadata.
 - These projections MUST NOT project arbitrary run params.
@@ -201,12 +206,13 @@ recovery outcome. The resolver MUST reject that outcome unless the audit is comp
 `actor`, `scope`, `risk`, and `verificationResponsibility`, plus optional `artifactRef` and `worktreeRef`; at least
 one artifact/worktree reference is required by the resolver.
 
-`PrReadinessInput` also accepts optional `issueRef` with the same shape. For issue-bound runs, readiness reports a
-human-decision item when branch/title linkage is missing. The link policy is reference-only: it MUST NOT emit
-closing keywords such as `Closes`, `Fixes`, or `Resolves`. Issue closure remains a manual/out-of-band action; this
-API MUST NOT call issue-close endpoints. Issue-bound PR titles and commits MAY include a non-closing `#<number>`
-same-repo reference or `owner/repo#<number>` cross-repo reference, and PR bodies MAY remain empty for compatibility
-with the existing publication flow.
+`PrReadinessInput` also accepts optional `issueRef` and `issueAction` with the same shape. For issue-bound runs,
+readiness reports a human-decision item when branch/title linkage is missing. When `issueAction` is `close`,
+readiness MUST also require GitHub `closingIssuesReferences` to include the expected issue before the merge gate.
+The API MUST NOT call issue-close endpoints. Issue-bound PR titles and commits MAY include a non-closing
+`#<number>` same-repo reference or `owner/repo#<number>` cross-repo reference. When `issueAction` is `close`, the PR
+body MUST contain a closing reference for the canonical issue; when it is `refs` or `none`, closing keywords are not
+added.
 
 ## Subscriptions
 

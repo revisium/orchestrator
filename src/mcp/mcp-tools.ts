@@ -53,6 +53,7 @@ const issueRefSchema = z.object({
   number: z.number().int().positive(),
   url: z.string().min(1),
 }).optional();
+const issueActionSchema = z.enum(['close', 'refs', 'none']).optional();
 const watchCursorSchema = z.string().max(MAX_WATCH_CURSOR_CHARS);
 const prReadinessInputSchema = {
   repo: z.string().min(1).describe('GitHub repository in owner/name form, for example revisium/agent-orchestrator'),
@@ -61,6 +62,7 @@ const prReadinessInputSchema = {
   baseBranch: z.string().min(1).optional().default('master'),
   sonarProject: z.string().min(1).optional(),
   issueRef: issueRefSchema,
+  issueAction: issueActionSchema,
   includeComments: z.boolean().optional().default(true),
   includeReviewThreads: z.boolean().optional().default(true),
 };
@@ -166,6 +168,7 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
         pipelineId: z.string().min(1).optional().describe('Required: the pipeline to use. Omit to receive candidatePipelines for selection (no run is created).'),
         params: paramsSchema,
         issueRef: issueRefSchema,
+        issueAction: issueActionSchema.describe('Issue linkage behavior for issue-bound delivery: close, refs, or none. Defaults to close when issueRef is supplied.'),
         priority: z.number().int().optional(),
         start: z.boolean().optional().describe('Start the workflow immediately after creating the run'),
         includeMonitoringGuidance: z.boolean().optional().describe('Set false to suppress the operator monitoring directive in the response. Default: true.'),

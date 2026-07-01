@@ -22,7 +22,14 @@ import {
   type ReviewThread,
 } from '../poller/pr-readiness-core.js';
 import { RunService } from '../revisium/run.service.js';
-import { issueRefTag, type IssueRef } from '../run/issue-ref.js';
+import {
+  hasClosingIssueReference,
+  hasIssueRefToken,
+  issueBodyWithClosingReference,
+  issueRefTag,
+  type IssueAction,
+  type IssueRef,
+} from '../run/issue-ref.js';
 import { resolveGhAccount, resolvePinnedGh } from './gh-identity.js';
 import type { ExecFn, IntegratorBlocked } from './integrator-types.js';
 import { gitAbsPath, branchExists, countAhead } from './integrator-git.js';
@@ -47,6 +54,7 @@ export type ProducedChangeArtifact = {
   branch: string;
   headSha: string;
   issueRef?: IssueRef;
+  issueAction?: IssueAction;
   worktreePath?: string;
   artifactRef?: string;
   prNumber?: number;
@@ -60,6 +68,7 @@ export type CaptureProducedChangeInput = {
   nodeId: string;
   attemptId: string;
   issueRef?: IssueRef;
+  issueAction?: IssueAction;
   artifactRef?: string;
 };
 
@@ -71,6 +80,7 @@ export type IntegratorInput = {
   title: string;
   base: string;
   issueRef?: IssueRef;
+  issueAction?: IssueAction;
 
   change?: ProducedChangeArtifact;
 
@@ -90,17 +100,29 @@ export type IntegratorOutput = {
 };
 
 
-type PrListEntry = { number: number; url: string; baseRefName: string; headRefOid?: string };
-type PrSummary = { prUrl: string; prNumber: number; headSha?: string };
+type PrListEntry = { number: number; url: string; baseRefName: string; headRefOid?: string; title?: string; body?: string };
+type PrSummary = { prUrl: string; prNumber: number; headSha?: string; title?: string; body?: string };
 
-function issueBoundTitle(title: string, issueRef?: IssueRef, ownerRepo?: string): string {
+function issueBoundTitle(title: string, issueRef?: IssueRef, ownerRepo?: string, issueAction: IssueAction = issueRef ? 'close' : 'none'): string {
+  if (!issueRef || issueAction === 'none') return title;
+  if (hasIssueRefToken(title, issueRef, ownerRepo)) return title;
   const tag = issueRefTag(issueRef, ownerRepo);
   return tag ? `${tag} ${title}` : title;
 }
 
-function commitMessage(title: string, issueRef?: IssueRef, ownerRepo?: string): string {
+function commitMessage(title: string, issueRef?: IssueRef, ownerRepo?: string, issueAction: IssueAction = issueRef ? 'close' : 'none'): string {
+  if (!issueRef || issueAction === 'none') return `feat: ${title}`;
   const tag = issueRefTag(issueRef, ownerRepo);
   return tag ? `feat: ${tag} ${title}` : `feat: ${title}`;
+}
+
+function prBody(body: string | undefined, issueRef: IssueRef | undefined, ownerRepo: string, issueAction: IssueAction | undefined): string {
+  if (issueAction !== 'close') return body ?? '';
+  return issueBodyWithClosingReference(body, issueRef, ownerRepo);
+}
+
+function resolvedIssueAction(issueRef: IssueRef | undefined, issueAction: IssueAction | undefined): IssueAction | undefined {
+  return issueAction ?? (issueRef ? 'close' : undefined);
 }
 
 function parsePrList(raw: string): PrListEntry[] {
@@ -136,7 +158,13 @@ function matchingOpenPr(
   if (matching.length === 1) {
     const pr = matching[0];
     if (!pr) throw new Error('unexpected empty match');
-    return { prUrl: pr.url, prNumber: pr.number, ...(pr.headRefOid ? { headSha: pr.headRefOid } : {}) };
+    return {
+      prUrl: pr.url,
+      prNumber: pr.number,
+      ...(pr.headRefOid ? { headSha: pr.headRefOid } : {}),
+      ...(pr.title !== undefined ? { title: pr.title } : {}),
+      ...(pr.body !== undefined ? { body: pr.body } : {}),
+    };
   }
 
   if (matching.length > 1) {
@@ -156,8 +184,11 @@ function createPr(
   base: string,
   title: string,
   issueRef: IssueRef | undefined,
+  issueAction: IssueAction | undefined,
   execGh: ExecGhFn,
 ): PrSummary | IntegratorBlocked {
+  const resolvedTitle = issueBoundTitle(title, issueRef, ownerRepo, issueAction);
+  const resolvedBody = prBody(undefined, issueRef, ownerRepo, issueAction);
   const createOut = execGh([
     'pr',
     'create',
@@ -169,9 +200,9 @@ function createPr(
     '--head',
     branch,
     '--title',
-    issueBoundTitle(title, issueRef, ownerRepo),
+    resolvedTitle,
     '--body',
-    '',
+    resolvedBody,
   ]);
 
   const createdUrl = createOut.trim();
@@ -196,7 +227,25 @@ function createPr(
         'check if the PR was created and update the run manually',
     };
   }
-  return { prUrl: viewData.url, prNumber: viewData.number };
+  return { prUrl: viewData.url, prNumber: viewData.number, title: resolvedTitle, body: resolvedBody };
+}
+
+function repairPr(
+  ownerRepo: string,
+  prNumber: number,
+  issueRef: IssueRef | undefined,
+  issueAction: IssueAction | undefined,
+  title: string | undefined,
+  body: string | undefined,
+  desiredTitle: string,
+  desiredBody: string,
+  execGh: ExecGhFn,
+): void {
+  if (!issueRef && issueAction !== 'close') return;
+  const args = ['pr', 'edit', String(prNumber), '--repo', ownerRepo];
+  if ((title ?? '') !== desiredTitle) args.push('--title', desiredTitle);
+  if ((body ?? '') !== desiredBody) args.push('--body', desiredBody);
+  if (args.length > 5) execGh(args);
 }
 
 function findOrCreatePr(
@@ -205,14 +254,26 @@ function findOrCreatePr(
   base: string,
   title: string,
   issueRef: IssueRef | undefined,
+  issueAction: IssueAction | undefined,
   execGh: ExecGhFn,
 ): { prUrl: string; prNumber: number } | IntegratorBlocked {
-  const existing = matchingOpenPr(ownerRepo, branch, base, execGh, 'number,url,baseRefName');
+  const existing = matchingOpenPr(ownerRepo, branch, base, execGh, 'number,url,baseRefName,title,body');
   if (existing && !('needsHuman' in existing)) {
+    repairPr(
+      ownerRepo,
+      existing.prNumber,
+      issueRef,
+      issueAction,
+      existing.title,
+      existing.body,
+      issueBoundTitle(existing.title || title, issueRef, ownerRepo, issueAction),
+      prBody(existing.body, issueRef, ownerRepo, issueAction),
+      execGh,
+    );
     return { prUrl: existing.prUrl, prNumber: existing.prNumber };
   }
   if (existing) return existing;
-  return createPr(ownerRepo, branch, base, title, issueRef, execGh);
+  return createPr(ownerRepo, branch, base, title, issueRef, issueAction, execGh);
 }
 
 function findExistingPrWithHead(
@@ -221,7 +282,7 @@ function findExistingPrWithHead(
   base: string,
   execGh: ExecGhFn,
 ): PrSummary | null | IntegratorBlocked {
-  return matchingOpenPr(ownerRepo, branch, base, execGh, 'number,url,baseRefName,headRefOid');
+  return matchingOpenPr(ownerRepo, branch, base, execGh, 'number,url,baseRefName,headRefOid,title,body');
 }
 
 
@@ -319,6 +380,7 @@ export async function captureProducedChange(
   const branch = branchName(input.taskId, input.title, input.issueRef);
   const ownerRepoResult = resolveOwnerRepo(git, cwd);
   const ownerRepo = 'needsHuman' in ownerRepoResult ? undefined : ownerRepoResult.ownerRepo;
+  const issueAction = resolvedIssueAction(input.issueRef, input.issueAction);
 
   if (branchExists(git, cwd, branch)) {
     git(['switch', branch], cwd);
@@ -328,7 +390,7 @@ export async function captureProducedChange(
 
   git(['add', '-A'], cwd);
   if (stagedDiffPresent(git, cwd)) {
-    git(['commit', '-m', commitMessage(input.title, input.issueRef, ownerRepo)], cwd);
+    git(['commit', '-m', commitMessage(input.title, input.issueRef, ownerRepo, issueAction)], cwd);
   }
 
   const headSha = git(['rev-parse', 'HEAD'], cwd).trim();
@@ -336,6 +398,7 @@ export async function captureProducedChange(
     branch,
     headSha,
     ...(input.issueRef ? { issueRef: input.issueRef } : {}),
+    ...(issueAction ? { issueAction } : {}),
     worktreePath: cwd,
     ...(input.artifactRef ? { artifactRef: input.artifactRef } : {}),
   };
@@ -367,6 +430,7 @@ export async function integrate(
   const ownerRepoResult = resolveOwnerRepo(git, cwd);
   if ('needsHuman' in ownerRepoResult) return ownerRepoResult;
   const { ownerRepo } = ownerRepoResult;
+  const issueAction = resolvedIssueAction(input.issueRef, input.issueAction);
 
   git(['fetch', 'origin', input.base], cwd);
 
@@ -379,7 +443,7 @@ export async function integrate(
   git(['add', '-A'], cwd);
 
   if (stagedDiffPresent(git, cwd)) {
-    const commitMsg = commitMessage(input.title, input.issueRef, ownerRepo);
+    const commitMsg = commitMessage(input.title, input.issueRef, ownerRepo, issueAction);
     git(['commit', '-m', commitMsg], cwd);
   } else {
     const ahead = countAhead(git, cwd, branch, input.base);
@@ -402,7 +466,7 @@ export async function integrate(
 
   git(['push', '-u', 'origin', branch], cwd);
 
-  const prResult = findOrCreatePr(ownerRepo, branch, input.base, input.title, input.issueRef, gh);
+  const prResult = findOrCreatePr(ownerRepo, branch, input.base, input.title, input.issueRef, issueAction, gh);
   if ('needsHuman' in prResult) return prResult;
 
   return { prUrl: prResult.prUrl, branch, prNumber: prResult.prNumber, ...(input.issueRef ? { issueRef: input.issueRef } : {}) };
@@ -417,6 +481,7 @@ async function integrateProducedChange(
   const cwd = change.worktreePath ?? await deps.resolveRunCwd(input.runId, input.taskId);
   const branch = change.branch;
   const issueRef = change.issueRef ?? input.issueRef;
+  const issueAction = resolvedIssueAction(issueRef, change.issueAction ?? input.issueAction);
 
   const ownerRepoResult = resolveOwnerRepo(git, cwd);
   if ('needsHuman' in ownerRepoResult) return ownerRepoResult;
@@ -427,6 +492,17 @@ async function integrateProducedChange(
   const existing = findExistingPrWithHead(ownerRepo, branch, input.base, gh);
   if (existing && 'needsHuman' in existing) return existing;
   if (existing?.headSha === change.headSha) {
+    repairPr(
+      ownerRepo,
+      existing.prNumber,
+      issueRef,
+      issueAction,
+      existing.title,
+      existing.body,
+      issueBoundTitle(existing.title || input.title, issueRef, ownerRepo, issueAction),
+      prBody(existing.body, issueRef, ownerRepo, issueAction),
+      gh,
+    );
     return {
       prUrl: existing.prUrl,
       branch,
@@ -450,6 +526,17 @@ async function integrateProducedChange(
   git(['push', 'origin', `${change.headSha}:refs/heads/${branch}`], cwd);
 
   if (existing) {
+    repairPr(
+      ownerRepo,
+      existing.prNumber,
+      issueRef,
+      issueAction,
+      existing.title,
+      existing.body,
+      issueBoundTitle(existing.title || input.title, issueRef, ownerRepo, issueAction),
+      prBody(existing.body, issueRef, ownerRepo, issueAction),
+      gh,
+    );
     return {
       prUrl: existing.prUrl,
       branch,
@@ -460,7 +547,7 @@ async function integrateProducedChange(
     };
   }
 
-  const created = createPr(ownerRepo, branch, input.base, input.title, issueRef, gh);
+  const created = createPr(ownerRepo, branch, input.base, input.title, issueRef, issueAction, gh);
   if ('needsHuman' in created) return created;
   return {
     prUrl: created.prUrl,
@@ -487,19 +574,8 @@ type PrMergeView = {
   state: string;
   isDraft: boolean;
   mergeStateStatus: string;
+  closingIssuesReferences?: unknown[];
 };
-
-
-
-
-
-
-
-
-
-
-
-
 
 export async function confirmMerge(
   input: IntegratorInput,
@@ -512,9 +588,10 @@ export async function confirmMerge(
   const ownerRepoResult = resolveOwnerRepo(git, cwd);
   if ('needsHuman' in ownerRepoResult) return ownerRepoResult;
   const { ownerRepo } = ownerRepoResult;
+  const issueAction = resolvedIssueAction(input.issueRef, input.issueAction);
 
   const view = (): PrMergeView => {
-    const raw = gh(['pr', 'view', branch, '--repo', ownerRepo, '--json', 'number,url,state,isDraft,mergeStateStatus']);
+    const raw = gh(['pr', 'view', branch, '--repo', ownerRepo, '--json', 'number,url,state,isDraft,mergeStateStatus,closingIssuesReferences']);
     try {
       return JSON.parse(raw) as PrMergeView;
     } catch {
@@ -541,6 +618,12 @@ export async function confirmMerge(
     return {
       needsHuman: true,
       lesson: `PR #${pr.number} merge requires a fresh merge readiness headSha guard — re-run readiness before approving merge`,
+    };
+  }
+  if (issueAction === 'close' && input.issueRef && !hasClosingIssueReference(pr.closingIssuesReferences, input.issueRef)) {
+    return {
+      needsHuman: true,
+      lesson: `PR #${pr.number} is expected to close ${issueRefTag(input.issueRef, ownerRepo)} but GitHub closingIssuesReferences does not include it`,
     };
   }
 
@@ -594,7 +677,7 @@ function envInt(name: string, fallback: number): number {
 
 export type PollPrDeps = IntegratorDeps & {
 
-  collect?: (repo: string, branch: string, base: string, execGh: ExecGhFn, issueRef?: IssueRef) => Promise<PollPrReadiness>;
+  collect?: (repo: string, branch: string, base: string, execGh: ExecGhFn, issueRef?: IssueRef, issueAction?: IssueAction) => Promise<PollPrReadiness>;
 
   sleep?: (ms: number) => Promise<void>;
 
@@ -621,8 +704,9 @@ function defaultCollect(
   base: string,
   execGh: ExecGhFn,
   issueRef?: IssueRef,
+  issueAction?: IssueAction,
 ): Promise<PollPrReadiness> {
-  return collectPrReadiness({ repo, headBranch: branch, baseBranch: base, issueRef, includeReviewThreads: true, includeComments: false }, execGh).then(
+  return collectPrReadiness({ repo, headBranch: branch, baseBranch: base, issueRef, issueAction, includeReviewThreads: true, includeComments: false }, execGh).then(
     (r): PollPrReadiness => ({
       pr: { number: r.pr.number, headSha: r.pr.headSha },
       checks: { pending: r.checks.pending, fail: r.checks.fail, list: r.checks.list },
@@ -714,7 +798,7 @@ export async function pollPr(
   let readiness: PollPrReadiness | undefined;
   let lastReadiness: PollPrReadiness | undefined;
   for (let i = 0; i < maxPolls; i++) {
-    readiness = await collect(ownerRepo, branch, input.base, gh, input.issueRef);
+    readiness = await collect(ownerRepo, branch, input.base, gh, input.issueRef, input.issueAction);
     lastReadiness = readiness;
     if (readiness.checks.pending.length === 0 && readiness.checks.list.length > 0) break;
     readiness = undefined;
@@ -751,7 +835,7 @@ export async function pollPr(
     const reviewGracePolls = deps.reviewGracePolls ?? envInt('REVO_POLL_PR_REVIEW_GRACE_POLLS', 4);
     for (let i = 0; i < reviewGracePolls && settled.reviewThreads.items.length === 0; i++) {
       await sleep(intervalMs);
-      settled = await collect(ownerRepo, branch, input.base, gh, input.issueRef);
+      settled = await collect(ownerRepo, branch, input.base, gh, input.issueRef, input.issueAction);
     }
   }
 

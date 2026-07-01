@@ -671,6 +671,7 @@ export class TaskControlPlaneApiService {
     pipelineId?: string;
     params?: unknown;
     issueRef?: unknown;
+    issueAction?: unknown;
 
     executionProfile?: unknown;
     role?: string;
@@ -687,6 +688,7 @@ export class TaskControlPlaneApiService {
       pipelineId: input.pipelineId,
       params: input.params,
       issueRef: input.issueRef,
+      issueAction: input.issueAction,
       executionProfile: input.executionProfile,
       source: input.pipelineId ? 'explicit' : 'deterministic-installed-playbook',
     });
@@ -1503,10 +1505,11 @@ export class TaskControlPlaneApiService {
     pipelineId?: string;
     params?: unknown;
     issueRef?: unknown;
+    issueAction?: unknown;
     executionProfile?: unknown;
     source: RouteDecision['source'];
   }): Promise<RouteDecision> {
-    const params = normalizeParams(input.params, input.issueRef);
+    const params = normalizeParams(input.params, input.issueRef, input.issueAction);
     const executionProfile = normalizeExecutionProfile(input.executionProfile);
     const playbook = await this.playbooks.resolvePlaybook(input.playbookId);
     const pipeline = input.pipelineId
