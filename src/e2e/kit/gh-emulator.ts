@@ -103,25 +103,23 @@ function ghBehavior(scenario: GhScenario, args: string[], st: GhState): string {
   if (args[0] === 'api' && args[1] === 'graphql') {
     const query = gqlQuery(args);
     if (query.includes('reviewThreads')) {
-      // collectPrReadiness reads reviewThreads by owner/name/number — return the unresolved nodes shape.
-      // The set is per the run's only branch; the e2e routes by taskId so a single branch is in play.
+      // collectPrReadiness reads reviewThreads by owner/name/number.
       const branch = onlyBranch(st);
       const ids = [...threadsFor(scenario, st, branch)];
-      // collectPrReadiness's mapReviewThreads reads `repository.pullRequest.reviewThreads` at the ROOT
-      // (matching how the readiness layer consumes the gh-graphql result — see pr-readiness.test.ts's
-      // reviewThreadsResponse). It is NOT wrapped in a `data` envelope here.
       return JSON.stringify({
-        repository: {
-          pullRequest: {
-            reviewThreads: {
-              nodes: ids.map((id) => ({
-                id,
-                isResolved: false,
-                isOutdated: false,
-                path: 'src/foo.ts',
-                line: 3,
-                comments: { nodes: [{ body: 'please address this review comment', url: `${PR_URL}#${id}`, author: { login: 'coderabbitai' } }] },
-              })),
+        data: {
+          repository: {
+            pullRequest: {
+              reviewThreads: {
+                nodes: ids.map((id) => ({
+                  id,
+                  isResolved: false,
+                  isOutdated: false,
+                  path: 'src/foo.ts',
+                  line: 3,
+                  comments: { nodes: [{ body: 'please address this review comment', url: `${PR_URL}#${id}`, author: { login: 'coderabbitai' } }] },
+                })),
+              },
             },
           },
         },

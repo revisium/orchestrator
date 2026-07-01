@@ -213,13 +213,31 @@ function checkMergeGateRecheckRouting(template: Template, sink: PolicySink): voi
   expectGateOutcomes(template, sink, {
     code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
     nodeId: 'mergeGate',
-    outcomes: ['approved', 'recheck', 'cancel'],
+    outcomes: ['approved', 'recheck', 'address_review_threads', 'return_to_development', 'override_merge', 'cancel'],
   });
   expectRoute(template, sink, {
     code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
     nodeId: 'mergeGate',
     verdict: 'recheck',
     target: 'mergeRecheck',
+  });
+  expectRoute(template, sink, {
+    code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
+    nodeId: 'mergeGate',
+    verdict: 'address_review_threads',
+    target: 'triage',
+  });
+  expectRoute(template, sink, {
+    code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
+    nodeId: 'mergeGate',
+    verdict: 'return_to_development',
+    target: 'triage',
+  });
+  expectRoute(template, sink, {
+    code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
+    nodeId: 'mergeGate',
+    verdict: 'override_merge',
+    target: 'confirmMerge',
   });
   expectRoute(template, sink, {
     code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',

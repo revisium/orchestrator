@@ -637,6 +637,63 @@ test('McpFacadeService.getPrReadiness strips raw GitHub comment metadata while p
   assert.ok(Buffer.byteLength(serialized, 'utf8') < 5_000, 'MCP readiness response stays compact');
 });
 
+test('compactReviewThreads: unresolvedCount and included survive (0 and false are not dropped)', async () => {
+  const api = {
+    async getPrReadiness() {
+      return {
+        verdict: 'needs_work',
+        pr: { number: 1, url: 'https://github.com/o/r/pull/1', state: 'OPEN', draft: false, base: 'master', head: 'h', headSha: 'sha', title: 'T', mergeState: 'BLOCKED' },
+        checks: { terminal: [], pending: [], pass: [], fail: [], list: [] },
+        reviewDecision: '',
+        reviewThreads: { included: false, unresolvedCount: 0, items: [] },
+        providerState: {},
+        sonar: { configured: false, issues: [], hotspots: [], unavailable: false },
+        nextAction: 'developer_fix',
+        evidence: [],
+        feedback: { developerFixes: [], reviewerQuestions: [], providerWait: [], humanDecisions: [], ignoredNoise: [], residualRisks: [] },
+        ciSummary: { ci_passed: false, checks: [], sonar_issues: [], sonar_hotspots_to_review: [], human_reviews: [], human_comments: [], bot_comments: [] },
+      };
+    },
+  } as unknown as TaskControlPlaneApiService;
+  const facade = new McpFacadeService(api);
+  const readiness = await facade.getPrReadiness({ repo: 'o/r', prNumber: 1 });
+  const threads = readiness.reviewThreads as { included?: boolean; unresolvedCount?: number };
+  assert.equal(threads.included, false, 'included:false must survive definedEntries (not dropped as undefined)');
+  assert.equal(threads.unresolvedCount, 0, 'unresolvedCount:0 must survive definedEntries');
+});
+
+test('compactReviewThreads: unresolvedCount and included are populated from the real fields', async () => {
+  const api = {
+    async getPrReadiness() {
+      return {
+        verdict: 'needs_work',
+        pr: { number: 2, url: 'https://github.com/o/r/pull/2', state: 'OPEN', draft: false, base: 'master', head: 'h', headSha: 'sha', title: 'T', mergeState: 'BLOCKED' },
+        checks: { terminal: [], pending: [], pass: [], fail: [], list: [] },
+        reviewDecision: '',
+        reviewThreads: {
+          included: true,
+          unresolvedCount: 2,
+          items: [
+            { id: 't1', isResolved: false, isOutdated: false, path: 'src/a.ts', line: 10, author: 'bot', body: 'Fix this.', url: 'https://github.com/o/r/pull/2#t1' },
+          ],
+        },
+        providerState: {},
+        sonar: { configured: false, issues: [], hotspots: [], unavailable: false },
+        nextAction: 'developer_fix',
+        evidence: [],
+        feedback: { developerFixes: [], reviewerQuestions: [], providerWait: [], humanDecisions: [], ignoredNoise: [], residualRisks: [] },
+        ciSummary: { ci_passed: false, checks: [], sonar_issues: [], sonar_hotspots_to_review: [], human_reviews: [], human_comments: [], bot_comments: [] },
+      };
+    },
+  } as unknown as TaskControlPlaneApiService;
+  const facade = new McpFacadeService(api);
+  const readiness = await facade.getPrReadiness({ repo: 'o/r', prNumber: 2 });
+  const threads = readiness.reviewThreads as { included?: boolean; unresolvedCount?: number; items?: unknown[] };
+  assert.equal(threads.included, true);
+  assert.equal(threads.unresolvedCount, 2);
+  assert.equal((threads.items ?? []).length, 1);
+});
+
 test('McpFacadeService exposes agent observability application error codes', async () => {
   const api = {
     async getAgentLog() {

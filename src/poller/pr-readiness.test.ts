@@ -65,10 +65,12 @@ function makeFullResponses(
 
 function reviewThreadsResponse(nodes: unknown[]) {
   return {
-    repository: {
-      pullRequest: {
-        reviewThreads: {
-          nodes,
+    data: {
+      repository: {
+        pullRequest: {
+          reviewThreads: {
+            nodes,
+          },
         },
       },
     },
@@ -1590,10 +1592,8 @@ test('#142 Finding #1: a coderabbit comment at a DIFFERENT line than the thread 
 
 // ─── fetchRequiredCheckNames (PR #135 fix: required-only ci_changes) ──────────
 
-/** A statusCheckRollup.contexts GraphQL payload — `name` for CheckRun, `context` for StatusContext.
- *  Matches reviewThreadsResponse: gh `api graphql` returns the `repository` object at the top level. */
 function requiredChecksResponse(nodes: unknown[]) {
-  return { repository: { pullRequest: { statusCheckRollup: { contexts: { nodes } } } } };
+  return { data: { repository: { pullRequest: { statusCheckRollup: { contexts: { nodes } } } } } };
 }
 
 test('fetchRequiredCheckNames: returns only isRequired contexts, mapping CheckRun.name + StatusContext.context', () => {
@@ -1615,11 +1615,116 @@ test('fetchRequiredCheckNames: empty/missing rollup → empty set (caller applie
   const execGh: ExecGhFn = () => JSON.stringify(requiredChecksResponse([]));
   assert.equal(fetchRequiredCheckNames('owner/repo', 42, execGh).size, 0);
 
-  const nullRollup: ExecGhFn = () => JSON.stringify({ repository: { pullRequest: { statusCheckRollup: null } } });
+  const nullRollup: ExecGhFn = () => JSON.stringify({ data: { repository: { pullRequest: { statusCheckRollup: null } } } });
   assert.equal(fetchRequiredCheckNames('owner/repo', 42, nullRollup).size, 0);
 });
 
 test('fetchRequiredCheckNames: non-JSON gh output throws (so pollPr can fail-safe to all-failures)', () => {
   const execGh: ExecGhFn = () => 'Error: authentication required';
   assert.throws(() => fetchRequiredCheckNames('owner/repo', 42, execGh), /non-JSON/);
+});
+
+// ─── data-envelope regression (issue #233 fix) ───────────────
+// gh api graphql wraps all responses in {"data":{...}}; these tests confirm the parse
+// boundary handles the real envelope. They fail before unwrapGraphqlData is applied.
+
+test('#233: collectPrReadiness correctly collects unresolved threads from data-wrapped graphql response', async () => {
+  const terminalView = prViewResponse([checkRun('CI', 'COMPLETED', 'SUCCESS')], {
+    number: 42, state: 'OPEN',
+  });
+  const threadNode = reviewThreadNode(); // already uses reviewThreadsResponse which now wraps in data
+  const execGh = makeFullResponses(
+    terminalView,
+    [],
+    [],
+    [],
+    null,
+    reviewThreadsResponse([threadNode, { ...threadNode, id: 'thread-2' }, { ...threadNode, id: 'thread-3' }]),
+  );
+
+  const readiness = await collectPrReadiness({ repo: 'owner/repo', prNumber: 42, includeReviewThreads: true }, execGh);
+
+  assert.equal(readiness.reviewThreads.items.length, 3, 'all 3 unresolved threads must be collected');
+  assert.equal(readiness.reviewThreads.unresolvedCount, 3);
+  assert.notEqual(readiness.verdict, 'ready', 'verdict must not be ready when threads exist');
+  assert.notEqual(readiness.nextAction, 'ready_for_merge_gate', 'nextAction must not be ready_for_merge_gate with threads');
+  assert.ok(
+    readiness.feedback.developerFixes.some((f) => f.source === 'review_thread'),
+    'review_thread finding must appear in developerFixes',
+  );
+});
+
+test('#233: resolved and outdated threads are filtered out; only unresolved non-outdated count', async () => {
+  const terminalView = prViewResponse([checkRun('CI', 'COMPLETED', 'SUCCESS')], { number: 42, state: 'OPEN' });
+  const nodes = [
+    reviewThreadNode(),                                    // unresolved, non-outdated → included
+    { ...reviewThreadNode(), id: 'resolved', isResolved: true },     // resolved → dropped
+    { ...reviewThreadNode(), id: 'outdated', isOutdated: true },     // outdated → dropped
+  ];
+  const execGh = makeFullResponses(terminalView, [], [], [], null, reviewThreadsResponse(nodes));
+
+  const readiness = await collectPrReadiness({ repo: 'owner/repo', prNumber: 42, includeReviewThreads: true }, execGh);
+
+  assert.equal(readiness.reviewThreads.items.length, 1, 'only the unresolved non-outdated thread is kept');
+  assert.equal(readiness.reviewThreads.unresolvedCount, 1);
+});
+
+test('#233: green CI + unresolved review threads → review_changes, not ready/clean', async () => {
+  const terminalView = prViewResponse([checkRun('CI', 'COMPLETED', 'SUCCESS'), checkRun('Lint', 'COMPLETED', 'SUCCESS')], {
+    number: 42, state: 'OPEN',
+  });
+  const execGh = makeFullResponses(
+    terminalView,
+    [],
+    [],
+    [],
+    null,
+    reviewThreadsResponse([reviewThreadNode()]),
+  );
+
+  const readiness = await collectPrReadiness({ repo: 'owner/repo', prNumber: 42, includeReviewThreads: true }, execGh);
+
+  assert.equal(readiness.verdict, 'needs_work', 'unresolved threads cause needs_work verdict');
+  assert.equal(readiness.nextAction, 'developer_fix', 'nextAction is developer_fix with threads');
+  assert.equal(readiness.reviewThreads.unresolvedCount, 1);
+});
+
+test('#233: COMMENTED bot review state does not suppress unresolved threads', async () => {
+  const terminalView = prViewResponse([checkRun('CI', 'COMPLETED', 'SUCCESS')], { number: 42, state: 'OPEN' });
+  const reviews = [{ user: { login: 'coderabbitai[bot]', type: 'Bot' }, state: 'COMMENTED', body: '' }];
+  const execGh = makeFullResponses(
+    terminalView,
+    reviews,
+    [],
+    [],
+    null,
+    reviewThreadsResponse([reviewThreadNode()]),
+  );
+
+  const readiness = await collectPrReadiness({ repo: 'owner/repo', prNumber: 42, includeReviewThreads: true }, execGh);
+
+  assert.equal(readiness.reviewThreads.items.length, 1, 'threads must survive despite COMMENTED bot review');
+  assert.notEqual(readiness.verdict, 'ready');
+});
+
+test('#233: ignoredNoise closed allowlist — unrecognized bot comment surfaces in developerFixes, not ignored', async () => {
+  const terminalView = prViewResponse([checkRun('CI', 'COMPLETED', 'SUCCESS')], { number: 42, state: 'OPEN' });
+  const unknownBot = { user: { login: 'security-scanner[bot]', type: 'Bot' }, body: 'Found a potential injection vulnerability in src/api.ts:42', path: 'src/api.ts', line: 42 };
+  const knownInfoBot = { user: { login: 'sonarqubecloud[bot]', type: 'Bot' }, body: '## Quality Gate passed\n\nNo issues.', path: undefined, line: undefined };
+  const execGh = makeFullResponses(terminalView, [], [unknownBot, knownInfoBot], [], null, reviewThreadsResponse([]));
+
+  const readiness = await collectPrReadiness({ repo: 'owner/repo', prNumber: 42, includeReviewThreads: true }, execGh);
+
+  assert.ok(
+    readiness.feedback.developerFixes.some((f) => f.source === 'bot_comment' && f.author === 'security-scanner[bot]'),
+    'unrecognized bot comment must surface in developerFixes',
+  );
+  assert.ok(
+    !readiness.feedback.ignoredNoise.some((n) => n.source === 'security-scanner[bot]'),
+    'unrecognized bot comment must NOT be in ignoredNoise',
+  );
+  assert.ok(
+    readiness.feedback.ignoredNoise.some((n) => n.source === 'sonarqubecloud[bot]'),
+    'known informational bot stays in ignoredNoise',
+  );
 });

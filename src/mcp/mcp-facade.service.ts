@@ -283,7 +283,8 @@ function compactReviewThreads(value: unknown): unknown {
   const reviewThreads = asRecord(value);
   if (!reviewThreads) return value;
   return definedEntries({
-    totalCount: asNumber(reviewThreads.totalCount),
+    included: typeof reviewThreads.included === 'boolean' ? reviewThreads.included : undefined,
+    unresolvedCount: asNumber(reviewThreads.unresolvedCount),
     items: compactRecordArray(reviewThreads.items).map((thread) => definedEntries({
       id: asString(thread.id),
       path: asString(thread.path),

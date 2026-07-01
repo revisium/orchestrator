@@ -395,8 +395,15 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
+// gh api graphql wraps responses in {"data":{...}}; unwrap tolerantly so unit fixtures still work.
+function unwrapGraphqlData(raw: unknown): unknown {
+  const top = asRecord(raw);
+  const data = top ? asRecord(top['data']) : null;
+  return data ?? raw;
+}
+
 function mapReviewThreads(raw: unknown): ReviewThread[] {
-  const root = asRecord(raw);
+  const root = asRecord(unwrapGraphqlData(raw));
   const repository = asRecord(root?.['repository']);
   const pullRequest = asRecord(repository?.['pullRequest']);
   const reviewThreads = asRecord(pullRequest?.['reviewThreads']);
@@ -440,7 +447,7 @@ function fetchReviewThreads(repo: string, prNumber: number, execGh: ExecGhFn): R
 
 
 function mapRequiredCheckNames(raw: unknown): Set<string> {
-  const root = asRecord(raw);
+  const root = asRecord(unwrapGraphqlData(raw));
   const repository = asRecord(root?.['repository']);
   const pullRequest = asRecord(repository?.['pullRequest']);
   const rollup = asRecord(pullRequest?.['statusCheckRollup']);
@@ -478,6 +485,10 @@ export function fetchRequiredCheckNames(repo: string, prNumber: number, execGh: 
 function collectReviewThreads(input: PrReadinessInput, prNumber: number, execGh: ExecGhFn): PrReadinessResult['reviewThreads'] {
   const threads = input.includeReviewThreads === false ? [] : fetchReviewThreads(input.repo, prNumber, execGh);
   const unresolved = threads.filter((thread) => !thread.isResolved && !thread.isOutdated);
+  const dropped = threads.length - unresolved.length;
+  if (threads.length > 0) {
+    console.info(`[pr-readiness] review-threads fetched=${threads.length} unresolved=${unresolved.length} dropped(resolved/outdated)=${dropped}`);
+  }
   return {
     included: input.includeReviewThreads !== false,
     unresolvedCount: unresolved.length,
@@ -758,6 +769,15 @@ function issueLinkageFeedback(
   }];
 }
 
+// Bot logins whose comments are purely informational and safe to suppress.
+// Anything not in this list surfaces in developerFixes to avoid silent suppression.
+const KNOWN_INFORMATIONAL_BOTS = new Set([
+  'sonarqubecloud[bot]',
+  'cursor[bot]',
+  'linear-app[bot]',
+  'deepsource-autofix[bot]',
+]);
+
 function buildFeedback(input: {
   checks: ReturnType<typeof compactCheckLists>;
   providerState: ReturnType<typeof providerState>;
@@ -808,6 +828,14 @@ function buildFeedback(input: {
       input.botComments,
       new Set(input.reviewThreads.items.map((thread) => locationOf(thread)).filter((loc) => loc !== '')),
     ),
+    ...input.botComments
+      .filter((comment) => !isCodeRabbit(comment.user) && !KNOWN_INFORMATIONAL_BOTS.has(comment.user?.login ?? ''))
+      .map((comment) => ({
+        source: 'bot_comment',
+        summary: compactBody(comment.body),
+        author: comment.user?.login ?? 'bot',
+        evidence: comment.user?.login ?? 'bot',
+      })),
   ];
 
   const reviewerQuestions = input.humanComments
@@ -830,7 +858,7 @@ function buildFeedback(input: {
   ];
 
   const ignoredNoise = input.botComments
-    .filter((comment) => !comment.user?.login.toLowerCase().includes('coderabbit'))
+    .filter((comment) => !isCodeRabbit(comment.user) && KNOWN_INFORMATIONAL_BOTS.has(comment.user?.login ?? ''))
     .map((comment) => ({ source: comment.user?.login ?? 'bot', summary: compactBody(comment.body) }));
 
   const residualRisks = [
