@@ -17,6 +17,7 @@ import type {
 import { ControlPlaneError } from '../control-plane/errors.js';
 import type { InboxItem } from '../control-plane/inbox.js';
 import { validateManualAdoptionAudit, type ManualAdoptionAuditInput } from '../control-plane/manual-adoption-audit.js';
+import { validateMergeOverrideAudit, type MergeOverrideAuditInput } from '../control-plane/merge-override-audit.js';
 import { fnv1a64Hex } from '../control-plane/steps.js';
 import { DbosService } from '../engine/dbos.service.js';
 import { PipelineService, type RunnerMode } from '../pipeline/pipeline.service.js';
@@ -1226,6 +1227,7 @@ export class TaskControlPlaneApiService {
     note?: string;
     resolvedBy?: string;
     adoptionAudit?: ManualAdoptionAuditInput;
+    mergeOverrideAudit?: MergeOverrideAuditInput;
   }) {
     const item = await this.getInboxItem(input.inboxId);
     const topic = gateTopic(item);
@@ -1250,11 +1252,15 @@ export class TaskControlPlaneApiService {
     const adoptionAudit = outcome === 'adopt_patch_manually'
       ? validateManualAdoptionAudit(input.adoptionAudit, item)
       : undefined;
+    const mergeOverrideAudit = outcome === 'override_merge'
+      ? validateMergeOverrideAudit(input.mergeOverrideAudit, item)
+      : undefined;
     const resolvedBy = input.resolvedBy ?? 'mcp';
     const answer = {
       outcome,
       ...(note ? { note } : {}),
       ...(adoptionAudit ? { adoptionAudit } : {}),
+      ...(mergeOverrideAudit ? { mergeOverrideAudit } : {}),
       resolvedBy,
       resolvedAt: new Date().toISOString(),
       inboxId: input.inboxId,
@@ -1353,11 +1359,15 @@ export class TaskControlPlaneApiService {
         const adoptionAudit = outcome === 'adopt_patch_manually'
           ? validateManualAdoptionAudit(answer.adoptionAudit, item)
           : undefined;
+        const mergeOverrideAudit = outcome === 'override_merge'
+          ? validateMergeOverrideAudit(answer.mergeOverrideAudit, item)
+          : undefined;
         answerToResolve = {
           ...answer,
           outcome,
           ...(typeof answer.note === 'string' ? { note } : {}),
           ...(adoptionAudit ? { adoptionAudit } : {}),
+          ...(mergeOverrideAudit ? { mergeOverrideAudit } : {}),
         };
       }
     }

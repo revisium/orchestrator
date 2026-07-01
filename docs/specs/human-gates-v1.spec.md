@@ -197,6 +197,9 @@ Merge gate:
 
 - Appears after integration/review checks and before merge.
 - Agents do not merge without this gate when the selected pipeline includes it.
+- Exposes `approved`, `recheck`, `address_review_threads`, `return_to_development`, `override_merge`, and `cancel`
+  outcomes. `address_review_threads` and `return_to_development` both route to `triage`; `override_merge` routes to
+  `confirmMerge`; `cancel` routes to `cancelledEnd`.
 
 Question gate:
 
@@ -221,6 +224,12 @@ pollPr review_changes -> analyst triage
 triage question -> questionGate -> triage
 triage fix -> developer rework -> respondThreads -> integrator
 triage wontfix -> respondThreads -> pollPr
+mergeGate approved -> confirmMerge
+mergeGate recheck -> mergeRecheck -> mergeRecheckRouter
+mergeGate address_review_threads -> triage
+mergeGate return_to_development -> triage
+mergeGate override_merge -> confirmMerge   (override audit required)
+mergeGate cancel -> cancelledEnd
 ```
 
 Contracts:
@@ -233,9 +242,22 @@ Contracts:
 - `respondThreads` replies to and resolves only the threads it triaged as `fix` or `wontfix`.
 - Resolved or reopened threads are detected by the next PR poll.
 - Thread maps and triage decisions ride `run_outputs`; no separate durable PR-thread table exists in v1.
+- Unresolved review threads are an independent blocker: `pollPr` / `mergeReadiness` emit `review_changes` when threads
+  exist, even when CI is green. A run blocked at `mergeGate` with live unresolved threads uses
+  `address_review_threads` or `return_to_development` (both route to triage) rather than `recheck` (which only
+  re-polls providers).
+- `override_merge` bypasses thread resolution. It requires a `mergeOverrideAudit` payload on the `resolve_gate` call:
+  `threadIds`, `actor`, `reason`, `risk`, `verificationResponsibility`, and `headSha` (recorded for accountability;
+  the SHA is not live-checked at gate-resolve time — the existing SHA guard in `confirmMerge` remains the merge-time
+  fence). The audit is persisted in the gate-resolution artifact.
+- Known informational bots (`sonarqubecloud`, `cursor`, `linear-app`, `deepsource-autofix`) are suppressed into
+  `ignoredNoise`; all other bot comments surface in `developerFixes` with `source: 'bot_comment'`.
 
 ## Changelog
 
+- 2026-07-01: Documented merge-gate thread-recovery outcomes (`address_review_threads`, `return_to_development`,
+  `override_merge`), thread-as-independent-blocker contract, override audit requirement, and informational-bot
+  suppression allowlist (issue #233).
 - 2026-07-01: Added cancelled run observation and documented named `cancel` / iterative plan rework gates.
 - 2026-06-29: Replaced legacy run-observation tools with get_run_attention (primary), get_run_status
   (neutral), and watch_run_changes (advanced delivery). Cursor moves to watch_run_changes only.

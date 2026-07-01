@@ -5,6 +5,7 @@ import {
   type RepositoryValidation,
 } from '../task-control-plane/task-control-plane-api.service.js';
 import type { ManualAdoptionAuditInput } from '../control-plane/manual-adoption-audit.js';
+import type { MergeOverrideAuditInput } from '../control-plane/merge-override-audit.js';
 import { ControlPlaneError } from '../control-plane/errors.js';
 import { AgentObservabilityError } from '../observability/types.js';
 import { CreateRunWorkflowError } from '../run/create-run.js';
@@ -283,7 +284,8 @@ function compactReviewThreads(value: unknown): unknown {
   const reviewThreads = asRecord(value);
   if (!reviewThreads) return value;
   return definedEntries({
-    totalCount: asNumber(reviewThreads.totalCount),
+    included: typeof reviewThreads.included === 'boolean' ? reviewThreads.included : undefined,
+    unresolvedCount: asNumber(reviewThreads.unresolvedCount),
     items: compactRecordArray(reviewThreads.items).map((thread) => definedEntries({
       id: asString(thread.id),
       path: asString(thread.path),
@@ -548,6 +550,7 @@ export class McpFacadeService {
     note?: string;
     resolvedBy?: string;
     adoptionAudit?: ManualAdoptionAuditInput;
+    mergeOverrideAudit?: MergeOverrideAuditInput;
   }) {
     return this.api.resolveGate(input);
   }

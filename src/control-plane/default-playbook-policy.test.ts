@@ -161,7 +161,7 @@ test('default playbook policy: missing merge-gate reject recheck outcome is diag
 
   assert.equal(diagnostic.nodeId, 'mergeGate');
   assert.equal(diagnostic.path, 'outcomes');
-  assert.match(diagnostic.expected ?? '', /approved,recheck,cancel/);
+  assert.match(diagnostic.expected ?? '', /approved,recheck,address_review_threads,return_to_development,override_merge,cancel/);
 });
 
 test('default playbook policy: merge-gate cancel must terminate as cancelled', () => {
@@ -174,6 +174,42 @@ test('default playbook policy: merge-gate cancel must terminate as cancelled', (
 
   assert.equal(diagnostic.nodeId, 'mergeGate');
   assert.match(diagnostic.expected ?? '', /cancel -> cancelledEnd/);
+});
+
+test('default playbook policy: merge-gate address_review_threads must route to triage', () => {
+  const diagnostic = assertDiagnostic(
+    mutateTemplate((template) => {
+      guardedBranchContaining(template, 'mergeGate', 'address_review_threads').goto = 'blockedEnd';
+    }),
+    'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
+  );
+
+  assert.equal(diagnostic.nodeId, 'mergeGate');
+  assert.match(diagnostic.expected ?? '', /address_review_threads -> triage/);
+});
+
+test('default playbook policy: merge-gate return_to_development must route to triage', () => {
+  const diagnostic = assertDiagnostic(
+    mutateTemplate((template) => {
+      guardedBranchContaining(template, 'mergeGate', 'return_to_development').goto = 'blockedEnd';
+    }),
+    'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
+  );
+
+  assert.equal(diagnostic.nodeId, 'mergeGate');
+  assert.match(diagnostic.expected ?? '', /return_to_development -> triage/);
+});
+
+test('default playbook policy: merge-gate override_merge must route to confirmMerge', () => {
+  const diagnostic = assertDiagnostic(
+    mutateTemplate((template) => {
+      guardedBranchContaining(template, 'mergeGate', 'override_merge').goto = 'blockedEnd';
+    }),
+    'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
+  );
+
+  assert.equal(diagnostic.nodeId, 'mergeGate');
+  assert.match(diagnostic.expected ?? '', /override_merge -> confirmMerge/);
 });
 
 test('default playbook policy: merge-gate reject must re-poll PR feedback', () => {

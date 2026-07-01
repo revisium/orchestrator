@@ -289,7 +289,7 @@ test('default playbook: verdict domains preserve local-change narrowness and fea
   );
   assert.deepEqual(
     pipelineTemplate('feature-development').verdicts?.domain,
-    ['approved', 'clean', 'blocker', 'changes_requested', 'review_changes', 'ci_changes', 'fix', 'wontfix', 'question', 'recheck', 'approve_anyway', 'rework', 'cancel'],
+    ['approved', 'clean', 'blocker', 'changes_requested', 'review_changes', 'ci_changes', 'fix', 'wontfix', 'question', 'recheck', 'approve_anyway', 'rework', 'cancel', 'address_review_threads', 'return_to_development', 'override_merge'],
     'feature-development keeps the broad default domain used by plan/review/PR-feedback routing',
   );
 });
