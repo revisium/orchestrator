@@ -51,6 +51,8 @@ Verify from the agent by calling:
 
 Core MCP verbs include run creation/start/cancel, `get_run_attention` (primary observation loop), `watch_run_changes` (cursor-based delivery), inbox gate resolution, repository diagnostics, and PR readiness. Normal observation loop: call `get_run_attention` after `start_run` and after each gate resolution; repeat until `nextAction` is `'done'`.
 
+When you call `create_run` or `start_run`, the response includes a `monitoring` object that instructs you to act as operator/humanGate for the run. Follow the embedded `protocol` steps: poll `get_run_attention`, handle gates via inbox tools (`get_inbox_item` → `resolve_gate` / `approve_gate` / `reject_gate` / `answer_question`), and stop when `nextAction` is `"done"`. Pass `includeMonitoringGuidance: false` to suppress this directive if you manage orchestration externally. The full operator monitoring contract is documented in [specs/human-gates-v1.spec.md](./specs/human-gates-v1.spec.md).
+
 ## Use GraphQL
 
 The dev profile endpoint is:

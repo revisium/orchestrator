@@ -185,6 +185,36 @@ Rules:
   attempt, digest, and log surfaces (`runner_retry_scheduled`, `runner_retry_exhausted`, per-attempt rows, and
   per-attempt agent logs). `retrying` remains reserved for a future transition shape.
 
+## Operator monitoring directive
+
+When `create_run` or `start_run` succeeds, the response includes a `monitoring` object that instructs the calling agent to act as operator/humanGate for the run. The directive is emitted by default; pass `includeMonitoringGuidance: false` to suppress it.
+
+Shape:
+
+```ts
+type MonitoringDirective = {
+  nextAction: 'monitor';
+  role: 'operator/humanGate';
+  runId: string;
+  pollTool: 'get_run_attention';
+  cadence: string;
+  protocol: string[];
+  gateTools: string[];
+  stopConditions: string[];
+  guidance: string;
+  clientHints: { advisory: true; note: string; hints: Record<string, string> };
+};
+```
+
+Rules:
+
+- `monitoring` is a nested object; it does not conflict with any top-level `nextAction` field.
+- Suppressed on `confirmationRequired` (no run created) and on `nextAction: 'resume_run'` (recoverable preflight block).
+- `protocol` is the same array exported from `src/mcp/monitoring-directive.ts` as `OPERATOR_MONITORING_PROTOCOL` — identical to the `task_monitoring_loop` steps in `MCP_INSTRUCTIONS` and the `get_run_attention` description. A consistency test guards against drift.
+- `clientHints` is advisory only. No field in the directive requires a client-specific primitive.
+- The directive references only protocol intent. The client-side sleep/wake engine is not part of this MCP layer; it belongs to each client harness.
+- Durable cross-session monitoring (daemon push, cloud schedules) is a separate daemon-side concern not covered here.
+
 ## Gate Kinds
 
 Plan gate:
@@ -258,6 +288,7 @@ Contracts:
 - 2026-07-01: Documented merge-gate thread-recovery outcomes (`address_review_threads`, `return_to_development`,
   `override_merge`), thread-as-independent-blocker contract, override audit requirement, and informational-bot
   suppression allowlist (issue #233).
+- 2026-07-01: Added operator monitoring directive: `create_run` and `start_run` responses include a structured `monitoring` object instructing the calling agent to act as operator/humanGate. Opt-out via `includeMonitoringGuidance: false`. Protocol shared with `MCP_INSTRUCTIONS` and `get_run_attention` description via `OPERATOR_MONITORING_PROTOCOL` constant.
 - 2026-07-01: Added cancelled run observation and documented named `cancel` / iterative plan rework gates.
 - 2026-06-29: Replaced legacy run-observation tools with get_run_attention (primary), get_run_status
   (neutral), and watch_run_changes (advanced delivery). Cursor moves to watch_run_changes only.

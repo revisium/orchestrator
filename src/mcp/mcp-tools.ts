@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { MAX_WATCH_CURSOR_CHARS } from '../task-control-plane/run-watch.service.js';
+import { OPERATOR_MONITORING_PROTOCOL } from './monitoring-directive.js';
 import type { McpFacadeService } from './mcp-facade.service.js';
 
 function json(value: unknown) {
@@ -167,6 +168,7 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
         issueRef: issueRefSchema,
         priority: z.number().int().optional(),
         start: z.boolean().optional().describe('Start the workflow immediately after creating the run'),
+        includeMonitoringGuidance: z.boolean().optional().describe('Set false to suppress the operator monitoring directive in the response. Default: true.'),
       },
       annotations: { readOnlyHint: false },
     },
@@ -180,6 +182,7 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
         'Start or reattach the durable pipeline workflow for an existing run. For a terminal recoverable preflight block, returns nextAction:"resume_run" without retrying or creating recovery.',
       inputSchema: {
         runId: runIdSchema,
+        includeMonitoringGuidance: z.boolean().optional().describe('Set false to suppress the operator monitoring directive in the response. Default: true.'),
       },
       annotations: { readOnlyHint: false },
     },
@@ -203,7 +206,7 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
     'get_run_attention',
     {
       description:
-        'Default/primary tool for agents monitoring a run: answers "what currently requires attention?" Single-shot, no cursor. task_monitoring_loop: re-poll on "wait"; resolve inbox on "ask_human"; call start_run on "start_run"; use get_run_digest/get_agent_log once on inspect actions; stop on "done".',
+        `Default/primary tool for agents monitoring a run: answers "what currently requires attention?" Single-shot, no cursor. ${OPERATOR_MONITORING_PROTOCOL.join(' ')}`,
       inputSchema: { runId: runIdSchema },
       annotations: { readOnlyHint: true },
     },
