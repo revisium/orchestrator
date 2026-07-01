@@ -41,8 +41,20 @@ test('normalizePrReadinessInput forwards normalized issueRef to readiness core i
       baseBranch: 'master',
       sonarProject: undefined,
       issueRef: ISSUE_REF,
+      issueAction: 'close',
       includeComments: false,
       includeReviewThreads: false,
     },
+  );
+});
+
+test('normalizePrReadinessInput defaults issue-bound readiness to close', () => {
+  assert.equal(
+    normalizePrReadinessInput({
+      repo: 'revisium/orchestrator',
+      prNumber: 191,
+      issueRef: ISSUE_REF,
+    }).issueAction,
+    'close',
   );
 });

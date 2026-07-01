@@ -481,7 +481,7 @@ async function integrateProducedChange(
   const cwd = change.worktreePath ?? await deps.resolveRunCwd(input.runId, input.taskId);
   const branch = change.branch;
   const issueRef = change.issueRef ?? input.issueRef;
-  const issueAction = resolvedIssueAction(issueRef, input.issueAction);
+  const issueAction = resolvedIssueAction(issueRef, change.issueAction ?? input.issueAction);
 
   const ownerRepoResult = resolveOwnerRepo(git, cwd);
   if ('needsHuman' in ownerRepoResult) return ownerRepoResult;
@@ -620,7 +620,7 @@ export async function confirmMerge(
       lesson: `PR #${pr.number} merge requires a fresh merge readiness headSha guard — re-run readiness before approving merge`,
     };
   }
-  if (issueAction === 'close' && !hasClosingIssueReference(pr.closingIssuesReferences, input.issueRef)) {
+  if (issueAction === 'close' && input.issueRef && !hasClosingIssueReference(pr.closingIssuesReferences, input.issueRef)) {
     return {
       needsHuman: true,
       lesson: `PR #${pr.number} is expected to close ${issueRefTag(input.issueRef, ownerRepo)} but GitHub closingIssuesReferences does not include it`,

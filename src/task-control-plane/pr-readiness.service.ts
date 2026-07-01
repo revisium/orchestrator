@@ -4,7 +4,7 @@ import {
   type PrReadinessInput,
   type PrReadinessResult,
 } from '../poller/pr-readiness-core.js';
-import { normalizeIssueAction, normalizeIssueRef } from '../run/issue-ref.js';
+import { defaultIssueAction, normalizeIssueAction, normalizeIssueRef } from '../run/issue-ref.js';
 
 export type GetPrReadinessInput = {
   repo: string;
@@ -42,14 +42,15 @@ export class PrReadinessService {
 }
 
 export function normalizePrReadinessInput(input: GetPrReadinessInput): PrReadinessInput {
-  const issueAction = normalizeIssueAction(input.issueAction, 'issueAction');
+  const issueRef = normalizeIssueRef(input.issueRef, 'issueRef');
+  const issueAction = normalizeIssueAction(input.issueAction, 'issueAction') ?? defaultIssueAction(issueRef);
   return {
     repo: input.repo,
     prNumber: input.prNumber,
     headBranch: input.headBranch,
     baseBranch: input.baseBranch ?? 'master',
     sonarProject: input.sonarProject,
-    issueRef: normalizeIssueRef(input.issueRef, 'issueRef'),
+    issueRef,
     ...(issueAction ? { issueAction } : {}),
     includeComments: input.includeComments ?? true,
     includeReviewThreads: input.includeReviewThreads ?? true,

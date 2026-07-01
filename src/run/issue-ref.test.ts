@@ -159,5 +159,7 @@ test('issueBodyWithClosingReference adds one duplicate-safe closing reference', 
     issueBodyWithClosingReference('Already closes #147', ISSUE_REF, 'revisium/orchestrator'),
     'Already closes #147',
   );
+  assert.equal(hasIssueClosingReference('Closes: #147', ISSUE_REF, 'revisium/orchestrator'), true);
   assert.equal(hasIssueClosingReference('Fixes revisium/orchestrator#147', ISSUE_REF, 'other/repo'), true);
+  assert.equal(hasIssueClosingReference('Resolves: revisium/orchestrator#147', ISSUE_REF, 'other/repo'), true);
 });

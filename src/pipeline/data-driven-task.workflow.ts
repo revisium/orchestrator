@@ -59,7 +59,7 @@ import { redactEventPayload } from '../run/append-event.js';
 import { redactSecrets } from '../control-plane/inbox.js';
 import { fnv1a64Hex } from '../control-plane/steps.js';
 import type { RunOutputRow } from '../run/run-outputs.js';
-import { normalizeIssueRef, type IssueAction, type IssueRef } from '../run/issue-ref.js';
+import { normalizeIssueAction, normalizeIssueRef, type IssueAction, type IssueRef } from '../run/issue-ref.js';
 import type { Decision as GateDecision } from './await-human.js';
 import type { CompleteRunResult } from '../run/complete-run.js';
 import type { FailRunResult } from '../run/fail-run.js';
@@ -308,10 +308,12 @@ function producedChangeArtifact(value: unknown): ProducedChangeArtifact | undefi
   if (typeof branch !== 'string' || branch.trim().length === 0) return undefined;
   if (typeof headSha !== 'string' || headSha.trim().length === 0) return undefined;
   const issueRef = normalizeArtifactIssueRef(candidate.issueRef);
+  const issueAction = normalizeArtifactIssueAction(candidate.issueAction);
   return {
     branch,
     headSha,
     ...(issueRef ? { issueRef } : {}),
+    ...(issueAction ? { issueAction } : {}),
     ...(typeof candidate.worktreePath === 'string' && candidate.worktreePath.trim() ? { worktreePath: candidate.worktreePath } : {}),
     ...(typeof candidate.artifactRef === 'string' && candidate.artifactRef.trim() ? { artifactRef: candidate.artifactRef } : {}),
     ...(typeof candidate.prNumber === 'number' && Number.isSafeInteger(candidate.prNumber) ? { prNumber: candidate.prNumber } : {}),
@@ -321,6 +323,14 @@ function producedChangeArtifact(value: unknown): ProducedChangeArtifact | undefi
 function normalizeArtifactIssueRef(value: unknown): IssueRef | undefined {
   try {
     return normalizeIssueRef(value, 'change.issueRef');
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeArtifactIssueAction(value: unknown): IssueAction | undefined {
+  try {
+    return normalizeIssueAction(value, 'change.issueAction');
   } catch {
     return undefined;
   }

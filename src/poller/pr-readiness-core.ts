@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { accessSync, constants } from 'node:fs';
-import { hasClosingIssueReference, hasIssueRefToken, type IssueAction, type IssueRef } from '../run/issue-ref.js';
+import { defaultIssueAction, hasClosingIssueReference, hasIssueRefToken, type IssueAction, type IssueRef } from '../run/issue-ref.js';
 
 export type PrReadinessVerdict =
   | 'ready'
@@ -738,10 +738,11 @@ function hasIssueBranchToken(head: string | undefined, issueRef: IssueRef): bool
 
 function issueLinkageFeedback(
   issueRef: IssueRef | undefined,
+  issueAction: IssueAction | undefined,
   repo: string,
   pr: { head?: string; title?: string },
 ) {
-  if (!issueRef) return [];
+  if (!issueRef || issueAction === 'none') return [];
   const issueBranch = `issue-${issueRef.number}`;
   const issueTag = issueRefTitleTag(issueRef, repo);
   const missing: string[] = [];
@@ -852,7 +853,7 @@ function buildFeedback(input: {
       ? [{ source: 'github_review_decision', summary: `Review decision is ${input.reviewDecision}` }]
       : []),
     ...(input.sonar.unavailable ? [{ source: 'sonar', summary: 'Sonar was configured but unavailable.' }] : []),
-    ...issueLinkageFeedback(input.issueRef, input.repo, input.pr ?? {}),
+    ...issueLinkageFeedback(input.issueRef, input.issueAction, input.repo, input.pr ?? {}),
     ...issueCloseFeedback(input.issueRef, input.issueAction, input.repo, input.prView),
   ];
 
@@ -1112,6 +1113,7 @@ export async function collectPrReadiness(
   execGh: ExecGhFn = defaultExecGh,
   fetchSonar: FetchSonarFn = defaultFetchSonar,
 ): Promise<PrReadinessResult> {
+  input = { ...input, issueAction: input.issueAction ?? defaultIssueAction(input.issueRef) };
   const baseBranch = input.baseBranch ?? 'master';
   const resolved = resolveOpenPr(input, baseBranch, execGh);
 

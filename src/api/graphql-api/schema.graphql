@@ -117,7 +117,7 @@ input AnswerQuestionInput {
 
 input CreateRunInput {
   description: String
-  issueAction: String
+  issueAction: IssueAction
   issueRef: IssueRefInput
   params: JSON
   pipelineId: String
@@ -231,6 +231,12 @@ type InboxResolutionModel {
   runId: String
   signaled: Boolean!
   topic: String
+}
+
+enum IssueAction {
+  close
+  none
+  refs
 }
 
 input IssueRefInput {
@@ -405,7 +411,7 @@ input PrReadinessInput {
   headBranch: String
   includeComments: Boolean
   includeReviewThreads: Boolean
-  issueAction: String
+  issueAction: IssueAction
   issueRef: IssueRefInput
   prNumber: Int
   repo: String!

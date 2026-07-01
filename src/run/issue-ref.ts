@@ -172,7 +172,7 @@ export function hasIssueClosingReference(text: string | undefined, issueRef: Iss
   const alternatives = repo && issueRef.repo.toLowerCase() === repo.toLowerCase()
     ? `${tag}|${qualifiedTag}|${issueNumberTag}`
     : `${tag}|${qualifiedTag}`;
-  return new RegExp(`${boundaryBefore}${keyword}\\s+(?:${alternatives})${boundaryAfter}`, 'i').test(text ?? '');
+  return new RegExp(`${boundaryBefore}${keyword}:?\\s+(?:${alternatives})${boundaryAfter}`, 'i').test(text ?? '');
 }
 
 export function issueBodyWithClosingReference(body: string | undefined, issueRef: IssueRef | undefined, repo?: string): string {

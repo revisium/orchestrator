@@ -597,6 +597,86 @@ test('issueAction none: integrate does not inject issue refs into commit, title,
   assert.equal(prBody, '');
 });
 
+test('produced change issueAction refs preserves non-closing PR body repair', async () => {
+  const issueRef = {
+    repo: 'o/r',
+    number: 147,
+    url: 'https://github.com/o/r/issues/147',
+  };
+  const edits: string[][] = [];
+
+  const deps: IntegratorDeps = {
+    execGit: (args) => {
+      if (args[0] === 'remote' && args[2] === 'origin') return 'git@github.com:o/r.git\n';
+      if (args[0] === 'fetch') return '';
+      if (args[0] === 'rev-list') return '1\n';
+      if (args[0] === 'push') return '';
+      throw new Error(`unexpected git: ${args.join(' ')}`);
+    },
+    execGh: (args) => {
+      if (args[0] === 'pr' && args[1] === 'list') {
+        return JSON.stringify([{ number: 12, url: 'https://github.com/o/r/pull/12', baseRefName: 'master', headRefOid: 'old', title: 'Add feature X', body: 'References #147' }]);
+      }
+      if (args[0] === 'pr' && args[1] === 'edit') {
+        edits.push(args);
+        return '';
+      }
+      throw new Error(`unexpected gh: ${args.join(' ')}`);
+    },
+    resolveTaskCwd: makeResolveTaskCwd(),
+    resolveRunCwd: makeResolveRunCwd(),
+  };
+
+  const result = await integrate({
+    ...BASE_INPUT,
+    issueRef,
+    change: { branch: 'feat/task-001', headSha: 'new', issueRef, issueAction: 'refs' },
+  }, deps);
+
+  assert.ok(!('needsHuman' in result));
+  assert.deepEqual(edits, [['pr', 'edit', '12', '--repo', 'o/r', '--title', '#147 Add feature X']]);
+});
+
+test('produced change issueAction none skips issue PR body repair', async () => {
+  const issueRef = {
+    repo: 'o/r',
+    number: 147,
+    url: 'https://github.com/o/r/issues/147',
+  };
+  const edits: string[][] = [];
+
+  const deps: IntegratorDeps = {
+    execGit: (args) => {
+      if (args[0] === 'remote' && args[2] === 'origin') return 'git@github.com:o/r.git\n';
+      if (args[0] === 'fetch') return '';
+      if (args[0] === 'rev-list') return '1\n';
+      if (args[0] === 'push') return '';
+      throw new Error(`unexpected git: ${args.join(' ')}`);
+    },
+    execGh: (args) => {
+      if (args[0] === 'pr' && args[1] === 'list') {
+        return JSON.stringify([{ number: 12, url: 'https://github.com/o/r/pull/12', baseRefName: 'master', headRefOid: 'old', title: 'Add feature X', body: '' }]);
+      }
+      if (args[0] === 'pr' && args[1] === 'edit') {
+        edits.push(args);
+        return '';
+      }
+      throw new Error(`unexpected gh: ${args.join(' ')}`);
+    },
+    resolveTaskCwd: makeResolveTaskCwd(),
+    resolveRunCwd: makeResolveRunCwd(),
+  };
+
+  const result = await integrate({
+    ...BASE_INPUT,
+    issueRef,
+    change: { branch: 'feat/task-001', headSha: 'new', issueRef, issueAction: 'none' },
+  }, deps);
+
+  assert.ok(!('needsHuman' in result));
+  assert.deepEqual(edits, []);
+});
+
 test('issueRef: cross-repo captureProducedChange uses qualified non-closing commit before publication', async () => {
   const issueRef = {
     repo: 'revisium/orchestrator',
