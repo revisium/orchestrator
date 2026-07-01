@@ -1,6 +1,6 @@
 import { ControlPlaneError } from './errors.js';
 import type { InboxItem } from './inbox.js';
-import { asRecord, nonBlankString } from './audit-validation-helpers.js';
+import { asRecord, nonBlankString, requireAuditRecord, normalizeAuditStringFields } from './audit-validation-helpers.js';
 
 export type ManualAdoptionAudit = {
   runId: string;
@@ -38,19 +38,8 @@ function adoptionAuditContextRunId(item: InboxItem): string | undefined {
 }
 
 export function validateManualAdoptionAudit(input: unknown, item: InboxItem): ManualAdoptionAudit {
-  const record = asRecord(input);
-  if (!record) {
-    throw new ControlPlaneError('VALIDATION_FAILURE', 'adopt_patch_manually requires adoptionAudit');
-  }
-
-  const normalized: Record<string, string> = {};
-  for (const field of REQUIRED_STRING_FIELDS) {
-    const value = nonBlankString(record, field);
-    if (!value) {
-      throw new ControlPlaneError('VALIDATION_FAILURE', `adopt_patch_manually adoptionAudit.${field} is required`);
-    }
-    normalized[field] = value;
-  }
+  const record = requireAuditRecord(input, 'adopt_patch_manually requires adoptionAudit');
+  const normalized = normalizeAuditStringFields(record, REQUIRED_STRING_FIELDS, 'adopt_patch_manually adoptionAudit');
 
   const artifactRef = nonBlankString(record, 'artifactRef');
   const worktreeRef = nonBlankString(record, 'worktreeRef');

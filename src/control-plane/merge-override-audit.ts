@@ -1,6 +1,6 @@
 import { ControlPlaneError } from './errors.js';
 import type { InboxItem } from './inbox.js';
-import { asRecord, nonBlankString } from './audit-validation-helpers.js';
+import { asRecord, nonBlankString, requireAuditRecord, normalizeAuditStringFields } from './audit-validation-helpers.js';
 
 export type MergeOverrideAudit = {
   threadIds: string[];
@@ -30,19 +30,8 @@ function overrideAuditContextRunId(item: InboxItem): string | undefined {
 }
 
 export function validateMergeOverrideAudit(input: unknown, item: InboxItem): MergeOverrideAudit {
-  const record = asRecord(input);
-  if (!record) {
-    throw new ControlPlaneError('VALIDATION_FAILURE', 'override_merge requires mergeOverrideAudit');
-  }
-
-  const normalized: Record<string, string> = {};
-  for (const field of REQUIRED_STRING_FIELDS) {
-    const value = nonBlankString(record, field);
-    if (!value) {
-      throw new ControlPlaneError('VALIDATION_FAILURE', `override_merge mergeOverrideAudit.${field} is required`);
-    }
-    normalized[field] = value;
-  }
+  const record = requireAuditRecord(input, 'override_merge requires mergeOverrideAudit');
+  const normalized = normalizeAuditStringFields(record, REQUIRED_STRING_FIELDS, 'override_merge mergeOverrideAudit');
 
   const threadIds = record['threadIds'];
   if (!Array.isArray(threadIds) || threadIds.length === 0) {
