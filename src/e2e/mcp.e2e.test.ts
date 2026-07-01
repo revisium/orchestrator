@@ -285,6 +285,7 @@ test('H12b: create_run with includeMonitoringGuidance:false omits the monitoring
 
 test('H12c: start_run response includes monitoring directive', { skip: e2eSkip }, async () => {
   const target = createTargetRepo();
+  let runId: string | undefined;
   try {
     const created = await inv<{ runId: string }>('create_run', {
       title: 'E2E start_run monitoring',
@@ -292,11 +293,13 @@ test('H12c: start_run response includes monitoring directive', { skip: e2eSkip }
       pipelineId: 'local-change',
       start: false,
     });
+    runId = created.runId;
     h.developerWrites.set(created.runId, target.worktree);
     const started = await inv<{ runId?: string; monitoring?: Record<string, unknown> }>('start_run', { runId: created.runId });
     assert.equal(started.monitoring?.nextAction, 'monitor', 'start_run monitoring.nextAction must be "monitor"');
     assert.equal(started.monitoring?.pollTool, 'get_run_attention', 'start_run monitoring.pollTool must be get_run_attention');
   } finally {
+    if (runId) await inv('cancel_run', { runId });
     target.cleanup();
   }
 });
