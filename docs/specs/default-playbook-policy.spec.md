@@ -8,7 +8,7 @@
   [run-dataflow-v1.spec.md](./run-dataflow-v1.spec.md),
   [human-gates-v1.spec.md](./human-gates-v1.spec.md).
 
-The static bundled-playbook checks are accepted, and #141 merge-gate reject/recheck routing and #233 thread-recovery outcomes are implemented.
+The static bundled-playbook checks are accepted, and #141 merge-gate reject/recheck routing, #233 thread-recovery outcomes, and #240 mergeability-honest `clean` are implemented.
 
 ## Scope
 
@@ -68,6 +68,9 @@ contract: the verifier does not prove that GitHub/provider state was fresh at ru
 
 ## Changelog
 
+- 2026-07-02: `pollPr`/`mergeReadiness` `clean` now requires mergeability clean in addition to required
+  checks and no unresolved threads; `UNKNOWN`/async → `recheck`; definite-negative merge state → `blockedEnd`
+  reason `poll-pr` (issue #240).
 - 2026-07-01: Added thread-recovery outcomes (`address_review_threads`, `return_to_development`, `override_merge`) to
   mergeGate domain and #141 stabilization row; updated "Implemented #141 Rule" accordingly (issue #233).
 - 2026-07-01: Added cancelled terminal and reusable ordinary stuck-review gate policy.

@@ -16,6 +16,7 @@ export type GhScenario =
   | 'ambiguous-prs' //      list→[two open PRs on master] → integrator needsHuman (ambiguous)
   | 'pr-view-non-json' //   create succeeds but `pr view` returns non-JSON → needsHuman (never stub://)
   | 'merge-not-clean' //    `pr view` → OPEN but mergeStateStatus≠CLEAN → confirmMerge blocks (keeps worktree)
+  | 'merge-conflict' //     pollPr rollup: checks green, no threads, but DIRTY/CONFLICTING → pollPr blocks (#240)
   | 'ci-red-then-green' //  pollPr: 1st readiness has a FAILING check (ci_changes); after a dev re-push it goes green (plan 0018)
   | 'review-comment' //     pollPr: one UNRESOLVED review thread until respondThreads resolves it; CI green (plan 0018)
   | 'gh-error' //           every gh call throws (rate-limit / network family) → DBOS retries the step
@@ -179,6 +180,7 @@ function ghBehavior(scenario: GhScenario, args: string[], st: GhState): string {
       const ciRed = scenario === 'ci-red-then-green' && !st.repushedBranches.has(branch);
       // record that pollPr saw the branch; the NEXT integrate re-push will flip it green
       if (scenario === 'ci-red-then-green' && ciRed) st.repushedBranches.add(branch);
+      const mergeConflict = scenario === 'merge-conflict';
       return JSON.stringify({
         number: 7,
         url: PR_URL,
@@ -187,9 +189,9 @@ function ghBehavior(scenario: GhScenario, args: string[], st: GhState): string {
         baseRefName: BASE,
         headRefName: branch,
         headRefOid: 'deadbeefcafe',
-        mergeStateStatus: 'CLEAN',
+        mergeStateStatus: mergeConflict ? 'DIRTY' : 'CLEAN',
         reviewDecision: '',
-        mergeable: 'MERGEABLE',
+        mergeable: mergeConflict ? 'CONFLICTING' : 'MERGEABLE',
         statusCheckRollup: ciRed
           ? [{ __typename: 'CheckRun', name: 'build', status: 'COMPLETED', conclusion: 'FAILURE' }]
           : [{ __typename: 'CheckRun', name: 'build', status: 'COMPLETED', conclusion: 'SUCCESS' }],

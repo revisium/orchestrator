@@ -269,6 +269,13 @@ Contracts:
 - Ambiguous comments route to a question gate.
 - Pending provider/check readiness stays internal as a `recheck` PR feedback verdict; it does not surface as clean or
   terminally block while it can still be re-polled.
+- `pollPr` / `mergeReadiness` emit `clean` only when ALL three independent blockers are clear: required CI checks pass,
+  mergeability is clean (`mergeable=MERGEABLE` AND `mergeStateStatus ∈ {CLEAN, UNSTABLE, HAS_HOOKS}`), and no unresolved
+  non-outdated review threads exist. A definite-negative merge state (`DIRTY`, `BLOCKED`, `BEHIND`, or
+  `mergeable=CONFLICTING`) routes to `blockedEnd` (reason: `poll-pr`) with the raw fields in the lesson pending the
+  #246/#247 classifier. An async/unknown mergeability (`UNKNOWN`, empty, unrecognized) routes to `recheck` — never
+  `clean`. Advisory (non-required) check failures do NOT burn `ciLoop` or route to rework when required checks and
+  mergeability are clean.
 - `respondThreads` replies to and resolves only the threads it triaged as `fix` or `wontfix`.
 - Resolved or reopened threads are detected by the next PR poll.
 - Thread maps and triage decisions ride `run_outputs`; no separate durable PR-thread table exists in v1.
@@ -285,6 +292,9 @@ Contracts:
 
 ## Changelog
 
+- 2026-07-02: Made `pollPr`/`mergeReadiness` readiness-honest: `clean` now requires required checks passing,
+  mergeability clean, AND no unresolved non-outdated threads. `UNKNOWN`/async mergeability → `recheck`; definite-negative
+  merge state → `blockedEnd` reason `poll-pr` with raw fields for future #246/#247 classifier (issue #240).
 - 2026-07-01: Documented merge-gate thread-recovery outcomes (`address_review_threads`, `return_to_development`,
   `override_merge`), thread-as-independent-blocker contract, override audit requirement, and informational-bot
   suppression allowlist (issue #233).
