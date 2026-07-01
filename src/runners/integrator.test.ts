@@ -403,7 +403,7 @@ test('M4: gh pr list returns 0 → creates PR', async () => {
   }
 });
 
-test('issueRef: cross-repo integrate uses qualified non-closing commit and title, and empty PR body', async () => {
+test('issueRef: cross-repo integrate uses qualified non-closing commit and title, and closing PR body by default', async () => {
   const issueRef = {
     repo: 'revisium/orchestrator',
     number: 147,
@@ -459,7 +459,7 @@ test('issueRef: cross-repo integrate uses qualified non-closing commit and title
   assert.equal(prHead, 'feat/task-001-issue-147-add-feature-x');
   assert.equal(commitMsg, 'feat: revisium/orchestrator#147 Add feature X');
   assert.equal(prTitle, 'revisium/orchestrator#147 Add feature X');
-  assert.equal(prBody, '');
+  assert.equal(prBody, 'Closes revisium/orchestrator#147');
   assert.ok(!/closes|fixes|resolves/i.test(commitMsg));
 });
 
@@ -506,6 +506,95 @@ test('issueRef: same-repo integrate keeps short non-closing commit and title ref
   assert.equal(commitMsg, 'feat: #147 Add feature X');
   assert.equal(prTitle, '#147 Add feature X');
   assert.ok(!/closes|fixes|resolves/i.test(commitMsg));
+});
+
+test('issueAction refs: integrate keeps non-closing issue refs and does not add closing PR body', async () => {
+  const issueRef = {
+    repo: 'o/r',
+    number: 147,
+    url: 'https://github.com/o/r/issues/147',
+  };
+  let prTitle = '';
+  let prBody = '';
+
+  const deps: IntegratorDeps = {
+    execGit: (args, _cwd) => {
+      if (args[0] === 'remote' && args[2] === 'origin') return 'git@github.com:o/r.git\n';
+      if (args[0] === 'fetch') return '';
+      if (args[0] === 'rev-parse' && args[1] === '--verify') throw new Error('not found');
+      if (args[0] === 'switch') return '';
+      if (args[0] === 'add') return '';
+      if (args[0] === 'diff' && args.includes('--cached') && args.includes('--quiet')) throw new Error('staged');
+      if (args[0] === 'commit') return '';
+      if (args[0] === 'push') return '';
+      throw new Error(`unexpected git: ${args.join(' ')}`);
+    },
+    execGh: (args) => {
+      if (args[0] === 'pr' && args[1] === 'list') return JSON.stringify([]);
+      if (args[0] === 'pr' && args[1] === 'create') {
+        prTitle = args[args.indexOf('--title') + 1] ?? '';
+        prBody = args[args.indexOf('--body') + 1] ?? '';
+        return 'https://github.com/o/r/pull/147\n';
+      }
+      if (args[0] === 'pr' && args[1] === 'view') return JSON.stringify({ url: 'https://github.com/o/r/pull/147', number: 147 });
+      throw new Error(`unexpected gh: ${args.join(' ')}`);
+    },
+    resolveTaskCwd: makeResolveTaskCwd(),
+    resolveRunCwd: makeResolveRunCwd(),
+  };
+
+  const result = await integrate({ ...BASE_INPUT, issueRef, issueAction: 'refs' }, deps);
+
+  assert.ok(!('needsHuman' in result));
+  assert.equal(prTitle, '#147 Add feature X');
+  assert.equal(prBody, '');
+});
+
+test('issueAction none: integrate does not inject issue refs into commit, title, or body', async () => {
+  const issueRef = {
+    repo: 'o/r',
+    number: 147,
+    url: 'https://github.com/o/r/issues/147',
+  };
+  let commitMsg = '';
+  let prTitle = '';
+  let prBody = '';
+
+  const deps: IntegratorDeps = {
+    execGit: (args, _cwd) => {
+      if (args[0] === 'remote' && args[2] === 'origin') return 'git@github.com:o/r.git\n';
+      if (args[0] === 'fetch') return '';
+      if (args[0] === 'rev-parse' && args[1] === '--verify') throw new Error('not found');
+      if (args[0] === 'switch') return '';
+      if (args[0] === 'add') return '';
+      if (args[0] === 'diff' && args.includes('--cached') && args.includes('--quiet')) throw new Error('staged');
+      if (args[0] === 'commit' && args[1] === '-m') {
+        commitMsg = args[2] ?? '';
+        return '';
+      }
+      if (args[0] === 'push') return '';
+      throw new Error(`unexpected git: ${args.join(' ')}`);
+    },
+    execGh: (args) => {
+      if (args[0] === 'pr' && args[1] === 'list') return JSON.stringify([]);
+      if (args[0] === 'pr' && args[1] === 'create') {
+        prTitle = args[args.indexOf('--title') + 1] ?? '';
+        prBody = args[args.indexOf('--body') + 1] ?? '';
+        return 'https://github.com/o/r/pull/147\n';
+      }
+      if (args[0] === 'pr' && args[1] === 'view') return JSON.stringify({ url: 'https://github.com/o/r/pull/147', number: 147 });
+      throw new Error(`unexpected gh: ${args.join(' ')}`);
+    },
+    resolveTaskCwd: makeResolveTaskCwd(),
+    resolveRunCwd: makeResolveRunCwd(),
+  };
+
+  const result = await integrate({ ...BASE_INPUT, issueRef, issueAction: 'none' }, deps);
+
+  assert.ok(!('needsHuman' in result));
+  assert.equal(commitMsg, 'feat: Add feature X');
+  assert.equal(prTitle, 'Add feature X');
+  assert.equal(prBody, '');
 });
 
 test('issueRef: cross-repo captureProducedChange uses qualified non-closing commit before publication', async () => {
@@ -1367,8 +1456,8 @@ const MERGE_INPUT: IntegratorInput = {
 
 // Mirrors REAL gh: no `merged` field — `state` (OPEN|MERGED|CLOSED) is the merged indicator. The
 // integrator opens PRs as drafts, so `isDraft` gates whether confirmMerge must `gh pr ready` first.
-function prView(state: string, mergeStateStatus: string, isDraft = false, number = 7): string {
-  return JSON.stringify({ number, url: `https://gh/pr/${number}`, state, isDraft, mergeStateStatus });
+function prView(state: string, mergeStateStatus: string, isDraft = false, number = 7, closingIssuesReferences?: unknown[]): string {
+  return JSON.stringify({ number, url: `https://gh/pr/${number}`, state, isDraft, mergeStateStatus, closingIssuesReferences });
 }
 
 /** Deps for confirmMerge: a git that reports a github origin, plus the supplied scripted gh. */
@@ -1412,6 +1501,69 @@ test('confirmMerge: OPEN + CLEAN draft → marks ready, squash-merges, confirms 
     ['--match-head-commit', 'ready-head'],
     'merge is guarded by the fresh merge-readiness head sha',
   );
+});
+
+test('confirmMerge: issueAction close blocks when GitHub does not report closing linkage', async () => {
+  const issueRef = {
+    repo: 'e2e/repo',
+    number: 238,
+    url: 'https://github.com/e2e/repo/issues/238',
+  };
+  const calls: string[][] = [];
+  const gh: ExecGhFn = (a) => {
+    calls.push(a);
+    return prView('OPEN', 'CLEAN', false, 7, []);
+  };
+
+  const r = await confirmMerge({ ...MERGE_INPUT, issueRef, issueAction: 'close' }, confirmDeps(gh));
+
+  assert.ok('needsHuman' in r);
+  assert.match(r.lesson, /closingIssuesReferences/);
+  assert.ok(!calls.some((a) => a[1] === 'merge'), 'does not merge without GitHub auto-close linkage');
+});
+
+test('confirmMerge: issueAction close proceeds when closing linkage matches expected issue', async () => {
+  const issueRef = {
+    repo: 'e2e/repo',
+    number: 238,
+    url: 'https://github.com/e2e/repo/issues/238',
+  };
+  const refs = [{ number: 238, repository: { nameWithOwner: 'e2e/repo' } }];
+  const calls: string[][] = [];
+  let views = 0;
+  const gh: ExecGhFn = (a) => {
+    calls.push(a);
+    if (a[1] === 'view') {
+      views++;
+      return views === 1 ? prView('OPEN', 'CLEAN', false, 7, refs) : prView('MERGED', 'CLEAN', false, 7, refs);
+    }
+    return '';
+  };
+
+  const r = await confirmMerge({ ...MERGE_INPUT, issueRef, issueAction: 'close' }, confirmDeps(gh));
+
+  assert.equal('merged' in r && r.merged, true);
+  assert.ok(calls.some((a) => a[1] === 'merge'), 'merges when GitHub reports the expected auto-close issue');
+});
+
+test('confirmMerge: issueAction refs does not require closing linkage', async () => {
+  const issueRef = {
+    repo: 'e2e/repo',
+    number: 238,
+    url: 'https://github.com/e2e/repo/issues/238',
+  };
+  let views = 0;
+  const gh: ExecGhFn = (a) => {
+    if (a[1] === 'view') {
+      views++;
+      return views === 1 ? prView('OPEN', 'CLEAN', false, 7, []) : prView('MERGED', 'CLEAN', false, 7, []);
+    }
+    return '';
+  };
+
+  const r = await confirmMerge({ ...MERGE_INPUT, issueRef, issueAction: 'refs' }, confirmDeps(gh));
+
+  assert.equal('merged' in r && r.merged, true);
 });
 
 test('confirmMerge: OPEN + CLEAN without merge readiness head blocks before merge', async () => {

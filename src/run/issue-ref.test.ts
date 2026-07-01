@@ -1,6 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { issueRefsEqual, issueRefTag, normalizeIssueRef, normalizeIssueRefIntoParams } from './issue-ref.js';
+import {
+  hasIssueClosingReference,
+  issueBodyWithClosingReference,
+  issueRefsEqual,
+  issueRefTag,
+  normalizeIssueAction,
+  normalizeIssueRef,
+  normalizeIssueRefIntoParams,
+} from './issue-ref.js';
 
 const ISSUE_REF = {
   repo: 'revisium/orchestrator',
@@ -99,22 +107,57 @@ test('issueRefsEqual treats repo casing as equivalent while number and url remai
 test('normalizeIssueRefIntoParams stores top-level issueRef under public params', () => {
   assert.deepEqual(
     normalizeIssueRefIntoParams({ ticket: 'RV-147' }, ISSUE_REF),
-    { ticket: 'RV-147', issueRef: ISSUE_REF },
+    { ticket: 'RV-147', issueRef: ISSUE_REF, issueAction: 'close' },
   );
 });
 
 test('normalizeIssueRefIntoParams accepts matching params.issueRef and rejects conflicts', () => {
   assert.deepEqual(
     normalizeIssueRefIntoParams({ issueRef: ISSUE_REF }, { ...ISSUE_REF }),
-    { issueRef: ISSUE_REF },
+    { issueRef: ISSUE_REF, issueAction: 'close' },
   );
   assert.deepEqual(
     normalizeIssueRefIntoParams({ issueRef: { ...ISSUE_REF, repo: 'Revisium/Orchestrator' } }, ISSUE_REF),
-    { issueRef: ISSUE_REF },
+    { issueRef: ISSUE_REF, issueAction: 'close' },
   );
 
   assert.throws(
     () => normalizeIssueRefIntoParams({ issueRef: ISSUE_REF }, { ...ISSUE_REF, number: 148 }),
     /conflicts with params\.issueRef/,
   );
+});
+
+test('normalizeIssueAction accepts only close, refs, or none', () => {
+  assert.equal(normalizeIssueAction('close'), 'close');
+  assert.equal(normalizeIssueAction('refs'), 'refs');
+  assert.equal(normalizeIssueAction('none'), 'none');
+  assert.throws(() => normalizeIssueAction('fixes'), /issueAction/);
+});
+
+test('normalizeIssueRefIntoParams preserves explicit issueAction and rejects conflicts', () => {
+  assert.deepEqual(
+    normalizeIssueRefIntoParams({ issueAction: 'refs' }, ISSUE_REF),
+    { issueAction: 'refs', issueRef: ISSUE_REF },
+  );
+  assert.deepEqual(
+    normalizeIssueRefIntoParams({ issueRef: ISSUE_REF, issueAction: 'refs' }, ISSUE_REF, 'refs'),
+    { issueRef: ISSUE_REF, issueAction: 'refs' },
+  );
+  assert.throws(
+    () => normalizeIssueRefIntoParams({ issueAction: 'refs' }, ISSUE_REF, 'close'),
+    /conflicts with params\.issueAction/,
+  );
+});
+
+test('issueBodyWithClosingReference adds one duplicate-safe closing reference', () => {
+  assert.equal(issueBodyWithClosingReference('', ISSUE_REF, 'revisium/orchestrator'), 'Closes #147');
+  assert.equal(
+    issueBodyWithClosingReference('Already references #147', ISSUE_REF, 'revisium/orchestrator'),
+    'Already references #147\n\nCloses #147',
+  );
+  assert.equal(
+    issueBodyWithClosingReference('Already closes #147', ISSUE_REF, 'revisium/orchestrator'),
+    'Already closes #147',
+  );
+  assert.equal(hasIssueClosingReference('Fixes revisium/orchestrator#147', ISSUE_REF, 'other/repo'), true);
 });

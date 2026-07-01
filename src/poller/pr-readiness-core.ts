@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { accessSync, constants } from 'node:fs';
-import type { IssueRef } from '../run/issue-ref.js';
+import type { IssueAction, IssueRef } from '../run/issue-ref.js';
 
 export type PrReadinessVerdict =
   | 'ready'
@@ -26,6 +26,7 @@ export type PrReadinessInput = {
   baseBranch?: string;
   sonarProject?: string;
   issueRef?: IssueRef;
+  issueAction?: IssueAction;
   includeComments?: boolean;
   includeReviewThreads?: boolean;
 };
@@ -37,6 +38,7 @@ export type PollInput = {
   base_branch?: string;
   sonar_project?: string;
   issue_ref?: IssueRef;
+  issue_action?: IssueAction;
   poll_count: number;
   poll_interval_ms?: number;
   max_polls?: number;
@@ -122,6 +124,7 @@ type PrViewData = {
   mergeStateStatus?: string;
   reviewDecision?: string;
   mergeable?: string;
+  closingIssuesReferences?: unknown[];
 };
 
 export type ExecGhFn = (args: string[]) => string;
@@ -274,7 +277,7 @@ function resolvePrByBranch(
 function fetchPrView(prNumber: number, repo: string, execGh: ExecGhFn): PrViewData {
   const raw = execGh([
     'pr', 'view', String(prNumber), '--repo', repo,
-    '--json', 'number,url,state,isDraft,baseRefName,headRefName,headRefOid,title,statusCheckRollup,mergeStateStatus,reviewDecision,mergeable',
+    '--json', 'number,url,state,isDraft,baseRefName,headRefName,headRefOid,title,statusCheckRollup,mergeStateStatus,reviewDecision,mergeable,closingIssuesReferences',
   ]);
   return parseGhJson<PrViewData>(raw, `pr view #${prNumber}`);
 }
@@ -765,6 +768,38 @@ function issueLinkageFeedback(
   }];
 }
 
+function hasClosingIssueReference(refs: unknown[] | undefined, issueRef: IssueRef | undefined): boolean {
+  if (!issueRef || !Array.isArray(refs)) return false;
+  const [owner, name] = issueRef.repo.toLowerCase().split('/');
+  return refs.some((item) => {
+    if (item === null || typeof item !== 'object') return false;
+    const record = item as Record<string, unknown>;
+    if (record.number !== issueRef.number) return false;
+    const repository = record.repository;
+    if (repository === null || typeof repository !== 'object') return false;
+    const repoRecord = repository as Record<string, unknown>;
+    if (typeof repoRecord.nameWithOwner === 'string') {
+      return repoRecord.nameWithOwner.toLowerCase() === issueRef.repo.toLowerCase();
+    }
+    const repoName = typeof repoRecord.name === 'string' ? repoRecord.name.toLowerCase() : '';
+    const repoOwner = repoRecord.owner;
+    const ownerLogin = repoOwner && typeof repoOwner === 'object' && typeof (repoOwner as Record<string, unknown>).login === 'string'
+      ? String((repoOwner as Record<string, unknown>).login).toLowerCase()
+      : '';
+    return ownerLogin === owner && repoName === name;
+  });
+}
+
+function issueCloseFeedback(issueRef: IssueRef | undefined, issueAction: IssueAction | undefined, repo: string, prView?: PrViewData) {
+  if (issueAction !== 'close' || !issueRef || hasClosingIssueReference(prView?.closingIssuesReferences, issueRef)) return [];
+  const issueTag = issueRefTitleTag(issueRef, repo);
+  return [{
+    source: 'issue_auto_close',
+    summary: `PR does not auto-close ${issueTag}`,
+    evidence: `GitHub closingIssuesReferences does not include ${issueTag}`,
+  }];
+}
+
 // Bot logins whose comments are purely informational and safe to suppress.
 // Anything not in this list surfaces in developerFixes to avoid silent suppression.
 const KNOWN_INFORMATIONAL_BOTS = new Set([
@@ -785,8 +820,10 @@ function buildFeedback(input: {
   botComments: CommentEntry[];
   coderabbitReviews?: ReviewEntry[];
   issueRef?: IssueRef;
+  issueAction?: IssueAction;
   repo: string;
   pr?: { head?: string; title?: string };
+  prView?: PrViewData;
 }) {
   const developerFixes: DeveloperFix[] = [
     ...input.checks.fail.map((name) => ({ source: 'ci', summary: `Fix failing check: ${name}`, evidence: name })),
@@ -851,6 +888,7 @@ function buildFeedback(input: {
       : []),
     ...(input.sonar.unavailable ? [{ source: 'sonar', summary: 'Sonar was configured but unavailable.' }] : []),
     ...issueLinkageFeedback(input.issueRef, input.repo, input.pr ?? {}),
+    ...issueCloseFeedback(input.issueRef, input.issueAction, input.repo, input.prView),
   ];
 
   const ignoredNoise = input.botComments
@@ -951,6 +989,9 @@ function buildEmptyFeedback(input: {
   reviewDecision?: string;
   reviewThreads?: PrReadinessResult['reviewThreads'];
   issueRef?: IssueRef;
+  issueAction?: IssueAction;
+  repo?: string;
+  prView?: PrViewData;
 }) {
   return buildFeedback({
     checks: compactCheckLists([]),
@@ -962,7 +1003,9 @@ function buildEmptyFeedback(input: {
     humanComments: [],
     botComments: [],
     issueRef: input.issueRef,
-    repo: '',
+    issueAction: input.issueAction,
+    repo: input.repo ?? '',
+    prView: input.prView,
   });
 }
 
@@ -979,7 +1022,7 @@ function buildMergedReadiness(input: PrReadinessInput, resolved: Extract<OpenPrR
     sonar: emptySonar(sonarConfigured),
     nextAction: 'none',
     evidence: [`PR #${resolved.prNumber} is merged.`],
-    feedback: buildEmptyFeedback({ sonarConfigured, includeReviewThreads }),
+    feedback: buildEmptyFeedback({ sonarConfigured, includeReviewThreads, issueRef: input.issueRef, issueAction: input.issueAction, repo: input.repo, prView: resolved.prView }),
     ciSummary: { ...emptyCiSummary(true), ...(input.issueRef ? { issueRef: input.issueRef } : {}) },
     ...(input.issueRef ? { issueRef: input.issueRef } : {}),
   };
@@ -988,7 +1031,7 @@ function buildMergedReadiness(input: PrReadinessInput, resolved: Extract<OpenPrR
 function buildNeedsHumanReadiness(input: PrReadinessInput, resolved: Extract<OpenPrResult, { kind: 'needsHuman' }>): PrReadinessResult {
   const includeReviewThreads = input.includeReviewThreads !== false;
   const sonarConfigured = Boolean(input.sonarProject);
-  const feedback = buildEmptyFeedback({ sonarConfigured, includeReviewThreads });
+  const feedback = buildEmptyFeedback({ sonarConfigured, includeReviewThreads, issueRef: input.issueRef, issueAction: input.issueAction, repo: input.repo, prView: resolved.prView });
   return {
     verdict: resolved.verdict === 'closed' ? 'closed' : 'needs_human',
     pr: resolved.prNumber ? prFromView(resolved.prNumber, resolved.prView) : emptyPr(input.prNumber, resolved.verdict),
@@ -1014,6 +1057,7 @@ function buildWaitingReadiness(input: {
   reviewThreads: PrReadinessResult['reviewThreads'];
   sonarConfigured: boolean;
   issueRef?: IssueRef;
+  issueAction?: IssueAction;
   evidence: string[];
   isDraft?: boolean;
 }): PrReadinessResult {
@@ -1039,8 +1083,10 @@ function buildWaitingReadiness(input: {
     humanComments: [],
     botComments: [],
     issueRef: input.issueRef,
+    issueAction: input.issueAction,
     repo: input.repo,
     pr: { head: input.prView.headRefName, title: input.prView.title },
+    prView: input.prView,
   });
 
   const providerWait: ProviderWaitItem[] = pendingCodeRabbit
@@ -1129,6 +1175,7 @@ export async function collectPrReadiness(
       reviewThreads,
       sonarConfigured,
       issueRef: input.issueRef,
+      issueAction: input.issueAction,
       evidence: [`PR #${prNumber} is still draft.`],
       isDraft: true,
     });
@@ -1144,6 +1191,7 @@ export async function collectPrReadiness(
       reviewThreads,
       sonarConfigured,
       issueRef: input.issueRef,
+      issueAction: input.issueAction,
       evidence: ci.pendingNames.length > 0 ? [`Pending checks: ${ci.pendingNames.join(', ')}`] : ['No check rollup entries are registered yet.'],
     });
   }
@@ -1170,8 +1218,10 @@ export async function collectPrReadiness(
     botComments: comments.bot_comments,
     coderabbitReviews: comments.coderabbit_reviews,
     issueRef: input.issueRef,
+    issueAction: input.issueAction,
     repo: input.repo,
     pr: { head: prView.headRefName, title: prView.title },
+    prView,
   });
   const ciSummary: CiSummary = {
     ci_passed: ci.ci_passed,
@@ -1223,6 +1273,7 @@ export function toReadinessInput(input: PollInput): PrReadinessInput {
     baseBranch: input.base_branch,
     sonarProject: input.sonar_project,
     issueRef: input.issue_ref,
+    issueAction: input.issue_action,
     includeComments: true,
     includeReviewThreads: false,
   };

@@ -117,6 +117,7 @@ input AnswerQuestionInput {
 
 input CreateRunInput {
   description: String
+  issueAction: String
   issueRef: IssueRefInput
   params: JSON
   pipelineId: String
@@ -404,6 +405,7 @@ input PrReadinessInput {
   headBranch: String
   includeComments: Boolean
   includeReviewThreads: Boolean
+  issueAction: String
   issueRef: IssueRefInput
   prNumber: Int
   repo: String!

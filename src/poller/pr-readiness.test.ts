@@ -231,6 +231,60 @@ test('issueRef readiness: branch and title linkage keep a clean PR ready', async
   assert.deepEqual(readiness.feedback.humanDecisions, []);
 });
 
+test('issueAction close readiness: missing GitHub closing linkage needs a human decision', async () => {
+  const issueRef = {
+    repo: 'owner/repo',
+    number: 147,
+    url: 'https://github.com/owner/repo/issues/147',
+  };
+  const terminalView = prViewResponse([checkRun('Gitar', 'COMPLETED', 'SUCCESS')], {
+    number: 42,
+    url: 'https://github.com/owner/repo/pull/42',
+    state: 'OPEN',
+    isDraft: false,
+    baseRefName: 'master',
+    headRefName: 'feat/abcd-issue-147-add-feature',
+    headRefOid: 'sha',
+    title: '#147 Add feature',
+    closingIssuesReferences: [],
+  });
+  const execGh = makeFullResponses(terminalView);
+
+  const readiness = await collectPrReadiness({ repo: 'owner/repo', prNumber: 42, issueRef, issueAction: 'close' }, execGh);
+
+  assert.equal(readiness.verdict, 'needs_human');
+  assert.equal(readiness.nextAction, 'human_decision');
+  const closeDecision = readiness.feedback.humanDecisions.find((decision) => decision.source === 'issue_auto_close');
+  assert.ok(closeDecision);
+  assert.match(closeDecision.summary, /does not auto-close #147/);
+});
+
+test('issueAction close readiness: matching GitHub closing linkage keeps a clean PR ready', async () => {
+  const issueRef = {
+    repo: 'owner/repo',
+    number: 147,
+    url: 'https://github.com/owner/repo/issues/147',
+  };
+  const terminalView = prViewResponse([checkRun('Gitar', 'COMPLETED', 'SUCCESS')], {
+    number: 42,
+    url: 'https://github.com/owner/repo/pull/42',
+    state: 'OPEN',
+    isDraft: false,
+    baseRefName: 'master',
+    headRefName: 'feat/abcd-issue-147-add-feature',
+    headRefOid: 'sha',
+    title: '#147 Add feature',
+    closingIssuesReferences: [{ number: 147, repository: { nameWithOwner: 'owner/repo' } }],
+  });
+  const execGh = makeFullResponses(terminalView);
+
+  const readiness = await collectPrReadiness({ repo: 'owner/repo', prNumber: 42, issueRef, issueAction: 'close' }, execGh);
+
+  assert.equal(readiness.verdict, 'ready');
+  assert.equal(readiness.nextAction, 'ready_for_merge_gate');
+  assert.deepEqual(readiness.feedback.humanDecisions, []);
+});
+
 test('issueRef readiness: branch and title matching does not accept larger issue numbers', async () => {
   const issueRef = {
     repo: 'owner/repo',

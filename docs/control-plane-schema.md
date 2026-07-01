@@ -42,8 +42,10 @@ route_decision, execution_profile, created_by, created_at, updated_at`.
 Serialized JSON fields: `params`, `route_decision`, `execution_profile`.
 
 `params.issueRef` is the canonical issue traceability location for issue-bound runs. Shape:
-`{ repo: string, number: positive integer, url: string }`. It is public, non-secret metadata projected by read,
-digest, status, and readiness surfaces. Do not add a parallel `task_runs.issue_ref` or `tasks.issue_ref` column.
+`{ repo: string, number: positive integer, url: string }`. `params.issueAction` controls delivery linkage and is
+one of `close`, `refs`, or `none`; issue-bound runs default it to `close`. These fields are public, non-secret
+metadata projected by read, digest, status, and readiness surfaces. Do not add parallel `task_runs.issue_ref`,
+`task_runs.issue_action`, `tasks.issue_ref`, or `tasks.issue_action` columns.
 
 ### `tasks`
 

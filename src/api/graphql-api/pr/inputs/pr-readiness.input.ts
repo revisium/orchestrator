@@ -1,4 +1,5 @@
 import { Field, InputType, Int } from '@nestjs/graphql';
+import type { IssueAction } from '../../../../run/issue-ref.js';
 import { IssueRefInput } from '../../share/model/issue-ref.model.js';
 
 @InputType()
@@ -20,6 +21,9 @@ export class PrReadinessInput {
 
   @Field(() => IssueRefInput, { nullable: true })
   issueRef?: IssueRefInput;
+
+  @Field(() => String, { nullable: true })
+  issueAction?: IssueAction;
 
   @Field(() => Boolean, { nullable: true })
   includeComments?: boolean;

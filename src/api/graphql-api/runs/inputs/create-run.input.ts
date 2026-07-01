@@ -31,6 +31,9 @@ export class CreateRunInput {
   @Field(() => IssueRefInput, { nullable: true })
   issueRef?: IssueRefInput;
 
+  @Field(() => String, { nullable: true })
+  issueAction?: string;
+
   @Field(() => Boolean, { defaultValue: false })
   start?: boolean;
 }
