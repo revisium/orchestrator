@@ -485,10 +485,6 @@ export function fetchRequiredCheckNames(repo: string, prNumber: number, execGh: 
 function collectReviewThreads(input: PrReadinessInput, prNumber: number, execGh: ExecGhFn): PrReadinessResult['reviewThreads'] {
   const threads = input.includeReviewThreads === false ? [] : fetchReviewThreads(input.repo, prNumber, execGh);
   const unresolved = threads.filter((thread) => !thread.isResolved && !thread.isOutdated);
-  const dropped = threads.length - unresolved.length;
-  if (threads.length > 0) {
-    console.info(`[pr-readiness] review-threads fetched=${threads.length} unresolved=${unresolved.length} dropped(resolved/outdated)=${dropped}`);
-  }
   return {
     included: input.includeReviewThreads !== false,
     unresolvedCount: unresolved.length,
