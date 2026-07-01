@@ -13,6 +13,7 @@ import {
   stubIntegrate,
   preflightLive,
   pollPr,
+  mergeSignal,
   respondThreads,
   captureProducedChange,
   resolveExecutable,
@@ -1474,6 +1475,8 @@ function readiness(opts: {
   evidence?: string[];
   readinessVerdict?: PollPrReadiness['readinessVerdict'];
   nextAction?: PollPrReadiness['nextAction'];
+  mergeStateStatus?: string;
+  mergeable?: string;
 }): PollPrReadiness {
   return {
     pr: { number: 5, headSha: opts.headSha ?? 'sha5' },
@@ -1482,6 +1485,8 @@ function readiness(opts: {
     ...(opts.readinessVerdict ? { readinessVerdict: opts.readinessVerdict } : {}),
     ...(opts.nextAction ? { nextAction: opts.nextAction } : {}),
     evidence: opts.evidence ?? [`PR head ${opts.headSha ?? 'sha5'}`],
+    mergeStateStatus: opts.mergeStateStatus ?? 'CLEAN',
+    mergeable: opts.mergeable ?? 'MERGEABLE',
   };
 }
 
@@ -1762,6 +1767,143 @@ test('pollPr: unparseable origin → needsHuman (no poll)', async () => {
   const r = await pollPr(POLL_INPUT, deps);
   assert.ok('needsHuman' in r, 'no parseable remote blocks before polling');
   assert.equal(polled, false, 'never polled when the remote is unparseable');
+});
+
+// ─── mergeSignal unit tests (#240) ───────────────────────────────────────────
+
+test('mergeSignal: CLEAN+MERGEABLE → clean', () => {
+  assert.equal(mergeSignal('CLEAN', 'MERGEABLE'), 'clean');
+});
+
+test('mergeSignal: UNSTABLE+MERGEABLE → clean (GitHub quirk: advisory-only checks unsettled)', () => {
+  assert.equal(mergeSignal('UNSTABLE', 'MERGEABLE'), 'clean');
+});
+
+test('mergeSignal: HAS_HOOKS+MERGEABLE → clean', () => {
+  assert.equal(mergeSignal('HAS_HOOKS', 'MERGEABLE'), 'clean');
+});
+
+test('mergeSignal: DIRTY+MERGEABLE → blocked', () => {
+  assert.equal(mergeSignal('DIRTY', 'MERGEABLE'), 'blocked');
+});
+
+test('mergeSignal: BLOCKED+MERGEABLE → blocked', () => {
+  assert.equal(mergeSignal('BLOCKED', 'MERGEABLE'), 'blocked');
+});
+
+test('mergeSignal: BEHIND+MERGEABLE → blocked', () => {
+  assert.equal(mergeSignal('BEHIND', 'MERGEABLE'), 'blocked');
+});
+
+test('mergeSignal: CLEAN+CONFLICTING → blocked', () => {
+  assert.equal(mergeSignal('CLEAN', 'CONFLICTING'), 'blocked');
+});
+
+test('mergeSignal: DIRTY+CONFLICTING → blocked', () => {
+  assert.equal(mergeSignal('DIRTY', 'CONFLICTING'), 'blocked');
+});
+
+test('mergeSignal: CLEAN+UNKNOWN → unknown', () => {
+  assert.equal(mergeSignal('CLEAN', 'UNKNOWN'), 'unknown');
+});
+
+test('mergeSignal: undefined+undefined → unknown', () => {
+  assert.equal(mergeSignal(undefined, undefined), 'unknown');
+});
+
+test('mergeSignal: empty string inputs → unknown', () => {
+  assert.equal(mergeSignal('', ''), 'unknown');
+});
+
+test('mergeSignal: lowercase inputs are normalized', () => {
+  assert.equal(mergeSignal('clean', 'mergeable'), 'clean');
+  assert.equal(mergeSignal('dirty', 'conflicting'), 'blocked');
+});
+
+// ─── pollPr mergeability matrix (#240) ───────────────────────────────────────
+
+test('pollPr row 1: required green + no threads + CLEAN/MERGEABLE → clean', async () => {
+  const collect = async (): Promise<PollPrReadiness> =>
+    readiness({ mergeStateStatus: 'CLEAN', mergeable: 'MERGEABLE' });
+  const r = await pollPr(POLL_INPUT, pollDeps(collect));
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) {
+    assert.equal(r.verdict, 'clean');
+  }
+});
+
+test('pollPr row 2a: DIRTY/CONFLICTING → needsHuman; lesson contains mergeStateStatus=DIRTY', async () => {
+  const collect = async (): Promise<PollPrReadiness> =>
+    readiness({ mergeStateStatus: 'DIRTY', mergeable: 'CONFLICTING' });
+  const r = await pollPr(POLL_INPUT, pollDeps(collect));
+  assert.ok('needsHuman' in r, 'DIRTY/CONFLICTING must block, not clean');
+  if ('needsHuman' in r) {
+    assert.ok(r.lesson.includes('mergeStateStatus=DIRTY'), `lesson must name DIRTY; got: ${r.lesson}`);
+  }
+});
+
+test('pollPr row 2b: BLOCKED mergeStateStatus → needsHuman; lesson contains mergeStateStatus=BLOCKED', async () => {
+  const collect = async (): Promise<PollPrReadiness> =>
+    readiness({ mergeStateStatus: 'BLOCKED', mergeable: 'MERGEABLE' });
+  const r = await pollPr(POLL_INPUT, pollDeps(collect));
+  assert.ok('needsHuman' in r);
+  if ('needsHuman' in r) {
+    assert.ok(r.lesson.includes('mergeStateStatus=BLOCKED'), `lesson must name BLOCKED; got: ${r.lesson}`);
+  }
+});
+
+test('pollPr row 2c: BEHIND mergeStateStatus → needsHuman; lesson contains mergeStateStatus=BEHIND', async () => {
+  const collect = async (): Promise<PollPrReadiness> =>
+    readiness({ mergeStateStatus: 'BEHIND', mergeable: 'MERGEABLE' });
+  const r = await pollPr(POLL_INPUT, pollDeps(collect));
+  assert.ok('needsHuman' in r);
+  if ('needsHuman' in r) {
+    assert.ok(r.lesson.includes('mergeStateStatus=BEHIND'), `lesson must name BEHIND; got: ${r.lesson}`);
+  }
+});
+
+test('pollPr row 3: UNKNOWN mergeable → recheck; evidence names unknown mergeability; NOT clean', async () => {
+  const collect = async (): Promise<PollPrReadiness> =>
+    readiness({ mergeStateStatus: 'CLEAN', mergeable: 'UNKNOWN' });
+  const r = await pollPr(POLL_INPUT, pollDeps(collect));
+  assert.ok(!('needsHuman' in r), 'UNKNOWN should recheck, not block');
+  if (!('needsHuman' in r)) {
+    assert.equal(r.verdict, 'recheck', 'unknown mergeability must not produce clean');
+    assert.ok(
+      r.evidence.some((e) => e.toLowerCase().includes('unknown')),
+      `evidence must name unknown mergeability; got: ${r.evidence.join('; ')}`,
+    );
+  }
+});
+
+test('pollPr row 5: advisory failure + UNSTABLE/MERGEABLE → clean; ciFailures carries advisory; ciVerdictFailures empty', async () => {
+  const collect = async (): Promise<PollPrReadiness> =>
+    readiness({
+      fail: ['SonarCloud'],
+      list: [{ name: 'Verify', result: 'SUCCESS' }, { name: 'SonarCloud', result: 'FAILURE' }],
+      mergeStateStatus: 'UNSTABLE',
+      mergeable: 'MERGEABLE',
+    });
+  const r = await pollPr(POLL_INPUT, pollDeps(collect, { requiredChecks: () => new Set(['Verify']) }));
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) {
+    assert.equal(r.verdict, 'clean', 'advisory failure must not gate the merge when UNSTABLE/MERGEABLE');
+    assert.deepEqual(r.ciFailures.map((c) => c.name), ['SonarCloud'], 'ciFailures still carries advisory for downstream');
+  }
+});
+
+test('pollPr row 10: undefined mergeStateStatus/mergeable → recheck (fail-safe, not crash)', async () => {
+  const collect = async (): Promise<PollPrReadiness> => ({
+    pr: { number: 5, headSha: 'sha5' },
+    checks: { pending: [], fail: [], list: [{ name: 'build', result: 'SUCCESS' }] },
+    reviewThreads: { items: [] },
+    evidence: [],
+  });
+  const r = await pollPr(POLL_INPUT, pollDeps(collect));
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) {
+    assert.equal(r.verdict, 'recheck', 'absent merge fields fall safe to recheck, never clean');
+  }
 });
 
 // ─── respondThreads (plan 0018: reply + resolve the triaged threads) ──────────
