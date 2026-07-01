@@ -126,7 +126,7 @@ its own scope, and `codeReviewLoop` is a child of that scope so each human-appro
 developer/reviewer cycle series without creating a separate follow-up task.
 
 The default codex consensus feature-development pipeline keeps the older compatibility shape: a bounded stuck recovery
-attempt followed by a final stuck gate with `approve_anyway`, `rework`, or `abort`.
+attempt followed by a final stuck gate that allows only explicit `approve_anyway` or `abort`.
 
 ## Fork and Join
 

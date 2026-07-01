@@ -76,7 +76,17 @@ export function featureDevelopment(): Template {
       node.choice('watcherRouter', [on(verdictEq('clean'), 'mergeGate'), otherwise('failedEnd')]),
       node.humanGate('mergeGate', 'merge-review', ['approved', 'recheck', 'cancel'], [
         on(verdictEq('approved'), 'mergedEnd'),
+        on(verdictEq('recheck'), 'mergeRecheck'),
         on(verdictEq('cancel'), 'cancelledEnd'),
+        otherwise('blockedEnd'),
+      ]),
+      node.script('mergeRecheck', 'script:pollPr', 'mergeRecheckRouter', {
+        resultSchema: 'schema:prFeedback',
+        onFailure: 'route',
+        catch: [{ onError: 'revo.ScriptFailed', goto: 'failedEnd' }],
+      }),
+      node.choice('mergeRecheckRouter', [
+        on(verdictEq('clean'), 'mergeGate'),
         otherwise('blockedEnd'),
       ]),
       node.terminal('mergedEnd', 'succeeded'),

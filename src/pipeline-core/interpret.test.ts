@@ -161,6 +161,30 @@ test('feature-development: merge gate non-named outcome routes to blocked', () =
   assert.equal(result.path.at(-1), 'blockedEnd');
 });
 
+test('feature-development: merge gate recheck polls fresh readiness before reopening merge gate', () => {
+  const result = drive(featureDevelopment(), {
+    planGate: 'approved',
+    codeReview: 'approved',
+    watcherPost: 'clean',
+    mergeGate: ['recheck', 'approved'],
+    mergeRecheck: 'clean',
+  });
+
+  assertReachesTerminal(result, 'succeeded');
+  assertPath(result, [
+    'analyst',
+    'planGate',
+    'developer',
+    'codeReview',
+    'integrator',
+    'watcherPost',
+    'mergeGate',
+    'mergeRecheck',
+    'mergeGate',
+    'mergedEnd',
+  ]);
+});
+
 test('feature-development: cancel gates reach cancelled terminal', () => {
   for (const [gate, script] of [
     ['planGate', { planGate: 'cancel' }],
