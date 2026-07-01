@@ -247,9 +247,9 @@ Contracts:
   `address_review_threads` or `return_to_development` (both route to triage) rather than `recheck` (which only
   re-polls providers).
 - `override_merge` bypasses thread resolution. It requires a `mergeOverrideAudit` payload on the `resolve_gate` call:
-  `threadIds`, `actor`, `reason`, `risk`, `verificationResponsibility`, and `headSha` (which is SHA-guarded against
-  the live head at merge time). The audit is persisted in the gate-resolution artifact and the existing SHA guard in
-  `confirmMerge` remains in force.
+  `threadIds`, `actor`, `reason`, `risk`, `verificationResponsibility`, and `headSha` (recorded for accountability;
+  the SHA is not live-checked at gate-resolve time — the existing SHA guard in `confirmMerge` remains the merge-time
+  fence). The audit is persisted in the gate-resolution artifact.
 - Known informational bots (`sonarqubecloud`, `cursor`, `linear-app`, `deepsource-autofix`) are suppressed into
   `ignoredNoise`; all other bot comments surface in `developerFixes` with `source: 'bot_comment'`.
 

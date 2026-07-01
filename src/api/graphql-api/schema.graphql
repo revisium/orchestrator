@@ -281,6 +281,16 @@ input ManualAdoptionAuditInput {
   worktreeRef: String
 }
 
+input MergeOverrideAuditInput {
+  actor: String!
+  fingerprint: String
+  headSha: String!
+  reason: String!
+  risk: String!
+  threadIds: [String!]!
+  verificationResponsibility: String!
+}
+
 type Mutation {
   answerQuestion(data: AnswerQuestionInput!): InboxResolutionModel!
   approveGate(data: GateDecisionInput!): InboxResolutionModel!
@@ -535,6 +545,7 @@ type RepositoryValidationModel {
 input ResolveGateInput {
   adoptionAudit: ManualAdoptionAuditInput
   inboxId: ID!
+  mergeOverrideAudit: MergeOverrideAuditInput
   note: String
   outcome: String!
   resolvedBy: String
