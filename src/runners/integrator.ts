@@ -23,6 +23,7 @@ import {
 } from '../poller/pr-readiness-core.js';
 import { RunService } from '../revisium/run.service.js';
 import {
+  hasClosingIssueReference,
   hasIssueRefToken,
   issueBodyWithClosingReference,
   issueRefTag,
@@ -575,40 +576,6 @@ type PrMergeView = {
   mergeStateStatus: string;
   closingIssuesReferences?: unknown[];
 };
-
-function hasClosingIssueReference(refs: unknown[] | undefined, issueRef: IssueRef | undefined): boolean {
-  if (!issueRef || !Array.isArray(refs)) return false;
-  const [owner, name] = issueRef.repo.toLowerCase().split('/');
-  return refs.some((item) => {
-    if (item === null || typeof item !== 'object') return false;
-    const record = item as Record<string, unknown>;
-    if (record.number !== issueRef.number) return false;
-    const repository = record.repository;
-    if (repository === null || typeof repository !== 'object') return false;
-    const repoRecord = repository as Record<string, unknown>;
-    if (typeof repoRecord.nameWithOwner === 'string') {
-      return repoRecord.nameWithOwner.toLowerCase() === issueRef.repo.toLowerCase();
-    }
-    const repoName = typeof repoRecord.name === 'string' ? repoRecord.name.toLowerCase() : '';
-    const repoOwner = repoRecord.owner;
-    const ownerLogin = repoOwner && typeof repoOwner === 'object' && typeof (repoOwner as Record<string, unknown>).login === 'string'
-      ? String((repoOwner as Record<string, unknown>).login).toLowerCase()
-      : '';
-    return ownerLogin === owner && repoName === name;
-  });
-}
-
-
-
-
-
-
-
-
-
-
-
-
 
 export async function confirmMerge(
   input: IntegratorInput,

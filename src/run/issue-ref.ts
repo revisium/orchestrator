@@ -184,6 +184,24 @@ export function issueBodyWithClosingReference(body: string | undefined, issueRef
   return trimmed ? `${trimmed}\n\n${reference}` : reference;
 }
 
+export function hasClosingIssueReference(refs: unknown[] | undefined, issueRef: IssueRef | undefined): boolean {
+  if (!issueRef || !Array.isArray(refs)) return false;
+  const [owner, name] = issueRef.repo.toLowerCase().split('/');
+  return refs.some((item) => {
+    const record = asRecord(item);
+    if (!record || record.number !== issueRef.number) return false;
+    const repoRecord = asRecord(record.repository);
+    if (!repoRecord) return false;
+    if (typeof repoRecord.nameWithOwner === 'string') {
+      return repoRecord.nameWithOwner.toLowerCase() === issueRef.repo.toLowerCase();
+    }
+    const repoName = typeof repoRecord.name === 'string' ? repoRecord.name.toLowerCase() : '';
+    const ownerRecord = asRecord(repoRecord.owner);
+    const ownerLogin = typeof ownerRecord?.login === 'string' ? ownerRecord.login.toLowerCase() : '';
+    return ownerLogin === owner && repoName === name;
+  });
+}
+
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { accessSync, constants } from 'node:fs';
-import type { IssueAction, IssueRef } from '../run/issue-ref.js';
+import { hasClosingIssueReference, hasIssueRefToken, type IssueAction, type IssueRef } from '../run/issue-ref.js';
 
 export type PrReadinessVerdict =
   | 'ready'
@@ -726,10 +726,6 @@ function providerWaitFeedback(state: ReturnType<typeof providerState>, botCommen
   }];
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 function issueRefTitleTag(issueRef: IssueRef, repo: string): string {
   return issueRef.repo.toLowerCase() === repo.toLowerCase()
     ? `#${issueRef.number}`
@@ -738,15 +734,6 @@ function issueRefTitleTag(issueRef: IssueRef, repo: string): string {
 
 function hasIssueBranchToken(head: string | undefined, issueRef: IssueRef): boolean {
   return new RegExp(`(?:^|[/-])issue-${issueRef.number}(?:-|$)`).test(head ?? '');
-}
-
-function hasIssueTitleToken(title: string | undefined, issueRef: IssueRef, repo: string): boolean {
-  const boundaryBefore = String.raw`(?:^|[\s([{"'])`;
-  const boundaryAfter = String.raw`(?=$|[^A-Za-z0-9_-])`;
-  const qualified = new RegExp(`${boundaryBefore}${escapeRegExp(`${issueRef.repo}#${issueRef.number}`)}${boundaryAfter}`, 'i');
-  if (qualified.test(title ?? '')) return true;
-  if (issueRef.repo.toLowerCase() !== repo.toLowerCase()) return false;
-  return new RegExp(`${boundaryBefore}#${issueRef.number}${boundaryAfter}`).test(title ?? '');
 }
 
 function issueLinkageFeedback(
@@ -759,35 +746,13 @@ function issueLinkageFeedback(
   const issueTag = issueRefTitleTag(issueRef, repo);
   const missing: string[] = [];
   if (!hasIssueBranchToken(pr.head, issueRef)) missing.push(`branch missing ${issueBranch}`);
-  if (!hasIssueTitleToken(pr.title, issueRef, repo)) missing.push(`title missing ${issueTag}`);
+  if (!hasIssueRefToken(pr.title, issueRef, repo)) missing.push(`title missing ${issueTag}`);
   if (missing.length === 0) return [];
   return [{
     source: 'issue_ref_linkage',
     summary: `PR is missing issueRef linkage for ${issueTag}`,
     evidence: `${missing.join('; ')} (head=${pr.head ?? ''}, title=${pr.title ?? ''})`,
   }];
-}
-
-function hasClosingIssueReference(refs: unknown[] | undefined, issueRef: IssueRef | undefined): boolean {
-  if (!issueRef || !Array.isArray(refs)) return false;
-  const [owner, name] = issueRef.repo.toLowerCase().split('/');
-  return refs.some((item) => {
-    if (item === null || typeof item !== 'object') return false;
-    const record = item as Record<string, unknown>;
-    if (record.number !== issueRef.number) return false;
-    const repository = record.repository;
-    if (repository === null || typeof repository !== 'object') return false;
-    const repoRecord = repository as Record<string, unknown>;
-    if (typeof repoRecord.nameWithOwner === 'string') {
-      return repoRecord.nameWithOwner.toLowerCase() === issueRef.repo.toLowerCase();
-    }
-    const repoName = typeof repoRecord.name === 'string' ? repoRecord.name.toLowerCase() : '';
-    const repoOwner = repoRecord.owner;
-    const ownerLogin = repoOwner && typeof repoOwner === 'object' && typeof (repoOwner as Record<string, unknown>).login === 'string'
-      ? String((repoOwner as Record<string, unknown>).login).toLowerCase()
-      : '';
-    return ownerLogin === owner && repoName === name;
-  });
 }
 
 function issueCloseFeedback(issueRef: IssueRef | undefined, issueAction: IssueAction | undefined, repo: string, prView?: PrViewData) {
