@@ -90,7 +90,7 @@ test('H2: a feature run drives plan + merge gates entirely through MCP tools', {
       assert.equal(att.nextAction, 'ask_human', `gate ${i + 1} should require attention`);
       assert.ok(att.inbox?.id, 'pending_gate must surface the inbox item');
       assert.equal(att.requiresAttention, true);
-      await inv('approve_gate', { inboxId: att.inbox.id, resolvedBy: 'mcp-e2e' });
+      await inv('resolve_gate', { inboxId: att.inbox.id, outcome: 'approved', resolvedBy: 'mcp-e2e' });
     }
     const done = await attentionUntil(created.runId, 'done');
     assert.equal(done.nextAction, 'done');
@@ -130,7 +130,7 @@ test('H11: watch_run_changes delivers gates and terminal under a single advancin
     for (let g = 0; g < 2; g++) {
       const inboxId = await nextTransition('pending_gate');
       assert.ok(inboxId, `gate ${g + 1} inbox must be surfaced via watch_run_changes`);
-      await inv('approve_gate', { inboxId, resolvedBy: 'mcp-e2e' });
+      await inv('resolve_gate', { inboxId, outcome: 'approved', resolvedBy: 'mcp-e2e' });
     }
 
     let completed = false;
@@ -219,8 +219,8 @@ test('H7: gate-only verbs are enforced — answer_question on a gate is rejected
       () => mcp.invoke('approve_gate', { inboxId: 'inbox_missing' }),
       (err: unknown) => (err as { code?: string }).code === 'ROW_NOT_FOUND',
     );
-    // Settle cleanly: reject the plan gate so the workflow terminates and the shared harness stays clean.
-    await inv('reject_gate', { inboxId });
+    // Settle cleanly: cancel the named plan gate so the workflow terminates and the shared harness stays clean.
+    await inv('resolve_gate', { inboxId, outcome: 'cancel', resolvedBy: 'mcp-e2e' });
   } finally {
     target.cleanup();
   }
@@ -231,7 +231,7 @@ test('H8: get_capabilities advertises the full stdio tool set with new observati
   assert.equal(caps.transport, 'stdio');
   assert.equal(caps.auth, 'none');
   assert.deepEqual([...caps.tools].sort(), [...mcp.toolNames].sort(), 'advertised tools match the registered handlers');
-  for (const t of ['create_run', 'start_run', 'get_run_attention', 'get_run_status', 'watch_run_changes', 'approve_gate', 'get_run']) {
+  for (const t of ['create_run', 'start_run', 'get_run_attention', 'get_run_status', 'watch_run_changes', 'approve_gate', 'resolve_gate', 'get_run']) {
     assert.ok(caps.tools.includes(t), `capabilities must list ${t}`);
   }
   assert.equal(caps.tools.includes('observe_run'), false, 'observe_run must not be advertised');

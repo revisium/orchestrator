@@ -161,7 +161,19 @@ test('default playbook policy: missing merge-gate reject recheck outcome is diag
 
   assert.equal(diagnostic.nodeId, 'mergeGate');
   assert.equal(diagnostic.path, 'outcomes');
-  assert.match(diagnostic.expected ?? '', /approved,recheck/);
+  assert.match(diagnostic.expected ?? '', /approved,recheck,cancel/);
+});
+
+test('default playbook policy: merge-gate cancel must terminate as cancelled', () => {
+  const diagnostic = assertDiagnostic(
+    mutateTemplate((template) => {
+      guardedBranchContaining(template, 'mergeGate', 'cancel').goto = 'blockedEnd';
+    }),
+    'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
+  );
+
+  assert.equal(diagnostic.nodeId, 'mergeGate');
+  assert.match(diagnostic.expected ?? '', /cancel -> cancelledEnd/);
 });
 
 test('default playbook policy: merge-gate reject must re-poll PR feedback', () => {
@@ -343,6 +355,18 @@ test('default playbook policy: blocked terminal must remain first-class', () => 
   assert.match(diagnostic.expected ?? '', /blocked/);
 });
 
+test('default playbook policy: cancelled terminal must remain first-class', () => {
+  const diagnostic = assertDiagnostic(
+    mutateTemplate((template) => {
+      template.nodes['cancelledEnd'] = { id: 'cancelledEnd', kind: 'terminal', status: 'blocked' };
+    }),
+    'DEFAULT_POLICY_CANCELLED_TERMINAL_MISSING',
+  );
+
+  assert.equal(diagnostic.nodeId, 'cancelledEnd');
+  assert.match(diagnostic.expected ?? '', /cancelled/);
+});
+
 test('default playbook policy: loop exhaustion must not dead-end directly at blockedEnd', () => {
   const diagnostic = assertDiagnostic(
     mutateTemplate((template) => {
@@ -362,50 +386,48 @@ test('default playbook policy: loop exhaustion must not dead-end directly at blo
 test('default playbook policy: codeStuckGate rework must route to stuckReworkDeveloper', () => {
   const diagnostic = assertDiagnostic(
     mutateTemplate((template) => {
-      guardedBranchContaining(template, 'codeStuckGate', 'rework').goto = 'codeFinalStuckGate';
+      guardedBranchContaining(template, 'codeStuckGate', 'rework').goto = 'blockedEnd';
     }),
     'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
   );
 
   assert.equal(diagnostic.nodeId, 'codeStuckGate');
-  assert.match(diagnostic.expected ?? '', /rework -> stuckReworkDeveloper/);
+  assert.match(diagnostic.expected ?? '', /rework(?: .*)? -> stuckReworkDeveloper/);
 });
 
-test('default playbook policy: codeFinalStuckGate approve_anyway must preserve override route', () => {
+test('default playbook policy: codeStuckGate cancel must terminate as cancelled', () => {
   const diagnostic = assertDiagnostic(
     mutateTemplate((template) => {
-      guardedBranchContaining(template, 'codeFinalStuckGate', 'approve_anyway').goto = 'blockedEnd';
+      guardedBranchContaining(template, 'codeStuckGate', 'cancel').goto = 'blockedEnd';
     }),
     'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
   );
 
-  assert.equal(diagnostic.nodeId, 'codeFinalStuckGate');
-  assert.match(diagnostic.expected ?? '', /approve_anyway -> integrator/);
+  assert.equal(diagnostic.nodeId, 'codeStuckGate');
+  assert.match(diagnostic.expected ?? '', /cancel -> cancelledEnd/);
 });
 
-test('default playbook policy: codeFinalStuckGate default must block', () => {
+test('default playbook policy: plan gates must route rework back to analyst', () => {
   const diagnostic = assertDiagnostic(
     mutateTemplate((template) => {
-      defaultBranch(template, 'codeFinalStuckGate').default = 'integrator';
+      guardedBranchContaining(template, 'planGate', 'rework').goto = 'developer';
     }),
     'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
   );
 
-  assert.equal(diagnostic.nodeId, 'codeFinalStuckGate');
-  assert.match(diagnostic.expected ?? '', /default -> blockedEnd/);
+  assert.equal(diagnostic.nodeId, 'planGate');
+  assert.match(diagnostic.expected ?? '', /rework -> analyst/);
 });
 
-test('default playbook policy: final stuck gate outcome diagnostics identify the final gate', () => {
+test('default playbook policy: code review loop must be reset by stuck recovery iterations', () => {
   const diagnostic = assertDiagnostic(
     mutateTemplate((template) => {
-      const gate = template.nodes['codeFinalStuckGate'];
-      const outcomes = gate['outcomes'] as string[];
-      outcomes.push('rework');
+      assert.ok(template.scopes?.codeReviewLoop);
+      template.scopes.codeReviewLoop.parent = null;
     }),
     'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
   );
 
-  assert.equal(diagnostic.nodeId, 'codeFinalStuckGate');
-  assert.equal(diagnostic.path, 'outcomes');
-  assert.equal(diagnostic.actual, 'approve_anyway,abort,rework');
+  assert.equal(diagnostic.path, 'scopes.codeReviewLoop');
+  assert.match(diagnostic.expected ?? '', /parent=codeStuckRecoveryLoop/);
 });

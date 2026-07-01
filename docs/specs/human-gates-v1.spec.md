@@ -92,8 +92,8 @@ GraphQL mutations:
 `resolve_gate` / `resolveGate` is the named-outcome resolver for gates whose `options` are not simply
 approve/reject. It validates that `outcome` is one of the pending inbox row options and requires a non-empty note
 for `approve_anyway`. `approve_gate` and `reject_gate` remain compatibility wrappers for simple two-way gates, but
-they reject multi-outcome stuck gates instead of silently mapping approve to `approve_anyway` or reject to a recovery
-or abort outcome.
+they reject multi-outcome gates such as plan, merge, and stuck-review gates instead of silently mapping approve to
+`approve_anyway` or reject to a recovery, recheck, cancel, or abort outcome.
 
 Verification environment blocks open a recovery gate with outcomes `rerun_with_permissions`, `continue_in_revo`,
 `adopt_patch_manually`, and `abort`. Revo-owned work remains owned by Revo unless the selected outcome is
@@ -122,7 +122,7 @@ Single-shot. No cursor. Answers "what currently requires attention?"
 ```ts
 type RunAttentionResult = {
   runId: string;
-  state: 'ready' | 'running' | 'pending_gate' | 'question' | 'blocked' | 'failed' | 'completed' | 'retrying';
+  state: 'ready' | 'running' | 'pending_gate' | 'question' | 'blocked' | 'failed' | 'completed' | 'cancelled' | 'retrying';
   requiresAttention: boolean; // true iff nextAction ∈ {start_run, ask_human, inspect_digest, inspect_log}
   nextAction: 'start_run' | 'wait' | 'ask_human' | 'inspect_digest' | 'inspect_log' | 'done';
   issueRef?: IssueRef;
@@ -132,6 +132,12 @@ type RunAttentionResult = {
   suggestedTools: string[];
 };
 ```
+
+Gate outcome `cancel` is an intentional human stop. Pipelines that expose it MUST route to a `cancelled` terminal;
+observation surfaces report `state: 'cancelled'` with `nextAction: 'done'`, not `blocked`.
+
+Plan gates MAY expose `rework`. In that case the gate decision is fed back through run dataflow and routes to the
+analyst as an iteration over the existing plan and comments, not as a new task.
 
 ### get_run_status
 
@@ -230,6 +236,7 @@ Contracts:
 
 ## Changelog
 
+- 2026-07-01: Added cancelled run observation and documented named `cancel` / iterative plan rework gates.
 - 2026-06-29: Replaced legacy run-observation tools with get_run_attention (primary), get_run_status
   (neutral), and watch_run_changes (advanced delivery). Cursor moves to watch_run_changes only.
 - 2026-06-27: Documented that runner retry evidence uses existing observation surfaces without adding a new

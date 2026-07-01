@@ -631,6 +631,10 @@ export class PipelineService {
         runId: string,
         blockOpts?: { actor?: string; source?: string; reason?: string },
       ) => this.runService.blockRun(runId, blockOpts),
+      cancelRun: (
+        runId: string,
+        cancelOpts?: { actor?: string; source?: string },
+      ) => this.runService.cancelRun(runId, cancelOpts),
       loadRunTaskContext: this.runService.loadRunTaskContext.bind(this.runService),
       integrateFn,
       runStub: this.integratorService.runStub,

@@ -119,11 +119,14 @@ defense-in-depth; it is not a substitute for giving the runner the active domain
 
 ## Stuck Review Recovery
 
-The default codex consensus feature-development pipeline uses explicit stuck-review gate outcomes:
-`approve_anyway`, `rework`, and `abort`. `approve_anyway` is a human override to the integrator, `rework` routes
-through a separate `stuckReworkDeveloper` node, and `abort` blocks the run. The stuck recovery loop is capped by its
-own scope and MUST NOT reset or extend `codeReviewLoop`; after the bounded recovery attempt, failed consensus routes
-to a final stuck gate that allows only explicit `approve_anyway` or `abort`.
+The ordinary default `feature-development` pipeline uses a reusable `codeStuckGate` with explicit outcomes:
+`approve_anyway`, `rework`, and `cancel`. `approve_anyway` is a human override to the integrator, `rework` routes
+through `stuckReworkDeveloper`, and `cancel` completes the run as `cancelled`. The stuck recovery loop is capped by
+its own scope, and `codeReviewLoop` is a child of that scope so each human-approved stuck rework starts a fresh normal
+developer/reviewer cycle series without creating a separate follow-up task.
+
+The default codex consensus feature-development pipeline keeps the older compatibility shape: a bounded stuck recovery
+attempt followed by a final stuck gate that allows only explicit `approve_anyway` or `abort`.
 
 ## Fork and Join
 
@@ -149,7 +152,7 @@ does not observe live branch races.
 type RunState = {
   activeNodeIds: ReadonlySet<string>;
   scopedCounters: Readonly<Record<string, number>>;
-  status: 'running' | 'awaiting_gate' | 'succeeded' | 'failed' | 'blocked';
+  status: 'running' | 'awaiting_gate' | 'succeeded' | 'failed' | 'blocked' | 'cancelled';
   lastResult?: LastResult;
 };
 
@@ -207,6 +210,7 @@ v1 reports safe/breaking information but does not migrate live in-flight runs.
 
 ## Changelog
 
+- 2026-07-01: Added `cancelled` terminal status and documented reusable ordinary code-stuck recovery.
 - 2026-06-29: Normative-language / canon-discipline pass; no contract change.
 - 2026-06-27: Clarified that transient runner retry is implemented by the DBOS adapter around physical attempts,
   not by templates or `pipeline-core`.

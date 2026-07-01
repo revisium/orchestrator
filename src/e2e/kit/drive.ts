@@ -49,6 +49,6 @@ export async function approveUntilTerminal(
     const topic = (context as Record<string, unknown>)['topic'];
     assert.equal(typeof topic, 'string');
     approvedTopics.push(topic as string);
-    await api.approveGate({ inboxId: inbox.id, resolvedBy: 'e2e' });
+    await api.resolveGate({ inboxId: inbox.id, outcome: 'approved', resolvedBy: 'e2e' });
   }
 }
