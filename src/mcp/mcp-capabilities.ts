@@ -1,3 +1,5 @@
+import { OPERATOR_MONITORING_PROTOCOL } from './monitoring-directive.js';
+
 export const MCP_TOOL_NAMES = [
   'get_status',
   'doctor',
@@ -44,9 +46,16 @@ export const MCP_TOOL_NAMES = [
 
 export type McpToolName = (typeof MCP_TOOL_NAMES)[number];
 
+const monitoringLoopLines = [
+  'task_monitoring_loop — default agent algorithm for monitoring a run:',
+  ...OPERATOR_MONITORING_PROTOCOL.map((step, i) => `${i + 1}. ${step}`),
+  'Use get_run_status for neutral dashboard or status checks that must not prescribe actions.',
+  'watch_run_changes is only for UI/change-stream/long-poll consumers that explicitly need cursor-based transition delivery — not for normal task monitoring.',
+];
+
 export const MCP_INSTRUCTIONS = `Revo is a local-first software-development task orchestrator.
 
-Use these tools to manage tasks end-to-end from your coding agent:
+Use these tools to manage tasks end-to-end from your coding agent. When you create or start a run, you become the operator/humanGate for that run — follow task_monitoring_loop below until nextAction is "done".
 - create and start runs;
 - resume terminal recoverable preflight blocks with resume_run after the target repo is repaired;
 - observe run state and attention requirements through the intent-named observation tools;
@@ -56,14 +65,7 @@ Use these tools to manage tasks end-to-end from your coding agent:
 - inspect PR readiness and actionable review feedback before resuming work;
 - validate repository context before starting live work.
 
-task_monitoring_loop — default agent algorithm for monitoring a run:
-1. Call get_run_attention(runId): answers "what currently requires attention?" with requiresAttention, nextAction, and suggestedTools.
-2. nextAction "wait" → sleep/backoff, re-call get_run_attention.
-3. nextAction "ask_human" → inspect and resolve the inbox item with resolve_gate for named gate outcomes, approve_gate/reject_gate for simple gates, or answer_question.
-4. nextAction "inspect_digest" → call get_run_digest once; nextAction "inspect_log" → call get_agent_log once.
-5. nextAction "done" → stop. nextAction "start_run" → call start_run.
-Use get_run_status for neutral dashboard or status checks that must not prescribe actions.
-watch_run_changes is only for UI/change-stream/long-poll consumers that explicitly need cursor-based transition delivery — not for normal task monitoring.
+${monitoringLoopLines.join('\n')}
 
 Diagnostic tools (call only when required):
 - get_run_digest when nextAction is "inspect_digest".

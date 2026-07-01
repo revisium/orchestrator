@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { McpFacadeService } from './mcp-facade.service.js';
 import { MCP_TOOL_NAMES, MCP_INSTRUCTIONS } from './mcp-capabilities.js';
+import { OPERATOR_MONITORING_PROTOCOL, buildMonitoringDirective } from './monitoring-directive.js';
 import type { TaskControlPlaneApiService } from '../task-control-plane/task-control-plane-api.service.js';
 import { ControlPlaneError } from '../control-plane/errors.js';
 import { AgentObservabilityError } from '../observability/types.js';
@@ -138,7 +139,7 @@ test('McpFacadeService delegates product operations to TaskControlPlaneApiServic
   } as unknown as TaskControlPlaneApiService;
   const facade = new McpFacadeService(api);
 
-  const result = await facade.createRun({ title: 'Task', repo: '.', pipelineId: 'feature-development', start: false, issueRef });
+  const result = await facade.createRun({ title: 'Task', repo: '.', pipelineId: 'feature-development', start: false, issueRef, includeMonitoringGuidance: false });
 
   assert.deepEqual(received, { title: 'Task', repo: '.', pipelineId: 'feature-development', start: false, issueRef });
   assert.deepEqual(result, { runId: 'run-1', started: false });
@@ -198,7 +199,12 @@ test('McpFacadeService.createRun returns a compact default response without the 
   });
   assert.equal(serialized.includes('template_json'), false);
   assert.equal(serialized.includes('executionPolicy'), false);
-  assert.ok(Buffer.byteLength(serialized, 'utf8') < 1_200, 'create_run MCP response stays compact by default');
+  const monitoring = result.monitoring as Record<string, unknown>;
+  assert.equal(monitoring?.nextAction, 'monitor', 'monitoring directive must be present by default');
+  assert.equal(monitoring?.pollTool, 'get_run_attention');
+  assert.equal(monitoring?.runId, 'run-1');
+  assert.ok(Array.isArray(monitoring?.protocol), 'monitoring.protocol must be an array');
+  assert.ok(Buffer.byteLength(serialized, 'utf8') < 2_600, 'create_run MCP response stays compact by default');
 });
 
 test('McpFacadeService pipeline tools return compact defaults without execution policy graphs', async () => {
@@ -692,6 +698,124 @@ test('compactReviewThreads: unresolvedCount and included are populated from the 
   assert.equal(threads.included, true);
   assert.equal(threads.unresolvedCount, 2);
   assert.equal((threads.items ?? []).length, 1);
+});
+
+test('McpFacadeService.createRun monitoring directive is present with correct shape by default', async () => {
+  const api = {
+    async createRun() {
+      return { runId: 'run-1', started: false };
+    },
+  } as unknown as TaskControlPlaneApiService;
+  const facade = new McpFacadeService(api);
+
+  const result = await facade.createRun({ title: 'Task', repo: '.', pipelineId: 'feature-development' }) as Record<string, unknown>;
+  const monitoring = result.monitoring as Record<string, unknown>;
+
+  assert.equal(monitoring?.nextAction, 'monitor');
+  assert.equal(monitoring?.role, 'operator/humanGate');
+  assert.equal(monitoring?.runId, 'run-1');
+  assert.equal(monitoring?.pollTool, 'get_run_attention');
+  assert.ok(typeof monitoring?.cadence === 'string' && monitoring.cadence.length > 0);
+  assert.ok(Array.isArray(monitoring?.protocol) && (monitoring.protocol as unknown[]).length > 0);
+  assert.ok(Array.isArray(monitoring?.gateTools) && (monitoring.gateTools as unknown[]).includes('resolve_gate'));
+  assert.ok(Array.isArray(monitoring?.stopConditions) && (monitoring.stopConditions as unknown[]).length > 0);
+  assert.ok(typeof monitoring?.guidance === 'string' && monitoring.guidance.length > 0);
+  assert.equal((monitoring?.clientHints as Record<string, unknown>)?.advisory, true);
+});
+
+test('McpFacadeService.createRun monitoring directive is absent when includeMonitoringGuidance is false', async () => {
+  const api = {
+    async createRun() {
+      return { runId: 'run-1', started: false };
+    },
+  } as unknown as TaskControlPlaneApiService;
+  const facade = new McpFacadeService(api);
+
+  const result = await facade.createRun({ title: 'Task', repo: '.', pipelineId: 'feature-development', includeMonitoringGuidance: false }) as Record<string, unknown>;
+
+  assert.equal('monitoring' in result, false, 'monitoring must be absent when opt-out');
+});
+
+test('McpFacadeService.createRun confirmationRequired path carries no monitoring directive', async () => {
+  const api = {
+    async previewPipelineSelection() {
+      return { playbookId: 'pb', candidatePipelines: [], wouldAutoRoute: null };
+    },
+  } as unknown as TaskControlPlaneApiService;
+  const facade = new McpFacadeService(api);
+
+  const result = await facade.createRun({ title: 'Task', repo: '.' }) as Record<string, unknown>;
+
+  assert.equal(result.confirmationRequired, true);
+  assert.equal('monitoring' in result, false, 'monitoring must be absent on confirmationRequired path');
+});
+
+test('McpFacadeService.startRun monitoring directive is present with correct shape by default', async () => {
+  const api = {
+    async startRun() {
+      return { runId: 'run-1', workflowID: 'wf-1', alreadyStarted: false, engine: 'data-driven' };
+    },
+  } as unknown as TaskControlPlaneApiService;
+  const facade = new McpFacadeService(api);
+
+  const result = await facade.startRun({ runId: 'run-1' }) as Record<string, unknown>;
+  const monitoring = result.monitoring as Record<string, unknown>;
+
+  assert.equal(monitoring?.nextAction, 'monitor');
+  assert.equal(monitoring?.pollTool, 'get_run_attention');
+  assert.equal(monitoring?.runId, 'run-1');
+  assert.ok(Array.isArray(monitoring?.protocol));
+});
+
+test('McpFacadeService.startRun monitoring directive is absent when includeMonitoringGuidance is false', async () => {
+  const api = {
+    async startRun() {
+      return { runId: 'run-1', workflowID: 'wf-1', alreadyStarted: false, engine: 'data-driven' };
+    },
+  } as unknown as TaskControlPlaneApiService;
+  const facade = new McpFacadeService(api);
+
+  const result = await facade.startRun({ runId: 'run-1', includeMonitoringGuidance: false }) as Record<string, unknown>;
+
+  assert.equal('monitoring' in result, false, 'monitoring must be absent when opt-out');
+});
+
+test('McpFacadeService.startRun suppresses monitoring and preserves nextAction:resume_run on recoverable preflight block', async () => {
+  const api = {
+    async startRun() {
+      return {
+        runId: 'run-1',
+        workflowID: 'wf-1',
+        alreadyStarted: true,
+        recoverable: true,
+        retryStarted: false,
+        nextAction: 'resume_run' as const,
+        blockedEventId: 'ev-1',
+        blockedReason: 'preflight_failed',
+        workflowStatus: 'ERROR',
+      };
+    },
+  } as unknown as TaskControlPlaneApiService;
+  const facade = new McpFacadeService(api);
+
+  const result = await facade.startRun({ runId: 'run-1' }) as Record<string, unknown>;
+
+  assert.equal(result.nextAction, 'resume_run', 'nextAction:resume_run must be preserved on recoverable path');
+  assert.equal('monitoring' in result, false, 'monitoring must be absent on recoverable path');
+});
+
+test('monitoring-directive consistency: buildMonitoringDirective protocol matches OPERATOR_MONITORING_PROTOCOL and MCP_INSTRUCTIONS contains each protocol line', () => {
+  assert.equal(
+    buildMonitoringDirective('r').protocol,
+    OPERATOR_MONITORING_PROTOCOL,
+    'buildMonitoringDirective.protocol must be the same reference as OPERATOR_MONITORING_PROTOCOL',
+  );
+  for (const line of OPERATOR_MONITORING_PROTOCOL) {
+    assert.ok(
+      MCP_INSTRUCTIONS.includes(line),
+      `MCP_INSTRUCTIONS must contain protocol line: ${line}`,
+    );
+  }
 });
 
 test('McpFacadeService exposes agent observability application error codes', async () => {

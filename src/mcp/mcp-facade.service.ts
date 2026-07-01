@@ -17,6 +17,7 @@ import {
   type WatchResult,
 } from '../task-control-plane/run-watch.service.js';
 import { MCP_TOOL_NAMES } from './mcp-capabilities.js';
+import { buildMonitoringDirective } from './monitoring-directive.js';
 
 export type { RepositoryContext, RepositoryValidation };
 
@@ -413,10 +414,19 @@ export class McpFacadeService {
     issueRef?: { repo: string; number: number; url: string };
     priority?: number;
     start?: boolean;
+    includeMonitoringGuidance?: boolean;
   }) {
-    const pipelineId = input.pipelineId?.trim();
-    if (!pipelineId) return this.requirePipelineSelection(input);
-    return this.api.createRun(input).then((result) => compactCreateRunResult(result) as JsonRecord).catch((error: unknown) => {
+    const { includeMonitoringGuidance = true, ...apiInput } = input;
+    const pipelineId = apiInput.pipelineId?.trim();
+    if (!pipelineId) return this.requirePipelineSelection(apiInput);
+    return this.api.createRun(apiInput).then((result) => {
+      const compacted = compactCreateRunResult(result) as JsonRecord;
+      const runId = asString(compacted.runId);
+      if (includeMonitoringGuidance && runId) {
+        return { ...compacted, monitoring: buildMonitoringDirective(runId) };
+      }
+      return compacted;
+    }).catch((error: unknown) => {
       if (error instanceof CreateRunWorkflowError) {
         const created = Object.keys(error.createdIds).length > 0
           ? `; createdBeforeFailure=${JSON.stringify(error.createdIds)}`
@@ -450,8 +460,15 @@ export class McpFacadeService {
     };
   }
 
-  startRun(input: { runId: string }) {
-    return this.api.startRun(input);
+  startRun(input: { runId: string; includeMonitoringGuidance?: boolean }) {
+    const { includeMonitoringGuidance = true, runId } = input;
+    return this.api.startRun({ runId }).then((result) => {
+      const r = result as unknown as Record<string, unknown>;
+      if (r !== null && typeof r === 'object' && r.nextAction === 'resume_run') return result;
+      if (!includeMonitoringGuidance) return result;
+      const resultRunId = asString(r?.runId) ?? runId;
+      return { ...(typeof r === 'object' && r !== null ? r : {}), monitoring: buildMonitoringDirective(resultRunId) };
+    });
   }
 
   resumeRun(input: { runId: string }) {
