@@ -16,6 +16,7 @@ export type CreateRunInput = {
   pipelineId?: string;
   params?: Record<string, unknown>;
   issueRef?: unknown;
+  issueAction?: unknown;
   routeDecision?: Record<string, unknown>;
   executionProfile?: Record<string, unknown>;
   now?: Date;
@@ -161,7 +162,7 @@ function normalizeInput(input: CreateRunInput): NormalizedInput {
     role,
     playbookId: input.playbookId?.trim() ?? '',
     pipelineId: input.pipelineId?.trim() ?? '',
-    params: normalizeIssueRefIntoParams(input.params ?? {}, input.issueRef),
+    params: normalizeIssueRefIntoParams(input.params ?? {}, input.issueRef, input.issueAction),
     routeDecision: input.routeDecision ?? {},
     executionProfile: input.executionProfile ?? {},
     now: input.now ?? new Date(),

@@ -5,6 +5,7 @@ export type GetPrReadinessQueryData = {
   baseBranch?: string;
   sonarProject?: string;
   issueRef?: { repo: string; number: number; url: string };
+  issueAction?: 'close' | 'refs' | 'none';
   includeComments?: boolean;
   includeReviewThreads?: boolean;
 };

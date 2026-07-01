@@ -30,7 +30,7 @@ import type {
 } from '../runners/integrator.js';
 import { template, node, on, otherwise, verdictEq, allOf, counterLt, joinAll } from '../pipeline-core/kit/index.js';
 import { RUNNER_IDLE_TIMEOUT_KIND, RUNNER_WALL_CLOCK_LIMIT_KIND } from '../worker/process-executor.js';
-import type { IssueRef } from '../run/issue-ref.js';
+import type { IssueAction, IssueRef } from '../run/issue-ref.js';
 
 const RUN_ID = 'run-dd-001';
 
@@ -171,6 +171,7 @@ function buildAdapter(opts: {
   retryPolicy?: RunnerTransientRetryPolicy;
   onSleep?: (ms: number) => void | Promise<void>;
   issueRef?: IssueRef;
+  issueAction?: IssueAction;
 }) {
   const rec: Recorder = {
     gates: [],
@@ -260,7 +261,14 @@ function buildAdapter(opts: {
     failRun: async (_runId, reason) => { rec.failed.push(reason); return null; },
     blockRun: async (_runId, o) => { rec.blocked.push({ reason: o?.reason }); return null; },
     cancelRun: async (_runId, o) => { rec.cancelled.push({ source: o?.source }); return null; },
-    loadRunTaskContext: async () => ({ taskId: 'task-1', title: 'T', base: 'master', repoRef: '', issueRef: opts.issueRef }),
+    loadRunTaskContext: async () => ({
+      taskId: 'task-1',
+      title: 'T',
+      base: 'master',
+      repoRef: '',
+      issueRef: opts.issueRef,
+      issueAction: opts.issueAction,
+    }),
     integrateFn: async (input: IntegratorInput): Promise<IntegratorOutput | IntegratorBlocked> => {
       rec.integrateCalls++;
       rec.integratorInputs.push(input);
@@ -327,6 +335,7 @@ function buildAdapter(opts: {
         headSha: `sha-${input.nodeId}-${input.attemptId}`,
         worktreePath: '/fake/worktree',
         ...(input.issueRef ? { issueRef: input.issueRef } : {}),
+        ...(input.issueAction ? { issueAction: input.issueAction } : {}),
         ...(input.artifactRef ? { artifactRef: input.artifactRef } : {}),
       };
       rec.capturedChanges.push(change);
@@ -1243,6 +1252,7 @@ test('issueRef: run context reaches worktree creation, produced change, and inte
     verdicts: { codeReview: 'approved' },
     gate: () => ({ decision: 'approve' }),
     issueRef,
+    issueAction: 'refs',
   });
 
   const result = await run();
@@ -1250,8 +1260,11 @@ test('issueRef: run context reaches worktree creation, produced change, and inte
   assert.equal(result.status, 'succeeded');
   assert.deepEqual(rec.worktreeIssueRefs, [issueRef]);
   assert.deepEqual(rec.capturedChanges[0]?.issueRef, issueRef);
+  assert.equal(rec.capturedChanges[0]?.issueAction, 'refs');
   assert.deepEqual(rec.integratorInputs[0]?.issueRef, issueRef);
+  assert.equal(rec.integratorInputs[0]?.issueAction, 'refs');
   assert.deepEqual(rec.integratorInputs[0]?.change?.issueRef, issueRef);
+  assert.equal(rec.integratorInputs[0]?.change?.issueAction, 'refs');
 });
 
 test('issueRef: run context overrides mismatched produced change issueRef before integrator handoff', async () => {

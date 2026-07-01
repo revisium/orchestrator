@@ -55,9 +55,9 @@ function asStringArray(value: unknown): string[] | undefined {
   return value.filter((item): item is string => typeof item === 'string' && item.trim() !== '');
 }
 
-export function normalizeParams(value: unknown, issueRef?: unknown): Record<string, unknown> {
+export function normalizeParams(value: unknown, issueRef?: unknown, issueAction?: unknown): Record<string, unknown> {
   const record = asRecord(value);
-  if (!record) return normalizeIssueRefIntoParams({}, issueRef);
+  if (!record) return normalizeIssueRefIntoParams({}, issueRef, issueAction);
   const {
     executionProfile: _executionProfile,
     execution_profile: _executionProfileSnake,
@@ -67,7 +67,7 @@ export function normalizeParams(value: unknown, issueRef?: unknown): Record<stri
     available_runners: _availableRunnersSnake,
     ...publicParams
   } = record;
-  return normalizeIssueRefIntoParams(publicParams, issueRef);
+  return normalizeIssueRefIntoParams(publicParams, issueRef, issueAction);
 }
 
 export function normalizeRouteGates(value: unknown): string[] {

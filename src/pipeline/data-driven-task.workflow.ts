@@ -59,7 +59,7 @@ import { redactEventPayload } from '../run/append-event.js';
 import { redactSecrets } from '../control-plane/inbox.js';
 import { fnv1a64Hex } from '../control-plane/steps.js';
 import type { RunOutputRow } from '../run/run-outputs.js';
-import { normalizeIssueRef, type IssueRef } from '../run/issue-ref.js';
+import { normalizeIssueAction, normalizeIssueRef, type IssueAction, type IssueRef } from '../run/issue-ref.js';
 import type { Decision as GateDecision } from './await-human.js';
 import type { CompleteRunResult } from '../run/complete-run.js';
 import type { FailRunResult } from '../run/fail-run.js';
@@ -308,10 +308,12 @@ function producedChangeArtifact(value: unknown): ProducedChangeArtifact | undefi
   if (typeof branch !== 'string' || branch.trim().length === 0) return undefined;
   if (typeof headSha !== 'string' || headSha.trim().length === 0) return undefined;
   const issueRef = normalizeArtifactIssueRef(candidate.issueRef);
+  const issueAction = normalizeArtifactIssueAction(candidate.issueAction);
   return {
     branch,
     headSha,
     ...(issueRef ? { issueRef } : {}),
+    ...(issueAction ? { issueAction } : {}),
     ...(typeof candidate.worktreePath === 'string' && candidate.worktreePath.trim() ? { worktreePath: candidate.worktreePath } : {}),
     ...(typeof candidate.artifactRef === 'string' && candidate.artifactRef.trim() ? { artifactRef: candidate.artifactRef } : {}),
     ...(typeof candidate.prNumber === 'number' && Number.isSafeInteger(candidate.prNumber) ? { prNumber: candidate.prNumber } : {}),
@@ -326,12 +328,25 @@ function normalizeArtifactIssueRef(value: unknown): IssueRef | undefined {
   }
 }
 
-function changeWithRunIssueRef(change: ProducedChangeArtifact, issueRef?: IssueRef): ProducedChangeArtifact {
+function normalizeArtifactIssueAction(value: unknown): IssueAction | undefined {
+  try {
+    return normalizeIssueAction(value, 'change.issueAction');
+  } catch {
+    return undefined;
+  }
+}
+
+function changeWithRunIssueContract(change: ProducedChangeArtifact, issueRef?: IssueRef, issueAction?: IssueAction): ProducedChangeArtifact {
   const normalized = { ...change };
   if (issueRef) {
     normalized.issueRef = issueRef;
   } else {
     delete normalized.issueRef;
+  }
+  if (issueAction) {
+    normalized.issueAction = issueAction;
+  } else {
+    delete normalized.issueAction;
   }
   return normalized;
 }
@@ -520,7 +535,7 @@ export type DataDrivenTaskDeps = {
     opts?: { actor?: string; source?: string },
   ) => Promise<CancelRunResult | null>;
 
-  loadRunTaskContext: (runId: string) => Promise<{ taskId: string; title: string; base: string; repoRef: string; issueRef?: IssueRef }>;
+  loadRunTaskContext: (runId: string) => Promise<{ taskId: string; title: string; base: string; repoRef: string; issueRef?: IssueRef; issueAction?: IssueAction }>;
 
   integrateFn: (input: IntegratorInput) => Promise<IntegratorOutput | IntegratorBlocked>;
 
@@ -676,7 +691,7 @@ export type ScriptResult =
 type SystemScriptInvocation = {
   runId: string;
   decision: Extract<Decision, { type: 'invokeScript' }>;
-  ctx: { taskId: string; title: string; base: string; issueRef?: IssueRef };
+  ctx: { taskId: string; title: string; base: string; issueRef?: IssueRef; issueAction?: IssueAction };
   bindingByRef: Map<string, RouteRoleBinding>;
   stepKey: string;
   inputs: Record<string, unknown>;
@@ -706,16 +721,17 @@ export function buildSystemScriptRegistry(deps: ScriptRegistryDeps): Map<string,
     ctx: SystemScriptInvocation['ctx'],
     inputs: Record<string, unknown>,
   ): IntegratorInput {
-    const { taskId, title, base, issueRef } = ctx;
+    const { taskId, title, base, issueRef, issueAction } = ctx;
     const change = producedChangeFromInputs(inputs);
     const mergeReadiness = mergeReadinessFromInputs(inputs);
-    const changeForIntegrator = change ? changeWithRunIssueRef(change, issueRef) : undefined;
+    const changeForIntegrator = change ? changeWithRunIssueContract(change, issueRef, issueAction) : undefined;
     return {
       runId,
       taskId,
       title,
       base,
       ...(issueRef ? { issueRef } : {}),
+      ...(issueAction ? { issueAction } : {}),
       ...(changeForIntegrator ? { change: changeForIntegrator } : {}),
       ...(inputs.triage === undefined ? {} : { triage: inputs.triage }),
       ...(mergeReadiness ? { mergeReadiness } : {}),
@@ -948,7 +964,7 @@ export function makeDataDrivenTask(
       );
     }
 
-    const { taskId, title, base, issueRef } = await loadRunTaskContext(runId);
+    const { taskId, title, base, issueRef, issueAction } = await loadRunTaskContext(runId);
 
     const live = route.roleBindings.some((b) => runnerNeedsLivePreflight(b.resolvedRunnerId));
     if (live) {
@@ -961,7 +977,7 @@ export function makeDataDrivenTask(
     if (live) {
       await createWorktreeFn(runId, taskId, title, base, issueRef);
     }
-    return runGraph(runId, opts, taskId, title, base, issueRef, live);
+    return runGraph(runId, opts, taskId, title, base, issueRef, issueAction, live);
   }
 
 
@@ -972,6 +988,7 @@ export function makeDataDrivenTask(
     title: string,
     base: string,
     issueRef: IssueRef | undefined,
+    issueAction: IssueAction | undefined,
     live: boolean,
   ): Promise<DataDrivenResult> {
     const { route, template, runnerRetryPolicy } = opts;
@@ -1005,7 +1022,7 @@ export function makeDataDrivenTask(
       }
 
       const eff = await applyDecision(decision, {
-        runId, template, state, bindingByRef, executionProfile, taskId, title, base, issueRef,
+        runId, template, state, bindingByRef, executionProfile, taskId, title, base, issueRef, issueAction,
         effectOrdinalByNode, outputsByNode, runnerRetryPolicy,
         live,
         lastVerdict,
@@ -1063,6 +1080,7 @@ export function makeDataDrivenTask(
     title: string;
     base: string;
     issueRef?: IssueRef;
+    issueAction?: IssueAction;
     live: boolean;
     effectOrdinalByNode: Map<string, number>;
     outputsByNode: Map<string, RunOutputRow[]>;
@@ -1259,7 +1277,7 @@ export function makeDataDrivenTask(
           });
           return { lastResult: { outcome: 'failed', errorCode: REVO_INPUT_MISSING }, lastVerdict: 'failed', stepDelta: 1 };
         }
-        const scriptResult = await invokeScript(runId, decision, { taskId, title, base, issueRef: ctx.issueRef }, bindingByRef, stepKeyFor(node.id, ordinal), resolved.inputs);
+        const scriptResult = await invokeScript(runId, decision, { taskId, title, base, issueRef: ctx.issueRef, issueAction: ctx.issueAction }, bindingByRef, stepKeyFor(node.id, ordinal), resolved.inputs);
         if (scriptResult.outcome === 'blocked') {
           return { lastResult: { outcome: 'failed', errorCode: REVO_SCRIPT_BLOCKED }, lastVerdict: 'blocked', stepDelta: 1 };
         }
@@ -1380,6 +1398,7 @@ export function makeDataDrivenTask(
           nodeId: node.id,
           attemptId: physicalAttempt.attemptId,
           ...(ctx.issueRef ? { issueRef: ctx.issueRef } : {}),
+          ...(ctx.issueAction ? { issueAction: ctx.issueAction } : {}),
           ...(artifactRef ? { artifactRef } : {}),
         });
         output = attachProducedChange(output, change);
@@ -1654,7 +1673,7 @@ export function makeDataDrivenTask(
   async function invokeScript(
     runId: string,
     decision: Extract<Decision, { type: 'invokeScript' }>,
-    ctx: { taskId: string; title: string; base: string; issueRef?: IssueRef },
+    ctx: { taskId: string; title: string; base: string; issueRef?: IssueRef; issueAction?: IssueAction },
     bindingByRef: Map<string, RouteRoleBinding>,
     stepKey: string,
     inputs: Record<string, unknown>,

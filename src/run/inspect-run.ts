@@ -1,6 +1,6 @@
 import type { RowWhereInputDto } from '@revisium/client';
 import type { ControlPlaneDataAccess, ControlPlaneRow } from '../control-plane/index.js';
-import { issueRefFromParams, type IssueRef } from './issue-ref.js';
+import { issueActionFromParams, issueRefFromParams, type IssueAction, type IssueRef } from './issue-ref.js';
 
 export type RunSummary = {
   runId: string;
@@ -9,6 +9,7 @@ export type RunSummary = {
   priority: number;
   createdAt: string;
   issueRef?: IssueRef;
+  issueAction?: IssueAction;
 };
 
 export type TaskSummary = {
@@ -72,6 +73,7 @@ function strArr(v: unknown): string[] {
 
 function toRunSummary(row: ControlPlaneRow): RunSummary {
   const issueRef = issueRefFromParams(row.data.params);
+  const issueAction = issueActionFromParams(row.data.params);
   return {
     runId: row.rowId,
     title: str(row.data.title),
@@ -79,6 +81,7 @@ function toRunSummary(row: ControlPlaneRow): RunSummary {
     priority: num(row.data.priority),
     createdAt: str(row.data.created_at ?? row.createdAt),
     ...(issueRef ? { issueRef } : {}),
+    ...(issueAction ? { issueAction } : {}),
   };
 }
 
