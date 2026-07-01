@@ -667,6 +667,8 @@ export type PrFeedback = {
   verdict: 'review_changes' | 'ci_changes' | 'recheck' | 'clean';
   ciFailures: CiFailure[];
   reviewThreads: PrReviewThread[];
+  mergeStateStatus?: string;
+  mergeable?: string;
 };
 
 function envInt(name: string, fallback: number): number {
@@ -696,6 +698,8 @@ export type PollPrReadiness = {
   readinessVerdict?: PrReadinessVerdict;
   nextAction?: PrReadinessNextAction;
   evidence: string[];
+  mergeStateStatus?: string;
+  mergeable?: string;
 };
 
 function defaultCollect(
@@ -714,6 +718,8 @@ function defaultCollect(
       readinessVerdict: r.verdict,
       nextAction: r.nextAction,
       evidence: r.evidence,
+      mergeStateStatus: r.pr.mergeState,
+      mergeable: r.ciSummary.mergeable,
     }),
   );
 }
@@ -770,10 +776,20 @@ function unsettledReadinessFeedback(
     verdict: 'recheck',
     ciFailures: ciFailuresFrom(readiness),
     reviewThreads,
+    ...(readiness.mergeStateStatus !== undefined ? { mergeStateStatus: readiness.mergeStateStatus } : {}),
+    ...(readiness.mergeable !== undefined ? { mergeable: readiness.mergeable } : {}),
   };
 }
 
-
+// UNSTABLE/HAS_HOOKS: GitHub marks a PR mergeable even when non-required checks are unsettled.
+// Required-check gating is handled upstream; this quirk is intentional for advisory-only scenarios.
+export function mergeSignal(mergeStateStatus: string | undefined, mergeable: string | undefined): 'clean' | 'blocked' | 'unknown' {
+  const ms = (mergeStateStatus ?? '').toUpperCase();
+  const mg = (mergeable ?? '').toUpperCase();
+  if (mg === 'CONFLICTING' || ms === 'DIRTY' || ms === 'BLOCKED' || ms === 'BEHIND') return 'blocked';
+  if (mg === 'MERGEABLE' && (ms === 'CLEAN' || ms === 'UNSTABLE' || ms === 'HAS_HOOKS')) return 'clean';
+  return 'unknown';
+}
 
 
 
@@ -865,12 +881,7 @@ export async function pollPr(
     }
   }
 
-  const verdict: PrFeedback['verdict'] =
-    reviewThreads.length > 0 || readinessRequiresReview(settled)
-      ? 'review_changes'
-      : ciVerdictFailures.length > 0 ? 'ci_changes' : 'clean';
-
-  return {
+  const makeFeedback = (verdict: PrFeedback['verdict']): PrFeedback => ({
     prNumber: settled.pr.number ?? null,
     headSha: settled.pr.headSha,
     evidence: [...settled.evidence, ...readinessEvidence(settled), `PR headSha=${settled.pr.headSha}`, `pollPr verdict=${verdict}`],
@@ -878,7 +889,34 @@ export async function pollPr(
     verdict,
     ciFailures,
     reviewThreads,
-  };
+    ...(settled.mergeStateStatus !== undefined ? { mergeStateStatus: settled.mergeStateStatus } : {}),
+    ...(settled.mergeable !== undefined ? { mergeable: settled.mergeable } : {}),
+  });
+
+  if (reviewThreads.length > 0 || readinessRequiresReview(settled)) return makeFeedback('review_changes');
+  if (ciVerdictFailures.length > 0) return makeFeedback('ci_changes');
+
+  const signal = mergeSignal(settled.mergeStateStatus, settled.mergeable);
+  if (signal === 'blocked') {
+    return {
+      needsHuman: true,
+      lesson: [
+        ...settled.evidence,
+        ...readinessEvidence(settled),
+        `pollPr merge readiness blocked (mergeStateStatus=${settled.mergeStateStatus ?? ''} mergeable=${settled.mergeable ?? ''})`,
+        `PR headSha=${settled.pr.headSha}`,
+      ].join('; '),
+    };
+  }
+  if (signal === 'unknown') {
+    return unsettledReadinessFeedback(
+      input,
+      settled,
+      `pollPr merge readiness unknown (mergeable=${settled.mergeable ?? 'undefined'})`,
+    );
+  }
+
+  return makeFeedback('clean');
 }
 
 

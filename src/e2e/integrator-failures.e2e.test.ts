@@ -427,6 +427,29 @@ test('D19: a token in a gh error reaches no persisted event; the run fails redac
   }
 });
 
+// ── #240 — pollPr mergeability gate ─────────────────────────────────────────
+
+test('D35: merge conflict during pollPr → run blocked with mergeStateStatus=DIRTY in lesson', { skip: e2eSkip }, async () => {
+  const target = createTargetRepo();
+  try {
+    // gh reports checks green, no review threads, but mergeStateStatus=DIRTY, mergeable=CONFLICTING.
+    // Before #240, pollPr would false-clean and proceed to confirmMerge; after #240 it must block.
+    const run = await startFeature(target, { gh: 'merge-conflict' });
+    await approveUntilTerminal(h.api, run.runId); // approve plan gate; pollPr then blocks
+    await assertBlocked(h.api, run.runId);
+    const events = await h.api.getRunEvents({ runId: run.runId, limit: 50 });
+    const blockedEvent = events.find((e) => e.type === 'pipeline_blocked');
+    assert.ok(blockedEvent, 'a pipeline_blocked event must fire for a merge-conflict run');
+    const payload = blockedEvent?.payload as { reason?: string; lesson?: string } | undefined;
+    assert.equal(payload?.reason, 'poll-pr', 'blocked reason must be poll-pr');
+    const lesson = String(payload?.lesson ?? '');
+    assert.ok(lesson.includes('mergeStateStatus=DIRTY'), `lesson must name DIRTY mergeStateStatus; got: ${lesson}`);
+    await assertEventsPresent(h.api, run.runId, ['integrate_succeeded', 'pipeline_blocked']);
+  } finally {
+    target.cleanup();
+  }
+});
+
 // ── plan 0018 — the PR review-feedback loop (pollPr → triage → fix/reply/resolve → merge) ─────────────
 
 test('D30: CI-red → developer fixes → green → merge (pollPr ci_changes → ciRework → re-integrate → clean)', { skip: e2eSkip }, async () => {
