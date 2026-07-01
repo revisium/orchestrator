@@ -37,12 +37,11 @@ test('B9: gate ops on an unknown inbox id reject with ROW_NOT_FOUND', { skip: e2
 });
 
 test('B3: plan-gate reject blocks the run (data-routed terminal); developer never executes', { skip: e2eSkip }, async () => {
-  // SPEC-CORRECT DIFFERENCE (plan 0015 slice 3): the old hardcoded engine HARD-CANCELLED the run on a
-  // plan-gate reject. The data-driven engine routes the gate verdict purely through the template (§8):
-  // feature-development's planGate declares outcome [approved] with a default → `blockedEnd`, so a
-  // reject (no `approved`) falls through to the BLOCKED terminal. `cancelled` is not a core terminal
-  // status (succeeded|failed|blocked) — blocked is the faithful data-routed mapping. The invariant the
-  // test pins is unchanged: a rejected plan gate stops the run BEFORE the developer executes.
+    // SPEC-CORRECT DIFFERENCE (plan 0015 slice 3): the old hardcoded engine hard-cancelled the run on a
+    // plan-gate reject. This fixture template routes the gate verdict through data only: its planGate
+    // declares outcome [approved] with a default -> `blockedEnd`, so a reject (no `approved`) falls through
+    // to the blocked terminal. The invariant the test pins is unchanged: a rejected plan gate stops the run
+    // BEFORE the developer executes.
   const target = createTargetRepo();
   try {
     const { runId, inboxId } = await givenFeatureRunAtPlanGate(h, target);

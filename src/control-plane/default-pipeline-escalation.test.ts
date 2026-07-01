@@ -1,7 +1,7 @@
 /**
  * default-pipeline-escalation.test.ts — guards the slice-142/B escalation gates in the built-in
  * `feature-development` pipeline: when an agent-convergence loop EXHAUSTS its cap, the run must route
- * to a HUMAN gate (approve-as-is / abort), NOT silently dead-end at `blockedEnd`. A live dogfood run
+ * to a HUMAN gate (approve/rework/cancel), NOT silently dead-end at `blockedEnd`. A live dogfood run
  * blocked exactly this way, throwing away the reviewer's (valuable) last verdict.
  */
 import test from 'node:test';
@@ -33,7 +33,7 @@ test('plan-review loop exhaustion escalates to a human gate, not blockedEnd', ()
   const gate = nodes['planStuckGate'];
   assert.equal(gate?.kind, 'humanGate');
   assert.equal(approveGoto(gate), 'developer', 'approve → proceed with the current plan');
-  assert.equal(routerDefault(gate), 'blockedEnd', 'reject → abort');
+  assert.equal(routerDefault(gate), 'blockedEnd', 'default → blockedEnd');
 });
 
 test('code-review loop exhaustion escalates to a human gate, not blockedEnd', () => {
@@ -42,7 +42,7 @@ test('code-review loop exhaustion escalates to a human gate, not blockedEnd', ()
   const gate = nodes['codeStuckGate'];
   assert.equal(gate?.kind, 'humanGate');
   assert.equal(approveGoto(gate), 'integrator', 'approve → accept the code as-is');
-  assert.equal(routerDefault(gate), 'blockedEnd', 'reject → abort');
+  assert.equal(routerDefault(gate), 'blockedEnd', 'default → blockedEnd');
 });
 
 test('the two agent-convergence routers no longer dead-end straight to blockedEnd', () => {
@@ -60,25 +60,23 @@ const gotoForVerdict = (n: Node, value: string): string | undefined =>
     return when?.op === 'all' && (when.of ?? []).some((c) => c.op === 'verdict.eq' && c.value === value);
   })?.goto;
 
-test('#141: a merge-gate reject is evidence-driven — re-polls fresh readiness and routes on the fresh verdict', () => {
-  // The merge gate must NOT always terminal-block on reject. Reject maps (gateVerdict) to the LAST declared
-  // outcome, so a 2nd outcome on the gate routes the reject to a dedicated re-poll; the re-poll's router then
+test('#141: a merge-gate recheck is evidence-driven — re-polls fresh readiness and routes on the fresh verdict', () => {
+  // The merge gate must keep a dedicated recheck branch before cancel so human recheck re-polls readiness and then
   // routes on the FRESH verdict: clean→blockedEnd (explicit abort), review_changes→triage / ci_changes→ciRework
-  // (recoverable). Approve still proceeds to confirmMerge. Pure routing-data change (no gateVerdict/Decision/MCP).
+  // (recoverable). Approve still proceeds to confirmMerge. Pure routing-data change (no Decision/MCP).
   const nodes = featureDevNodes();
   const mergeGate = nodes['mergeGate'];
   assert.equal(mergeGate?.kind, 'humanGate', 'mergeGate is a humanGate');
   assert.equal(approveGoto(mergeGate), 'confirmMerge', 'approve → confirmMerge (unchanged)');
 
-  // The reject branch is the non-approve, non-default goto (gateVerdict maps reject → the last outcome).
-  const rejectGoto = mergeGate.branches?.find(
+  const recheckGoto = mergeGate.branches?.find(
     (b) => b.goto !== undefined && b.when !== undefined && b.goto !== approveGoto(mergeGate),
   )?.goto;
-  assert.ok(rejectGoto, 'mergeGate has a reject (non-approve) branch that re-checks readiness');
+  assert.ok(recheckGoto, 'mergeGate has a recheck branch before cancel that re-checks readiness');
 
-  const recheck = nodes[rejectGoto] as Node & { scriptRef?: string; next?: string };
-  assert.equal(recheck?.kind, 'script', 'the reject routes to a script node');
-  assert.equal(recheck.scriptRef, 'script:pollPr', 'the reject re-polls fresh PR readiness (pollPr)');
+  const recheck = nodes[recheckGoto] as Node & { scriptRef?: string; next?: string };
+  assert.equal(recheck?.kind, 'script', 'recheck routes to a script node');
+  assert.equal(recheck.scriptRef, 'script:pollPr', 'recheck re-polls fresh PR readiness (pollPr)');
 
   const router = nodes[recheck.next as string];
   assert.equal(router?.kind, 'choice', 'the re-poll feeds a choice router that routes on the fresh verdict');

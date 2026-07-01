@@ -48,6 +48,7 @@ const STATUS_BY_TERMINAL: Record<TerminalStatus, RunStatus> = {
   succeeded: 'succeeded',
   failed: 'failed',
   blocked: 'blocked',
+  cancelled: 'cancelled',
 };
 
 

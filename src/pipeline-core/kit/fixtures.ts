@@ -26,14 +26,16 @@ export function featureDevelopment(): Template {
     .title('Feature development with plan + merge gates and bounded rework')
     .specVersion('1.0')
     .entry('analyst')
-    .domain('approved', 'changes_requested', 'blocker', 'clean', 'dirty')
+    .domain('approved', 'changes_requested', 'blocker', 'clean', 'dirty', 'recheck', 'approve_anyway', 'rework', 'cancel')
     .policy({ conflicts: [['developer', 'reviewer']], enforcement: 'strict' })
-    .scope('codeReviewLoop', { cap: 3, parent: null })
+    .scope('codeStuckRecoveryLoop', { cap: 3, parent: null })
+    .scope('codeReviewLoop', { cap: 3, parent: 'codeStuckRecoveryLoop' })
     .add(
       node.agent('analyst', 'role:analyst', 'planGate', { resultSchema: 'schema:plan', onFailure: 'abort' }),
-      node.humanGate('planGate', 'plan-review', ['approved', 'changes_requested'], [
+      node.humanGate('planGate', 'plan-review', ['approved', 'rework', 'cancel'], [
         on(verdictEq('approved'), 'developer'),
-        on(verdictEq('changes_requested'), 'analyst'),
+        on(verdictEq('rework'), 'analyst'),
+        on(verdictEq('cancel'), 'cancelledEnd'),
         otherwise('blockedEnd'),
       ]),
       node.agent('developer', 'role:developer', 'codeReview', { resultSchema: 'schema:change', onFailure: 'abort' }),
@@ -44,11 +46,22 @@ export function featureDevelopment(): Template {
       node.choice('codeReviewRouter', [
         on(verdictEq('approved'), 'integrator'),
         on(allOf(verdictIn('blocker', 'changes_requested'), counterLt('codeReviewLoop', 3)), 'reworkDeveloper'),
+        otherwise('codeStuckGate'),
+      ]),
+      node.humanGate('codeStuckGate', 'code-review-stuck', ['approve_anyway', 'rework', 'cancel'], [
+        on(verdictEq('approve_anyway'), 'integrator'),
+        on(allOf(verdictEq('rework'), counterLt('codeStuckRecoveryLoop', 3)), 'stuckReworkDeveloper'),
+        on(verdictEq('cancel'), 'cancelledEnd'),
         otherwise('blockedEnd'),
       ]),
       node.agent('reworkDeveloper', 'role:developer', 'codeReview', {
         resultSchema: 'schema:change',
         incrementCounters: ['codeReviewLoop'],
+        onFailure: 'abort',
+      }),
+      node.agent('stuckReworkDeveloper', 'role:developer', 'codeReview', {
+        resultSchema: 'schema:change',
+        incrementCounters: ['codeStuckRecoveryLoop'],
         onFailure: 'abort',
       }),
       node.script('integrator', 'script:integrator', 'watcherPost', {
@@ -61,13 +74,15 @@ export function featureDevelopment(): Template {
         onFailure: 'abort',
       }),
       node.choice('watcherRouter', [on(verdictEq('clean'), 'mergeGate'), otherwise('failedEnd')]),
-      node.humanGate('mergeGate', 'merge-review', ['approved', 'changes_requested'], [
+      node.humanGate('mergeGate', 'merge-review', ['approved', 'recheck', 'cancel'], [
         on(verdictEq('approved'), 'mergedEnd'),
+        on(verdictEq('cancel'), 'cancelledEnd'),
         otherwise('blockedEnd'),
       ]),
       node.terminal('mergedEnd', 'succeeded'),
       node.terminal('failedEnd', 'failed'),
       node.terminal('blockedEnd', 'blocked'),
+      node.terminal('cancelledEnd', 'cancelled'),
     )
     .build();
 }

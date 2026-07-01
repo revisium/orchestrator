@@ -50,18 +50,15 @@ test('feature-development: approve-everywhere happy path reaches succeeded', () 
   ]);
 });
 
-test('feature-development: reviewer BLOCKER ×3 increments the counter then routes to blocked at the cap', () => {
-  // codeReview yields blocker every pass. The router reworks while counter.lt 3, then the cap-guard
-  // (counter.lt 3 false ⇒ default) routes to blockedEnd. reworkDeveloper increments codeReviewLoop.
+test('feature-development: reviewer BLOCKER ×3 opens codeStuckGate then default blocks', () => {
   const result = drive(featureDevelopment(), {
     planGate: 'approved',
     codeReview: 'blocker',
   });
   assertReachesTerminal(result, 'blocked');
-  // developer → codeReview → rework → codeReview → rework → codeReview → rework → codeReview → blocked.
-  // 3 rework passes (counter 1,2,3), the 4th codeReview's blocker hits counter.lt 3 == false → blocked.
   assertVisitCount(result, 'reworkDeveloper', 3);
   assertVisitCount(result, 'codeReview', 4);
+  assertVisitCount(result, 'codeStuckGate', 1);
   assertCounter(result, 'codeReviewLoop', 3);
   assert.equal(result.path.at(-1), 'blockedEnd');
 });
@@ -114,9 +111,9 @@ test('feature-development: one CHANGES_REQUESTED then APPROVED reworks once then
   ]);
 });
 
-test('feature-development: plan gate changes_requested loops back to the analyst', () => {
+test('feature-development: plan gate rework loops back to the analyst', () => {
   const result = drive(featureDevelopment(), {
-    planGate: ['changes_requested', 'approved'], // first review sends back to analyst, then approve
+    planGate: ['rework', 'approved'],
     codeReview: 'approved',
     watcherPost: 'clean',
     mergeGate: 'approved',
@@ -153,7 +150,7 @@ test('feature-development: integrator script error routes via catch (revo.Script
   assert.equal(result.path.at(-1), 'failedEnd');
 });
 
-test('feature-development: merge gate rejection routes to blocked', () => {
+test('feature-development: merge gate non-named outcome routes to blocked', () => {
   const result = drive(featureDevelopment(), {
     planGate: 'approved',
     codeReview: 'approved',
@@ -162,6 +159,35 @@ test('feature-development: merge gate rejection routes to blocked', () => {
   });
   assertReachesTerminal(result, 'blocked');
   assert.equal(result.path.at(-1), 'blockedEnd');
+});
+
+test('feature-development: cancel gates reach cancelled terminal', () => {
+  for (const [gate, script] of [
+    ['planGate', { planGate: 'cancel' }],
+    ['codeStuckGate', { planGate: 'approved', codeReview: 'blocker', codeStuckGate: 'cancel' }],
+    ['mergeGate', { planGate: 'approved', codeReview: 'approved', watcherPost: 'clean', mergeGate: 'cancel' }],
+  ] as const) {
+    const result = drive(featureDevelopment(), script);
+    assertReachesTerminal(result, 'cancelled');
+    assert.equal(result.path.at(-1), 'cancelledEnd', gate);
+  }
+});
+
+test('feature-development: codeStuckGate rework resets codeReviewLoop for a fresh review series', () => {
+  const result = drive(featureDevelopment(), {
+    planGate: 'approved',
+    codeReview: ['blocker', 'blocker', 'blocker', 'blocker', 'blocker', 'approved'],
+    codeStuckGate: 'rework',
+    watcherPost: 'clean',
+    mergeGate: 'approved',
+  });
+
+  assertReachesTerminal(result, 'succeeded');
+  assertVisitCount(result, 'codeStuckGate', 1);
+  assertVisitCount(result, 'stuckReworkDeveloper', 1);
+  assertVisitCount(result, 'reworkDeveloper', 4);
+  assertCounter(result, 'codeStuckRecoveryLoop', 1);
+  assertCounter(result, 'codeReviewLoop', 1);
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -650,8 +650,8 @@ test('TaskControlPlaneApiService.resolveGate validates named outcomes and propag
     inboxService: {
       async getInbox() {
         return makeInboxItem({
-          options: ['approve_anyway', 'rework', 'abort'],
-          context: { topic: 'plan', summary: { nodeId: 'codeStuckGate', outcomes: ['approve_anyway', 'rework', 'abort'] } },
+          options: ['approve_anyway', 'rework', 'cancel'],
+          context: { topic: 'plan', summary: { nodeId: 'codeStuckGate', outcomes: ['approve_anyway', 'rework', 'cancel'] } },
         });
       },
     },
@@ -687,8 +687,8 @@ test('TaskControlPlaneApiService.resolveGate rejects invalid outcome and approve
     inboxService: {
       async getInbox() {
         return makeInboxItem({
-          options: ['approve_anyway', 'rework', 'abort'],
-          context: { topic: 'plan', summary: { outcomes: ['approve_anyway', 'rework', 'abort'] } },
+          options: ['approve_anyway', 'rework', 'cancel'],
+          context: { topic: 'plan', summary: { outcomes: ['approve_anyway', 'rework', 'cancel'] } },
         });
       },
     },
@@ -705,8 +705,8 @@ test('TaskControlPlaneApiService.resolveInboxItem normalizes named gate outcome 
     inboxService: {
       async getInbox() {
         return makeInboxItem({
-          options: ['approve_anyway', 'rework', 'abort'],
-          context: { topic: 'plan', summary: { outcomes: ['approve_anyway', 'rework', 'abort'] } },
+          options: ['approve_anyway', 'rework', 'cancel'],
+          context: { topic: 'plan', summary: { outcomes: ['approve_anyway', 'rework', 'cancel'] } },
         });
       },
       async resolveInbox(_id, answer) {
@@ -737,8 +737,8 @@ test('TaskControlPlaneApiService.resolveInboxItem rejects blank named gate outco
     inboxService: {
       async getInbox() {
         return makeInboxItem({
-          options: ['approve_anyway', 'rework', 'abort'],
-          context: { topic: 'plan', summary: { outcomes: ['approve_anyway', 'rework', 'abort'] } },
+          options: ['approve_anyway', 'rework', 'cancel'],
+          context: { topic: 'plan', summary: { outcomes: ['approve_anyway', 'rework', 'cancel'] } },
         });
       },
     },
@@ -755,8 +755,8 @@ test('TaskControlPlaneApiService approve/reject wrappers reject ambiguous named 
     inboxService: {
       async getInbox() {
         return makeInboxItem({
-          options: ['approve_anyway', 'rework', 'abort'],
-          context: { topic: 'plan', summary: { outcomes: ['approve_anyway', 'rework', 'abort'] } },
+          options: ['approve_anyway', 'rework', 'cancel'],
+          context: { topic: 'plan', summary: { outcomes: ['approve_anyway', 'rework', 'cancel'] } },
         });
       },
     },
@@ -2211,6 +2211,57 @@ test('TaskControlPlaneApiService.resolveRunState reports ready when a run has no
   assert.equal(state.runStatus, 'ready');
   assert.equal(state.workflowStatus, '');
   assert.equal(state.nextAction, 'start_run');
+});
+
+test('TaskControlPlaneApiService.resolveRunState reports cancelled as a terminal state', async () => {
+  const api = makeApi({
+    runService: {
+      async showRun() {
+        return {
+          run: {
+            runId: 'run-1',
+            title: 'Run',
+            status: 'cancelled',
+            priority: 0,
+            createdAt: '2026-06-13T00:00:00.000Z',
+            description: '',
+            scope: '',
+            repos: [],
+          },
+          tasks: [{ taskId: 'task-1', title: 'Task', status: 'cancelled', roleHint: 'developer' }],
+        };
+      },
+      async listRunEvents() {
+        return [];
+      },
+    },
+    inboxService: {
+      async listInbox() {
+        return [];
+      },
+    },
+    dbosService: {
+      async getWorkflowStatus() {
+        return {
+          workflowID: 'run-1',
+          status: 'SUCCESS',
+          workflowName: 'dataDrivenTask',
+          workflowClassName: 'PipelineService',
+          createdAt: Date.parse('2026-06-13T00:00:00.000Z'),
+          updatedAt: Date.parse('2026-06-13T00:00:01.000Z'),
+          priority: 0,
+          applicationID: 'test',
+        } as Awaited<ReturnType<DbosService['getWorkflowStatus']>>;
+      },
+    },
+  });
+
+  const state = await api.resolveRunState('run-1');
+
+  assert.equal(state.state, 'cancelled');
+  assert.equal(state.runStatus, 'cancelled');
+  assert.equal(state.workflowStatus, 'SUCCESS');
+  assert.equal(state.nextAction, 'run was cancelled intentionally');
 });
 
 test('TaskControlPlaneApiService.resolveRunState reports running when workflow progressed but row stayed ready', async () => {

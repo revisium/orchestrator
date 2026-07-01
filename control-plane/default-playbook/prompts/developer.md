@@ -17,6 +17,10 @@ reviewer can approve it and the integrator can ship it.
 4. On a rework pass (reviewer requested changes), address each reviewer finding directly.
 5. On a CI rework pass, use `mergeFeedback` when it is present; otherwise use `feedback`.
 
+On a stuck-gate rework pass, treat the human gate note and latest review findings as an iteration
+on the current change. Continue from the existing branch and worktree, preserve useful work, and do
+not restart the implementation unless the feedback explicitly requires replacing it.
+
 ## Output
 
 Summarize what you changed and how you verified it, then end with a verdict token:

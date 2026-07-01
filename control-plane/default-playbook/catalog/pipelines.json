@@ -46,7 +46,7 @@
             "recheck",
             "approve_anyway",
             "rework",
-            "abort"
+            "cancel"
           ]
         },
         "nodes": {
@@ -62,6 +62,36 @@
             },
             "incrementCounters": [
               "planReviewLoop"
+            ],
+            "consumes": [
+              {
+                "node": "analyst",
+                "as": "priorPlan",
+                "iteration": "latest",
+                "optional": true,
+                "staleOk": true
+              },
+              {
+                "node": "planReviewer",
+                "as": "planReview",
+                "iteration": "latest",
+                "optional": true,
+                "staleOk": true
+              },
+              {
+                "node": "planGate",
+                "as": "planGateResolution",
+                "iteration": "latest",
+                "optional": true,
+                "staleOk": true
+              },
+              {
+                "node": "planStuckGate",
+                "as": "planStuckResolution",
+                "iteration": "latest",
+                "optional": true,
+                "staleOk": true
+              }
             ]
           },
           "planReviewer": {
@@ -71,6 +101,9 @@
             "next": "planReviewRouter",
             "onFailure": "abort",
             "resultSchema": "schema:reviewVerdict",
+            "produces": {
+              "name": "planReview"
+            },
             "consumes": [
               {
                 "node": "analyst",
@@ -122,7 +155,9 @@
             "kind": "humanGate",
             "reason": "plan-stuck",
             "outcomes": [
-              "approved"
+              "approved",
+              "rework",
+              "cancel"
             ],
             "branches": [
               {
@@ -133,12 +168,29 @@
                 "goto": "developer"
               },
               {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "rework"
+                },
+                "goto": "analyst"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "cancel"
+                },
+                "goto": "cancelledEnd"
+              },
+              {
                 "default": "blockedEnd"
               }
             ],
             "gatedArtifact": {
               "node": "analyst",
               "as": "plan"
+            },
+            "produces": {
+              "name": "planStuckResolution"
             }
           },
           "planGate": {
@@ -146,7 +198,9 @@
             "kind": "humanGate",
             "reason": "plan-review",
             "outcomes": [
-              "approved"
+              "approved",
+              "rework",
+              "cancel"
             ],
             "branches": [
               {
@@ -157,12 +211,29 @@
                 "goto": "developer"
               },
               {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "rework"
+                },
+                "goto": "analyst"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "cancel"
+                },
+                "goto": "cancelledEnd"
+              },
+              {
                 "default": "blockedEnd"
               }
             ],
             "gatedArtifact": {
               "node": "analyst",
               "as": "plan"
+            },
+            "produces": {
+              "name": "planGateResolution"
             }
           },
           "developer": {
@@ -245,14 +316,6 @@
                 "goto": "reworkDeveloper"
               },
               {
-                "when": {
-                  "op": "counter.gte",
-                  "scope": "codeStuckRecoveryLoop",
-                  "value": 1
-                },
-                "goto": "codeFinalStuckGate"
-              },
-              {
                 "default": "codeStuckGate"
               }
             ]
@@ -264,7 +327,7 @@
             "outcomes": [
               "approve_anyway",
               "rework",
-              "abort"
+              "cancel"
             ],
             "branches": [
               {
@@ -285,7 +348,7 @@
                     {
                       "op": "counter.lt",
                       "scope": "codeStuckRecoveryLoop",
-                      "value": 1
+                      "value": 3
                     }
                   ]
                 },
@@ -294,9 +357,9 @@
               {
                 "when": {
                   "op": "verdict.eq",
-                  "value": "rework"
+                  "value": "cancel"
                 },
-                "goto": "codeFinalStuckGate"
+                "goto": "cancelledEnd"
               },
               {
                 "default": "blockedEnd"
@@ -371,7 +434,8 @@
             "reason": "merge-review",
             "outcomes": [
               "approved",
-              "recheck"
+              "recheck",
+              "cancel"
             ],
             "branches": [
               {
@@ -387,6 +451,13 @@
                   "value": "recheck"
                 },
                 "goto": "mergeRecheck"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "cancel"
+                },
+                "goto": "cancelledEnd"
               },
               {
                 "default": "blockedEnd"
@@ -901,33 +972,10 @@
               }
             ]
           },
-          "codeFinalStuckGate": {
-            "id": "codeFinalStuckGate",
-            "kind": "humanGate",
-            "reason": "code-review-final-stuck",
-            "outcomes": [
-              "approve_anyway",
-              "abort"
-            ],
-            "branches": [
-              {
-                "when": {
-                  "op": "verdict.eq",
-                  "value": "approve_anyway"
-                },
-                "goto": "integrator"
-              },
-              {
-                "default": "blockedEnd"
-              }
-            ],
-            "gatedArtifact": {
-              "node": "stuckReworkDeveloper",
-              "as": "change"
-            },
-            "produces": {
-              "name": "gateResolution"
-            }
+          "cancelledEnd": {
+            "id": "cancelledEnd",
+            "kind": "terminal",
+            "status": "cancelled"
           }
         },
         "title": "Feature development — plan + merge gates, bounded code-review rework, and a PR review-feedback loop (plan 0018)",
@@ -947,7 +995,7 @@
           },
           "codeReviewLoop": {
             "cap": 3,
-            "parent": null
+            "parent": "codeStuckRecoveryLoop"
           },
           "ciLoop": {
             "cap": 3,
@@ -962,7 +1010,7 @@
             "parent": null
           },
           "codeStuckRecoveryLoop": {
-            "cap": 1,
+            "cap": 3,
             "parent": null
           }
         }

@@ -25,7 +25,7 @@ export type Trace = { nodeId: string; decision: Decision['type'] };
 
 export type DriveResult = {
 
-  status: 'succeeded' | 'failed' | 'blocked';
+  status: 'succeeded' | 'failed' | 'blocked' | 'cancelled';
 
   path: string[];
 
