@@ -1,5 +1,6 @@
 import { ControlPlaneError } from './errors.js';
 import type { InboxItem } from './inbox.js';
+import { asRecord, nonBlankString } from './audit-validation-helpers.js';
 
 export type ManualAdoptionAudit = {
   runId: string;
@@ -28,18 +29,6 @@ const REQUIRED_STRING_FIELDS = [
   'risk',
   'verificationResponsibility',
 ] as const;
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
-  return value as Record<string, unknown>;
-}
-
-function nonBlankString(record: Record<string, unknown>, key: string): string | undefined {
-  const value = record[key];
-  if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
 
 function adoptionAuditContextRunId(item: InboxItem): string | undefined {
   if (typeof item.runId === 'string' && item.runId.trim().length > 0) return item.runId;
