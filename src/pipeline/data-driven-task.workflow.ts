@@ -668,6 +668,187 @@ export function buildGateSummary(
 
 
 
+export type ScriptResult =
+  | { outcome: 'ok'; pointer: unknown; verdict?: string }
+  | { outcome: 'blocked' }
+  | { outcome: 'failed' };
+
+type SystemScriptInvocation = {
+  runId: string;
+  decision: Extract<Decision, { type: 'invokeScript' }>;
+  ctx: { taskId: string; title: string; base: string; issueRef?: IssueRef };
+  bindingByRef: Map<string, RouteRoleBinding>;
+  stepKey: string;
+  inputs: Record<string, unknown>;
+};
+
+type SystemScriptHandler = (inv: SystemScriptInvocation) => Promise<ScriptResult>;
+
+type ScriptRegistryDeps = Pick<
+  DataDrivenTaskDeps,
+  | 'appendEvent'
+  | 'releaseWorktreeFn'
+  | 'integrateFn'
+  | 'runStub'
+  | 'confirmMergeFn'
+  | 'runConfirmStub'
+  | 'pollPrFn'
+  | 'runPollStub'
+  | 'respondThreadsFn'
+  | 'runRespondStub'
+>;
+
+export function buildSystemScriptRegistry(deps: ScriptRegistryDeps): Map<string, SystemScriptHandler> {
+  const { appendEvent, releaseWorktreeFn, integrateFn, runStub, confirmMergeFn, runConfirmStub, pollPrFn, runPollStub, respondThreadsFn, runRespondStub } = deps;
+
+  function buildIntegratorInput(
+    runId: string,
+    ctx: SystemScriptInvocation['ctx'],
+    inputs: Record<string, unknown>,
+  ): IntegratorInput {
+    const { taskId, title, base, issueRef } = ctx;
+    const change = producedChangeFromInputs(inputs);
+    const mergeReadiness = mergeReadinessFromInputs(inputs);
+    const changeForIntegrator = change ? changeWithRunIssueRef(change, issueRef) : undefined;
+    return {
+      runId,
+      taskId,
+      title,
+      base,
+      ...(issueRef ? { issueRef } : {}),
+      ...(changeForIntegrator ? { change: changeForIntegrator } : {}),
+      ...(inputs.triage === undefined ? {} : { triage: inputs.triage }),
+      ...(mergeReadiness ? { mergeReadiness } : {}),
+    };
+  }
+
+  function makeIntegratorScript<TSuccess>(desc: {
+    real: (input: IntegratorInput) => Promise<TSuccess | IntegratorBlocked>;
+    stub: (input: IntegratorInput) => TSuccess;
+    blockedReason: string;
+    mapSuccess: (result: TSuccess) => { eventType: string; payload: Record<string, unknown>; pointer: unknown; verdict?: string };
+  }): SystemScriptHandler {
+    return async ({ runId, decision, ctx, bindingByRef, stepKey, inputs }) => {
+      const integratorInput = buildIntegratorInput(runId, ctx, inputs);
+      const binding = bindingByRef.get(decision.scriptRef) ?? bindingByRef.get('script:integrator');
+      const useReal = !!binding && runnerUsesRealIntegrator(binding.resolvedRunnerId);
+      let result: TSuccess | IntegratorBlocked;
+      try {
+        result = useReal ? await desc.real(integratorInput) : desc.stub(integratorInput);
+      } catch (err) {
+        await appendEvent({
+          runId, taskId: ctx.taskId, stepId: '', stepKey,
+          type: 'step_failed',
+          payload: { scriptRef: decision.scriptRef, error: err instanceof Error ? err.message : String(err) },
+        });
+        return { outcome: 'failed' };
+      }
+      if ('needsHuman' in (result as object)) {
+        await appendEvent({
+          runId, taskId: ctx.taskId, stepId: '', stepKey: 'pipeline',
+          type: 'pipeline_blocked',
+          payload: { reason: desc.blockedReason, lesson: (result as IntegratorBlocked).lesson, nodeId: decision.nodeId },
+        });
+        return { outcome: 'blocked' };
+      }
+      const { eventType, payload, pointer, verdict } = desc.mapSuccess(result as TSuccess);
+      await appendEvent({ runId, taskId: ctx.taskId, stepId: '', stepKey, type: eventType, payload });
+      return { outcome: 'ok', pointer, ...(verdict !== undefined ? { verdict } : {}) };
+    };
+  }
+
+  const cleanupWorktree: SystemScriptHandler = async ({ runId, decision, ctx, stepKey }) => {
+    try { await releaseWorktreeFn(runId, ctx.taskId); } catch { /* best-effort */ }
+    await appendEvent({ runId, taskId: ctx.taskId, stepId: '', stepKey, type: 'worktree_released', payload: { nodeId: decision.nodeId } });
+    return { outcome: 'ok', pointer: { released: true } };
+  };
+
+  const integratorScript = makeIntegratorScript({
+    real: integrateFn,
+    stub: runStub,
+    blockedReason: 'integrate',
+    mapSuccess: (result: IntegratorOutput) => ({
+      eventType: 'integrate_succeeded',
+      payload: {
+        prUrl: result.prUrl,
+        branch: result.branch,
+        prNumber: result.prNumber,
+        headSha: result.headSha,
+        status: result.status,
+        ...(result.issueRef ? { issueRef: result.issueRef } : {}),
+      },
+      pointer: {
+        prUrl: result.prUrl,
+        branch: result.branch,
+        prNumber: result.prNumber,
+        headSha: result.headSha,
+        status: result.status,
+        ...(result.issueRef ? { issueRef: result.issueRef } : {}),
+      },
+    }),
+  });
+
+  const confirmMergeScript = makeIntegratorScript({
+    real: confirmMergeFn,
+    stub: runConfirmStub,
+    blockedReason: 'confirm-merge',
+    mapSuccess: (result: ConfirmMergeOutput) => ({
+      eventType: 'merge_confirmed',
+      payload: {
+        prNumber: result.prNumber,
+        prUrl: result.prUrl,
+        ...(result.issueRef ? { issueRef: result.issueRef } : {}),
+      },
+      pointer: {
+        merged: true,
+        prNumber: result.prNumber,
+        prUrl: result.prUrl,
+        ...(result.issueRef ? { issueRef: result.issueRef } : {}),
+      },
+    }),
+  });
+
+  const pollPrScript = makeIntegratorScript({
+    real: pollPrFn,
+    stub: runPollStub,
+    blockedReason: 'poll-pr',
+    mapSuccess: (result: PrFeedback) => ({
+      eventType: 'pr_polled',
+      payload: {
+        prNumber: result.prNumber,
+        headSha: result.headSha,
+        verdict: result.verdict,
+        evidence: result.evidence,
+        ciFailures: result.ciFailures.length,
+        reviewThreads: result.reviewThreads.length,
+        ...(result.issueRef ? { issueRef: result.issueRef } : {}),
+      },
+      pointer: result,
+      verdict: result.verdict,
+    }),
+  });
+
+  const respondThreadsScript = makeIntegratorScript({
+    real: respondThreadsFn,
+    stub: runRespondStub,
+    blockedReason: 'respond-threads',
+    mapSuccess: (result: RespondThreadsOutput) => ({
+      eventType: 'threads_responded',
+      payload: { replied: result.replied, resolved: result.resolved },
+      pointer: result,
+    }),
+  });
+
+  return new Map<string, SystemScriptHandler>([
+    ['script:cleanupWorktree', cleanupWorktree],
+    ['script:confirmMerge', confirmMergeScript],
+    ['script:pollPr', pollPrScript],
+    ['script:respondThreads', respondThreadsScript],
+    // Unknown refs fall through to this entry, matching the original else-branch behavior.
+    ['script:integrator', integratorScript],
+  ]);
+}
+
 export function makeDataDrivenTask(
   runStepFn: (
     runId: string,
@@ -681,7 +862,8 @@ export function makeDataDrivenTask(
   ) => Promise<AttemptResult>,
   deps: DataDrivenTaskDeps,
 ) {
-  const { appendEvent, appendRunOutput, awaitHuman, completeRun, failRun, blockRun, cancelRun, loadRunTaskContext, integrateFn, runStub, confirmMergeFn, runConfirmStub, pollPrFn, runPollStub, respondThreadsFn, runRespondStub, captureChangeFn, preflightFn, createWorktreeFn, releaseWorktreeFn } = deps;
+  const { appendEvent, appendRunOutput, awaitHuman, completeRun, failRun, blockRun, cancelRun, loadRunTaskContext, captureChangeFn, preflightFn, createWorktreeFn } = deps;
+  const scriptRegistry = buildSystemScriptRegistry(deps);
 
   function resolveConsumes(
     node: Node,
@@ -1476,148 +1658,9 @@ export function makeDataDrivenTask(
     bindingByRef: Map<string, RouteRoleBinding>,
     stepKey: string,
     inputs: Record<string, unknown>,
-  ): Promise<{ outcome: 'ok'; pointer: unknown; verdict?: string } | { outcome: 'blocked' } | { outcome: 'failed' }> {
-    if (decision.scriptRef === 'script:cleanupWorktree') {
-      try { await releaseWorktreeFn(runId, ctx.taskId); } catch { /* best-effort */ }
-      await appendEvent({ runId, taskId: ctx.taskId, stepId: '', stepKey, type: 'worktree_released', payload: { nodeId: decision.nodeId } });
-      return { outcome: 'ok', pointer: { released: true } };
-    }
-    const isConfirmMerge = decision.scriptRef === 'script:confirmMerge';
-    const isPollPr = decision.scriptRef === 'script:pollPr';
-    const isRespondThreads = decision.scriptRef === 'script:respondThreads';
-    const binding = bindingByRef.get(decision.scriptRef) ?? bindingByRef.get('script:integrator');
-    const change = producedChangeFromInputs(inputs);
-    const mergeReadiness = mergeReadinessFromInputs(inputs);
-    const issueRef = ctx.issueRef;
-    const changeForIntegrator = change ? changeWithRunIssueRef(change, issueRef) : undefined;
-    const integratorInput: IntegratorInput = {
-      runId,
-      taskId: ctx.taskId,
-      title: ctx.title,
-      base: ctx.base,
-      ...(issueRef ? { issueRef } : {}),
-      ...(changeForIntegrator ? { change: changeForIntegrator } : {}),
-      ...(inputs.triage === undefined ? {} : { triage: inputs.triage }),
-      ...(mergeReadiness ? { mergeReadiness } : {}),
-    };
-    const useReal = !!binding && runnerUsesRealIntegrator(binding.resolvedRunnerId);
-    let result: IntegratorOutput | ConfirmMergeOutput | PrFeedback | RespondThreadsOutput | IntegratorBlocked;
-    try {
-      if (isConfirmMerge) {
-        result = useReal ? await confirmMergeFn(integratorInput) : runConfirmStub(integratorInput);
-      } else if (isPollPr) {
-        result = useReal ? await pollPrFn(integratorInput) : runPollStub(integratorInput);
-      } else if (isRespondThreads) {
-        result = useReal ? await respondThreadsFn(integratorInput) : runRespondStub(integratorInput);
-      } else {
-        result = useReal ? await integrateFn(integratorInput) : runStub(integratorInput);
-      }
-    } catch (err) {
-      await appendEvent({
-        runId,
-        taskId: ctx.taskId,
-        stepId: '',
-        stepKey,
-        type: 'step_failed',
-        payload: { scriptRef: decision.scriptRef, error: err instanceof Error ? err.message : String(err) },
-      });
-      return { outcome: 'failed' };
-    }
-    if ('needsHuman' in result) {
-      const reason = isConfirmMerge ? 'confirm-merge' : isPollPr ? 'poll-pr' : isRespondThreads ? 'respond-threads' : 'integrate';
-      await appendEvent({
-        runId,
-        taskId: ctx.taskId,
-        stepId: '',
-        stepKey: 'pipeline',
-        type: 'pipeline_blocked',
-        payload: { reason, lesson: result.lesson, nodeId: decision.nodeId },
-      });
-      return { outcome: 'blocked' };
-    }
-    if (isConfirmMerge) {
-      const merged = result as ConfirmMergeOutput;
-      await appendEvent({
-        runId,
-        taskId: ctx.taskId,
-        stepId: '',
-        stepKey,
-        type: 'merge_confirmed',
-        payload: {
-          prNumber: merged.prNumber,
-          prUrl: merged.prUrl,
-          ...(merged.issueRef ? { issueRef: merged.issueRef } : {}),
-        },
-      });
-      return {
-        outcome: 'ok',
-        pointer: {
-          merged: true,
-          prNumber: merged.prNumber,
-          prUrl: merged.prUrl,
-          ...(merged.issueRef ? { issueRef: merged.issueRef } : {}),
-        },
-      };
-    }
-    if (isPollPr) {
-      const feedback = result as PrFeedback;
-      await appendEvent({
-        runId,
-        taskId: ctx.taskId,
-        stepId: '',
-        stepKey,
-        type: 'pr_polled',
-        payload: {
-          prNumber: feedback.prNumber,
-          headSha: feedback.headSha,
-          verdict: feedback.verdict,
-          evidence: feedback.evidence,
-          ciFailures: feedback.ciFailures.length,
-          reviewThreads: feedback.reviewThreads.length,
-          ...(feedback.issueRef ? { issueRef: feedback.issueRef } : {}),
-        },
-      });
-      return { outcome: 'ok', pointer: feedback, verdict: feedback.verdict };
-    }
-    if (isRespondThreads) {
-      const responded = result as RespondThreadsOutput;
-      await appendEvent({
-        runId,
-        taskId: ctx.taskId,
-        stepId: '',
-        stepKey,
-        type: 'threads_responded',
-        payload: { replied: responded.replied, resolved: responded.resolved },
-      });
-      return { outcome: 'ok', pointer: responded };
-    }
-    const integrated = result as IntegratorOutput;
-    await appendEvent({
-      runId,
-      taskId: ctx.taskId,
-      stepId: '',
-      stepKey,
-      type: 'integrate_succeeded',
-      payload: {
-        prUrl: integrated.prUrl,
-        branch: integrated.branch,
-        prNumber: integrated.prNumber,
-        headSha: integrated.headSha,
-        status: integrated.status,
-        ...(integrated.issueRef ? { issueRef: integrated.issueRef } : {}),
-      },
-    });
-    return {
-      outcome: 'ok',
-      pointer: {
-        prUrl: integrated.prUrl,
-        branch: integrated.branch,
-        prNumber: integrated.prNumber,
-        headSha: integrated.headSha,
-        status: integrated.status,
-        ...(integrated.issueRef ? { issueRef: integrated.issueRef } : {}),
-      },
-    };
+  ): Promise<ScriptResult> {
+    const handler = scriptRegistry.get(decision.scriptRef) ?? scriptRegistry.get('script:integrator')!;
+    return handler({ runId, decision, ctx, bindingByRef, stepKey, inputs });
   }
 
 
