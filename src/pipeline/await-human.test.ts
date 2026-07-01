@@ -122,11 +122,11 @@ test('A1c: awaitHuman falls back from empty explicit options to named outcomes',
     'merge',
     'codeStuckGate',
     'Code review stuck',
-    { nodeId: 'codeStuckGate', outcomes: ['approve_anyway', 'rework', 'abort'] },
+    { nodeId: 'codeStuckGate', outcomes: ['approve_anyway', 'rework', 'cancel'] },
     [],
   );
 
-  assert.deepEqual(pushInboxCalls[0]?.item.options, ['approve_anyway', 'rework', 'abort']);
+  assert.deepEqual(pushInboxCalls[0]?.item.options, ['approve_anyway', 'rework', 'cancel']);
 });
 
 test('A1 (merge gate): awaitHuman works for merge topic too', async () => {
@@ -157,16 +157,16 @@ test('A2: awaitDecision returns null → awaitHuman returns fail-closed reject (
   assert.equal(answer?.reason, 'gate-timeout', 'timeout reason must be gate-timeout');
 });
 
-test('A2b: named gate timeout does not approve or abort by selecting the last outcome', async () => {
+test('A2b: named gate timeout does not approve or cancel by selecting the last outcome', async () => {
   const { deps, pushInboxCalls } = makeDeps({ decision: null });
   const awaitHuman = makeAwaitHuman(deps);
 
   const result = await awaitHuman('run-ah-named-timeout', 'plan', 'codeStuckGate', 'Code review stuck', {
     nodeId: 'codeStuckGate',
-    outcomes: ['approve_anyway', 'rework', 'abort'],
+    outcomes: ['approve_anyway', 'rework', 'cancel'],
   });
 
-  assert.deepEqual(pushInboxCalls[0]?.item.options, ['approve_anyway', 'rework', 'abort']);
+  assert.deepEqual(pushInboxCalls[0]?.item.options, ['approve_anyway', 'rework', 'cancel']);
   assert.equal(result.decision, 'reject');
   assert.equal(result.outcome, undefined);
 });

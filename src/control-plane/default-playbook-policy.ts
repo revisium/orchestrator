@@ -8,6 +8,7 @@ export const DEFAULT_PLAYBOOK_POLICY_DIAGNOSTIC_CODES = [
   'DEFAULT_POLICY_REVIEW_CHANGES_ROUTE_MISSING',
   'DEFAULT_POLICY_CI_CHANGES_ROUTE_MISSING',
   'DEFAULT_POLICY_BLOCKED_TERMINAL_MISSING',
+  'DEFAULT_POLICY_CANCELLED_TERMINAL_MISSING',
   'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
 ] as const;
 
@@ -63,6 +64,7 @@ export function validateDefaultFeatureDevelopmentPolicy(
   }
 
   checkBlockedTerminal(template, sink);
+  checkCancelledTerminal(template, sink);
   checkProducedChangeHandoff(template, sink);
   checkPrFreshnessWiring(template, sink);
   checkMergeGateRecheckRouting(template, sink);
@@ -83,6 +85,21 @@ function checkBlockedTerminal(template: Template, sink: PolicySink): void {
       nodeId: 'blockedEnd',
       expected: 'terminal status=blocked',
       actual: blockedEnd ? `${blockedEnd.kind}${'status' in blockedEnd ? ` status=${blockedEnd.status}` : ''}` : 'missing',
+    },
+  );
+}
+
+function checkCancelledTerminal(template: Template, sink: PolicySink): void {
+  const cancelledEnd = template.nodes['cancelledEnd'];
+  if (cancelledEnd?.kind === 'terminal' && cancelledEnd.status === 'cancelled') return;
+
+  sink.error(
+    'DEFAULT_POLICY_CANCELLED_TERMINAL_MISSING',
+    'feature-development must keep cancelledEnd as a first-class cancelled terminal',
+    {
+      nodeId: 'cancelledEnd',
+      expected: 'terminal status=cancelled',
+      actual: cancelledEnd ? `${cancelledEnd.kind}${'status' in cancelledEnd ? ` status=${cancelledEnd.status}` : ''}` : 'missing',
     },
   );
 }
@@ -196,13 +213,19 @@ function checkMergeGateRecheckRouting(template: Template, sink: PolicySink): voi
   expectGateOutcomes(template, sink, {
     code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
     nodeId: 'mergeGate',
-    outcomes: ['approved', 'recheck'],
+    outcomes: ['approved', 'recheck', 'cancel'],
   });
   expectRoute(template, sink, {
     code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
     nodeId: 'mergeGate',
     verdict: 'recheck',
     target: 'mergeRecheck',
+  });
+  expectRoute(template, sink, {
+    code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
+    nodeId: 'mergeGate',
+    verdict: 'cancel',
+    target: 'cancelledEnd',
   });
   expectScript(template, sink, {
     code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
@@ -363,10 +386,44 @@ function checkReviewFeedbackLoop(template: Template, sink: PolicySink): void {
 }
 
 function checkLoopExhaustionEscalation(template: Template, sink: PolicySink): void {
+  expectHumanGateOutcomes(template, sink, {
+    code: 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
+    nodeId: 'planGate',
+    outcomes: ['approved', 'rework', 'cancel'],
+  });
+  expectRoute(template, sink, {
+    code: 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
+    nodeId: 'planGate',
+    verdict: 'rework',
+    target: 'analyst',
+  });
+  expectRoute(template, sink, {
+    code: 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
+    nodeId: 'planGate',
+    verdict: 'cancel',
+    target: 'cancelledEnd',
+  });
   expectRouterDefaultGate(template, sink, {
     routerId: 'planReviewRouter',
     gateId: 'planStuckGate',
     approveTarget: 'developer',
+  });
+  expectHumanGateOutcomes(template, sink, {
+    code: 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
+    nodeId: 'planStuckGate',
+    outcomes: ['approved', 'rework', 'cancel'],
+  });
+  expectRoute(template, sink, {
+    code: 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
+    nodeId: 'planStuckGate',
+    verdict: 'rework',
+    target: 'analyst',
+  });
+  expectRoute(template, sink, {
+    code: 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
+    nodeId: 'planStuckGate',
+    verdict: 'cancel',
+    target: 'cancelledEnd',
   });
   expectRouterDefaultGate(template, sink, {
     routerId: 'codeReviewRouter',
@@ -379,32 +436,34 @@ function checkLoopExhaustionEscalation(template: Template, sink: PolicySink): vo
     nodeId: 'stuckReworkDeveloper',
     target: template.nodes['codeReviewFanout'] ? 'codeReviewFanout' : 'codeReview',
   });
-  expectRoute(template, sink, {
+  expectBoundedRoute(template, sink, {
     code: 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
     nodeId: 'codeStuckGate',
     verdict: 'rework',
     target: 'stuckReworkDeveloper',
+    scope: 'codeStuckRecoveryLoop',
+    value: 3,
   });
   expectRoute(template, sink, {
     code: 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
-    nodeId: 'codeFinalStuckGate',
-    verdict: 'approve_anyway',
-    target: 'integrator',
-  });
-  expectDefaultRoute(template, sink, {
-    code: 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
-    nodeId: 'codeFinalStuckGate',
-    target: 'blockedEnd',
+    nodeId: 'codeStuckGate',
+    verdict: 'cancel',
+    target: 'cancelledEnd',
   });
   expectHumanGateOutcomes(template, sink, {
     code: 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
     nodeId: 'codeStuckGate',
-    outcomes: ['approve_anyway', 'rework', 'abort'],
+    outcomes: ['approve_anyway', 'rework', 'cancel'],
   });
-  expectHumanGateOutcomes(template, sink, {
-    code: 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
-    nodeId: 'codeFinalStuckGate',
-    outcomes: ['approve_anyway', 'abort'],
+  expectScopeConfig(template, sink, {
+    scopeId: 'codeReviewLoop',
+    cap: 3,
+    parent: 'codeStuckRecoveryLoop',
+  });
+  expectScopeConfig(template, sink, {
+    scopeId: 'codeStuckRecoveryLoop',
+    cap: 3,
+    parent: null,
   });
 }
 
@@ -664,6 +723,25 @@ function expectGateArtifact(
       ? `node=${node.gatedArtifact.node} as=${node.gatedArtifact.as ?? ''}`
       : describeNode(node),
   });
+}
+
+function expectScopeConfig(
+  template: Template,
+  sink: PolicySink,
+  rule: { scopeId: string; cap: number; parent: string | null },
+): void {
+  const scope = template.scopes?.[rule.scopeId];
+  if (scope?.cap === rule.cap && scope.parent === rule.parent) return;
+
+  sink.error(
+    'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
+    `scope ${rule.scopeId} must have cap ${rule.cap} and parent ${String(rule.parent)}`,
+    {
+      path: `scopes.${rule.scopeId}`,
+      expected: `cap=${rule.cap} parent=${String(rule.parent)}`,
+      actual: scope ? `cap=${scope.cap} parent=${String(scope.parent)}` : 'missing scope',
+    },
+  );
 }
 
 function expectHumanGateOutcomes(

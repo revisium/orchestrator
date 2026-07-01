@@ -106,6 +106,7 @@ const WATCH_TRANSITION_STATES: ReadonlySet<RunState['state']> = new Set([
   'pending_gate',
   'question',
   'completed',
+  'cancelled',
   'failed',
   'blocked',
   'retrying',
@@ -134,6 +135,8 @@ function markerFor(state: RunState): string | null {
       return `g:${state.inbox?.id ?? ''}`;
     case 'completed':
       return 'c';
+    case 'cancelled':
+      return 'x';
     case 'failed':
       return 'f';
     case 'blocked':
@@ -458,7 +461,7 @@ function shouldExposeActiveAttempt(
   activity: CanonicalActivitySignal | undefined,
 ): boolean {
   if (!activity?.attempt) return false;
-  return state.state !== 'completed';
+  return state.state !== 'completed' && state.state !== 'cancelled';
 }
 
 function shouldExposeActivitySignal(
@@ -466,7 +469,7 @@ function shouldExposeActivitySignal(
   activity: CanonicalActivitySignal | undefined,
 ): boolean {
   if (!activity) return false;
-  return state.state !== 'completed';
+  return state.state !== 'completed' && state.state !== 'cancelled';
 }
 
 function deriveRunAttentionNextAction(
@@ -480,11 +483,11 @@ function deriveRunAttentionNextAction(
     case 'question':
       return 'ask_human';
     case 'completed':
+    case 'cancelled':
       return 'done';
     case 'failed':
       return shouldInspectLog(activity) ? 'inspect_log' : 'inspect_digest';
     case 'blocked':
-      if (state.runStatus === 'cancelled') return 'done';
       return 'inspect_digest';
     case 'retrying':
     case 'running':

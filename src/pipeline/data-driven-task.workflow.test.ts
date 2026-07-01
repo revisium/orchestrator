@@ -117,6 +117,7 @@ type Recorder = {
   gates: string[];
   gateSummaries: GateSummary[];
   completed: Array<{ verdict?: string }>;
+  cancelled: Array<{ source?: string }>;
   blocked: Array<{ reason?: string }>;
   /** Lessons carried on emitted `pipeline_blocked` events (the human-readable WHY). */
   blockedLessons: string[];
@@ -151,7 +152,7 @@ type Recorder = {
  */
 function buildAdapter(opts: {
   verdicts?: Record<string, string | string[]>;
-  gate?: (topic: 'plan' | 'merge' | 'question') => GateDecision;
+  gate?: (topic: 'plan' | 'merge' | 'question', gateKey: string, summary: GateSummary) => GateDecision;
   needsHumanNodes?: Set<string>;
   template?: Template;
   /** Override the integrator result (default: success). Lets a test drive needsHuman / throw. */
@@ -175,6 +176,7 @@ function buildAdapter(opts: {
     gates: [],
     gateSummaries: [],
     completed: [],
+    cancelled: [],
     blocked: [],
     blockedLessons: [],
     failed: [],
@@ -252,11 +254,12 @@ function buildAdapter(opts: {
     awaitHuman: async (_runId, topic, _gateKey, _title, summary): Promise<GateDecision> => {
       rec.gates.push(topic);
       rec.gateSummaries.push(summary as GateSummary);
-      return (opts.gate ?? (() => ({ decision: 'approve' })))(topic);
+      return (opts.gate ?? (() => ({ decision: 'approve' })))(topic, _gateKey, summary as GateSummary);
     },
     completeRun: async (_runId, o) => { rec.completed.push({ verdict: o?.verdict }); return null; },
     failRun: async (_runId, reason) => { rec.failed.push(reason); return null; },
     blockRun: async (_runId, o) => { rec.blocked.push({ reason: o?.reason }); return null; },
+    cancelRun: async (_runId, o) => { rec.cancelled.push({ source: o?.source }); return null; },
     loadRunTaskContext: async () => ({ taskId: 'task-1', title: 'T', base: 'master', repoRef: '', issueRef: opts.issueRef }),
     integrateFn: async (input: IntegratorInput): Promise<IntegratorOutput | IntegratorBlocked> => {
       rec.integrateCalls++;
@@ -362,6 +365,24 @@ function singleDeveloperTemplate(pipelineId: string): Template {
         produces: { name: 'change' },
       }),
       node.terminal('done', 'succeeded'),
+    )
+    .build();
+}
+
+function cancelGateTemplate(): Template {
+  return template('cancel-gate')
+    .specVersion('1.0')
+    .entry('gate')
+    .domain('approved', 'cancel')
+    .add(
+      node.humanGate('gate', 'plan-review', ['approved', 'cancel'], [
+        on(verdictEq('approved'), 'done'),
+        on(verdictEq('cancel'), 'cancelled'),
+        otherwise('blocked'),
+      ]),
+      node.terminal('done', 'succeeded'),
+      node.terminal('blocked', 'blocked'),
+      node.terminal('cancelled', 'cancelled'),
     )
     .build();
 }
@@ -482,6 +503,23 @@ test('DD1: happy path — analyst→plan→developer→review→integrate→poll
   );
   assert.equal(rec.blocked.length, 0);
   assert.equal(rec.failed.length, 0);
+});
+
+test('cancel gate outcome reaches cancelled terminal and calls cancelRun', async () => {
+  const { run, rec } = buildAdapter({
+    template: cancelGateTemplate(),
+    gate: () => ({ outcome: 'cancel', resolvedBy: 'test' }),
+  });
+
+  const result = await run();
+
+  assert.equal(result.status, 'cancelled');
+  assert.deepEqual(rec.gates, ['plan']);
+  assert.deepEqual(rec.cancelled, [{ source: 'data-driven-cancelled' }]);
+  assert.equal(rec.completed.length, 0);
+  assert.equal(rec.blocked.length, 0);
+  assert.equal(rec.failed.length, 0);
+  assert.ok(rec.events.includes('pipeline_cancelled:pipeline'));
 });
 
 test('DD-parallel: fork executes both reviewer branches and feeds two join arrivals', async () => {
@@ -819,17 +857,20 @@ test('DD1b: adapter publishes graph progress cursors through its sealed dep', as
   assert.deepEqual(rec.progress.at(-1)?.activeNodeIds, ['mergedEnd']);
 });
 
-test('DD2: reviewer BLOCKER ×cap → bounded rework loop → blocked terminal (counter cap is DATA)', async () => {
+test('DD2: reviewer BLOCKER ×cap opens codeStuckGate; cancel reaches cancelled terminal', async () => {
   const { run, rec } = buildAdapter({
-    // codeReview always blocker → codeReviewRouter loops to reworkDeveloper until counter.gte(3) → blockedEnd.
+    // codeReview always blocker -> codeReviewRouter loops to reworkDeveloper until codeReviewLoop caps, then
+    // parks at the reusable codeStuckGate. Human cancel is an intentional cancelled terminal, not blocked.
     verdicts: { codeReview: 'blocker' },
+    gate: (_topic, gateKey) => (gateKey.startsWith('codeStuckGate') ? { decision: 'reject', outcome: 'cancel' } : { decision: 'approve' }),
   });
   const result = await run();
-  assert.equal(result.status, 'blocked', 'the run blocks at the cap, not the agent');
+  assert.equal(result.status, 'cancelled', 'the run cancels only after the human chooses cancel at codeStuckGate');
   assert.equal(rec.completed.length, 0);
-  assert.equal(rec.blocked.length, 1, 'blockRun called once');
-  assert.equal(rec.gates.length, 1, 'only the plan gate opened (blocked before the merge gate)');
-  assert.equal(rec.integrateCalls, 0, 'the integrator never ran (blocked in review)');
+  assert.equal(rec.blocked.length, 0, 'cancel must not be recorded as blocked');
+  assert.deepEqual(rec.cancelled, [{ source: 'data-driven-cancelled' }]);
+  assert.deepEqual(rec.gateSummaries.map((summary) => summary.nodeId), ['planGate', 'codeStuckGate']);
+  assert.equal(rec.integrateCalls, 0, 'the integrator never ran after the review-stuck gate');
 });
 
 test('DD3: plan-gate reject maps to the rework outcome — loops back to analyst, then approve proceeds', async () => {

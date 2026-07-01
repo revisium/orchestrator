@@ -91,6 +91,13 @@ const completed = (runId: string): RunState => ({
   runStatus: 'completed',
   workflowStatus: 'SUCCESS',
 });
+const cancelled = (runId: string): RunState => ({
+  runId,
+  state: 'cancelled',
+  nextAction: 'run was cancelled intentionally',
+  runStatus: 'cancelled',
+  workflowStatus: 'SUCCESS',
+});
 const failed = (runId: string): RunState => ({
   runId,
   state: 'failed',
@@ -482,7 +489,7 @@ test('getRunAttention maps states to canonical nextAction and requiresAttention'
     { name: 'blocked', state: blocked('r1'), nextAction: 'inspect_digest', requiresAttention: true },
     { name: 'failed-log', state: failed('r1'), activity: activity('failed'), nextAction: 'inspect_log', requiresAttention: true },
     { name: 'completed', state: completed('r1'), nextAction: 'done', requiresAttention: false },
-    { name: 'cancelled', state: { ...blocked('r1'), runStatus: 'cancelled' }, nextAction: 'done', requiresAttention: false },
+    { name: 'cancelled', state: cancelled('r1'), nextAction: 'done', requiresAttention: false },
     { name: 'retrying', state: retrying('r1'), nextAction: 'wait', requiresAttention: false },
     { name: 'running', state: running('r1'), nextAction: 'wait', requiresAttention: false },
   ];
@@ -542,12 +549,12 @@ test('getRunAttention returns attention result even when activity enrichment sta
   assert.equal(result.requiresAttention, true);
 });
 
-test('getRunAttention omits stale activeAttempt on completed terminal states', async () => {
-  const svc = new RunWatchService(fakeApi({ states: { r1: completed('r1') }, activity: activity('permission_blocked') }));
+test('getRunAttention omits stale activeAttempt on terminal states', async () => {
+  const svc = new RunWatchService(fakeApi({ states: { r1: cancelled('r1') }, activity: activity('permission_blocked') }));
 
   const result = await svc.getRunAttention('r1');
 
-  assert.equal(result.state, 'completed');
+  assert.equal(result.state, 'cancelled');
   assert.equal(result.nextAction, 'done');
   assert.equal(result.activeAttempt, undefined);
   assert.equal(result.requiresAttention, false);
@@ -581,12 +588,12 @@ test('getRunStatus includes activity for non-completed states', async () => {
 });
 
 test('getRunStatus omits activity for completed states', async () => {
-  const svc = new RunWatchService(fakeApi({ states: { r1: completed('r1') }, activity: activity() }));
+  const svc = new RunWatchService(fakeApi({ states: { r1: cancelled('r1') }, activity: activity() }));
 
   const result = await svc.getRunStatus('r1');
 
-  assert.equal(result.state, 'completed');
-  assert.equal(result.activity, undefined, 'activity suppressed for completed runs');
+  assert.equal(result.state, 'cancelled');
+  assert.equal(result.activity, undefined, 'activity suppressed for terminal runs');
 });
 
 test('getRunStatus propagates ROW_NOT_FOUND for missing runs', async () => {

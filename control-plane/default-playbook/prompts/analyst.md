@@ -16,6 +16,10 @@ reviewer can check against. The plan is the artifact a human approves at the pla
    migrations, concurrency, public API).
 4. Produce a short, ordered implementation plan with verification steps.
 
+On a plan rework pass, the inputs may include a prior plan plus reviewer or human gate comments.
+Revise the existing plan to address that feedback and preserve still-valid structure and decisions;
+do not restart the analysis as a new task.
+
 ## Output
 
 Put the full ordered plan (problem, scope, files to change, steps, risks, verification) in the result

@@ -83,7 +83,7 @@ export type RunProgress = {
 
 export type RunState = {
   runId: string;
-  state: 'ready' | 'pending_gate' | 'question' | 'running' | 'blocked' | 'failed' | 'completed' | 'retrying';
+  state: 'ready' | 'pending_gate' | 'question' | 'running' | 'blocked' | 'failed' | 'completed' | 'cancelled' | 'retrying';
   nextAction: string;
   runStatus: string;
   workflowStatus: string;
@@ -1126,7 +1126,7 @@ export class TaskControlPlaneApiService {
       return { runId, state: 'failed', nextAction: 'inspect get_run_events/get_run_log', runStatus, workflowStatus, ...issueRefPart, ...eventPulsePart };
     }
     if (detail.run.status === 'cancelled') {
-      return { runId, state: 'blocked', nextAction: 'run was cancelled; create or resume a different run', runStatus, workflowStatus, ...issueRefPart, ...eventPulsePart };
+      return { runId, state: 'cancelled', nextAction: 'run was cancelled intentionally', runStatus, workflowStatus, ...issueRefPart, ...eventPulsePart };
     }
     const blockingEvent = latestPipelineBlockedEvent(events);
     const blockedReason = blockingEvent ? blockedReasonFromEvent(blockingEvent) : undefined;

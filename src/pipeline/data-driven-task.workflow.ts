@@ -64,6 +64,7 @@ import type { Decision as GateDecision } from './await-human.js';
 import type { CompleteRunResult } from '../run/complete-run.js';
 import type { FailRunResult } from '../run/fail-run.js';
 import type { BlockRunResult } from '../run/block-run.js';
+import type { CancelRunResult } from '../run/cancel-run.js';
 import {
   RUNNER_IDLE_TIMEOUT_KIND,
   RUNNER_WALL_CLOCK_LIMIT_KIND,
@@ -514,6 +515,10 @@ export type DataDrivenTaskDeps = {
     runId: string,
     opts?: { actor?: string; source?: string; reason?: string },
   ) => Promise<BlockRunResult | null>;
+  cancelRun: (
+    runId: string,
+    opts?: { actor?: string; source?: string },
+  ) => Promise<CancelRunResult | null>;
 
   loadRunTaskContext: (runId: string) => Promise<{ taskId: string; title: string; base: string; repoRef: string; issueRef?: IssueRef }>;
 
@@ -676,7 +681,7 @@ export function makeDataDrivenTask(
   ) => Promise<AttemptResult>,
   deps: DataDrivenTaskDeps,
 ) {
-  const { appendEvent, appendRunOutput, awaitHuman, completeRun, failRun, blockRun, loadRunTaskContext, integrateFn, runStub, confirmMergeFn, runConfirmStub, pollPrFn, runPollStub, respondThreadsFn, runRespondStub, captureChangeFn, preflightFn, createWorktreeFn, releaseWorktreeFn } = deps;
+  const { appendEvent, appendRunOutput, awaitHuman, completeRun, failRun, blockRun, cancelRun, loadRunTaskContext, integrateFn, runStub, confirmMergeFn, runConfirmStub, pollPrFn, runPollStub, respondThreadsFn, runRespondStub, captureChangeFn, preflightFn, createWorktreeFn, releaseWorktreeFn } = deps;
 
   function resolveConsumes(
     node: Node,
@@ -1635,6 +1640,16 @@ export function makeDataDrivenTask(
         payload: { reason: 'route-terminal', lastVerdict: verdict, steps },
       });
       await blockRun(runId, { actor: 'pipeline', source: 'data-driven-blocked', reason: 'route-terminal' });
+    } else if (status === 'cancelled') {
+      await appendEvent({
+        runId,
+        taskId: '',
+        stepId: '',
+        stepKey: 'pipeline',
+        type: 'pipeline_cancelled',
+        payload: { reason: 'route-terminal', lastVerdict: verdict, steps },
+      });
+      await cancelRun(runId, { actor: 'pipeline', source: 'data-driven-cancelled' });
     } else {
       await failRun(runId, failureReason || `data-driven pipeline reached a failed terminal (lastVerdict=${verdict})`);
     }

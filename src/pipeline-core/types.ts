@@ -11,7 +11,7 @@ export const CORE_VERDICTS = ['succeeded', 'failed', 'errored', 'timed_out'] as 
 export type CoreVerdict = (typeof CORE_VERDICTS)[number];
 
 
-export const TERMINAL_STATUSES = ['succeeded', 'failed', 'blocked'] as const;
+export const TERMINAL_STATUSES = ['succeeded', 'failed', 'blocked', 'cancelled'] as const;
 export type TerminalStatus = (typeof TERMINAL_STATUSES)[number];
 
 
@@ -230,7 +230,7 @@ export type Decision =
 export type DecisionInput = Record<string, unknown>;
 
 
-export type RunStatus = 'running' | 'awaiting_gate' | 'succeeded' | 'failed' | 'blocked';
+export type RunStatus = 'running' | 'awaiting_gate' | 'succeeded' | 'failed' | 'blocked' | 'cancelled';
 
 
 
