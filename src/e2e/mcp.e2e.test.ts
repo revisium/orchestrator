@@ -249,6 +249,58 @@ test('H9: catalog tools reflect the installed playbook', { skip: e2eSkip }, asyn
   assert.ok(playbooks.some((p) => p.id === PLAYBOOK_ID), 'list_playbooks must include the installed playbook');
 });
 
+test('H12: create_run response includes monitoring directive by default (shape-only, no run completion)', { skip: e2eSkip }, async () => {
+  const created = await inv<{ runId: string; monitoring?: Record<string, unknown> }>('create_run', {
+    title: 'E2E monitoring directive shape',
+    repo: process.cwd(),
+    pipelineId: 'local-change',
+    start: false,
+  });
+  try {
+    assert.equal(created.monitoring?.nextAction, 'monitor', 'monitoring.nextAction must be "monitor"');
+    assert.equal(created.monitoring?.pollTool, 'get_run_attention', 'monitoring.pollTool must be get_run_attention');
+    assert.equal(created.monitoring?.runId, created.runId, 'monitoring.runId must match runId');
+    assert.ok(Array.isArray(created.monitoring?.protocol) && (created.monitoring.protocol as unknown[]).length > 0, 'monitoring.protocol must be a non-empty array');
+    assert.equal(created.monitoring?.role, 'operator/humanGate', 'monitoring.role must be operator/humanGate');
+    assert.equal((created.monitoring?.clientHints as Record<string, unknown>)?.advisory, true, 'clientHints.advisory must be true');
+  } finally {
+    await inv('cancel_run', { runId: created.runId });
+  }
+});
+
+test('H12b: create_run with includeMonitoringGuidance:false omits the monitoring directive', { skip: e2eSkip }, async () => {
+  const created = await inv<{ runId: string; monitoring?: Record<string, unknown> }>('create_run', {
+    title: 'E2E no monitoring directive',
+    repo: process.cwd(),
+    pipelineId: 'local-change',
+    start: false,
+    includeMonitoringGuidance: false,
+  });
+  try {
+    assert.equal('monitoring' in created, false, 'monitoring must be absent when includeMonitoringGuidance is false');
+  } finally {
+    await inv('cancel_run', { runId: created.runId });
+  }
+});
+
+test('H12c: start_run response includes monitoring directive', { skip: e2eSkip }, async () => {
+  const target = createTargetRepo();
+  try {
+    const created = await inv<{ runId: string }>('create_run', {
+      title: 'E2E start_run monitoring',
+      repo: target.worktree,
+      pipelineId: 'local-change',
+      start: false,
+    });
+    h.developerWrites.set(created.runId, target.worktree);
+    const started = await inv<{ runId?: string; monitoring?: Record<string, unknown> }>('start_run', { runId: created.runId });
+    assert.equal(started.monitoring?.nextAction, 'monitor', 'start_run monitoring.nextAction must be "monitor"');
+    assert.equal(started.monitoring?.pollTool, 'get_run_attention', 'start_run monitoring.pollTool must be get_run_attention');
+  } finally {
+    target.cleanup();
+  }
+});
+
 test('H10: inspection tools reflect a completed run', { skip: e2eSkip }, async () => {
   const target = createTargetRepo();
   try {

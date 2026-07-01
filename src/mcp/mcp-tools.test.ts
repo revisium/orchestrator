@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { MAX_WATCH_CURSOR_CHARS } from '../task-control-plane/run-watch.service.js';
 import { registerRevoMcpTools } from './mcp-tools.js';
+import { OPERATOR_MONITORING_PROTOCOL, buildMonitoringDirective } from './monitoring-directive.js';
+import { MCP_INSTRUCTIONS } from './mcp-capabilities.js';
 import type { McpFacadeService } from './mcp-facade.service.js';
 
 type RegisteredTool = {
@@ -277,6 +279,59 @@ test('get_run_events: schema accepts expand:["graph"] and rejects unknown expand
   assert.equal(schema.safeParse({ runId: 'r' }).success, true, 'no expand is valid');
   assert.equal(schema.safeParse({ runId: 'r', expand: ['graph'] }).success, true, 'expand:["graph"] is valid');
   assert.equal(schema.safeParse({ runId: 'r', expand: ['unknown-value'] }).success, false, 'expand with unknown value is invalid');
+});
+
+test('create_run and start_run schemas accept includeMonitoringGuidance boolean opt-out', async () => {
+  const { z } = await import('zod');
+  const { server, tools } = makeServer();
+  registerRevoMcpTools(server as never, {} as McpFacadeService);
+
+  for (const name of ['create_run', 'start_run']) {
+    const tool = tools.find((t) => t.name === name);
+    assert.ok(tool, `${name} must be registered`);
+    const schema = z.object(tool.config.inputSchema as Record<string, never>);
+    assert.equal(schema.safeParse({ title: 'T', repo: '.', runId: 'r1', includeMonitoringGuidance: false }).success, true, `${name} accepts includeMonitoringGuidance:false`);
+    assert.equal(schema.safeParse({ title: 'T', repo: '.', runId: 'r1', includeMonitoringGuidance: true }).success, true, `${name} accepts includeMonitoringGuidance:true`);
+    assert.equal(schema.safeParse({ title: 'T', repo: '.', runId: 'r1', includeMonitoringGuidance: 'yes' }).success, false, `${name} rejects non-boolean includeMonitoringGuidance`);
+  }
+});
+
+test('start_run schema still requires runId alongside optional includeMonitoringGuidance', async () => {
+  const { z } = await import('zod');
+  const { server, tools } = makeServer();
+  registerRevoMcpTools(server as never, {} as McpFacadeService);
+  const tool = tools.find((t) => t.name === 'start_run');
+  assert.ok(tool);
+  const schema = z.object(tool.config.inputSchema as Record<string, never>);
+  assert.equal(schema.safeParse({ runId: 'r1' }).success, true);
+  assert.equal(schema.safeParse({ runId: 'r1', includeMonitoringGuidance: false }).success, true);
+  assert.equal(schema.safeParse({ includeMonitoringGuidance: false }).success, false, 'runId is still required');
+});
+
+test('monitoring-directive no-drift: buildMonitoringDirective.protocol === OPERATOR_MONITORING_PROTOCOL, MCP_INSTRUCTIONS contains each line, get_run_attention description references shared protocol', () => {
+  const { server, tools } = makeServer();
+  registerRevoMcpTools(server as never, {} as McpFacadeService);
+  const attentionTool = tools.find((t) => t.name === 'get_run_attention');
+  assert.ok(attentionTool);
+
+  assert.equal(
+    buildMonitoringDirective('r').protocol,
+    OPERATOR_MONITORING_PROTOCOL,
+    'buildMonitoringDirective.protocol must be the same object reference as OPERATOR_MONITORING_PROTOCOL',
+  );
+
+  for (const line of OPERATOR_MONITORING_PROTOCOL) {
+    assert.ok(MCP_INSTRUCTIONS.includes(line), `MCP_INSTRUCTIONS must contain protocol line: "${line}"`);
+    assert.ok(
+      attentionTool.config.description?.includes(line),
+      `get_run_attention description must contain protocol line: "${line}"`,
+    );
+  }
+
+  assert.ok(
+    MCP_INSTRUCTIONS.includes('operator/humanGate'),
+    'MCP_INSTRUCTIONS must state operator/humanGate monitoring policy',
+  );
 });
 
 test('get_run_events: handler forwards expand to facade', async () => {
