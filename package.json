@@ -1,6 +1,6 @@
 {
   "name": "@revisium/orchestrator",
-  "version": "0.2.0-alpha.2",
+  "version": "0.2.0-alpha.3",
   "description": "Local orchestrator for software-development tasks driven by short-lived AI agents",
   "keywords": [
     "agents",
