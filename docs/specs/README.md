@@ -19,6 +19,8 @@ archive of superseded plans.
 | [runner-manifest-v1.spec.md](./runner-manifest-v1.spec.md) | Runner manifest field schema, StdoutParser/PermissionStyle code contracts, route-time capability snapshot, and replay determinism |
 | [runner-result-envelope-v1.spec.md](./runner-result-envelope-v1.spec.md) | Canonical result envelope, structured-output tiers, `submit_result` tool-call mechanism, tier degradation, and the verdict-presence validate seam |
 | [runner-capabilities-v1.spec.md](./runner-capabilities-v1.spec.md) | Runner capability vocabulary replacing the hardcoded branch functions, with one-to-one replacement mapping and worked blocks |
+| [playbook-storage-v1.spec.md](./playbook-storage-v1.spec.md) | Versioned playbook snapshot storage, document/entity projections, relation records, and route-time pins |
+| [revo-playbook-materialization-v1.spec.md](./revo-playbook-materialization-v1.spec.md) | `.revo/playbook` worktree bundle layout, manifest validation, per-step selected references, and worker prompt discovery |
 
 ## Authoring rules
 
