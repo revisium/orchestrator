@@ -797,33 +797,20 @@ export async function pollPr(
     }
   }
 
-  if (reviewThreads.length > 0 || readinessRequiresReview(settled)) {
-    return {
-      prNumber: settled.pr.number ?? null,
-      headSha: settled.pr.headSha,
-      evidence: [...settled.evidence, ...readinessEvidence(settled), `PR headSha=${settled.pr.headSha}`, 'pollPr verdict=review_changes'],
-      ...(input.issueRef ? { issueRef: input.issueRef } : {}),
-      verdict: 'review_changes',
-      ciFailures,
-      reviewThreads,
-      ...(settled.mergeStateStatus !== undefined ? { mergeStateStatus: settled.mergeStateStatus } : {}),
-      ...(settled.mergeable !== undefined ? { mergeable: settled.mergeable } : {}),
-    };
-  }
+  const makeFeedback = (verdict: PrFeedback['verdict']): PrFeedback => ({
+    prNumber: settled.pr.number ?? null,
+    headSha: settled.pr.headSha,
+    evidence: [...settled.evidence, ...readinessEvidence(settled), `PR headSha=${settled.pr.headSha}`, `pollPr verdict=${verdict}`],
+    ...(input.issueRef ? { issueRef: input.issueRef } : {}),
+    verdict,
+    ciFailures,
+    reviewThreads,
+    ...(settled.mergeStateStatus !== undefined ? { mergeStateStatus: settled.mergeStateStatus } : {}),
+    ...(settled.mergeable !== undefined ? { mergeable: settled.mergeable } : {}),
+  });
 
-  if (ciVerdictFailures.length > 0) {
-    return {
-      prNumber: settled.pr.number ?? null,
-      headSha: settled.pr.headSha,
-      evidence: [...settled.evidence, ...readinessEvidence(settled), `PR headSha=${settled.pr.headSha}`, 'pollPr verdict=ci_changes'],
-      ...(input.issueRef ? { issueRef: input.issueRef } : {}),
-      verdict: 'ci_changes',
-      ciFailures,
-      reviewThreads,
-      ...(settled.mergeStateStatus !== undefined ? { mergeStateStatus: settled.mergeStateStatus } : {}),
-      ...(settled.mergeable !== undefined ? { mergeable: settled.mergeable } : {}),
-    };
-  }
+  if (reviewThreads.length > 0 || readinessRequiresReview(settled)) return makeFeedback('review_changes');
+  if (ciVerdictFailures.length > 0) return makeFeedback('ci_changes');
 
   const signal = mergeSignal(settled.mergeStateStatus, settled.mergeable);
   if (signal === 'blocked') {
@@ -845,17 +832,7 @@ export async function pollPr(
     );
   }
 
-  return {
-    prNumber: settled.pr.number ?? null,
-    headSha: settled.pr.headSha,
-    evidence: [...settled.evidence, ...readinessEvidence(settled), `PR headSha=${settled.pr.headSha}`, 'pollPr verdict=clean'],
-    ...(input.issueRef ? { issueRef: input.issueRef } : {}),
-    verdict: 'clean',
-    ciFailures,
-    reviewThreads,
-    ...(settled.mergeStateStatus !== undefined ? { mergeStateStatus: settled.mergeStateStatus } : {}),
-    ...(settled.mergeable !== undefined ? { mergeable: settled.mergeable } : {}),
-  };
+  return makeFeedback('clean');
 }
 
 
