@@ -37,6 +37,16 @@ const manualAdoptionAuditSchema = z.object({
 }).refine((value) => value.artifactRef !== undefined || value.worktreeRef !== undefined, {
   message: 'artifactRef or worktreeRef is required',
 });
+
+const mergeOverrideAuditSchema = z.object({
+  threadIds: z.array(z.string().trim().min(1)).min(1),
+  actor: z.string().trim().min(1),
+  reason: z.string().trim().min(1),
+  risk: z.string().trim().min(1),
+  verificationResponsibility: z.string().trim().min(1),
+  headSha: z.string().trim().min(1),
+  fingerprint: z.string().trim().min(1).optional(),
+});
 const issueRefSchema = z.object({
   repo: z.string().min(1),
   number: z.number().int().positive(),
@@ -61,11 +71,19 @@ function assertValidAgentLogRange(input: { offsetBytes?: number; limitBytes?: nu
   }
 }
 
-function assertValidResolveGateInput(input: { outcome: string; adoptionAudit?: unknown }): void {
-  if (input.outcome.trim() !== 'adopt_patch_manually') return;
-  const parsed = manualAdoptionAuditSchema.safeParse(input.adoptionAudit);
-  if (!parsed.success) {
-    throw new Error(`VALIDATION_FAILURE: adopt_patch_manually requires complete adoptionAudit (${parsed.error.issues[0]?.message ?? 'invalid'})`);
+function assertValidResolveGateInput(input: { outcome: string; adoptionAudit?: unknown; mergeOverrideAudit?: unknown }): void {
+  if (input.outcome.trim() === 'adopt_patch_manually') {
+    const parsed = manualAdoptionAuditSchema.safeParse(input.adoptionAudit);
+    if (!parsed.success) {
+      throw new Error(`VALIDATION_FAILURE: adopt_patch_manually requires complete adoptionAudit (${parsed.error.issues[0]?.message ?? 'invalid'})`);
+    }
+    return;
+  }
+  if (input.outcome.trim() === 'override_merge') {
+    const parsed = mergeOverrideAuditSchema.safeParse(input.mergeOverrideAudit);
+    if (!parsed.success) {
+      throw new Error(`VALIDATION_FAILURE: override_merge requires complete mergeOverrideAudit (${parsed.error.issues[0]?.message ?? 'invalid'})`);
+    }
   }
 }
 
@@ -446,6 +464,7 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
         note: z.string().optional(),
         resolvedBy: z.string().optional(),
         adoptionAudit: manualAdoptionAuditSchema.optional(),
+        mergeOverrideAudit: mergeOverrideAuditSchema.optional(),
       },
       annotations: { readOnlyHint: false },
     },

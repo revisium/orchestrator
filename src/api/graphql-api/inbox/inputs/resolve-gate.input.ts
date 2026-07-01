@@ -1,5 +1,6 @@
 import { Field, ID, InputType } from '@nestjs/graphql';
 import type { ManualAdoptionAuditInput as DomainManualAdoptionAuditInput } from '../../../../control-plane/manual-adoption-audit.js';
+import type { MergeOverrideAuditInput as DomainMergeOverrideAuditInput } from '../../../../control-plane/merge-override-audit.js';
 
 @InputType()
 export class ManualAdoptionAuditInput implements DomainManualAdoptionAuditInput {
@@ -38,6 +39,30 @@ export class ManualAdoptionAuditInput implements DomainManualAdoptionAuditInput 
 }
 
 @InputType()
+export class MergeOverrideAuditInput implements DomainMergeOverrideAuditInput {
+  @Field(() => [String])
+  threadIds!: string[];
+
+  @Field(() => String)
+  actor!: string;
+
+  @Field(() => String)
+  reason!: string;
+
+  @Field(() => String)
+  risk!: string;
+
+  @Field(() => String)
+  verificationResponsibility!: string;
+
+  @Field(() => String)
+  headSha!: string;
+
+  @Field(() => String, { nullable: true })
+  fingerprint?: string;
+}
+
+@InputType()
 export class ResolveGateInput {
   @Field(() => ID)
   inboxId!: string;
@@ -53,4 +78,7 @@ export class ResolveGateInput {
 
   @Field(() => ManualAdoptionAuditInput, { nullable: true })
   adoptionAudit?: ManualAdoptionAuditInput;
+
+  @Field(() => MergeOverrideAuditInput, { nullable: true })
+  mergeOverrideAudit?: MergeOverrideAuditInput;
 }

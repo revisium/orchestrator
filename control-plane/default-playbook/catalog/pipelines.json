@@ -25,7 +25,7 @@
     "platform_invocation": "canonical-only",
     "execution_policy": {
       "raw": [
-        "Built-in default (slice 5, plan 0015): the pipeline graph is DATA — see template_json.",
+        "Built-in default (slice 5, plan 0015): the pipeline graph is DATA \u2014 see template_json.",
         "analyst -> reviewer[plan gate] -> developer -> reviewer[code] (bounded rework, cap 3) -> integrator(script) -> watcher[post-integrator] -> merge gate."
       ],
       "template_json": {
@@ -46,7 +46,10 @@
             "recheck",
             "approve_anyway",
             "rework",
-            "cancel"
+            "cancel",
+            "address_review_threads",
+            "return_to_development",
+            "override_merge"
           ]
         },
         "nodes": {
@@ -435,6 +438,9 @@
             "outcomes": [
               "approved",
               "recheck",
+              "address_review_threads",
+              "return_to_development",
+              "override_merge",
               "cancel"
             ],
             "branches": [
@@ -451,6 +457,27 @@
                   "value": "recheck"
                 },
                 "goto": "mergeRecheck"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "address_review_threads"
+                },
+                "goto": "triage"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "return_to_development"
+                },
+                "goto": "triage"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "override_merge"
+                },
+                "goto": "confirmMerge"
               },
               {
                 "when": {
@@ -978,7 +1005,7 @@
             "status": "cancelled"
           }
         },
-        "title": "Feature development — plan + merge gates, bounded code-review rework, and a PR review-feedback loop (plan 0018)",
+        "title": "Feature development \u2014 plan + merge gates, bounded code-review rework, and a PR review-feedback loop (plan 0018)",
         "policy": {
           "conflicts": [
             [
@@ -1064,7 +1091,11 @@
             "recheck",
             "approve_anyway",
             "rework",
-            "abort"
+            "abort",
+            "address_review_threads",
+            "return_to_development",
+            "override_merge",
+            "cancel"
           ]
         },
         "nodes": {
@@ -1347,7 +1378,11 @@
             "reason": "merge-review",
             "outcomes": [
               "approved",
-              "recheck"
+              "recheck",
+              "address_review_threads",
+              "return_to_development",
+              "override_merge",
+              "cancel"
             ],
             "branches": [
               {
@@ -1363,6 +1398,34 @@
                   "value": "recheck"
                 },
                 "goto": "mergeRecheck"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "address_review_threads"
+                },
+                "goto": "triage"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "return_to_development"
+                },
+                "goto": "triage"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "override_merge"
+                },
+                "goto": "confirmMerge"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "cancel"
+                },
+                "goto": "cancelledEnd"
               },
               {
                 "default": "blockedEnd"
@@ -2064,6 +2127,11 @@
             "produces": {
               "name": "gateResolution"
             }
+          },
+          "cancelledEnd": {
+            "id": "cancelledEnd",
+            "kind": "terminal",
+            "status": "cancelled"
           }
         },
         "title": "Codex feature development with parallel review consensus",
@@ -2123,7 +2191,7 @@
     "platform_invocation": "canonical-only",
     "execution_policy": {
       "raw": [
-        "Built-in default (slice 5, plan 0015): the pipeline graph is DATA — see template_json.",
+        "Built-in default (slice 5, plan 0015): the pipeline graph is DATA \u2014 see template_json.",
         "orchestrator routes; the graph runs developer -> done with no gate."
       ],
       "template_json": {
@@ -2150,7 +2218,7 @@
             "status": "succeeded"
           }
         },
-        "title": "Local change — developer only, no gate"
+        "title": "Local change \u2014 developer only, no gate"
       }
     }
   }

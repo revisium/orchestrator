@@ -799,6 +799,77 @@ test('TaskControlPlaneApiService.resolveGate persists adoptionAudit for adopt_pa
   assert.deepEqual((resolvedAnswers[0] as { adoptionAudit: unknown }).adoptionAudit, completeAdoptionAudit);
 });
 
+const completeMergeOverrideAudit = {
+  threadIds: ['thread-abc', 'thread-def'],
+  actor: 'kap',
+  reason: 'threads are stale and authors are unavailable; proceeding with documented risk',
+  risk: 'unresolved reviewer concern may resurface post-merge',
+  verificationResponsibility: 'release engineer must re-review threads within 24 h',
+  headSha: 'abc123def456',
+};
+
+test('TaskControlPlaneApiService.resolveGate requires complete audit for override_merge', async () => {
+  const api = makeApi({
+    inboxService: {
+      async getInbox() {
+        return makeInboxItem({
+          runId: 'run-1',
+          options: ['recheck', 'address_review_threads', 'return_to_development', 'override_merge', 'cancel'],
+          context: {
+            topic: 'merge',
+            summary: { outcomes: ['recheck', 'address_review_threads', 'return_to_development', 'override_merge', 'cancel'] },
+          },
+        });
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => api.resolveGate({ inboxId: 'inbox-1', outcome: 'override_merge', resolvedBy: 'human' }),
+    /requires mergeOverrideAudit/,
+  );
+  await assert.rejects(
+    () => api.resolveGate({
+      inboxId: 'inbox-1',
+      outcome: 'override_merge',
+      resolvedBy: 'human',
+      mergeOverrideAudit: { ...completeMergeOverrideAudit, threadIds: [] },
+    }),
+    /threadIds must be a non-empty array/,
+  );
+});
+
+test('TaskControlPlaneApiService.resolveGate persists mergeOverrideAudit for override_merge', async () => {
+  const resolvedAnswers: unknown[] = [];
+  const api = makeApi({
+    inboxService: {
+      async getInbox() {
+        return makeInboxItem({
+          runId: 'run-1',
+          options: ['recheck', 'address_review_threads', 'return_to_development', 'override_merge', 'cancel'],
+          context: {
+            topic: 'merge',
+            summary: { outcomes: ['recheck', 'address_review_threads', 'return_to_development', 'override_merge', 'cancel'] },
+          },
+        });
+      },
+      async resolveInbox(_id, answer) {
+        resolvedAnswers.push(answer);
+        return { status: 'pending' as const, answer };
+      },
+    },
+  });
+
+  await api.resolveGate({
+    inboxId: 'inbox-1',
+    outcome: 'override_merge',
+    resolvedBy: 'human',
+    mergeOverrideAudit: completeMergeOverrideAudit,
+  });
+
+  assert.deepEqual((resolvedAnswers[0] as { mergeOverrideAudit: unknown }).mergeOverrideAudit, completeMergeOverrideAudit);
+});
+
 test('TaskControlPlaneApiService.resolveInboxItem normalizes named gate outcome before persist and signal', async () => {
   const resolvedAnswers: unknown[] = [];
   const signals: unknown[] = [];

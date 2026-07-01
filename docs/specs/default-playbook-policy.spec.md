@@ -8,7 +8,7 @@
   [run-dataflow-v1.spec.md](./run-dataflow-v1.spec.md),
   [human-gates-v1.spec.md](./human-gates-v1.spec.md).
 
-The static bundled-playbook checks are accepted, and #141 merge-gate reject/recheck routing is implemented.
+The static bundled-playbook checks are accepted, and #141 merge-gate reject/recheck routing and #233 thread-recovery outcomes are implemented.
 
 ## Scope
 
@@ -31,7 +31,7 @@ static verifier.
 | #142 | The graph preserves routes that can carry `review_changes` and `ci_changes` after `pollPr` classifies PR feedback. | CodeRabbit/provider classification, stale review-body suppression, provider-wait bucketing, and grace polling. |
 | #143 | The graph requires `pollPr -> mergeReadiness -> mergeGate`, routes fresh `review_changes`/`ci_changes` before the gate, and gives merge approval/confirmation the `mergeReadiness` artifact. | Isolated worktree execution, real PR polling, fresh `headSha`, branch push, and provider state. |
 | #144 | No graph policy is inferred from stale provider comments or install versioning; the default catalog can still be checked statically. | `catalogHash` reseed behavior and informational provider waits for stale CodeRabbit comments. |
-| #141 | `mergeGate` exposes `approved,recheck,cancel`; `recheck` routes through a fresh `mergeRecheck` `script:pollPr` node, then routes `review_changes` to `triage`, bounded `ci_changes + ciLoop < 3` to `ciRework`, and `clean`/default to `blockedEnd`; `cancel` routes to `cancelledEnd`; `triage` and `ciRework` receive optional stale-ok `mergeRecheck` evidence. | Actual GitHub/provider freshness, named-gate runtime execution, and proof that live review/CI changes return to the correct recovery loop. |
+| #141 | `mergeGate` exposes `approved,recheck,address_review_threads,return_to_development,override_merge,cancel`; `recheck` routes through a fresh `mergeRecheck` `script:pollPr` node, then routes `review_changes` to `triage`, bounded `ci_changes + ciLoop < 3` to `ciRework`, and `clean`/default to `blockedEnd`; `address_review_threads` and `return_to_development` route to `triage`; `override_merge` routes to `confirmMerge` with a durable audit; `cancel` routes to `cancelledEnd`; `triage` and `ciRework` receive optional stale-ok `mergeRecheck` evidence. | Actual GitHub/provider freshness, named-gate runtime execution, unresolved-thread detection, override audit persistence, and proof that live review/CI changes return to the correct recovery loop. |
 
 ## Static Rules
 
@@ -51,9 +51,11 @@ The bundled `feature-development` policy verifier reports errors for these stati
 
 ## Implemented #141 Rule
 
-The scoped policy requires the bundled `mergeGate` to expose `approved,recheck,cancel` outcomes. The runtime accepts
+The scoped policy requires the bundled `mergeGate` to expose
+`approved,recheck,address_review_threads,return_to_development,override_merge,cancel` outcomes. The runtime accepts
 explicit named gate outcomes through `resolve_gate` / `resolveGate`; compatibility wrappers are not used for
-multi-outcome gates. `recheck` reaches `mergeRecheck`, and `cancel` reaches the `cancelledEnd` terminal.
+multi-outcome gates. `recheck` reaches `mergeRecheck`; `address_review_threads` and `return_to_development` both
+reach `triage`; `override_merge` reaches `confirmMerge`; and `cancel` reaches the `cancelledEnd` terminal.
 
 `mergeRecheck` MUST be a `script:pollPr` step that produces `schema:prFeedback` and routes to `mergeRecheckRouter`.
 The router MUST send a still-clean recheck, or an unclassified/default recheck, to `blockedEnd` as an explicit
@@ -66,6 +68,8 @@ contract: the verifier does not prove that GitHub/provider state was fresh at ru
 
 ## Changelog
 
+- 2026-07-01: Added thread-recovery outcomes (`address_review_threads`, `return_to_development`, `override_merge`) to
+  mergeGate domain and #141 stabilization row; updated "Implemented #141 Rule" accordingly (issue #233).
 - 2026-07-01: Added cancelled terminal and reusable ordinary stuck-review gate policy.
 - 2026-06-29: Normative-language / canon-discipline pass; no contract change.
 - 2026-06-30: Added named gate outcome and readiness `recheck` routing notes for #223.
