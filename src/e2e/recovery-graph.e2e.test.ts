@@ -13,6 +13,9 @@ import {
   routedGhEmulator,
   waitForGate,
   waitState,
+  assertCompleted,
+  assertEventsPresent,
+  assertGhNotCalled,
 } from './kit/index.js';
 
 // Group R — #246 recovery-policy graph: mergeApproveReverify + recoveryGate.
@@ -171,5 +174,90 @@ test('RG-E: always-ci-red → ciLoop exhaustion → recoveryGate(merge-recovery)
     assert.equal(terminal.state, 'cancelled', 'cancel outcome at recoveryGate → cancelledEnd → cancelled');
   } finally {
     targetE.cleanup();
+  }
+});
+
+test('RG-F: merge-unknown-then-clean → bounded UNKNOWN recheck → merge gate → completed (AC#3)', { skip: e2eSkip }, async () => {
+  // Real integrator: pollPr node returns UNKNOWN (readyCount<2) → prRouter recheck self-loop → second
+  // poll returns CLEAN → mergeReadiness → mergeGate. After approval → mergeApproveReverify (CLEAN) →
+  // confirmMerge → completed. Asserts pr_polled(recheck) precedes merge_confirmed.
+  const targetF = createTargetRepo();
+  try {
+    const created = await h.api.createRun({
+      repo: targetF.worktree,
+      title: 'RG-F merge-unknown-then-clean run',
+      description: 'RG-F — UNKNOWN recheck → CLEAN → merge.',
+      scope: 'recovery-graph e2e',
+      playbookId: PLAYBOOK_ID,
+      pipelineId: 'feature-development',
+      executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent' } },
+      start: false,
+    });
+    ghScenarios.set(created.taskId, 'merge-unknown-then-clean');
+    h.developerWrites.set(created.runId, targetF.worktree);
+    await h.api.startRun({ runId: created.runId });
+
+    const plan = await waitForGate(h.api, created.runId);
+    await h.api.resolveGate({ inboxId: plan.inboxId, outcome: 'approved', resolvedBy: 'e2e' });
+
+    const merge = await waitForGate(h.api, created.runId);
+    assert.equal(merge.topic, 'merge', 'merge gate opens after UNKNOWN recheck resolved to CLEAN');
+    await h.api.resolveGate({ inboxId: merge.inboxId, outcome: 'approved', resolvedBy: 'e2e' });
+
+    await assertCompleted(h.api, created.runId);
+
+    await assertEventsPresent(h.api, created.runId, ['pr_polled', 'merge_confirmed']);
+    const events = await h.api.getRunEvents({ runId: created.runId, limit: 500 });
+    const recheckIdx = events.findIndex(
+      (e) => e.type === 'pr_polled' && (e.payload as { verdict?: string } | undefined)?.verdict === 'recheck',
+    );
+    const mergeIdx = events.findIndex((e) => e.type === 'merge_confirmed');
+    assert.ok(recheckIdx >= 0, 'pr_polled(verdict=recheck) must be present (UNKNOWN caused a bounded recheck)');
+    assert.ok(recheckIdx < mergeIdx, 'recheck event must precede merge_confirmed (no premature merge while UNKNOWN)');
+  } finally {
+    targetF.cleanup();
+  }
+});
+
+test('RG-G: merge-stale-at-reverify → mergeGate approved → recoveryGate → cancel (AC#2)', { skip: e2eSkip }, async () => {
+  // Real integrator: pollPr + mergeReadiness CLEAN (readyCount<3). After mergeGate approval,
+  // mergeApproveReverify (readyCount≥3) sees DIRTY → {needsHuman} → catch → classifyRecovery →
+  // recoveryGate opens. Cancel → cancelledEnd. gh pr merge must not be called.
+  const targetG = createTargetRepo();
+  try {
+    const created = await h.api.createRun({
+      repo: targetG.worktree,
+      title: 'RG-G merge-stale-at-reverify run',
+      description: 'RG-G — stale at reverify → recoveryGate → cancel.',
+      scope: 'recovery-graph e2e',
+      playbookId: PLAYBOOK_ID,
+      pipelineId: 'feature-development',
+      executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent' } },
+      start: false,
+    });
+    ghScenarios.set(created.taskId, 'merge-stale-at-reverify');
+    h.developerWrites.set(created.runId, targetG.worktree);
+    await h.api.startRun({ runId: created.runId });
+
+    const plan = await waitForGate(h.api, created.runId);
+    await h.api.resolveGate({ inboxId: plan.inboxId, outcome: 'approved', resolvedBy: 'e2e' });
+
+    const merge = await waitForGate(h.api, created.runId);
+    assert.equal(merge.topic, 'merge', 'mergeGate opens (readiness was CLEAN before approval)');
+    await h.api.resolveGate({ inboxId: merge.inboxId, outcome: 'approved', resolvedBy: 'e2e' });
+
+    // mergeApproveReverify sees DIRTY → {needsHuman} → classifyRecovery → recoveryGate (same topic 'merge')
+    const recovery = await waitForGate(h.api, created.runId);
+    assert.equal(recovery.topic, 'merge', 'recoveryGate opens after stale reverify (merge-recovery reason → merge topic)');
+    await h.api.resolveGate({ inboxId: recovery.inboxId, outcome: 'cancel', resolvedBy: 'e2e' });
+
+    const terminal = await waitState(h.api, created.runId);
+    assert.equal(terminal.state, 'cancelled', 'recoveryGate cancel → cancelledEnd → cancelled');
+
+    assertGhNotCalled(h, created.taskId, ['pr', 'merge']);
+    const events = await h.api.getRunEvents({ runId: created.runId, limit: 500 });
+    assert.ok(!events.some((e) => e.type === 'merge_confirmed'), 'merge_confirmed must not be emitted when reverify fails');
+  } finally {
+    targetG.cleanup();
   }
 });

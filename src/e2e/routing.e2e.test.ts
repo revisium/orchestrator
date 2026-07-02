@@ -247,3 +247,43 @@ test('I10: bindingOverrides permissionMode mismatched for runner is rejected (PR
     },
   );
 });
+
+test('I11: feature-development-codex-consensus alias routes to base pipeline + codex-consensus profile, provenance stamped (AC#9)', { skip: e2eSkip }, async () => {
+  // The legacy alias id must resolve to basePipelineId='feature-development' + profileId='codex-consensus'
+  // with full provenance fields. M1b covers actual consensus-branch execution (AC#6).
+  type ProvenanceRoute = Route & {
+    requestedPipelineId?: string;
+    basePipelineId?: string;
+    profileId?: string;
+    materializedTemplateHash?: string;
+    profileHash?: string;
+    profileVersion?: string;
+    materializerVersion?: string;
+    policyVersion?: string;
+  };
+
+  const r = (await h.api.simulateRoute({ title: 'alias routing test', pipeline: 'feature-development-codex-consensus' })) as ProvenanceRoute;
+
+  assert.equal(r.pipelineId, 'feature-development-codex-consensus', 'public pipelineId is the alias id');
+  assert.equal(r.requestedPipelineId, 'feature-development-codex-consensus', 'requestedPipelineId is the alias id');
+  assert.equal(r.basePipelineId, 'feature-development', 'basePipelineId resolves to base pipeline');
+  assert.equal(r.profileId, 'codex-consensus', 'profileId is codex-consensus');
+  assert.ok(
+    typeof r.materializedTemplateHash === 'string' && r.materializedTemplateHash.length === 64,
+    'materializedTemplateHash is a SHA-256 hex string',
+  );
+  assert.ok(typeof r.profileHash === 'string' && r.profileHash.length > 0, 'profileHash is stamped');
+  assert.ok(typeof r.profileVersion === 'string' && r.profileVersion.length > 0, 'profileVersion is stamped');
+  assert.ok(r.roles.length > 0, 'alias route includes required roles');
+  assert.ok(r.routeGates.includes('plan') && r.routeGates.includes('merge'), 'alias route includes plan + merge gates');
+
+  // Verify createRun route matches simulateRoute (alias resolution is consistent)
+  const created = (await h.api.createRun({
+    title: 'alias routing test',
+    repo: process.cwd(),
+    pipelineId: 'feature-development-codex-consensus',
+    start: false,
+  })) as { route: ProvenanceRoute };
+  assert.equal(created.route.basePipelineId, 'feature-development', 'createRun route basePipelineId matches');
+  assert.equal(created.route.materializedTemplateHash, r.materializedTemplateHash, 'createRun materializedTemplateHash matches simulateRoute');
+});
