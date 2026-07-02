@@ -47,20 +47,15 @@ test('topology-profiles: materializeTemplate(canonicalCatalog, codexProfile) has
 
 // ─── byte-stable hash ─────────────────────────────────────────────────────────
 
+// materializeTemplate(base, profile, opts) has no binding/executionProfile parameter at all —
+// PROFILE_BINDING_ONLY_NO_GRAPH_CHANGE at the topology layer is a type-level guarantee, not a
+// runtime property distinct from determinism (there is no binding input to vary between calls).
 test('topology-profiles: materialized codex-consensus hash is byte-stable across two calls', () => {
   const base = catalogFeatureDevelopment();
   const allowlist = CONSENSUS_TOGGLE_ALLOWLIST['feature-development']!;
   const r1 = materializeTemplate(base, CODEX_CONSENSUS_PROFILE, { allowlist });
   const r2 = materializeTemplate(structuredClone(base), CODEX_CONSENSUS_PROFILE, { allowlist });
   assert.equal(r1.materializedTemplateHash, r2.materializedTemplateHash);
-});
-
-test('topology-profiles: binding-only change does not affect materializedTemplateHash', () => {
-  const base = catalogFeatureDevelopment();
-  const allowlist = CONSENSUS_TOGGLE_ALLOWLIST['feature-development']!;
-  const { materializedTemplateHash: h1 } = materializeTemplate(base, CODEX_CONSENSUS_PROFILE, { allowlist });
-  const { materializedTemplateHash: h2 } = materializeTemplate(structuredClone(base), CODEX_CONSENSUS_PROFILE, { allowlist });
-  assert.equal(h1, h2, 'PROFILE_BINDING_ONLY_NO_GRAPH_CHANGE: topology hash must be stable; binding is a separate axis (#244)');
 });
 
 test('topology-profiles: canonical and materialized hashes differ', () => {

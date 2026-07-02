@@ -23,6 +23,9 @@ export const MATERIALIZE_CODES = [
   'MATERIALIZE_UNKNOWN_PROFILE_KEY',
   'MATERIALIZE_TOGGLE_NOT_ALLOWLISTED',
   'MATERIALIZE_TOGGLE_UNRESOLVED',
+  'MATERIALIZE_TOGGLE_NOT_AGENT',
+  'MATERIALIZE_TOGGLE_DUPLICATE_TARGET',
+  'MATERIALIZE_TOGGLE_INVALID_BRANCH_COUNT',
 ] as const;
 export type MaterializeCode = (typeof MATERIALIZE_CODES)[number];
 
@@ -86,7 +89,19 @@ export function materializeTemplate(
     return { template, materializedTemplateHash: hashTemplate(template), diagnostics };
   }
 
+  const seenTargets = new Set<string>();
   for (const toggle of profile.toggles) {
+    if (seenTargets.has(toggle.target)) {
+      diagnostics.push({
+        code: 'MATERIALIZE_TOGGLE_DUPLICATE_TARGET',
+        severity: 'error',
+        message: `toggle target "${toggle.target}" is targeted by more than one toggle`,
+        target: toggle.target,
+      });
+      continue;
+    }
+    seenTargets.add(toggle.target);
+
     if (!opts.allowlist.includes(toggle.target)) {
       diagnostics.push({
         code: 'MATERIALIZE_TOGGLE_NOT_ALLOWLISTED',
@@ -94,11 +109,36 @@ export function materializeTemplate(
         message: `toggle target "${toggle.target}" is not in the allowlist`,
         target: toggle.target,
       });
-    } else if (!base.nodes[toggle.target]) {
+      continue;
+    }
+
+    const targetNode = base.nodes[toggle.target];
+    if (!targetNode) {
       diagnostics.push({
         code: 'MATERIALIZE_TOGGLE_UNRESOLVED',
         severity: 'error',
         message: `toggle target "${toggle.target}" does not exist in the base template`,
+        target: toggle.target,
+      });
+      continue;
+    }
+
+    if (targetNode.kind !== 'agent') {
+      diagnostics.push({
+        code: 'MATERIALIZE_TOGGLE_NOT_AGENT',
+        severity: 'error',
+        message: `toggle target "${toggle.target}" is kind "${targetNode.kind}", expected "agent"`,
+        target: toggle.target,
+      });
+      continue;
+    }
+
+    const n = toggle.fanout.branches;
+    if (!Number.isInteger(n) || n < 2 || n > BRANCH_NAMES.length) {
+      diagnostics.push({
+        code: 'MATERIALIZE_TOGGLE_INVALID_BRANCH_COUNT',
+        severity: 'error',
+        message: `toggle target "${toggle.target}" fanout.branches must be an integer between 2 and ${BRANCH_NAMES.length}, got ${n}`,
         target: toggle.target,
       });
     }
@@ -138,17 +178,15 @@ function applyToggle(nodes: Record<string, Node>, toggle: ConsensusToggle): Reco
     join: joinId,
   };
 
+  // Clone every field of the collapsed node (onFailure/resultSchema/produces/consumes and also
+  // catch/escalateTo/incrementCounters, which the original per-field copy silently dropped) —
+  // each branch is a full parallel copy of the collapsed agent, routed to the join instead.
   const branchNodes: Node[] = branchSuffixes.map((suffix) => {
     const branchNode: AgentNode = {
+      ...structuredClone(collapsed),
       id: `${base}${suffix}`,
-      kind: 'agent',
-      roleRef: collapsed.roleRef,
       next: joinId,
     };
-    if (collapsed.onFailure !== undefined) branchNode.onFailure = collapsed.onFailure;
-    if (collapsed.resultSchema !== undefined) branchNode.resultSchema = collapsed.resultSchema;
-    if (collapsed.produces !== undefined) branchNode.produces = structuredClone(collapsed.produces);
-    if (collapsed.consumes !== undefined) branchNode.consumes = structuredClone(collapsed.consumes);
     return branchNode;
   });
 

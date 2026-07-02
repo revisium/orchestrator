@@ -203,6 +203,58 @@ test('materialize: toggle targeting absent node → MATERIALIZE_TOGGLE_UNRESOLVE
   assert.equal(diag.target, 'nonExistentNode');
 });
 
+test('materialize: two toggles targeting the same node → MATERIALIZE_TOGGLE_DUPLICATE_TARGET, no crash', () => {
+  const profile: TopologyProfile = {
+    profileId: 'test',
+    pipelineId: 'synthetic',
+    toggles: [makePlanReviewerToggle(), { ...makePlanReviewerToggle() }],
+  };
+  const { diagnostics } = materializeTemplate(makeBase(), profile, { allowlist: ALLOWLIST });
+  const diag = diagnostics.find((d) => d.code === 'MATERIALIZE_TOGGLE_DUPLICATE_TARGET');
+  assert.ok(diag, `expected MATERIALIZE_TOGGLE_DUPLICATE_TARGET; got: ${diagnostics.map((d) => d.code).join(', ')}`);
+  assert.equal(diag.target, 'planReviewer');
+});
+
+test('materialize: toggle targeting a non-agent node → MATERIALIZE_TOGGLE_NOT_AGENT', () => {
+  const toggle = { ...makePlanReviewerToggle(), target: 'done' };
+  const profile: TopologyProfile = { profileId: 'test', pipelineId: 'synthetic', toggles: [toggle] };
+  const { diagnostics } = materializeTemplate(makeBase(), profile, { allowlist: ['done'] });
+  const diag = diagnostics.find((d) => d.code === 'MATERIALIZE_TOGGLE_NOT_AGENT');
+  assert.ok(diag, `expected MATERIALIZE_TOGGLE_NOT_AGENT; got: ${diagnostics.map((d) => d.code).join(', ')}`);
+  assert.equal(diag.target, 'done');
+});
+
+test('materialize: invalid fanout.branches count → MATERIALIZE_TOGGLE_INVALID_BRANCH_COUNT', () => {
+  const toggle = { ...makePlanReviewerToggle(), fanout: { branches: 1 } };
+  const profile: TopologyProfile = { profileId: 'test', pipelineId: 'synthetic', toggles: [toggle] };
+  const { diagnostics } = materializeTemplate(makeBase(), profile, { allowlist: ALLOWLIST });
+  const diag = diagnostics.find((d) => d.code === 'MATERIALIZE_TOGGLE_INVALID_BRANCH_COUNT');
+  assert.ok(diag, `expected MATERIALIZE_TOGGLE_INVALID_BRANCH_COUNT; got: ${diagnostics.map((d) => d.code).join(', ')}`);
+  assert.equal(diag.target, 'planReviewer');
+});
+
+test('materialize: fanned-out branches preserve catch/escalateTo/incrementCounters from the collapsed node', () => {
+  const base = makeBase();
+  base.nodes['planReviewer'] = {
+    ...base.nodes['planReviewer'],
+    kind: 'agent',
+    catch: [{ onError: 'revo.ScriptFailed', goto: 'done' }],
+    escalateTo: 'done',
+    incrementCounters: ['planReviewLoop'],
+  } as typeof base.nodes['planReviewer'];
+  const profile: TopologyProfile = { profileId: 'test', pipelineId: 'synthetic', toggles: [makePlanReviewerToggle()] };
+  const { template } = materializeTemplate(base, profile, { allowlist: ALLOWLIST });
+  const branch = template.nodes['planReviewPrimary'] as typeof base.nodes['planReviewer'] & {
+    catch?: unknown;
+    escalateTo?: string;
+    incrementCounters?: string[];
+  };
+  assert.ok(branch, 'expected planReviewPrimary to exist');
+  assert.deepEqual(branch.catch, [{ onError: 'revo.ScriptFailed', goto: 'done' }], 'catch must survive fanout');
+  assert.equal(branch.escalateTo, 'done', 'escalateTo must survive fanout');
+  assert.deepEqual(branch.incrementCounters, ['planReviewLoop'], 'incrementCounters must survive fanout');
+});
+
 // ─── validateTemplate pass on materialized output ─────────────────────────────
 
 test('materialize: materialized planReviewer-only output has zero validateTemplate errors', () => {
@@ -356,8 +408,8 @@ test('materialize: codeReviewJoin verdict is branch-order-invariant', () => {
   const profile: TopologyProfile = { profileId: 'test', pipelineId: 'synthetic', toggles: [makeCodeReviewToggle()] };
   const { template } = materializeTemplate(makeBase(), profile, { allowlist: ALLOWLIST });
   const join = emittedJoin(template, 'codeReviewJoin');
-  const a1 = arrivals(['primary', 'approved'], ['secondary', 'approved']);
-  const a2 = arrivals(['secondary', 'approved'], ['primary', 'approved']);
+  const a1 = arrivals(['primary', 'approved'], ['secondary', 'changes_requested']);
+  const a2 = arrivals(['secondary', 'changes_requested'], ['primary', 'approved']);
   const v1 = reduceJoinVerdict(join, a1, selectJoinWinner(join.joinMode, a1, join.id));
   const v2 = reduceJoinVerdict(join, a2, selectJoinWinner(join.joinMode, a2, join.id));
   assert.equal(v1, v2);
