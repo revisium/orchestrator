@@ -117,3 +117,81 @@ test('RolesService.listRoles maps persisted row fields into a summary', async ()
   assert.equal(roles[0]?.runner, 'claude-code');
   assert.equal(roles[0]?.playbookRoleId, 'developer');
 });
+
+test('RolesService.listRoles: timeoutMs extracted from data.timeout_ms when present', async () => {
+  const transport = fakeHeadTransport({}, {
+    listRows: {
+      roles: [
+        {
+          id: 'pb-developer',
+          data: {
+            name: 'developer', model_level: 'standard', runner_id: 'claude-code', surface: 'any',
+            rights: 'write-working-tree', playbook_id: 'pb', playbook_role_id: 'developer',
+            timeout_ms: 120000,
+          },
+        },
+      ],
+    },
+  });
+  const svc = makeRolesService(transport);
+  const roles = await svc.listRoles();
+  assert.equal(roles[0]?.timeoutMs, 120000);
+});
+
+test('RolesService.listRoles: timeoutMs absent when data.timeout_ms not set', async () => {
+  const transport = fakeHeadTransport({}, {
+    listRows: {
+      roles: [
+        {
+          id: 'pb-developer',
+          data: {
+            name: 'developer', model_level: 'standard', runner_id: 'claude-code', surface: 'any',
+            rights: 'write-working-tree', playbook_id: 'pb', playbook_role_id: 'developer',
+          },
+        },
+      ],
+    },
+  });
+  const svc = makeRolesService(transport);
+  const roles = await svc.listRoles();
+  assert.equal(roles[0]?.timeoutMs, undefined);
+});
+
+test('RolesService.listRoles: permissionMode extracted from data.permission_mode when present', async () => {
+  const transport = fakeHeadTransport({}, {
+    listRows: {
+      roles: [
+        {
+          id: 'pb-developer',
+          data: {
+            name: 'developer', model_level: 'standard', runner_id: 'claude-code', surface: 'any',
+            rights: 'write-working-tree', playbook_id: 'pb', playbook_role_id: 'developer',
+            permission_mode: 'bypassPermissions',
+          },
+        },
+      ],
+    },
+  });
+  const svc = makeRolesService(transport);
+  const roles = await svc.listRoles();
+  assert.equal(roles[0]?.permissionMode, 'bypassPermissions');
+});
+
+test('RolesService.listRoles: permissionMode absent when data.permission_mode not set', async () => {
+  const transport = fakeHeadTransport({}, {
+    listRows: {
+      roles: [
+        {
+          id: 'pb-developer',
+          data: {
+            name: 'developer', model_level: 'standard', runner_id: 'claude-code', surface: 'any',
+            rights: 'write-working-tree', playbook_id: 'pb', playbook_role_id: 'developer',
+          },
+        },
+      ],
+    },
+  });
+  const svc = makeRolesService(transport);
+  const roles = await svc.listRoles();
+  assert.equal(roles[0]?.permissionMode, undefined);
+});

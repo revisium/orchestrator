@@ -31,6 +31,7 @@ type SimulateRouteMcpInput = {
   pipeline?: string;
   playbookId?: string;
   params?: unknown;
+  executionProfile?: unknown;
   includeDetails?: boolean;
 };
 type ListPipelinesMcpInput = {
@@ -130,8 +131,10 @@ function compactRouteSummary(result: JsonRecord): JsonRecord | undefined {
 function compactExecutionProfile(value: unknown): JsonRecord | undefined {
   const profile = asRecord(value);
   if (!profile) return undefined;
+  const bindingOverrides = Array.isArray(profile.bindingOverrides) ? profile.bindingOverrides : [];
   return definedEntries({
     id: asString(profile.id),
+    bindingOverrideCount: bindingOverrides.length > 0 ? bindingOverrides.length : undefined,
   });
 }
 
@@ -411,6 +414,7 @@ export class McpFacadeService {
     playbookId?: string;
     pipelineId?: string;
     params?: Record<string, unknown>;
+    executionProfile?: unknown;
     issueRef?: { repo: string; number: number; url: string };
     issueAction?: 'close' | 'refs' | 'none';
     priority?: number;

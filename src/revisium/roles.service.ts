@@ -12,6 +12,8 @@ export type RoleSummary = {
   rights: string;
   playbookId: string;
   playbookRoleId: string;
+  timeoutMs?: number;
+  permissionMode?: string;
 };
 
 export type ModelProfileSummary = {
@@ -24,8 +26,10 @@ function str(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
-
-
+function toOptPosInt(value: unknown): number | undefined {
+  const n = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(n) && Number.isInteger(n) && n > 0 ? n : undefined;
+}
 
 @Injectable()
 export class RolesService {
@@ -52,6 +56,8 @@ export class RolesService {
         rights: str(data.rights),
         playbookId: str(data.playbook_id),
         playbookRoleId: str(data.playbook_role_id),
+        timeoutMs: toOptPosInt(data.timeout_ms),
+        permissionMode: str(data.permission_mode) || undefined,
       }];
     });
   }
@@ -73,7 +79,6 @@ export class RolesService {
       }];
     });
   }
-
 
   loadPipelinePolicy(): Promise<PipelinePolicy> {
     return loadPipelinePolicy(this.head);
