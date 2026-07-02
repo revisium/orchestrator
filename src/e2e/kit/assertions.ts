@@ -75,10 +75,15 @@ export async function assertUsage(
 
 /** Assert the run did not complete and emitted a `pipeline_blocked` event (preflight/integrate/etc.). */
 export async function assertBlocked(api: Api, runId: string): Promise<void> {
-  const events = await api.getRunEvents({ runId, limit: 50 });
+  const events = await api.getRunEvents({ runId, limit: 500 });
   assert.ok(events.some((e) => e.type === 'pipeline_blocked'), 'a blocked run must emit pipeline_blocked');
+  // #246: recoverable readiness/integration/merge/respond failures route to
+  // recovery → blocked, never the old failRun/failedEnd terminal. Guard against a
+  // regression where the recovery path AND the terminal-fail path both fire.
+  assert.ok(!events.some((e) => e.type === 'run_failed'), 'a recovery-blocked run must not also emit run_failed');
   const detail = await api.getRun({ runId });
   assert.notEqual(detail.run.status, 'completed', 'a blocked run must not be completed');
+  assert.notEqual(detail.run.status, 'failed', 'a recovery-blocked run must not be failed');
 }
 
 /** Assert no persisted event for the run carries the raw token (serialized scan over all events). */

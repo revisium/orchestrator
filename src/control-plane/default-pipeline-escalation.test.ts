@@ -67,7 +67,7 @@ test('#141: a merge-gate recheck is evidence-driven — re-polls fresh readiness
   const nodes = featureDevNodes();
   const mergeGate = nodes['mergeGate'];
   assert.equal(mergeGate?.kind, 'humanGate', 'mergeGate is a humanGate');
-  assert.equal(approveGoto(mergeGate), 'confirmMerge', 'approve → confirmMerge (unchanged)');
+  assert.equal(approveGoto(mergeGate), 'mergeApproveReverify', 'approve → mergeApproveReverify (post-approve readiness re-poll)');
 
   const recheckGoto = mergeGate.branches?.find(
     (b) => b.goto !== undefined && b.when !== undefined && b.goto !== approveGoto(mergeGate),
@@ -80,11 +80,24 @@ test('#141: a merge-gate recheck is evidence-driven — re-polls fresh readiness
 
   const router = nodes[recheck.next as string];
   assert.equal(router?.kind, 'choice', 'the re-poll feeds a choice router that routes on the fresh verdict');
-  // Explicit abort is statically reachable: a clean re-poll AND the catch-all default both terminate at blockedEnd.
+  // Explicit abort is statically reachable: a clean re-poll terminates at blockedEnd; unknown verdicts hit recoveryGate.
   assert.equal(gotoForVerdict(router, 'clean'), 'blockedEnd', 'clean re-poll → blockedEnd (explicit abort)');
-  assert.equal(routerDefault(router), 'blockedEnd', 'default → blockedEnd (abort reachable)');
+  assert.equal(routerDefault(router), 'recoveryGate', 'default → recoveryGate (hard recoverable)');
   // Recoverable verdicts rejoin the existing bounded loops instead of dead-ending.
   assert.equal(gotoForVerdict(router, 'review_changes'), 'triage', 'review_changes re-poll → triage (recoverable)');
   assert.equal(gotoForVerdict(router, 'ci_changes'), 'ciRework', 'ci_changes re-poll → ciRework (recoverable)');
   assert.equal(gotoForVerdict(router, 'recheck'), 'mergeReadiness', 'recheck re-poll → mergeReadiness (continue polling)');
+});
+
+test('#246: mergeApproveReverify re-polls then routes clean to confirmMerge, else to recoveryGate', () => {
+  const nodes = featureDevNodes();
+  const reverify = nodes['mergeApproveReverify'] as Node & { scriptRef?: string; next?: string };
+  assert.equal(reverify?.kind, 'script', 'mergeApproveReverify is a script node');
+  assert.equal(reverify.scriptRef, 'script:pollPr', 'mergeApproveReverify uses script:pollPr');
+  assert.equal(reverify.next, 'mergeApproveReverifyRouter', 'mergeApproveReverify feeds mergeApproveReverifyRouter');
+
+  const router = nodes['mergeApproveReverifyRouter'];
+  assert.equal(router?.kind, 'choice', 'mergeApproveReverifyRouter is a choice router');
+  assert.equal(gotoForVerdict(router, 'clean'), 'confirmMerge', 'clean → confirmMerge');
+  assert.equal(routerDefault(router), 'classifyRecovery', 'non-clean → classifyRecovery');
 });

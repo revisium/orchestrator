@@ -67,17 +67,19 @@ test('B3: plan-gate reject blocks the run (data-routed terminal); developer neve
   }
 });
 
-test('B4: merge-gate reject re-polls fresh readiness; a still-clean re-poll is an explicit abort → blocked (#141)', { skip: e2eSkip }, async () => {
-  // #141: a merge-gate reject is now EVIDENCE-DRIVEN. The reject maps (via gateVerdict's reject→last-outcome
-  // rule) to the `recheck` outcome, which routes to a dedicated `mergeRecheck` script (`script:pollPr`) that
-  // re-observes the PR; `mergeRecheckRouter` then routes on the FRESH verdict. The e2e gh emulator is
-  // deterministically clean here, so the re-poll returns `clean` → clean→blockedEnd: "nothing changed since
-  // the gate opened ⇒ the reject was a genuine abort". (review_changes→triage / ci_changes→ciRework reroutes
-  // are covered deterministically at the workflow-unit level — DD-issue-141 in data-driven-task.workflow.test.ts.)
+test('B4: merge-gate recheck re-polls fresh readiness; a still-clean re-poll is an explicit abort → blocked (#141)', { skip: e2eSkip }, async () => {
+  // #141: a merge-gate `recheck` is EVIDENCE-DRIVEN — it routes to a dedicated `mergeRecheck` script
+  // (`script:pollPr`) that re-observes the PR; `mergeRecheckRouter` then routes on the FRESH verdict. The
+  // e2e gh emulator is deterministically clean here, so the re-poll returns `clean` → clean→blockedEnd:
+  // "nothing changed since the gate opened ⇒ the recheck was a genuine abort". (review_changes→triage /
+  // ci_changes→ciRework reroutes are covered at the workflow-unit level — DD-issue-141.)
+  // #246 EXPANDED the merge gate to four named outcomes (approved/recheck/override_merge/cancel), so the
+  // legacy `rejectGate` wrapper (allowed only on ≤2-outcome gates) no longer applies — a reviewer now
+  // picks the explicit `recheck` outcome, which is exactly the evidence-driven re-poll #141 introduced.
   const target = createTargetRepo();
   try {
     const { runId, inboxId } = await givenFeatureRunAtMergeGate(h, target);
-    const res = await h.api.rejectGate({ inboxId, resolvedBy: 'e2e' });
+    const res = await h.api.resolveGate({ inboxId, outcome: 'recheck', resolvedBy: 'e2e' });
     assert.equal(res.topic, 'merge');
 
     await waitState(h.api, runId); // workflow returns after the recheck routes to the blocked terminal

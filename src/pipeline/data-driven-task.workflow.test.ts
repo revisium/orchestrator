@@ -489,7 +489,7 @@ test('DD1: happy path — analyst→plan→developer→review→integrate→poll
   assert.equal(rec.completed.length, 1, 'completeRun called once');
   assert.equal(rec.integrateCalls, 1, 'the integrator script ran once (real integrator via runner-wins)');
   assert.ok(rec.events.includes('integrate_succeeded:integrator'), 'integrate_succeeded emitted at the script node');
-  assert.equal(rec.pollPrCalls, 2, 'pollPr observed the PR, then mergeReadiness rechecked it before the merge gate');
+  assert.equal(rec.pollPrCalls, 3, 'pollPr + mergeReadiness + mergeApproveReverify re-poll fresh readiness after approval');
   const mergeSummary = rec.gateSummaries.find((summary) => summary.nodeId === 'mergeGate');
   assert.equal(mergeSummary?.gatedArtifact?.nodeId, 'mergeReadiness', 'merge gate surfaces the fresh readiness artifact');
   assert.deepEqual(
@@ -507,8 +507,8 @@ test('DD1: happy path — analyst→plan→developer→review→integrate→poll
   assert.equal(rec.confirmMergeCalls, 1, 'confirmMerge ran once at the success terminal');
   assert.deepEqual(
     rec.confirmMergeInputs[0]?.mergeReadiness,
-    { headSha: 'sha-2' },
-    'confirmMerge consumes the fresh mergeReadiness head sha for the GitHub merge guard',
+    { headSha: 'sha-3' },
+    'confirmMerge consumes the post-approval mergeApproveReverify head sha for the GitHub merge guard',
   );
   assert.equal(rec.blocked.length, 0);
   assert.equal(rec.failed.length, 0);
@@ -924,7 +924,7 @@ test('DD4: pollPr ci_changes → ciRework → re-integrate → pollPr(clean) →
   });
   const result = await run();
   assert.equal(result.status, 'succeeded');
-  assert.equal(rec.pollPrCalls, 3, 'polled for CI failure, then clean, then fresh merge readiness');
+  assert.equal(rec.pollPrCalls, 4, 'polled for CI failure, then clean, then mergeReadiness, then mergeApproveReverify re-poll');
   assert.equal(rec.integrateCalls, 2, 'integrator ran for the initial PR + the CI re-push');
   // ciRework consumed the prFeedback (0016) — its hydrated input carries the failing-check feedback.
   const ciFeedback = (rec.inputsByStep['ciRework'] as { feedback?: { verdict?: string } } | undefined)?.feedback;
@@ -1027,10 +1027,11 @@ function featureDevelopmentPrReviewWithMergeRecheck(): Template {
   const mergeGate = t.nodes['mergeGate'];
   assert.equal(mergeGate?.kind, 'humanGate', 'fixture mergeGate is a humanGate');
   if (mergeGate.kind === 'humanGate') {
-    mergeGate.outcomes = ['approved', 'recheck'];
+    mergeGate.outcomes = ['approved', 'recheck', 'cancel'];
     mergeGate.branches = [
-      on(verdictEq('approved'), 'confirmMerge'),
+      on(verdictEq('approved'), 'mergeApproveReverify'),
       on(verdictEq('recheck'), 'mergeRecheck'),
+      on(verdictEq('cancel'), 'cancelledEnd'),
       otherwise('blockedEnd'),
     ];
   }
@@ -1039,8 +1040,8 @@ function featureDevelopmentPrReviewWithMergeRecheck(): Template {
     onFailure: 'route',
     produces: { name: 'prFeedback' },
     catch: [
-      { onError: 'revo.ScriptBlocked', goto: 'blockedEnd' },
-      { onError: 'revo.ScriptFailed', goto: 'failedEnd' },
+      { onError: 'revo.ScriptBlocked', goto: 'classifyRecovery' },
+      { onError: 'revo.ScriptFailed', goto: 'classifyRecovery' },
     ],
   });
   t.nodes['mergeRecheckRouter'] = node.choice('mergeRecheckRouter', [
@@ -1048,7 +1049,7 @@ function featureDevelopmentPrReviewWithMergeRecheck(): Template {
     on(verdictEq('review_changes'), 'triage'),
     on(allOf(verdictEq('ci_changes'), counterLt('ciLoop', 3)), 'ciRework'),
     on(verdictEq('recheck'), 'mergeReadiness'),
-    otherwise('blockedEnd'),
+    otherwise('recoveryGate'),
   ]);
   // Mirror the JSON catalogs: the recovery nodes also consume the FRESH mergeRecheck feedback (optional +
   // staleOk, since mergeRecheck only runs on the reject path) so a reject-routed triage/ciRework acts on the
@@ -1073,13 +1074,13 @@ test('DD-issue-141 (abort): merge reject + a still-clean re-poll routes to block
   const { run, rec } = buildAdapter({
     template: featureDevelopmentPrReviewWithMergeRecheck(),
     verdicts: { codeReview: 'approved' },
-    gate: (topic) => (topic === 'merge' ? { decision: 'reject' } : { decision: 'approve' }),
+    gate: (topic) => (topic === 'merge' ? { outcome: 'recheck' } : { decision: 'approve' }),
     // every pollPr (pollPr, mergeReadiness, mergeRecheck) is clean — the default fake already returns clean.
   });
 
   const result = await run();
 
-  assert.equal(result.status, 'blocked', 'a still-clean re-poll on merge reject is an explicit abort → blocked');
+  assert.equal(result.status, 'blocked', 'a still-clean re-poll on merge recheck is an explicit abort → blocked');
   assert.equal(rec.completed.length, 0, 'an aborted merge does not complete the run');
   assert.equal(rec.confirmMergeCalls, 0, 'confirmMerge never ran (the reject aborted instead of merging)');
   assert.equal(rec.pollPrCalls, 3, 'pollPr → mergeReadiness → mergeRecheck (the reject re-polled fresh readiness)');
@@ -1117,7 +1118,7 @@ test('DD-issue-223: pollPr recheck verdict loops inside readiness polling', asyn
   const result = await run();
 
   assert.equal(result.status, 'succeeded');
-  assert.equal(rec.pollPrCalls, 3, 'first pollPr recheck repeats pollPr, then mergeReadiness runs');
+  assert.equal(rec.pollPrCalls, 4, 'first pollPr recheck repeats pollPr, then mergeReadiness, then mergeApproveReverify re-poll');
 });
 
 test('DD-issue-141 (reroute): merge reject + a review_changes re-poll reroutes to triage (recoverable), NOT blocked', async () => {
@@ -1132,13 +1133,13 @@ test('DD-issue-141 (reroute): merge reject + a review_changes re-poll reroutes t
     gate: (topic) => {
       if (topic !== 'merge') return { decision: 'approve' };
       mergeSeen++;
-      // reject the FIRST merge gate (drives the re-poll reroute); approve the SECOND (after recovery).
-      return mergeSeen === 1 ? { decision: 'reject' } : { decision: 'approve' };
+      // recheck the FIRST merge gate (drives the re-poll reroute); approve the SECOND (after recovery).
+      return mergeSeen === 1 ? { outcome: 'recheck' } : { decision: 'approve' };
     },
     pollPr: () => {
       polls++;
       // poll 1 = pollPr, poll 2 = mergeReadiness (both clean → reach the merge gate);
-      // poll 3 = mergeRecheck after the reject → review_changes (reroute to triage); then clean to recover.
+      // poll 3 = mergeRecheck after the recheck → review_changes (reroute to triage); then clean to recover.
       if (polls === 3) {
         return {
           prNumber: 1,
@@ -1187,7 +1188,7 @@ test('DD-issue-223: merge reject + a recheck re-poll continues readiness polling
     gate: (topic) => {
       if (topic !== 'merge') return { decision: 'approve' };
       mergeSeen++;
-      return mergeSeen === 1 ? { decision: 'reject' } : { decision: 'approve' };
+      return mergeSeen === 1 ? { outcome: 'recheck' } : { decision: 'approve' };
     },
     pollPr: () => {
       polls++;
@@ -1195,7 +1196,7 @@ test('DD-issue-223: merge reject + a recheck re-poll continues readiness polling
         return {
           prNumber: 1,
           headSha: 'recheck-pending',
-          evidence: ['merge-reject re-poll found pending readiness'],
+          evidence: ['merge-recheck re-poll found pending readiness'],
           verdict: 'recheck' as const,
           ciFailures: [],
           reviewThreads: [],
@@ -1210,7 +1211,7 @@ test('DD-issue-223: merge reject + a recheck re-poll continues readiness polling
   assert.equal(result.status, 'succeeded', 'the unsettled merge recheck loops through readiness polling, then merges');
   assert.equal(rec.blocked.length, 0, 'the recheck verdict did not terminal-block the run');
   assert.equal(rec.completed.length, 1, 'the run completes after the later merge approval');
-  assert.equal(rec.pollPrCalls, 4, 'pollPr → mergeReadiness → mergeRecheck(recheck) → mergeReadiness(clean)');
+  assert.equal(rec.pollPrCalls, 5, 'pollPr → mergeReadiness → mergeRecheck(recheck) → mergeReadiness(clean) → mergeApproveReverify');
   assert.equal(mergeSeen, 2, 'the merge gate re-opened after the extra readiness poll');
   assert.equal(rec.confirmMergeCalls, 1, 'confirmMerge only ran after the later merge approval');
 });
@@ -1425,16 +1426,16 @@ test('DD4a-issue-140: non-live produced change metadata reaches the integrator w
   assert.ok(!rec.events.includes('worktree_create:pipeline'), 'non-live routes do not create a run worktree');
 });
 
-test('DD4b: pollPr ci_changes forever → cap → blocked terminal (ciLoop is DATA)', async () => {
+test('DD4b: pollPr ci_changes forever → cap → recoveryGate → cancelled terminal (ciLoop is DATA)', async () => {
   const { run, rec } = buildAdapter({
     template: featureDevelopmentPrReview(),
     verdicts: { codeReview: 'approved' },
-    gate: () => ({ decision: 'approve' }),
+    gate: (_topic, gateKey) => gateKey.startsWith('recoveryGate') ? { outcome: 'cancel' } : { decision: 'approve' },
     pollPr: () => ({ prNumber: 1, headSha: 's', evidence: ['build failed'], verdict: 'ci_changes' as const, ciFailures: [{ name: 'build', conclusion: 'FAILURE' }], reviewThreads: [] }),
   });
   const result = await run();
-  assert.equal(result.status, 'blocked', 'the CI loop blocks at its cap, not the agent');
-  assert.equal(rec.blocked.length, 1);
+  assert.equal(result.status, 'cancelled', 'ciLoop exhaustion routes to recoveryGate; cancel outcome → cancelled terminal');
+  assert.equal(rec.cancelled.length, 1);
   assert.equal(rec.confirmMergeCalls, 0, 'never reached the merge gate');
 });
 

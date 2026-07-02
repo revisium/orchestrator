@@ -20,7 +20,8 @@ export type GhScenario =
   | 'ci-red-then-green' //  pollPr: 1st readiness has a FAILING check (ci_changes); after a dev re-push it goes green (plan 0018)
   | 'review-comment' //     pollPr: one UNRESOLVED review thread until respondThreads resolves it; CI green (plan 0018)
   | 'gh-error' //           every gh call throws (rate-limit / network family) → DBOS retries the step
-  | 'gh-token-leak'; //     throws an error embedding a gho_ token → asserts redaction in the lesson
+  | 'gh-token-leak' //      throws an error embedding a gho_ token → asserts redaction in the lesson
+  | 'always-ci-red'; //    pollPr rollup: all CI checks permanently failing → ciLoop exhaustion → recoveryGate (#246)
 
 /** Branch from a `gh pr <view|merge|ready> <branch> …` argv (integrator/confirmMerge pass it as args[2]). */
 function branchArg(args: string[]): string {
@@ -177,7 +178,7 @@ function ghBehavior(scenario: GhScenario, args: string[], st: GhState): string {
       // FAILING and flips to SUCCESS once a developer re-pushed (repushedBranches). A re-push is modelled
       // by the second `pr create` (idempotent integrator) NOT firing — so we flip on the integrator's push
       // recorded as a re-list; here we approximate: red until the branch is re-pushed at least once.
-      const ciRed = scenario === 'ci-red-then-green' && !st.repushedBranches.has(branch);
+      const ciRed = (scenario === 'ci-red-then-green' && !st.repushedBranches.has(branch)) || scenario === 'always-ci-red';
       // record that pollPr saw the branch; the NEXT integrate re-push will flip it green
       if (scenario === 'ci-red-then-green' && ciRed) st.repushedBranches.add(branch);
       const mergeConflict = scenario === 'merge-conflict';

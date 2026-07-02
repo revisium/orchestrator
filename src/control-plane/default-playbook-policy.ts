@@ -199,12 +199,26 @@ function checkPrFreshnessWiring(template: Template, sink: PolicySink): void {
     code: 'DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING',
     nodeId: 'mergeGate',
     verdict: 'approved',
+    target: 'mergeApproveReverify',
+  });
+  expectScript(template, sink, {
+    code: 'DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING',
+    nodeId: 'mergeApproveReverify',
+    scriptRef: 'script:pollPr',
+    next: 'mergeApproveReverifyRouter',
+    resultSchema: 'schema:prFeedback',
+    produces: 'prFeedback',
+  });
+  expectRoute(template, sink, {
+    code: 'DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING',
+    nodeId: 'mergeApproveReverifyRouter',
+    verdict: 'clean',
     target: 'confirmMerge',
   });
   expectConsume(template, sink, {
     code: 'DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING',
     consumerId: 'confirmMerge',
-    producerId: 'mergeReadiness',
+    producerId: 'mergeApproveReverify',
     as: 'mergeReadiness',
   });
 }
@@ -237,7 +251,7 @@ function checkMergeGateRecheckRouting(template: Template, sink: PolicySink): voi
     code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
     nodeId: 'mergeGate',
     verdict: 'override_merge',
-    target: 'confirmMerge',
+    target: 'mergeApproveReverify',
   });
   expectRoute(template, sink, {
     code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
@@ -282,7 +296,7 @@ function checkMergeGateRecheckRouting(template: Template, sink: PolicySink): voi
   expectDefaultRoute(template, sink, {
     code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
     nodeId: 'mergeRecheckRouter',
-    target: 'blockedEnd',
+    target: 'recoveryGate',
   });
   expectConsume(template, sink, {
     code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',

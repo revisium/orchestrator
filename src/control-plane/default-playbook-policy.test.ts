@@ -200,7 +200,7 @@ test('default playbook policy: merge-gate return_to_development must route to tr
   assert.match(diagnostic.expected ?? '', /return_to_development -> triage/);
 });
 
-test('default playbook policy: merge-gate override_merge must route to confirmMerge', () => {
+test('default playbook policy: merge-gate override_merge must route to mergeApproveReverify', () => {
   const diagnostic = assertDiagnostic(
     mutateTemplate((template) => {
       guardedBranchContaining(template, 'mergeGate', 'override_merge').goto = 'blockedEnd';
@@ -209,7 +209,56 @@ test('default playbook policy: merge-gate override_merge must route to confirmMe
   );
 
   assert.equal(diagnostic.nodeId, 'mergeGate');
-  assert.match(diagnostic.expected ?? '', /override_merge -> confirmMerge/);
+  assert.match(diagnostic.expected ?? '', /override_merge -> mergeApproveReverify/);
+});
+
+test('default playbook policy: merge-gate approved must route through reverify before confirmMerge', () => {
+  const diagnostic = assertDiagnostic(
+    mutateTemplate((template) => {
+      guardedBranchContaining(template, 'mergeGate', 'approved').goto = 'confirmMerge';
+    }),
+    'DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING',
+  );
+
+  assert.equal(diagnostic.nodeId, 'mergeGate');
+  assert.match(diagnostic.expected ?? '', /approved -> mergeApproveReverify/);
+});
+
+test('default playbook policy: mergeApproveReverify must be a pollPr script node', () => {
+  const diagnostic = assertDiagnostic(
+    mutateTemplate((template) => {
+      template.nodes['mergeApproveReverify']['scriptRef'] = 'script:confirmMerge';
+    }),
+    'DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING',
+  );
+
+  assert.equal(diagnostic.nodeId, 'mergeApproveReverify');
+  assert.match(diagnostic.expected ?? '', /script:pollPr/);
+});
+
+test('default playbook policy: mergeApproveReverifyRouter clean must go to confirmMerge', () => {
+  const diagnostic = assertDiagnostic(
+    mutateTemplate((template) => {
+      guardedBranchContaining(template, 'mergeApproveReverifyRouter', 'clean').goto = 'blockedEnd';
+    }),
+    'DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING',
+  );
+
+  assert.equal(diagnostic.nodeId, 'mergeApproveReverifyRouter');
+  assert.match(diagnostic.expected ?? '', /clean -> confirmMerge/);
+});
+
+test('default playbook policy: confirmMerge must consume fresh mergeApproveReverify evidence', () => {
+  const diagnostic = assertDiagnostic(
+    mutateTemplate((template) => {
+      const confirmMerge = template.nodes['confirmMerge'];
+      confirmMerge['consumes'] = [{ node: 'mergeReadiness', as: 'mergeReadiness' }];
+    }),
+    'DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING',
+  );
+
+  assert.equal(diagnostic.nodeId, 'confirmMerge');
+  assert.match(diagnostic.expected ?? '', /node=mergeApproveReverify/);
 });
 
 test('default playbook policy: merge-gate reject must re-poll PR feedback', () => {
@@ -279,9 +328,9 @@ test('default playbook policy: merge recheck clean/default abort path is diagnos
   assert.ok(
     diagnostics.some((diagnostic) =>
       diagnostic.nodeId === 'mergeRecheckRouter' &&
-      /default -> blockedEnd/.test(diagnostic.expected ?? ''),
+      /default -> recoveryGate/.test(diagnostic.expected ?? ''),
     ),
-    'default recheck result must remain an explicit abort',
+    'default recheck result must route to recoveryGate',
   );
 });
 

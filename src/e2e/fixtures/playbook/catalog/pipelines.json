@@ -392,7 +392,9 @@
             "fix",
             "wontfix",
             "question",
-            "recheck"
+            "recheck",
+            "cancel",
+            "override_merge"
           ]
         },
         "nodes": {
@@ -531,11 +533,11 @@
             "catch": [
               {
                 "onError": "revo.ScriptBlocked",
-                "goto": "blockedEnd"
+                "goto": "classifyRecovery"
               },
               {
                 "onError": "revo.ScriptFailed",
-                "goto": "failedEnd"
+                "goto": "classifyRecovery"
               }
             ],
             "onFailure": "route",
@@ -565,7 +567,9 @@
             "reason": "merge-review",
             "outcomes": [
               "approved",
-              "recheck"
+              "recheck",
+              "override_merge",
+              "cancel"
             ],
             "branches": [
               {
@@ -573,7 +577,7 @@
                   "op": "verdict.eq",
                   "value": "approved"
                 },
-                "goto": "confirmMerge"
+                "goto": "mergeApproveReverify"
               },
               {
                 "when": {
@@ -581,6 +585,20 @@
                   "value": "recheck"
                 },
                 "goto": "mergeRecheck"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "override_merge"
+                },
+                "goto": "mergeApproveReverify"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "cancel"
+                },
+                "goto": "cancelledEnd"
               },
               {
                 "default": "blockedEnd"
@@ -604,11 +622,11 @@
             "catch": [
               {
                 "onError": "revo.ScriptBlocked",
-                "goto": "blockedEnd"
+                "goto": "classifyRecovery"
               },
               {
                 "onError": "revo.ScriptFailed",
-                "goto": "failedEnd"
+                "goto": "classifyRecovery"
               }
             ]
           },
@@ -655,7 +673,7 @@
                 "goto": "mergeReadiness"
               },
               {
-                "default": "blockedEnd"
+                "default": "recoveryGate"
               }
             ]
           },
@@ -663,11 +681,6 @@
             "id": "mergedEnd",
             "kind": "terminal",
             "status": "succeeded"
-          },
-          "failedEnd": {
-            "id": "failedEnd",
-            "kind": "terminal",
-            "status": "failed"
           },
           "blockedEnd": {
             "id": "blockedEnd",
@@ -682,18 +695,18 @@
             "catch": [
               {
                 "onError": "revo.ScriptBlocked",
-                "goto": "blockedEnd"
+                "goto": "classifyRecovery"
               },
               {
                 "onError": "revo.ScriptFailed",
-                "goto": "failedEnd"
+                "goto": "classifyRecovery"
               }
             ],
             "onFailure": "route",
             "resultSchema": "schema:integration",
             "consumes": [
               {
-                "node": "mergeReadiness",
+                "node": "mergeApproveReverify",
                 "as": "mergeReadiness"
               }
             ]
@@ -718,11 +731,11 @@
             "catch": [
               {
                 "onError": "revo.ScriptBlocked",
-                "goto": "blockedEnd"
+                "goto": "classifyRecovery"
               },
               {
                 "onError": "revo.ScriptFailed",
-                "goto": "failedEnd"
+                "goto": "classifyRecovery"
               }
             ]
           },
@@ -769,7 +782,7 @@
                 "goto": "ciRework"
               },
               {
-                "default": "blockedEnd"
+                "default": "recoveryGate"
               }
             ]
           },
@@ -786,11 +799,11 @@
             "catch": [
               {
                 "onError": "revo.ScriptBlocked",
-                "goto": "blockedEnd"
+                "goto": "classifyRecovery"
               },
               {
                 "onError": "revo.ScriptFailed",
-                "goto": "failedEnd"
+                "goto": "classifyRecovery"
               }
             ]
           },
@@ -837,7 +850,7 @@
                 "goto": "ciRework"
               },
               {
-                "default": "blockedEnd"
+                "default": "recoveryGate"
               }
             ]
           },
@@ -953,7 +966,7 @@
                 "goto": "respondThreads"
               },
               {
-                "default": "blockedEnd"
+                "default": "recoveryGate"
               }
             ]
           },
@@ -1021,11 +1034,11 @@
             "catch": [
               {
                 "onError": "revo.ScriptBlocked",
-                "goto": "blockedEnd"
+                "goto": "classifyRecovery"
               },
               {
                 "onError": "revo.ScriptFailed",
-                "goto": "failedEnd"
+                "goto": "classifyRecovery"
               }
             ]
           },
@@ -1045,13 +1058,160 @@
             "catch": [
               {
                 "onError": "revo.ScriptBlocked",
-                "goto": "blockedEnd"
+                "goto": "classifyRecovery"
               },
               {
                 "onError": "revo.ScriptFailed",
-                "goto": "failedEnd"
+                "goto": "classifyRecovery"
               }
             ]
+          },
+          "cancelledEnd": {
+            "id": "cancelledEnd",
+            "kind": "terminal",
+            "status": "cancelled"
+          },
+          "mergeApproveReverify": {
+            "id": "mergeApproveReverify",
+            "kind": "script",
+            "scriptRef": "script:pollPr",
+            "next": "mergeApproveReverifyRouter",
+            "onFailure": "route",
+            "resultSchema": "schema:prFeedback",
+            "produces": {
+              "name": "prFeedback"
+            },
+            "catch": [
+              {
+                "onError": "revo.ScriptBlocked",
+                "goto": "classifyRecovery"
+              },
+              {
+                "onError": "revo.ScriptFailed",
+                "goto": "classifyRecovery"
+              }
+            ]
+          },
+          "mergeApproveReverifyRouter": {
+            "id": "mergeApproveReverifyRouter",
+            "kind": "choice",
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "clean"
+                },
+                "goto": "confirmMerge"
+              },
+              {
+                "default": "classifyRecovery"
+              }
+            ]
+          },
+          "classifyRecovery": {
+            "id": "classifyRecovery",
+            "kind": "agent",
+            "roleRef": "role:triager",
+            "next": "recoveryRouter",
+            "onFailure": "abort",
+            "resultSchema": "schema:triage",
+            "produces": {
+              "name": "recoveryTriage"
+            },
+            "incrementCounters": [
+              "recoveryLoop"
+            ],
+            "consumes": [
+              {
+                "node": "analyst",
+                "as": "plan",
+                "optional": true,
+                "staleOk": true
+              },
+              {
+                "node": "pollPr",
+                "as": "feedback",
+                "optional": true,
+                "staleOk": true
+              },
+              {
+                "node": "mergeReadiness",
+                "as": "mergeFeedback",
+                "optional": true,
+                "staleOk": true
+              },
+              {
+                "node": "mergeApproveReverify",
+                "as": "approveFeedback",
+                "optional": true,
+                "staleOk": true
+              },
+              {
+                "node": "mergeRecheck",
+                "as": "recheckFeedback",
+                "optional": true,
+                "staleOk": true
+              }
+            ]
+          },
+          "recoveryRouter": {
+            "id": "recoveryRouter",
+            "kind": "choice",
+            "branches": [
+              {
+                "when": {
+                  "op": "all",
+                  "of": [
+                    {
+                      "op": "verdict.eq",
+                      "value": "fix"
+                    },
+                    {
+                      "op": "counter.lt",
+                      "scope": "recoveryLoop",
+                      "value": 3
+                    }
+                  ]
+                },
+                "goto": "pollPr"
+              },
+              {
+                "default": "recoveryGate"
+              }
+            ]
+          },
+          "recoveryGate": {
+            "id": "recoveryGate",
+            "kind": "humanGate",
+            "reason": "merge-recovery",
+            "outcomes": [
+              "recheck",
+              "cancel",
+              "approved"
+            ],
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "recheck"
+                },
+                "goto": "pollPr"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "cancel"
+                },
+                "goto": "cancelledEnd"
+              },
+              {
+                "default": "blockedEnd"
+              }
+            ],
+            "gatedArtifact": {
+              "node": "pollPr",
+              "as": "prFeedback"
+            }
           }
         },
         "title": "Feature development — plan + merge gates, bounded code-review rework, and a PR review-feedback loop (plan 0018)",
@@ -1078,6 +1238,10 @@
             "parent": null
           },
           "questionLoop": {
+            "cap": 3,
+            "parent": null
+          },
+          "recoveryLoop": {
             "cap": 3,
             "parent": null
           }
