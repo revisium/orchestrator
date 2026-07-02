@@ -38,23 +38,13 @@ export type DefaultPlaybookPolicyDiagnostic = {
 type EffectNode = Extract<Node, { kind: 'agent' | 'script' }>;
 type RoutingNode = Extract<Node, { kind: 'choice' | 'humanGate' }>;
 
+export const POLICY_VERSION = '1';
+
 const SUPPORTED_PIPELINE_IDS = ['feature-development', 'feature-development-codex-consensus'] as const;
 
-// #242 debt snapshot — codes the reconciled rule set emits on feature-development-codex-consensus today.
-// When #242 reconciles the codex graph this set empties and VARIANT_PARITY_DRIFT fires, prompting removal.
-// To update: run validateDefaultPlaybookPolicy(codexTemplate), capture the unique code set, replace below.
-const CODEX_LEGACY_WAIVERS: readonly DefaultPlaybookPolicyDiagnosticCode[] = [
-  'DEFAULT_POLICY_APPROVE_REVERIFY_MISSING',
-  'DEFAULT_POLICY_CAP_EXHAUSTION_OFFRAMP_MISSING',
-  'DEFAULT_POLICY_CHANGE_HANDOFF_MISSING',
-  'DEFAULT_POLICY_CONFIRM_MERGE_FAILURE_TERMINAL',
-  'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
-  'DEFAULT_POLICY_MERGE_READINESS_FRESHNESS_MISSING',
-  'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
-  'DEFAULT_POLICY_POST_MERGE_CLEANUP_MISSING',
-  'DEFAULT_POLICY_RECOVERABLE_CATCH_TERMINAL',
-  'DEFAULT_POLICY_REVIEW_CHANGES_ROUTE_MISSING',
-] as const;
+// #242 reconciled: codex variant now matches canonical shape exactly (fanout/join delta only).
+// Empty by design — validateVariantParity on the materialized codex graph must return [].
+const CODEX_LEGACY_WAIVERS: readonly DefaultPlaybookPolicyDiagnosticCode[] = [] as const;
 
 class PolicySink {
   readonly diagnostics: DefaultPlaybookPolicyDiagnostic[] = [];
@@ -172,20 +162,40 @@ function checkProducedChangeHandoff(template: Template, sink: PolicySink): void 
     expectChangeProducer(template, sink, nodeId);
   }
 
-  expectConsume(template, sink, {
-    code: 'DEFAULT_POLICY_CHANGE_HANDOFF_MISSING',
-    consumerId: 'codeReview',
-    producerId: 'developer',
-    as: 'developerChange',
-    staleOk: true,
-  });
-  expectConsume(template, sink, {
-    code: 'DEFAULT_POLICY_CHANGE_HANDOFF_MISSING',
-    consumerId: 'codeReview',
-    producerId: 'reworkDeveloper',
-    as: 'reworkChange',
-    optional: true,
-  });
+  if (template.nodes['codeReviewFanout']) {
+    for (const branchId of ['codeReviewPrimary', 'codeReviewSecondary']) {
+      expectConsume(template, sink, {
+        code: 'DEFAULT_POLICY_CHANGE_HANDOFF_MISSING',
+        consumerId: branchId,
+        producerId: 'developer',
+        as: 'developerChange',
+        staleOk: true,
+      });
+      expectConsume(template, sink, {
+        code: 'DEFAULT_POLICY_CHANGE_HANDOFF_MISSING',
+        consumerId: branchId,
+        producerId: 'reworkDeveloper',
+        as: 'reworkChange',
+        optional: true,
+      });
+    }
+  } else {
+    expectConsume(template, sink, {
+      code: 'DEFAULT_POLICY_CHANGE_HANDOFF_MISSING',
+      consumerId: 'codeReview',
+      producerId: 'developer',
+      as: 'developerChange',
+      staleOk: true,
+    });
+    expectConsume(template, sink, {
+      code: 'DEFAULT_POLICY_CHANGE_HANDOFF_MISSING',
+      consumerId: 'codeReview',
+      producerId: 'reworkDeveloper',
+      as: 'reworkChange',
+      optional: true,
+    });
+  }
+
   expectConsume(template, sink, {
     code: 'DEFAULT_POLICY_CHANGE_HANDOFF_MISSING',
     consumerId: 'integrator',

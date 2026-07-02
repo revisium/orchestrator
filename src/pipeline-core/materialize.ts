@@ -272,6 +272,12 @@ function stableStringify(value: unknown): string {
   return JSON.stringify(value);
 }
 
+export const MATERIALIZER_VERSION = '1';
+
 export function hashTemplate(template: Template): string {
   return createHash('sha256').update(stableStringify(template)).digest('hex');
+}
+
+export function hashProfile(profile: TopologyProfile): string {
+  return createHash('sha256').update(stableStringify(profile as unknown)).digest('hex');
 }
