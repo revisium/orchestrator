@@ -27,6 +27,9 @@ export class CreateRunInput {
   @Field(() => String, { nullable: true })
   pipelineId?: string;
 
+  @Field(() => String, { nullable: true })
+  profileId?: string;
+
   @Field(() => GraphQLJSON, { nullable: true })
   params?: unknown;
 

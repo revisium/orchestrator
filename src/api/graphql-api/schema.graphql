@@ -138,6 +138,7 @@ input CreateRunInput {
   pipelineId: String
   playbookId: String
   priority: Int
+  profileId: String
   repo: String!
   scope: String
   start: Boolean! = false
@@ -797,6 +798,7 @@ input SimulateRouteInput {
   params: JSON
   pipeline: String
   playbookId: String
+  profileId: String
   repo: String
   title: String!
 }

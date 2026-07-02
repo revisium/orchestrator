@@ -53,6 +53,14 @@ export type RouteDecision = {
   executionProfile: ExecutionProfile;
   roleBindings: RouteRoleBinding[];
   params: Record<string, unknown>;
+  requestedPipelineId?: string;
+  basePipelineId?: string;
+  profileId?: string;
+  profileVersion?: string;
+  profileHash?: string;
+  materializedTemplateHash?: string;
+  materializerVersion?: string;
+  policyVersion?: string;
 };
 
 export const RUNNER_PERMISSION_MODES: Record<string, string[]> = {

@@ -16,6 +16,12 @@ import type { RolesService } from '../revisium/roles.service.js';
 import type { RunService } from '../revisium/run.service.js';
 import { CreateRunWorkflowError, previewCreateRunIds } from '../run/create-run.js';
 import { TaskControlPlaneApiService } from './task-control-plane-api.service.js';
+import {
+  CODEX_CONSENSUS_PROFILE,
+  CODEX_CONSENSUS_PROFILE_VERSION,
+} from '../control-plane/topology-profiles.js';
+import { hashProfile, MATERIALIZER_VERSION } from '../pipeline-core/materialize.js';
+import { POLICY_VERSION } from '../control-plane/default-playbook-policy.js';
 
 /**
  * A minimal VALID data-driven template (one developer agent → success terminal). The cutover (plan
@@ -3799,4 +3805,216 @@ test('simulateRoute forwards executionProfile', async () => {
   });
   assert.equal(result.executionProfile.id, 'test-profile');
   assert.equal(result.executionProfile.bindingOverrides?.length, 1);
+});
+
+// ─── codex-consensus alias resolution + provenance ───────────────────────────
+
+const FEATURE_DEV_TEMPLATE = {
+  specVersion: '1.0',
+  pipelineId: 'feature-development',
+  entry: 'analyst',
+  verdicts: { domain: ['approved'] },
+  nodes: {
+    analyst: { id: 'analyst', kind: 'agent', roleRef: 'role:analyst', next: 'planReviewer', resultSchema: 'schema:plan', produces: { name: 'plan' } },
+    planReviewer: { id: 'planReviewer', kind: 'agent', roleRef: 'role:reviewer', next: 'developer', resultSchema: 'schema:review', produces: { name: 'planReview' } },
+    developer: { id: 'developer', kind: 'agent', roleRef: 'role:developer', next: 'codeReview', resultSchema: 'schema:change', produces: { name: 'change' }, consumes: [] },
+    codeReview: { id: 'codeReview', kind: 'agent', roleRef: 'role:reviewer', next: 'doneEnd', resultSchema: 'schema:review', produces: { name: 'review' }, consumes: [{ node: 'developer', as: 'developerChange', staleOk: true }] },
+    doneEnd: { id: 'doneEnd', kind: 'terminal', status: 'succeeded' },
+  },
+};
+const FEATURE_DEV_POLICY = { template_json: FEATURE_DEV_TEMPLATE };
+
+const CANONICAL_ROLES = [
+  { id: 'pb-orchestrator', name: 'orchestrator', modelLevel: 'deep', runner: 'claude-code', surface: 'any', rights: 'write-working-tree', playbookId: 'pb', playbookRoleId: 'orchestrator' },
+  { id: 'pb-analyst', name: 'analyst', modelLevel: 'deep', runner: 'claude-code', surface: 'any', rights: 'write-working-tree', playbookId: 'pb', playbookRoleId: 'analyst' },
+  { id: 'pb-reviewer', name: 'reviewer', modelLevel: 'deep', runner: 'claude-code', surface: 'any', rights: 'read-only', playbookId: 'pb', playbookRoleId: 'reviewer' },
+  { id: 'pb-triager', name: 'triager', modelLevel: 'deep', runner: 'claude-code', surface: 'any', rights: 'write-working-tree', playbookId: 'pb', playbookRoleId: 'triager' },
+  { id: 'pb-developer', name: 'developer', modelLevel: 'standard', runner: 'claude-code', surface: 'any', rights: 'write-working-tree', playbookId: 'pb', playbookRoleId: 'developer' },
+  { id: 'pb-integrator', name: 'integrator', modelLevel: 'standard', runner: 'revo-integrator', surface: 'any', rights: 'write-working-tree', playbookId: 'pb', playbookRoleId: 'integrator' },
+  { id: 'pb-watcher', name: 'watcher', modelLevel: 'cheap', runner: 'claude-code', surface: 'any', rights: 'read-only', playbookId: 'pb', playbookRoleId: 'watcher' },
+];
+
+function makeApiForCodexAliasTests() {
+  return makeApi({
+    rolesService: {
+      async listRoles() { return CANONICAL_ROLES as never; },
+      async loadModelProfile(level: string) {
+        return { level: level as never, provider: 'anthropic', modelId: 'x', params: {}, costPerInput: 0, costPerOutput: 0 };
+      },
+    },
+    playbooksService: {
+      async resolvePlaybook() {
+        return { id: 'pb', name: 'PB', packageName: '@x/pb', version: '1.0.0', source: 'local:/pb', schemaVersion: 2 };
+      },
+      async listPipelines() {
+        return [
+          {
+            id: 'pb-feature-development',
+            playbookId: 'pb',
+            pipelineId: 'feature-development',
+            path: 'pipelines/feature-development/PIPELINE.md',
+            triggers: ['feature development task'],
+            requiredRoles: ['orchestrator', 'analyst', 'reviewer', 'triager', 'developer', 'integrator', 'watcher'],
+            alternativeRoles: [],
+            optionalRoles: [],
+            routeGates: ['task spec approval', 'merge approval'],
+            executionPolicy: FEATURE_DEV_POLICY,
+          },
+          {
+            id: 'pb-feature-development-codex-consensus',
+            playbookId: 'pb',
+            pipelineId: 'feature-development-codex-consensus',
+            path: 'pipelines/feature-development-codex-consensus/PIPELINE.md',
+            triggers: ['codex feature', 'codex consensus feature', 'codex task-to-PR work'],
+            requiredRoles: ['orchestrator-codex', 'analyst-codex', 'reviewer-codex', 'triager-codex', 'developer-codex', 'integrator', 'watcher-codex'],
+            alternativeRoles: [],
+            optionalRoles: [],
+            routeGates: ['task spec approval', 'merge approval'],
+            executionPolicy: {},
+          },
+        ] as never;
+      },
+      async resolvePipeline({ pipelineId }: { playbookId: string; pipelineId: string }) {
+        if (pipelineId === 'feature-development') {
+          return {
+            id: 'pb-feature-development',
+            playbookId: 'pb',
+            pipelineId: 'feature-development',
+            path: 'pipelines/feature-development/PIPELINE.md',
+            triggers: ['feature development task'],
+            requiredRoles: ['orchestrator', 'analyst', 'reviewer', 'triager', 'developer', 'integrator', 'watcher'],
+            alternativeRoles: [],
+            optionalRoles: [],
+            routeGates: ['task spec approval', 'merge approval'],
+            executionPolicy: FEATURE_DEV_POLICY,
+          } as never;
+        }
+        if (pipelineId === 'feature-development-codex-consensus') {
+          return {
+            id: 'pb-feature-development-codex-consensus',
+            playbookId: 'pb',
+            pipelineId: 'feature-development-codex-consensus',
+            path: 'pipelines/feature-development-codex-consensus/PIPELINE.md',
+            triggers: ['codex feature', 'codex consensus feature', 'codex task-to-PR work'],
+            requiredRoles: ['orchestrator-codex', 'analyst-codex', 'reviewer-codex', 'triager-codex', 'developer-codex', 'integrator', 'watcher-codex'],
+            alternativeRoles: [],
+            optionalRoles: [],
+            routeGates: ['task spec approval', 'merge approval'],
+            executionPolicy: {},
+          } as never;
+        }
+        throw new Error(`unexpected pipelineId: ${pipelineId}`);
+      },
+      async getPipeline() { return null; },
+    },
+  });
+}
+
+function assertCodexProvenanceFields(route: RouteDecision): void {
+  assert.equal(route.requestedPipelineId, 'feature-development-codex-consensus', 'requestedPipelineId must be alias id');
+  assert.equal(route.basePipelineId, 'feature-development', 'basePipelineId must be base id');
+  assert.equal(route.profileId, 'codex-consensus', 'profileId must be codex-consensus');
+  assert.equal(route.profileVersion, CODEX_CONSENSUS_PROFILE_VERSION, 'profileVersion must match constant');
+  assert.equal(route.profileHash, hashProfile(CODEX_CONSENSUS_PROFILE), 'profileHash must match hashProfile');
+  assert.equal(route.materializerVersion, MATERIALIZER_VERSION, 'materializerVersion must match constant');
+  assert.equal(route.policyVersion, POLICY_VERSION, 'policyVersion must match constant');
+  assert.ok(typeof route.materializedTemplateHash === 'string' && route.materializedTemplateHash.length === 64, 'materializedTemplateHash must be a SHA-256 hex string');
+  assert.equal(route.pipelineId, 'feature-development-codex-consensus', 'public pipelineId is the alias id');
+  assert.equal(route.pipelineRowId, 'pb-feature-development', 'pipelineRowId points to BASE pipeline row');
+}
+
+test('resolveRouteDecision: explicit codex-consensus alias → materialized template + full provenance', async () => {
+  const api = makeApiForCodexAliasTests();
+  const route = await api.simulateRoute({
+    title: 'test',
+    pipeline: 'feature-development-codex-consensus',
+  });
+  assertCodexProvenanceFields(route);
+
+  const template = (route.executionPolicy as { template_json?: { pipelineId?: string; nodes?: Record<string, unknown> } }).template_json;
+  assert.equal(template?.pipelineId, 'feature-development', 'materialized template pipelineId matches base');
+  assert.ok('planReviewFanout' in (template?.nodes ?? {}), 'materialized template has planReviewFanout');
+  assert.ok('codeReviewFanout' in (template?.nodes ?? {}), 'materialized template has codeReviewFanout');
+});
+
+test('resolveRouteDecision: auto-routed codex title → materialized template + full provenance (MUST-FIX)', async () => {
+  const api = makeApiForCodexAliasTests();
+  const route = await api.simulateRoute({
+    title: 'codex task-to-PR work feature implementation',
+  });
+  assertCodexProvenanceFields(route);
+
+  const template = (route.executionPolicy as { template_json?: { nodes?: Record<string, unknown> } }).template_json;
+  assert.ok('planReviewFanout' in (template?.nodes ?? {}), 'auto-routed: materialized template has planReviewFanout');
+  assert.ok('codeReviewFanout' in (template?.nodes ?? {}), 'auto-routed: materialized template has codeReviewFanout');
+});
+
+test('resolveRouteDecision: codex-consensus runner bindings — 6 canonical roles → codex, integrator stays revo-integrator', async () => {
+  const api = makeApiForCodexAliasTests();
+  const route = await api.simulateRoute({
+    title: 'test',
+    pipeline: 'feature-development-codex-consensus',
+  });
+
+  const byRole = new Map(route.roleBindings.map((b) => [b.roleId, b]));
+
+  for (const roleId of ['orchestrator', 'analyst', 'reviewer', 'triager', 'developer', 'watcher']) {
+    const binding = byRole.get(roleId);
+    assert.ok(binding, `${roleId} must have a binding`);
+    assert.equal(binding.resolvedRunnerId, 'codex', `${roleId} resolves to codex runner`);
+    assert.equal(binding.runnerSource, 'execution-profile', `${roleId} runnerSource is execution-profile`);
+  }
+
+  const codexModelExpectations: Record<string, string> = {
+    orchestrator: 'codex-deep',
+    analyst: 'codex-deep',
+    reviewer: 'codex-deep',
+    triager: 'codex-deep',
+    developer: 'codex-standard',
+    watcher: 'codex-cheap',
+  };
+  for (const [roleId, expectedLevel] of Object.entries(codexModelExpectations)) {
+    const binding = byRole.get(roleId);
+    assert.equal(binding?.resolvedModelLevel, expectedLevel, `${roleId} resolvedModelLevel must be ${expectedLevel}`);
+    assert.equal(binding?.modelSource, 'execution-profile', `${roleId} modelSource is execution-profile`);
+  }
+
+  const integrator = byRole.get('integrator');
+  assert.ok(integrator, 'integrator must have a binding');
+  assert.equal(integrator.resolvedRunnerId, 'revo-integrator', 'integrator stays on revo-integrator');
+  assert.equal(integrator.runnerSource, 'playbook', 'integrator runnerSource is playbook');
+  assert.equal(integrator.resolvedModelLevel, 'standard', 'integrator model stays standard');
+  assert.equal(integrator.modelSource, 'playbook', 'integrator modelSource is playbook');
+});
+
+test('resolveRouteDecision: caller runnerOverrides win over derived (claude-code→stub-agent bypasses codex remap)', async () => {
+  const api = makeApiForCodexAliasTests();
+  const route = await api.simulateRoute({
+    title: 'test',
+    pipeline: 'feature-development-codex-consensus',
+    executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent' } },
+  });
+
+  const byRole = new Map(route.roleBindings.map((b) => [b.roleId, b]));
+  const developer = byRole.get('developer');
+  assert.equal(developer?.resolvedRunnerId, 'stub-agent', 'caller override wins: claude-code→stub-agent overrides derived claude-code→codex');
+});
+
+test('resolveRouteDecision: base pipeline direct + profileId=codex-consensus (rule 2) yields same result as alias', async () => {
+  const api = makeApiForCodexAliasTests();
+  const viaAlias = await api.simulateRoute({ title: 'test', pipeline: 'feature-development-codex-consensus' });
+  const viaDirect = await api.simulateRoute({ title: 'test', pipeline: 'feature-development', profileId: 'codex-consensus' });
+
+  assert.equal(viaDirect.requestedPipelineId, 'feature-development', 'direct requestedPipelineId is base');
+  assert.equal(viaDirect.basePipelineId, 'feature-development');
+  assert.equal(viaDirect.profileId, 'codex-consensus');
+  assert.equal(viaDirect.materializedTemplateHash, viaAlias.materializedTemplateHash, 'same materialized hash via both paths');
+});
+
+test('resolveRouteDecision: alias + conflicting explicit profileId throws VALIDATION_FAILURE', async () => {
+  const api = makeApiForCodexAliasTests();
+  await assert.rejects(
+    () => api.simulateRoute({ title: 'test', pipeline: 'feature-development-codex-consensus', profileId: 'other-profile' }),
+    (err: ControlPlaneError) => err.code === 'VALIDATION_FAILURE' && err.message.includes('conflicts'),
+  );
 });
