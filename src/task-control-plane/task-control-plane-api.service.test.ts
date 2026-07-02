@@ -4018,3 +4018,83 @@ test('resolveRouteDecision: alias + conflicting explicit profileId throws VALIDA
     (err: ControlPlaneError) => err.code === 'VALIDATION_FAILURE' && err.message.includes('conflicts'),
   );
 });
+
+// ─── pinned-replay: old codex-consensus run uses cached route_decision, never re-resolves ───────
+
+const OLD_CODEX_CONSENSUS_TEMPLATE = {
+  specVersion: '1.0',
+  pipelineId: 'feature-development-codex-consensus',
+  entry: 'analyst',
+  verdicts: { domain: ['approved'] },
+  nodes: {
+    analyst: { id: 'analyst', kind: 'agent', roleRef: 'role:analyst-codex', next: 'doneEnd', onFailure: 'abort' },
+    doneEnd: { id: 'doneEnd', kind: 'terminal', status: 'succeeded' },
+  },
+};
+
+const OLD_CODEX_CONSENSUS_ROUTE: RouteDecision = {
+  playbookId: 'revisium-default',
+  pipelineId: 'feature-development-codex-consensus',
+  pipelineRowId: 'revisium-default-feature-development-codex-consensus',
+  source: 'explicit',
+  roles: ['analyst-codex', 'developer-codex', 'integrator'],
+  requiredRoles: ['analyst-codex', 'developer-codex', 'integrator'],
+  optionalRoles: [],
+  routeGates: ['plan', 'merge'],
+  executionPolicy: { template_json: OLD_CODEX_CONSENSUS_TEMPLATE },
+  executionProfile: { id: 'default', runnerOverrides: {} },
+  roleBindings: [
+    { roleId: 'analyst-codex', rowId: 'rd-analyst-codex', modelLevel: 'codex-deep', runnerId: 'codex', resolvedRunnerId: 'codex', runnerSource: 'playbook' },
+    { roleId: 'developer-codex', rowId: 'rd-developer-codex', modelLevel: 'codex-standard', runnerId: 'codex', resolvedRunnerId: 'codex', runnerSource: 'playbook' },
+    { roleId: 'integrator', rowId: 'rd-integrator', modelLevel: 'standard', runnerId: 'revo-integrator', resolvedRunnerId: 'revo-integrator', runnerSource: 'playbook' },
+  ],
+  params: {},
+};
+
+test('startRun: old codex-consensus run with cached route_decision replays PINNED template, never re-resolves', async () => {
+  let resolvePipelineCalled = false;
+  let capturedOpts: { route: RouteDecision; template: unknown } | undefined;
+
+  const api = makeApi({
+    runService: {
+      async getRun() {
+        return {
+          rowId: 'old-codex-run',
+          data: {
+            id: 'old-codex-run',
+            title: 'old codex run',
+            status: 'ready',
+            route_decision: OLD_CODEX_CONSENSUS_ROUTE,
+          },
+        };
+      },
+    },
+    playbooksService: {
+      async resolvePipeline() {
+        resolvePipelineCalled = true;
+        throw new Error('resolvePipeline must not be called when route_decision is cached');
+      },
+    },
+    pipelineService: {
+      async startDataDrivenTask(_runId, opts) {
+        capturedOpts = opts as { route: RouteDecision; template: unknown };
+        return { workflowID: 'old-codex-run' } as Awaited<ReturnType<PipelineService['startDataDrivenTask']>>;
+      },
+    },
+  });
+
+  const result = await api.startRun({ runId: 'old-codex-run' }) as Record<string, unknown>;
+
+  assert.equal(resolvePipelineCalled, false, 'resolvePipeline must not be called for cached route_decision (no re-materialization)');
+  assert.ok(capturedOpts, 'startDataDrivenTask must be called with opts');
+
+  const route = capturedOpts.route as RouteDecision;
+  assert.equal(route.pipelineId, 'feature-development-codex-consensus', 'pinned pipelineId is the old alias id');
+  assert.equal(route.pipelineRowId, 'revisium-default-feature-development-codex-consensus', 'pinned pipelineRowId is the old codex-consensus row');
+  assert.deepEqual(
+    (route.executionPolicy as { template_json?: unknown }).template_json,
+    OLD_CODEX_CONSENSUS_TEMPLATE,
+    'pinned template_json is the OLD hand-authored graph, not a re-materialized one',
+  );
+  assert.equal(result.engine, 'data-driven');
+});
