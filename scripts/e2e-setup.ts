@@ -6,52 +6,30 @@
 //
 // Isolation: `test:e2e` sets REVO_DATA_DIR / REVO_PORT / REVO_PG_PORT / REVO_DBOS_DB so this whole
 // chain (daemon spawn, bootstrap, DBOS) targets a throwaway home, never the dev dogfooding daemon.
-// Run-events accumulate in the never-committed draft; past some size a filtered+ordered event query
-// starts dropping the newest row (see memory: stale-draft). To keep the reused test home healthy we
-// reset it once the run count crosses a threshold — fast reuse most runs, an occasional clean slate.
+//
+// The test home is RESET (daemon stopped, data dir wiped, fresh spawn) on EVERY suite run, matching
+// CI's always-cold start. Reuse was tried and is a trap twice over: run-events accumulate in the
+// never-committed draft and past some size the filtered+ordered event query goes read-after-write
+// stale (newest rows invisible for seconds — flaky event assertions), and a run-count reset
+// heuristic fails silently. A reset costs ~10s; a degraded draft costs more in slower queries and
+// nondeterminism.
 //
 // Bootstrap + default-playbook seed run IN-PROCESS (the same path `revo start` uses on the daemon) —
 // the `revo bootstrap`/`revo revisium` CLI commands were removed (ADR 0006: CLI is lifecycle-only).
 import 'reflect-metadata';
 import { mkdirSync, rmSync } from 'node:fs';
-import { DBOSClient } from '@dbos-inc/dbos-sdk';
 import { ensureRevisium } from '../src/host/ensure-revisium.js';
-import { dbosSystemDatabaseUrl } from '../src/engine/ensure-postgres.js';
 import { bootstrapControlPlane } from '../src/control-plane/bootstrap.js';
 import {
-  playbookCatalogHash,
   seedDefaultPlaybook,
   seedDefaultPlaybookBestEffort,
 } from '../src/control-plane/seed-default-playbook.js';
 import { createClientTransport } from '../src/control-plane/client-transport.js';
-import { ControlPlaneError } from '../src/control-plane/errors.js';
 import { getConfig, readRuntime, removeRuntime, isAlive } from '../src/config.js';
 import { PlaybooksService } from '../src/revisium/playbooks.service.js';
 import { PLAYBOOK_SOURCE } from '../src/e2e/kit/env.js';
 
 const PLAYBOOK_ID = 'revisium-agent-playbook'; // matches scenarios.ts PLAYBOOK_ID
-const RESET_AT_RUNS = 100; // reset the test home once it has accumulated this many runs (draft hygiene)
-
-/** Bootstrapped? assertReady throws BOOTSTRAP_NOT_APPLIED on a fresh (un-bootstrapped) home. */
-async function isBootstrapped(): Promise<boolean> {
-  try {
-    await createClientTransport('head').assertReady();
-    return true;
-  } catch (e) {
-    if (e instanceof ControlPlaneError && e.code === 'BOOTSTRAP_NOT_APPLIED') return false;
-    throw e;
-  }
-}
-
-/** Count runs (cheap — one row per run; well below the event volume that degrades the draft query). */
-async function runCount(): Promise<number> {
-  try {
-    const rows = await createClientTransport('draft').listRows('task_runs', { first: RESET_AT_RUNS + 1 });
-    return rows.length;
-  } catch {
-    return 0; // not bootstrapped yet → nothing to count
-  }
-}
 
 /** Stop the test daemon, wipe its data dir, and spawn a fresh one (clean draft). */
 async function resetHome(): Promise<void> {
@@ -76,21 +54,8 @@ async function resetHome(): Promise<void> {
   await ensureRevisium(); // fresh spawn recreates the data dir + embedded Postgres
 }
 
-async function ensurePlaybook(): Promise<void> {
-  let playbooks = new PlaybooksService(createClientTransport('head'));
-  const installed = await playbooks.listPlaybooks();
-  const existing = installed.find((p) => p.id === PLAYBOOK_ID);
-  const expectedHash = playbookCatalogHash(PLAYBOOK_SOURCE, PLAYBOOK_ID);
-  if (existing?.catalogHash === expectedHash) {
-    console.log('[e2e setup] playbook already installed and current — skipping');
-    return;
-  }
-  if (existing) {
-    console.log('[e2e setup] playbook installed but stale or legacy — resetting test home before reinstall');
-    await resetHome();
-    await applyBootstrapAndDefaultSeed();
-    playbooks = new PlaybooksService(createClientTransport('head'));
-  }
+async function installPlaybook(): Promise<void> {
+  const playbooks = new PlaybooksService(createClientTransport('head'));
   try {
     const r = await playbooks.install({ source: PLAYBOOK_SOURCE, name: PLAYBOOK_ID, commit: true });
     console.log(`[e2e setup] installed playbook ${r.playbookId} (${r.roles} roles, ${r.pipelines} pipelines)`);
@@ -112,43 +77,13 @@ async function applyBootstrapAndDefaultSeed(): Promise<void> {
   );
 }
 
-/**
- * Cancel DBOS workflows left PENDING/ENQUEUED by a previous suite run on a reused test home
- * (teardown-drain intentionally leaves one parked; an aborted local run can leave more). Recovered
- * zombies occupy dev-tasks concurrency slots — enough of them starve the queue and wedge the suite.
- * On a cold home the `dbos` database does not exist yet — skip silently.
- */
-async function sweepLeftoverWorkflows(pgPort: number): Promise<void> {
-  let client: DBOSClient | null = null;
-  try {
-    client = await DBOSClient.create({ systemDatabaseUrl: dbosSystemDatabaseUrl(pgPort) });
-    const leftovers = await client.listWorkflows({ status: ['PENDING', 'ENQUEUED'], limit: 500 });
-    const ids = leftovers.map((wf) => wf.workflowID);
-    if (ids.length > 0) {
-      await client.cancelWorkflows(ids);
-      console.log(`[e2e setup] cancelled ${ids.length} leftover workflow(s) from a previous run`);
-    }
-  } catch {
-    console.log('[e2e setup] no DBOS system db yet — nothing to sweep');
-  } finally {
-    await client?.destroy().catch(() => undefined);
-  }
-}
-
 async function main(): Promise<void> {
   if (process.env['REVO_E2E_REAL'] !== '1') return; // no-op unless the real e2e is requested
   console.log(`[e2e setup] data dir: ${getConfig().dataDir}`);
-  const { runtime } = await ensureRevisium(); // spawn the isolated test daemon if it is not already up
-  await sweepLeftoverWorkflows(runtime.pgPort);
-
-  if ((await isBootstrapped()) && (await runCount()) > RESET_AT_RUNS) {
-    console.log(`[e2e setup] >${RESET_AT_RUNS} runs accumulated — resetting the test home for a clean draft`);
-    await resetHome();
-  }
-
+  console.log('[e2e setup] resetting the test home (deterministic cold start, matches CI)');
+  await resetHome();
   await applyBootstrapAndDefaultSeed();
-
-  await ensurePlaybook();
+  await installPlaybook();
 }
 
 await main();
