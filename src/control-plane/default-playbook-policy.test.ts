@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { repoRoot } from '../config.js';
 import type { Template } from '../pipeline-core/types.js';
 import {
-  validateDefaultFeatureDevelopmentPolicy,
+  validateDefaultPlaybookPolicy,
+  validateVariantParity,
   type DefaultPlaybookPolicyDiagnostic,
   type DefaultPlaybookPolicyDiagnosticCode,
 } from './default-playbook-policy.js';
@@ -38,8 +39,38 @@ function mutateTemplate(mutator: (template: MutableTemplate) => void): Template 
   return template as Template;
 }
 
+function bundledCodexConsensus(): Template {
+  const template = pipelines.find((pipeline) => pipeline.id === 'feature-development-codex-consensus')
+    ?.execution_policy?.template_json;
+  assert.ok(template, 'feature-development-codex-consensus carries execution_policy.template_json');
+  return structuredClone(template);
+}
+
+function mutateCodex(mutator: (template: MutableTemplate) => void): Template {
+  const template = bundledCodexConsensus() as MutableTemplate;
+  mutator(template);
+  return template as Template;
+}
+
 function diagnosticsFor(template: Template): DefaultPlaybookPolicyDiagnostic[] {
-  return validateDefaultFeatureDevelopmentPolicy(template);
+  return validateDefaultPlaybookPolicy(template);
+}
+
+function parityDiagnosticsFor(template: Template): DefaultPlaybookPolicyDiagnostic[] {
+  return validateVariantParity(template);
+}
+
+function assertParityDiagnostic(
+  template: Template,
+  code: DefaultPlaybookPolicyDiagnosticCode,
+): DefaultPlaybookPolicyDiagnostic {
+  const diagnostics = parityDiagnosticsFor(template);
+  const diagnostic = diagnostics.find((candidate) => candidate.code === code);
+  assert.ok(
+    diagnostic,
+    `expected parity ${code}; got ${diagnostics.map((candidate) => candidate.code).join(', ') || 'no diagnostics'}`,
+  );
+  return diagnostic;
 }
 
 function assertDiagnostic(
@@ -217,7 +248,7 @@ test('default playbook policy: merge-gate approved must route through reverify b
     mutateTemplate((template) => {
       guardedBranchContaining(template, 'mergeGate', 'approved').goto = 'confirmMerge';
     }),
-    'DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING',
+    'DEFAULT_POLICY_APPROVE_REVERIFY_MISSING',
   );
 
   assert.equal(diagnostic.nodeId, 'mergeGate');
@@ -229,7 +260,7 @@ test('default playbook policy: mergeApproveReverify must be a pollPr script node
     mutateTemplate((template) => {
       template.nodes['mergeApproveReverify']['scriptRef'] = 'script:confirmMerge';
     }),
-    'DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING',
+    'DEFAULT_POLICY_APPROVE_REVERIFY_MISSING',
   );
 
   assert.equal(diagnostic.nodeId, 'mergeApproveReverify');
@@ -241,7 +272,7 @@ test('default playbook policy: mergeApproveReverifyRouter clean must go to confi
     mutateTemplate((template) => {
       guardedBranchContaining(template, 'mergeApproveReverifyRouter', 'clean').goto = 'blockedEnd';
     }),
-    'DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING',
+    'DEFAULT_POLICY_APPROVE_REVERIFY_MISSING',
   );
 
   assert.equal(diagnostic.nodeId, 'mergeApproveReverifyRouter');
@@ -254,7 +285,7 @@ test('default playbook policy: confirmMerge must consume fresh mergeApproveRever
       const confirmMerge = template.nodes['confirmMerge'];
       confirmMerge['consumes'] = [{ node: 'mergeReadiness', as: 'mergeReadiness' }];
     }),
-    'DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING',
+    'DEFAULT_POLICY_MERGE_READINESS_FRESHNESS_MISSING',
   );
 
   assert.equal(diagnostic.nodeId, 'confirmMerge');
@@ -515,4 +546,126 @@ test('default playbook policy: code review loop must be reset by stuck recovery 
 
   assert.equal(diagnostic.path, 'scopes.codeReviewLoop');
   assert.match(diagnostic.expected ?? '', /parent=codeStuckRecoveryLoop/);
+});
+
+test('default playbook policy: recoverable script catches must not route to terminal nodes', () => {
+  const diagnostic = assertDiagnostic(
+    mutateTemplate((template) => {
+      const catches = template.nodes['pollPr']['catch'] as Array<{ onError: string; goto: string }>;
+      const failed = catches.find((c) => c.onError === 'revo.ScriptFailed');
+      assert.ok(failed, 'pollPr revo.ScriptFailed catch exists');
+      failed.goto = 'blockedEnd';
+    }),
+    'DEFAULT_POLICY_RECOVERABLE_CATCH_TERMINAL',
+  );
+
+  assert.equal(diagnostic.nodeId, 'pollPr');
+  assert.match(diagnostic.expected ?? '', /revo\.ScriptFailed -> non-terminal/);
+  assert.match(diagnostic.actual ?? '', /revo\.ScriptFailed -> blockedEnd/);
+});
+
+test('default playbook policy: cap-router default must reach a humanGate, not a terminal', () => {
+  const diagnostic = assertDiagnostic(
+    mutateTemplate((template) => {
+      defaultBranch(template, 'prRouter').default = 'blockedEnd';
+    }),
+    'DEFAULT_POLICY_CAP_EXHAUSTION_OFFRAMP_MISSING',
+  );
+
+  assert.equal(diagnostic.nodeId, 'prRouter');
+  assert.match(diagnostic.expected ?? '', /humanGate or classifyRecovery/);
+  assert.match(diagnostic.actual ?? '', /blockedEnd/);
+});
+
+test('default playbook policy: confirmMerge failure catches must not route to a terminal', () => {
+  const diagnostic = assertDiagnostic(
+    mutateTemplate((template) => {
+      const catches = template.nodes['confirmMerge']['catch'] as Array<{ onError: string; goto: string }>;
+      const failed = catches.find((c) => c.onError === 'revo.ScriptFailed');
+      assert.ok(failed, 'confirmMerge revo.ScriptFailed catch exists');
+      failed.goto = 'blockedEnd';
+    }),
+    'DEFAULT_POLICY_CONFIRM_MERGE_FAILURE_TERMINAL',
+  );
+
+  assert.equal(diagnostic.nodeId, 'confirmMerge');
+  assert.match(diagnostic.expected ?? '', /revo\.ScriptFailed -> non-terminal/);
+  assert.match(diagnostic.actual ?? '', /revo\.ScriptFailed -> blockedEnd/);
+});
+
+test('default playbook policy: cleanupWorktree must follow confirmMerge before mergedEnd', () => {
+  const diagnostic = assertDiagnostic(
+    mutateTemplate((template) => {
+      template.nodes['confirmMerge']['next'] = 'mergedEnd';
+    }),
+    'DEFAULT_POLICY_POST_MERGE_CLEANUP_MISSING',
+  );
+
+  assert.equal(diagnostic.nodeId, 'confirmMerge');
+  assert.match(diagnostic.expected ?? '', /cleanupWorktree/);
+});
+
+test('default playbook policy: confirmMerge cannot bypass cleanupWorktree by removing it', () => {
+  const diagnostic = assertDiagnostic(
+    mutateTemplate((template) => {
+      delete template.nodes['cleanupWorktree'];
+    }),
+    'DEFAULT_POLICY_POST_MERGE_CLEANUP_MISSING',
+  );
+
+  assert.equal(diagnostic.nodeId, 'cleanupWorktree');
+  assert.match(diagnostic.expected ?? '', /script:cleanupWorktree/);
+});
+
+test('default playbook policy: cancel/rework outcomes must have explicit guarded branches', () => {
+  const diagnostic = assertDiagnostic(
+    mutateTemplate((template) => {
+      const rg = template.nodes['recoveryGate'];
+      rg['branches'] = (rg['branches'] as unknown[]).filter(
+        (b) => !JSON.stringify(b).includes('"cancel"'),
+      );
+    }),
+    'DEFAULT_POLICY_GATE_OUTCOMES_IMPLICIT',
+  );
+
+  assert.equal(diagnostic.nodeId, 'recoveryGate');
+  assert.match(diagnostic.expected ?? '', /cancel/);
+});
+
+test('default playbook policy: codex-consensus violations match the documented CODEX_LEGACY_WAIVERS', () => {
+  const diags = diagnosticsFor(bundledCodexConsensus());
+  const actualCodes = [...new Set(diags.map((d) => d.code))].sort();
+  assert.ok(actualCodes.length > 0, 'codex must have documented violations (not yet reconciled by #242)');
+
+  const parityDiags = parityDiagnosticsFor(bundledCodexConsensus());
+  assert.deepEqual(
+    parityDiags,
+    [],
+    `validateVariantParity must return [] for codex; got: ${parityDiags.map((d) => d.code).join(', ')}`,
+  );
+});
+
+test('default playbook policy: unlisted codex violation triggers VARIANT_POLICY_GAP', () => {
+  const diagnostic = assertParityDiagnostic(
+    mutateCodex((template) => {
+      delete template.nodes['cancelledEnd'];
+    }),
+    'DEFAULT_POLICY_VARIANT_POLICY_GAP',
+  );
+
+  assert.match(diagnostic.actual ?? '', /CANCELLED_TERMINAL_MISSING/);
+});
+
+test('default playbook policy: fixing a codex violation triggers VARIANT_PARITY_DRIFT', () => {
+  const diagnostic = assertParityDiagnostic(
+    mutateCodex((template) => {
+      // Fix the single MERGE_READINESS_FRESHNESS_MISSING violation so it disappears from actuals
+      // while CODEX_LEGACY_WAIVERS still lists it — that symmetric difference fires PARITY_DRIFT.
+      const confirmMerge = template.nodes['confirmMerge'];
+      confirmMerge['consumes'] = [{ node: 'mergeApproveReverify', as: 'mergeReadiness' }];
+    }),
+    'DEFAULT_POLICY_VARIANT_PARITY_DRIFT',
+  );
+
+  assert.match(diagnostic.expected ?? '', /DEFAULT_POLICY_MERGE_READINESS_FRESHNESS_MISSING/);
 });
