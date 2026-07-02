@@ -788,6 +788,7 @@ type RunWorkflowPipelineModel {
   id: ID!
   pipelineId: String!
   playbookId: String!
+  provenance: JSON
   routeGates: [String!]!
   status: String!
   title: String!
