@@ -3,9 +3,12 @@ import type { TaskControlPlaneApiService } from '../../task-control-plane/task-c
 
 // Poll at 500ms: tighter intervals can observe a run as terminal before its DBOS workflow status /
 // step-status cascade settle, flaking `workflowStatus`/`no ready steps` assertions on slower CI.
-// A real run settles in a few seconds — if a wait needs >10s the run is stuck (a bug), so fail fast.
+// A real stubbed run settles in a few seconds locally, but the whole suite runs sequentially against
+// one process-global DBOS host + embedded Postgres, so the heaviest runs (crash-recovery, seeded
+// plan→merge) can take ~10s+ on a loaded CI runner. 30s keeps a fail-fast stuck-detector margin while
+// tolerating that latency; the underlying e2e slowness is tracked as a separate speed-up task.
 const POLL_MS = 500;
-const WAIT_TIMEOUT_MS = 10_000;
+const WAIT_TIMEOUT_MS = 30_000;
 
 /** Poll until the run settles (terminal or parked at a gate). Returns the wait state. */
 export function waitState(api: TaskControlPlaneApiService, runId: string, timeoutMs = WAIT_TIMEOUT_MS) {
