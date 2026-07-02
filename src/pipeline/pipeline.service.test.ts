@@ -7,7 +7,7 @@ import {
   type DataDrivenTaskOpts,
   type RunnerTransientRetryPolicy,
 } from './data-driven-task.workflow.js';
-import { PipelineService, resolveDevTasksConcurrency } from './pipeline.service.js';
+import { PipelineService, resolveDevTasksConcurrency, resolveDevTasksPollIntervalMs } from './pipeline.service.js';
 
 function restoreEnvVar(key: string, value: string | undefined): void {
   if (value === undefined) delete process.env[key];
@@ -25,6 +25,20 @@ test('resolveDevTasksConcurrency accepts positive integer overrides', () => {
 test('resolveDevTasksConcurrency falls back to default for invalid overrides', () => {
   for (const value of ['', ' ', '0', '-1', '1.5', '8workers', 'Infinity', 'not-a-number']) {
     assert.equal(resolveDevTasksConcurrency({ REVO_DEV_TASKS_CONCURRENCY: value }), 20);
+  }
+});
+
+test('resolveDevTasksPollIntervalMs defaults to unset (DBOS SDK default tick)', () => {
+  assert.equal(resolveDevTasksPollIntervalMs({}), undefined);
+});
+
+test('resolveDevTasksPollIntervalMs accepts positive integer overrides', () => {
+  assert.equal(resolveDevTasksPollIntervalMs({ REVO_DEV_TASKS_POLL_INTERVAL_MS: '25' }), 25);
+});
+
+test('resolveDevTasksPollIntervalMs stays unset for invalid overrides', () => {
+  for (const value of ['', ' ', '0', '-1', '1.5', '25ms', 'Infinity', 'not-a-number']) {
+    assert.equal(resolveDevTasksPollIntervalMs({ REVO_DEV_TASKS_POLL_INTERVAL_MS: value }), undefined);
   }
 });
 

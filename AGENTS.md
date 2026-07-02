@@ -73,6 +73,26 @@ expensive (~9 s/file, ~125 s across the suite):
 Production leaves `REVO_SHUTDOWN_DRAIN_TIMEOUT_MS` unset → the 8 s default stays in force; `--test-force-exit`
 is test-only. Never set the knob to `0` (that means "await the full drain", i.e. hang on a parked gate).
 
-Target wall-clock: `pnpm test:e2e` ≤ ~200 s. If it regresses toward ~300 s, suspect teardown (a dropped flag)
+Three more invariants keep the suite fast AND deterministic:
+
+- **Queue tick.** The DBOS dev-tasks dispatcher polls at `REVO_DEV_TASKS_POLL_INTERVAL_MS` (25 ms under
+  `test:e2e`; unset in production → SDK default 1000 ms). Without it every run waits ~0.5–1 s before its
+  workflow starts (~70 s across the suite).
+- **No zombie workflows.** `cancelRun` only patches the run row — it never cancels the DBOS workflow, so a run
+  left parked at a gate stays PENDING, is recovered by every later file's boot, and permanently occupies a
+  dev-tasks concurrency slot. Once ≥ `REVO_DEV_TASKS_CONCURRENCY` zombies accumulate, the queue starves and
+  every later run times out at 'running' (the historical CI tail wedge: recovery F1–F3, seed M1/M1b/M2,
+  run-lifecycle). `harness.close()` cancels PENDING/ENQUEUED workflows at the DBOS level (`keepWorkflowsParked`
+  opts out — only for teardown-drain, whose subject IS a parked workflow), and `scripts/e2e-setup.ts` resets
+  the whole test home on every suite run (a reused draft also degrades the event query into read-after-write
+  staleness — flaky event assertions).
+- **Settled waits.** `drive.ts` polls at 25 ms but returns only settled states (terminal run row AND terminal
+  DBOS workflow status; gates once the inbox row is visible). Do not assert on event counts with a single read
+  right after a wait — poll like `assertEventsPresent`/`countEventsSettled` (the draft event query can miss the
+  newest row for a beat).
+
+Target wall-clock: `pnpm test:e2e` ≈ 110–135 s. If it regresses toward ~200 s, suspect teardown (a dropped
+flag), the queue-tick knob, or zombie accumulation (`Recovering N workflows` climbing per file in the log)
 before blaming test bodies. `src/e2e/teardown-drain.e2e.test.ts` guards the drain cap: teardown with a parked
-gate must return < 500 ms.
+gate must return < 500 ms. The 30 s `WAIT_TIMEOUT_MS` in `drive.ts` is a deliberate stuck-detector — do not
+raise it to absorb slowness.
