@@ -83,3 +83,31 @@ test('e2e fixture: feature-development review rework already hands its produced 
     },
   ]);
 });
+
+test('e2e fixture (#246): feature-development has mergeApproveReverify + classifyRecovery + recoveryGate', () => {
+  const feature = templateFrom(e2eFixtureCatalog, 'feature-development');
+
+  // mergeApproveReverify: script node that re-polls readiness after approval before confirmMerge
+  const reverify = effectNode(feature, 'mergeApproveReverify');
+  assert.equal(reverify.kind, 'script', 'mergeApproveReverify is a script node');
+  assert.equal(reverify.next, 'mergeApproveReverifyRouter', 'mergeApproveReverify feeds the reverify router');
+
+  // classifyRecovery: agent node that increments the recoveryLoop counter
+  const classify = effectNode(feature, 'classifyRecovery');
+  assert.equal(classify.kind, 'agent', 'classifyRecovery is an agent node');
+  assert.ok(
+    classify.incrementCounters?.includes('recoveryLoop'),
+    'classifyRecovery increments recoveryLoop',
+  );
+
+  // recoveryGate: humanGate node that opens when the recoveryLoop is exhausted or scripts fail
+  const gate = feature.nodes['recoveryGate'];
+  assert.ok(gate, 'recoveryGate node exists');
+  assert.equal(gate?.kind, 'humanGate', 'recoveryGate is a humanGate');
+
+  // confirmMerge consumes the fresh mergeApproveReverify evidence (not stale pre-gate readiness)
+  const confirm = effectNode(feature, 'confirmMerge');
+  const freshnessConsume = confirm.consumes?.find((c) => c.node === 'mergeApproveReverify');
+  assert.ok(freshnessConsume, 'confirmMerge consumes mergeApproveReverify evidence');
+  assert.equal(freshnessConsume?.as, 'mergeReadiness', 'consumeRef alias is mergeReadiness');
+});

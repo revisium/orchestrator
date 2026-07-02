@@ -16,6 +16,7 @@ import {
   assertVisitCount,
   drive,
   featureDevelopment,
+  featureDevelopmentPrReview,
   gateWithTimeout,
   localChange,
   nestedScopeLoop,
@@ -509,4 +510,56 @@ test('re-resolving an already-active terminal re-asserts complete (idempotent re
   const out = step(t, atTerminal, { verdict: 'approved' });
   assert.equal(out.decision.type, 'complete');
   if (out.decision.type === 'complete') assert.equal(out.decision.status, 'succeeded');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// #246 — recovery-policy graph: mergeApproveReverify + classifyRecovery + recoveryGate.
+// ─────────────────────────────────────────────────────────────────────────────
+
+test('#246: mergeGate approved → mergeApproveReverify(clean) → confirmMerge → mergedEnd', () => {
+  const result = drive(featureDevelopmentPrReview(), {
+    planGate: 'approved',
+    codeReview: 'approved',
+    pollPr: 'clean',
+    mergeReadiness: 'clean',
+    mergeGate: 'approved',
+    mergeApproveReverify: 'clean',
+  });
+  assertReachesTerminal(result, 'succeeded');
+  assertPath(result, [
+    'analyst', 'planGate', 'developer', 'codeReview',
+    'integrator', 'pollPr', 'mergeReadiness',
+    'mergeGate', 'mergeApproveReverify', 'confirmMerge', 'mergedEnd',
+  ]);
+});
+
+test('#246: pollPr ScriptBlocked routes via catch to classifyRecovery; fix verdict resumes via recoveryRouter', () => {
+  const result = drive(featureDevelopmentPrReview(), {
+    planGate: 'approved',
+    codeReview: 'approved',
+    pollPr: [{ outcome: 'errored', errorCode: 'revo.ScriptBlocked' }, 'clean'],
+    classifyRecovery: 'fix',
+    mergeReadiness: 'clean',
+    mergeGate: 'approved',
+    mergeApproveReverify: 'clean',
+  });
+  assertReachesTerminal(result, 'succeeded');
+  assertVisitCount(result, 'classifyRecovery', 1);
+  assertCounter(result, 'recoveryLoop', 1);
+});
+
+test('#246: mergeApproveReverify non-clean → classifyRecovery × 3 → cap exhaustion → recoveryGate → cancel', () => {
+  const result = drive(featureDevelopmentPrReview(), {
+    planGate: 'approved',
+    codeReview: 'approved',
+    pollPr: 'clean',
+    mergeReadiness: 'clean',
+    mergeGate: 'approved',
+    mergeApproveReverify: 'ci_changes',
+    classifyRecovery: 'fix',
+    recoveryGate: 'cancel',
+  });
+  assertReachesTerminal(result, 'cancelled');
+  assertVisitCount(result, 'classifyRecovery', 3);
+  assertCounter(result, 'recoveryLoop', 3);
 });
