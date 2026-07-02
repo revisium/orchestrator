@@ -19,7 +19,7 @@ import {
   verdictEq,
   verdictIn,
 } from './builders.js';
-import type { Branch, CatchEntry, ConsumesRef, Template } from '../types.js';
+import type { CatchEntry, ConsumesRef, Template } from '../types.js';
 
 export function featureDevelopment(): Template {
   return template('feature-development')
@@ -126,29 +126,10 @@ export function confirmMergeFlow(): Template {
     .build();
 }
 
-function blockedOrFailedCatch(): CatchEntry[] {
+function recoveryCatch(): CatchEntry[] {
   return [
-    { onError: 'revo.ScriptBlocked', goto: 'blockedEnd' },
-    { onError: 'revo.ScriptFailed', goto: 'failedEnd' },
-  ];
-}
-
-function prReadinessScript(id: 'pollPr' | 'mergeReadiness', next: 'prRouter' | 'mergeReadinessRouter') {
-  return node.script(id, 'script:pollPr', next, {
-    resultSchema: 'schema:prFeedback',
-    onFailure: 'route',
-    produces: { name: 'prFeedback' },
-    catch: blockedOrFailedCatch(),
-  });
-}
-
-function prReadinessBranches(cleanGoto: 'mergeReadiness' | 'mergeGate', recheckGoto: 'pollPr' | 'mergeReadiness'): Branch[] {
-  return [
-    on(verdictEq('clean'), cleanGoto),
-    on(verdictEq('recheck'), recheckGoto),
-    on(verdictEq('review_changes'), 'triage'),
-    on(allOf(verdictEq('ci_changes'), counterLt('ciLoop', 3)), 'ciRework'),
-    otherwise('blockedEnd'),
+    { onError: 'revo.ScriptBlocked', goto: 'classifyRecovery' },
+    { onError: 'revo.ScriptFailed', goto: 'classifyRecovery' },
   ];
 }
 
@@ -175,12 +156,13 @@ export function featureDevelopmentPrReview(): Template {
     .title('Feature development with a PR review-feedback loop (plan 0018)')
     .specVersion('1.0')
     .entry('analyst')
-    .domain('approved', 'changes_requested', 'blocker', 'clean', 'review_changes', 'ci_changes', 'fix', 'wontfix', 'question', 'recheck')
+    .domain('approved', 'changes_requested', 'blocker', 'clean', 'review_changes', 'ci_changes', 'fix', 'wontfix', 'question', 'recheck', 'cancel', 'override_merge')
     .policy({ conflicts: [['developer', 'reviewer']], enforcement: 'strict' })
     .scope('codeReviewLoop', { cap: 3, parent: null })
     .scope('ciLoop', { cap: 3, parent: null })
     .scope('reviewLoop', { cap: 3, parent: null })
     .scope('questionLoop', { cap: 3, parent: null })
+    .scope('recoveryLoop', { cap: 3, parent: null })
     .add(
       node.agent('analyst', 'role:analyst', 'planGate', { resultSchema: 'schema:plan', onFailure: 'abort', produces: { name: 'plan' } }),
       node.humanGate('planGate', 'plan-review', ['approved', 'changes_requested'], [
@@ -219,12 +201,30 @@ export function featureDevelopmentPrReview(): Template {
           { node: 'reworkDeveloper', as: 'reworkChange', optional: true },
           { node: 'ciRework', as: 'ciChange', optional: true, staleOk: true },
         ],
-        catch: [{ onError: 'revo.ScriptFailed', goto: 'failedEnd' }],
+        catch: recoveryCatch(),
       }),
-      prReadinessScript('pollPr', 'prRouter'),
-      node.choice('prRouter', prReadinessBranches('mergeReadiness', 'pollPr')),
-      prReadinessScript('mergeReadiness', 'mergeReadinessRouter'),
-      node.choice('mergeReadinessRouter', prReadinessBranches('mergeGate', 'mergeReadiness')),
+      node.script('pollPr', 'script:pollPr', 'prRouter', {
+        resultSchema: 'schema:prFeedback', onFailure: 'route',
+        produces: { name: 'prFeedback' }, catch: recoveryCatch(),
+      }),
+      node.choice('prRouter', [
+        on(verdictEq('clean'), 'mergeReadiness'),
+        on(verdictEq('recheck'), 'pollPr'),
+        on(verdictEq('review_changes'), 'triage'),
+        on(allOf(verdictEq('ci_changes'), counterLt('ciLoop', 3)), 'ciRework'),
+        otherwise('recoveryGate'),
+      ]),
+      node.script('mergeReadiness', 'script:pollPr', 'mergeReadinessRouter', {
+        resultSchema: 'schema:prFeedback', onFailure: 'route',
+        produces: { name: 'prFeedback' }, catch: recoveryCatch(),
+      }),
+      node.choice('mergeReadinessRouter', [
+        on(verdictEq('clean'), 'mergeGate'),
+        on(verdictEq('recheck'), 'mergeReadiness'),
+        on(verdictEq('review_changes'), 'triage'),
+        on(allOf(verdictEq('ci_changes'), counterLt('ciLoop', 3)), 'ciRework'),
+        otherwise('recoveryGate'),
+      ]),
       node.agent('ciRework', 'role:developer', 'integrator', {
         resultSchema: 'schema:change', incrementCounters: ['ciLoop'], onFailure: 'abort',
         produces: { name: 'change' },
@@ -241,7 +241,7 @@ export function featureDevelopmentPrReview(): Template {
         on(allOf(verdictEq('question'), counterLt('questionLoop', 3)), 'questionGate'),
         on(allOf(verdictEq('fix'), counterLt('reviewLoop', 3)), 'reviewRework'),
         on(verdictEq('wontfix'), 'respondThreads'),
-        otherwise('blockedEnd'),
+        otherwise('recoveryGate'),
       ]),
       node.humanGate('questionGate', 'review-question', ['approved', 'changes_requested'], [
         on(verdictEq('approved'), 'triage'),
@@ -255,38 +255,69 @@ export function featureDevelopmentPrReview(): Template {
       node.script('reviewIntegrator', 'script:integrator', 'respondThreads', {
         resultSchema: 'schema:integration', onFailure: 'route',
         consumes: [{ node: 'reviewRework', as: 'reviewChange' }],
-        catch: blockedOrFailedCatch(),
+        catch: recoveryCatch(),
       }),
       node.script('respondThreads', 'script:respondThreads', 'pollPr', {
         resultSchema: 'schema:respond', onFailure: 'route', consumes: [{ node: 'triage', as: 'triage' }],
-        catch: blockedOrFailedCatch(),
+        catch: recoveryCatch(),
       }),
-      node.humanGate('mergeGate', 'merge-review', ['approved', 'recheck'], [
-        on(verdictEq('approved'), 'confirmMerge'),
+      node.humanGate('mergeGate', 'merge-review', ['approved', 'recheck', 'override_merge', 'cancel'], [
+        on(verdictEq('approved'), 'mergeApproveReverify'),
         on(verdictEq('recheck'), 'mergeRecheck'),
+        on(verdictEq('override_merge'), 'mergeApproveReverify'),
+        on(verdictEq('cancel'), 'cancelledEnd'),
         otherwise('blockedEnd'),
       ], { gatedArtifact: { node: 'mergeReadiness', as: 'prFeedback' } }),
       node.script('mergeRecheck', 'script:pollPr', 'mergeRecheckRouter', {
         resultSchema: 'schema:prFeedback',
         onFailure: 'route',
         produces: { name: 'prFeedback' },
-        catch: blockedOrFailedCatch(),
+        catch: recoveryCatch(),
       }),
       node.choice('mergeRecheckRouter', [
         on(verdictEq('clean'), 'blockedEnd'),
         on(verdictEq('review_changes'), 'triage'),
         on(allOf(verdictEq('ci_changes'), counterLt('ciLoop', 3)), 'ciRework'),
         on(verdictEq('recheck'), 'mergeReadiness'),
-        otherwise('blockedEnd'),
+        otherwise('recoveryGate'),
       ]),
+      node.script('mergeApproveReverify', 'script:pollPr', 'mergeApproveReverifyRouter', {
+        resultSchema: 'schema:prFeedback', onFailure: 'route',
+        produces: { name: 'prFeedback' }, catch: recoveryCatch(),
+      }),
+      node.choice('mergeApproveReverifyRouter', [
+        on(verdictEq('clean'), 'confirmMerge'),
+        otherwise('classifyRecovery'),
+      ]),
+      node.agent('classifyRecovery', 'role:triager', 'recoveryRouter', {
+        resultSchema: 'schema:triage', onFailure: 'abort',
+        produces: { name: 'recoveryTriage' },
+        incrementCounters: ['recoveryLoop'],
+        consumes: [
+          { node: 'analyst', as: 'plan', optional: true, staleOk: true },
+          { node: 'pollPr', as: 'feedback', optional: true, staleOk: true },
+          { node: 'mergeReadiness', as: 'mergeFeedback', optional: true, staleOk: true },
+          { node: 'mergeApproveReverify', as: 'approveFeedback', optional: true, staleOk: true },
+          { node: 'mergeRecheck', as: 'recheckFeedback', optional: true, staleOk: true },
+        ],
+      }),
+      node.choice('recoveryRouter', [
+        on(allOf(verdictEq('fix'), counterLt('recoveryLoop', 3)), 'pollPr'),
+        otherwise('recoveryGate'),
+      ]),
+      node.humanGate('recoveryGate', 'merge-recovery', ['recheck', 'cancel', 'approved'], [
+        on(verdictEq('recheck'), 'pollPr'),
+        on(verdictEq('cancel'), 'cancelledEnd'),
+        otherwise('blockedEnd'),
+      ], { gatedArtifact: { node: 'pollPr', as: 'prFeedback' } }),
       node.script('confirmMerge', 'script:confirmMerge', 'mergedEnd', {
         resultSchema: 'schema:integration', onFailure: 'route',
-        consumes: [{ node: 'mergeReadiness', as: 'mergeReadiness' }],
-        catch: blockedOrFailedCatch(),
+        consumes: [{ node: 'mergeApproveReverify', as: 'mergeReadiness' }],
+        catch: recoveryCatch(),
       }),
       node.terminal('mergedEnd', 'succeeded'),
-      node.terminal('failedEnd', 'failed'),
       node.terminal('blockedEnd', 'blocked'),
+      node.terminal('cancelledEnd', 'cancelled'),
     )
     .build();
 }

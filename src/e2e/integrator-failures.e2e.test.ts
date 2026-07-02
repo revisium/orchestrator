@@ -382,15 +382,17 @@ test('D7: an unresolved pinned gh account fails loud (refuses ambient) → block
   }
 });
 
-test('D13: a push rejection during integrate fails the run (throw → failRun)', { skip: e2eSkip }, async () => {
+test('D13: a push rejection during integrate routes to recovery → blocked (#246)', { skip: e2eSkip }, async () => {
   const target = createTargetRepo();
   try {
     const run = await startFeature(target, {
       integrate: { kind: 'throw', message: 'git push rejected: non-fast-forward (remote moved); integrate aborted' },
     });
     const terminal = await approveUntilTerminal(h.api, run.runId);
-    assert.equal(terminal.state, 'failed'); // integrate throws → workflow's top-level catch → failRun
-    await assertEventsPresent(h.api, run.runId, ['run_failed']);
+    // #246: integrator ScriptFailed now routes to classifyRecovery → recoveryGate; approveUntilTerminal
+    // resolves the recovery gate with 'approved' (→ blockedEnd) instead of failRun.
+    assert.equal(terminal.state, 'blocked');
+    await assertBlocked(h.api, run.runId);
   } finally {
     target.cleanup();
   }
@@ -414,13 +416,15 @@ test('D15: a token in an integrator lesson is redacted before it is persisted/su
   }
 });
 
-test('D19: a token in a gh error reaches no persisted event; the run fails redacted (failRun path)', { skip: e2eSkip }, async () => {
+test('D19: a token in a gh error reaches no persisted event; run routes to recovery (#246)', { skip: e2eSkip }, async () => {
   const target = createTargetRepo();
   try {
     const run = await startFeature(target, { gh: 'gh-token-leak' });
     const terminal = await approveUntilTerminal(h.api, run.runId);
-    assert.equal(terminal.state, 'failed'); // gh throws during integrate → integrate throws → failRun
-    await assertEventsPresent(h.api, run.runId, ['run_failed']);
+    // #246: integrator ScriptFailed (gh threw with token) now routes to classifyRecovery → recoveryGate;
+    // approveUntilTerminal resolves recovery gate with 'approved' → blockedEnd → blocked.
+    assert.equal(terminal.state, 'blocked');
+    await assertBlocked(h.api, run.runId);
     await assertNoRawTokenInEvents(h.api, run.runId, 'gho_abcdEFGH1234567890LEAK');
   } finally {
     target.cleanup();
