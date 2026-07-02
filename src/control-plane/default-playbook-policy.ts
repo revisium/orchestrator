@@ -124,8 +124,8 @@ export function validateVariantParity(template: Template): DefaultPlaybookPolicy
     }
   }
 
-  const actualSorted = [...actualCodes].sort().join(',');
-  const waivedSorted = [...waivedCodes].sort().join(',');
+  const actualSorted = [...actualCodes].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).join(',');
+  const waivedSorted = [...waivedCodes].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).join(',');
   if (actualSorted !== waivedSorted) {
     sink.error(
       'DEFAULT_POLICY_VARIANT_PARITY_DRIFT',
