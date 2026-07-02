@@ -151,3 +151,99 @@ test('I7: simulate_route matches the route a created run is actually bound to', 
     'role bindings are identical between simulate and create',
   );
 });
+
+// Group I — bindingOverrides (typed launch profile)
+
+type FullBinding = Binding & {
+  resolvedModelLevel?: string;
+  modelSource?: string;
+  resolvedTimeoutMs?: number;
+  timeoutSource?: string;
+  resolvedPermissionMode?: string;
+  permissionSource?: string;
+};
+type FullRoute = Omit<Route, 'roleBindings'> & { roleBindings: FullBinding[] };
+
+test('I8: bindingOverrides by roleId records per-axis provenance on resolved bindings', { skip: e2eSkip }, async () => {
+  // developer defaults: standard model, claude-code runner — override all three overridable axes.
+  const r = (await h.api.simulateRoute({
+    title: 'provenance',
+    pipeline: 'feature-development',
+    executionProfile: {
+      bindingOverrides: [{ match: { roleId: 'developer' }, modelLevel: 'deep', timeoutMs: 60000, permissionMode: 'acceptEdits' }],
+    },
+  })) as FullRoute;
+
+  const dev = r.roleBindings.find((b) => b.roleId === 'developer');
+  assert.ok(dev, 'developer binding present');
+  assert.equal(dev.resolvedModelLevel, 'deep', 'modelLevel override applied');
+  assert.equal(dev.modelSource, 'execution-profile', 'model sourced from execution-profile');
+  assert.equal(dev.resolvedTimeoutMs, 60000, 'timeoutMs override applied');
+  assert.equal(dev.timeoutSource, 'execution-profile', 'timeout sourced from execution-profile');
+  assert.equal(dev.resolvedPermissionMode, 'acceptEdits', 'permissionMode override applied');
+  assert.equal(dev.permissionSource, 'execution-profile', 'permission sourced from execution-profile');
+
+  // non-overridden roles retain playbook-sourced model
+  const others = r.roleBindings.filter((b) => b.roleId !== 'developer');
+  for (const b of others) {
+    if (b.modelSource !== undefined) {
+      assert.equal(b.modelSource, 'playbook', `non-overridden ${b.roleId} has playbook model source`);
+    }
+  }
+});
+
+test('I9: bindingOverrides unknown runnerId is rejected with VALIDATION_FAILURE before run starts', { skip: e2eSkip }, async () => {
+  await assert.rejects(
+    () =>
+      h.api.simulateRoute({
+        title: 'bad-runner',
+        pipeline: 'feature-development',
+        executionProfile: {
+          bindingOverrides: [{ match: { roleId: 'developer' }, runnerId: 'no-such-runner' }],
+        },
+      }),
+    (err: unknown) => {
+      assert.equal((err as { code?: string }).code, 'VALIDATION_FAILURE');
+      assert.ok((err as { message?: string }).message?.includes('no-such-runner'), 'error names the bad runner');
+      return true;
+    },
+  );
+});
+
+test('I9b: node-only bindingOverride with unknown runnerId fails closed-schema validation (no role match required)', { skip: e2eSkip }, async () => {
+  // Phase A validates EVERY override entry regardless of whether it matches a selected role.
+  await assert.rejects(
+    () =>
+      h.api.simulateRoute({
+        title: 'node-bad-runner',
+        pipeline: 'feature-development',
+        executionProfile: {
+          bindingOverrides: [{ match: { nodeId: 'step-1' }, runnerId: 'no-such-runner' }],
+        },
+      }),
+    (err: unknown) => {
+      assert.equal((err as { code?: string }).code, 'VALIDATION_FAILURE');
+      assert.ok((err as { message?: string }).message?.includes('no-such-runner'), 'error names the bad runner');
+      return true;
+    },
+  );
+});
+
+test('I10: bindingOverrides permissionMode mismatched for runner is rejected (PROFILE_SCHEMA_CLOSED)', { skip: e2eSkip }, async () => {
+  // developer is claude-code; workspace-write is codex-only — must fail closed.
+  await assert.rejects(
+    () =>
+      h.api.simulateRoute({
+        title: 'bad-permission',
+        pipeline: 'feature-development',
+        executionProfile: {
+          bindingOverrides: [{ match: { roleId: 'developer' }, permissionMode: 'workspace-write' }],
+        },
+      }),
+    (err: unknown) => {
+      assert.equal((err as { code?: string }).code, 'VALIDATION_FAILURE');
+      assert.ok((err as { message?: string }).message?.includes('workspace-write'), 'error names the bad permissionMode');
+      return true;
+    },
+  );
+});

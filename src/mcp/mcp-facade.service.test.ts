@@ -842,3 +842,75 @@ test('McpFacadeService exposes agent observability application error codes', asy
     /RUN_NOT_FOUND: run was not found/,
   );
 });
+
+test('McpFacadeService.simulateRoute: executionProfile forwarded to api.simulateRoute', async () => {
+  let capturedInput: unknown;
+  const api = {
+    async simulateRoute(input: unknown) {
+      capturedInput = input;
+      return {
+        playbookId: 'pb', pipelineId: 'feature-development', source: 'explicit',
+        routeGates: [], roles: [], executionPolicy: {},
+        executionProfile: { id: 'override', runnerOverrides: {}, bindingOverrides: [{ match: { roleId: 'developer' }, modelLevel: 'deep' }] },
+        roleBindings: [], params: {},
+      };
+    },
+  } as unknown as TaskControlPlaneApiService;
+  const facade = new McpFacadeService(api);
+
+  await facade.simulateRoute({ title: 'Task', pipeline: 'feature-development', executionProfile: { id: 'override', bindingOverrides: [{ match: { roleId: 'developer' }, modelLevel: 'deep' }] } });
+
+  const input = capturedInput as Record<string, unknown>;
+  const ep = input.executionProfile as Record<string, unknown>;
+  assert.ok(ep !== undefined, 'executionProfile forwarded');
+  assert.equal(ep.id, 'override');
+});
+
+test('McpFacadeService.simulateRoute: compact response includes bindingOverrideCount when bindingOverrides present', async () => {
+  const api = {
+    async simulateRoute() {
+      return {
+        playbookId: 'pb', pipelineId: 'feature-development', source: 'explicit',
+        routeGates: [], roles: [],
+        executionPolicy: {},
+        executionProfile: { id: 'test-profile', runnerOverrides: {}, bindingOverrides: [{ match: { roleId: 'developer' }, modelLevel: 'deep' }] },
+        roleBindings: [], params: {},
+      };
+    },
+  } as unknown as TaskControlPlaneApiService;
+  const facade = new McpFacadeService(api);
+
+  const result = await facade.simulateRoute({ title: 'Task' }) as Record<string, unknown>;
+  const ep = result.executionProfile as Record<string, unknown>;
+  assert.equal(ep.id, 'test-profile');
+  assert.equal(ep.bindingOverrideCount, 1, 'compact response includes bindingOverrideCount');
+});
+
+test('McpFacadeService.createRun: executionProfile forwarded to api.createRun', async () => {
+  let capturedInput: unknown;
+  const api = {
+    async createRun(input: unknown) {
+      capturedInput = input;
+      return { runId: 'run-1', taskId: 'task-1', stepId: 'step-1', eventId: 'evt-1', status: 'ready' as const };
+    },
+    async simulateRoute() {
+      return {
+        playbookId: 'pb', pipelineId: 'local-change', source: 'explicit' as const,
+        routeGates: [], roles: ['developer'], requiredRoles: ['developer'], optionalRoles: [],
+        executionPolicy: { template_json: { specVersion: '1.0', pipelineId: 'local-change', entry: 'developer', verdicts: { domain: ['approved'] }, nodes: { developer: { id: 'developer', kind: 'agent', roleRef: 'role:developer', next: 'done', onFailure: 'abort' }, done: { id: 'done', kind: 'terminal', status: 'succeeded' } } } },
+        executionProfile: { id: 'override', runnerOverrides: {} },
+        roleBindings: [{ roleId: 'developer', rowId: 'dev', modelLevel: 'standard', runnerId: 'claude-code', resolvedRunnerId: 'stub-agent', runnerSource: 'execution-profile' as const }],
+        params: {},
+        pipelineRowId: 'pb-local-change',
+      };
+    },
+  } as unknown as TaskControlPlaneApiService;
+  const facade = new McpFacadeService(api);
+
+  await facade.createRun({ title: 'Task', pipelineId: 'local-change', repo: '.', start: true, executionProfile: { id: 'override', bindingOverrides: [{ match: { roleId: 'developer' }, modelLevel: 'deep' }] } });
+
+  const input = capturedInput as Record<string, unknown>;
+  const ep = input.executionProfile as Record<string, unknown>;
+  assert.ok(ep !== undefined, 'executionProfile forwarded to createRun');
+  assert.equal(ep.id, 'override');
+});

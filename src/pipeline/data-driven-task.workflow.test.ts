@@ -17,7 +17,7 @@ import { featureDevelopment, featureDevelopmentPrReview, confirmMergeFlow, local
 import type { Template } from '../pipeline-core/index.js';
 import type { AttemptResult } from '../worker/runner.js';
 import type { AppendEventInput } from '../run/append-event.js';
-import type { RouteDecision, RouteRoleBinding } from './route-contract.js';
+import type { RouteDecision, RouteRoleBinding, LaunchOverrides } from './route-contract.js';
 import type { Decision as GateDecision } from './await-human.js';
 import type {
   IntegratorInput,
@@ -2181,4 +2181,132 @@ test('plain featureDevelopment (no cleanupWorktree) succeeded run does NOT relea
   assert.equal(r.status, 'succeeded');
   assert.ok(rec.events.includes('worktree_create:pipeline'));
   assert.ok(!rec.events.includes('worktree_release:pipeline'), 'no release without an explicit cleanupWorktree node');
+});
+
+// ─── launchOverrides dispatch tests ──────────────────────────────────────────
+
+function bindingWithOverride(roleId: string, overrides: Partial<RouteRoleBinding> = {}): RouteRoleBinding {
+  return {
+    roleId,
+    rowId: roleId,
+    modelLevel: 'standard',
+    runnerId: 'claude-code',
+    resolvedRunnerId: 'script',
+    runnerSource: 'playbook',
+    ...overrides,
+  };
+}
+
+function makeMinimalDeps(): DataDrivenTaskDeps {
+  return {
+    appendEvent: async () => {},
+    appendRunOutput: async () => {},
+    setProgress: async () => {},
+    sleep: async () => {},
+    awaitHuman: async () => ({ decision: 'approve' as const }),
+    completeRun: async () => null,
+    failRun: async () => null,
+    blockRun: async () => null,
+    cancelRun: async () => null,
+    loadRunTaskContext: async () => ({ taskId: 'task-1', title: 'T', base: 'master', repoRef: '', issueRef: undefined, issueAction: undefined }),
+    integrateFn: async (input) => ({ prUrl: `stub://pr/${input.taskId}`, branch: 'feat/x', prNumber: 1 }),
+    runStub: (input) => ({ prUrl: `stub://pr/${input.taskId}`, branch: 'feat/x', prNumber: 0 }),
+    preflightFn: async () => ({ ok: true }),
+    createWorktreeFn: async () => ({ worktreePath: '/fake/worktree' }),
+    releaseWorktreeFn: async () => {},
+    confirmMergeFn: async (input) => ({ merged: true as const, prNumber: 1, prUrl: `stub://pr/${input.taskId}` }),
+    runConfirmStub: (input) => ({ merged: true as const, prNumber: 0, prUrl: `stub://pr/${input.taskId}` }),
+    pollPrFn: async () => ({ prNumber: 1, headSha: 'sha', evidence: [], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] }),
+    runPollStub: () => ({ prNumber: 0, headSha: 'stub', evidence: [], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] }),
+    respondThreadsFn: async () => ({ replied: 0, resolved: 0 }),
+    runRespondStub: () => ({ replied: 0, resolved: 0 }),
+    captureChangeFn: async (input) => ({ branch: `feat/${input.taskId}`, headSha: 'sha', worktreePath: '/fake/worktree' }),
+  };
+}
+
+// localChange() template needs orchestrator + developer bindings.
+function makeLocalChangeRoute(developerBindingOverrides: Partial<RouteRoleBinding> = {}): RouteDecision {
+  return {
+    playbookId: 'pb',
+    pipelineId: 'local-change',
+    pipelineRowId: 'row',
+    source: 'explicit',
+    roles: ['orchestrator', 'developer'],
+    requiredRoles: ['orchestrator', 'developer'],
+    optionalRoles: [],
+    routeGates: [],
+    executionPolicy: {},
+    executionProfile: { id: 'test', runnerOverrides: {} },
+    roleBindings: [
+      bindingWithOverride('orchestrator'),
+      bindingWithOverride('developer', developerBindingOverrides),
+    ],
+    params: {},
+  };
+}
+
+test('dispatch: launchOverrides forwarded to runStepFn when bindingOverride has execution-profile source', async () => {
+  const capturedLaunchOverrides = new Map<string, LaunchOverrides | undefined>();
+
+  const runStepFn = async (
+    _runId: string,
+    _role: string,
+    stepKey: string,
+    _input: unknown,
+    _resolvedRunnerId?: string,
+    _executionProfile?: unknown,
+    _physicalAttempt?: { attemptNo: number; attemptId: string },
+    _acceptedVerdicts?: readonly string[],
+    launchOverrides?: LaunchOverrides,
+  ): Promise<AttemptResult> => {
+    capturedLaunchOverrides.set(stepKey, launchOverrides);
+    return { output: { from: stepKey }, verdict: 'approved', nextSteps: [], costs: [] };
+  };
+
+  const route = makeLocalChangeRoute({
+    resolvedModelLevel: 'cheap',
+    modelSource: 'execution-profile',
+    resolvedTimeoutMs: 60000,
+    timeoutSource: 'execution-profile',
+  });
+  route.executionProfile = {
+    id: 'override-profile',
+    runnerOverrides: {},
+    bindingOverrides: [{ match: { roleId: 'developer' }, modelLevel: 'cheap', timeoutMs: 60000 }],
+  };
+
+  const fn = makeDataDrivenTask(runStepFn, makeMinimalDeps());
+  await fn(RUN_ID, { route, template: localChange(), runnerRetryPolicy: resolveRunnerTransientRetryPolicy() });
+
+  const developerLaunchOverrides = capturedLaunchOverrides.get('developer');
+  assert.ok(developerLaunchOverrides !== undefined, 'launchOverrides were passed to runStepFn for developer');
+  assert.equal(developerLaunchOverrides?.modelLevel, 'cheap');
+  assert.equal(developerLaunchOverrides?.timeoutMs, 60000);
+  assert.equal(developerLaunchOverrides?.permissionMode, undefined);
+});
+
+test('dispatch: no launchOverrides when binding has only playbook sources', async () => {
+  const capturedLaunchOverrides = new Map<string, LaunchOverrides | undefined>();
+
+  const runStepFn = async (
+    _runId: string,
+    _role: string,
+    stepKey: string,
+    _input: unknown,
+    _resolvedRunnerId?: string,
+    _executionProfile?: unknown,
+    _physicalAttempt?: { attemptNo: number; attemptId: string },
+    _acceptedVerdicts?: readonly string[],
+    launchOverrides?: LaunchOverrides,
+  ): Promise<AttemptResult> => {
+    capturedLaunchOverrides.set(stepKey, launchOverrides);
+    return { output: { from: stepKey }, verdict: 'approved', nextSteps: [], costs: [] };
+  };
+
+  const route = makeLocalChangeRoute();
+  const fn = makeDataDrivenTask(runStepFn, makeMinimalDeps());
+  await fn(RUN_ID, { route, template: localChange(), runnerRetryPolicy: resolveRunnerTransientRetryPolicy() });
+
+  const developerLaunchOverrides = capturedLaunchOverrides.get('developer');
+  assert.equal(developerLaunchOverrides, undefined, 'no launchOverrides for playbook-only binding');
 });

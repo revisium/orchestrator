@@ -55,6 +55,7 @@ import {
 import {
   dispatchRunnerId,
   type ExecutionProfile,
+  type LaunchOverrides,
 } from './route-contract.js';
 
 
@@ -421,10 +422,12 @@ export function makeRunStep(deps: RunStepDeps) {
     executionProfile?: ExecutionProfile,
     physicalAttempt?: RunStepPhysicalAttempt,
     acceptedVerdicts?: readonly string[],
+    launchOverrides?: LaunchOverrides,
   ): Promise<AttemptResult> {
     const loadedRole = await loadRole(role);
 
-    const profile = await loadModelProfile(loadedRole.modelLevel);
+    const effectiveModelLevel = launchOverrides?.modelLevel ?? loadedRole.modelLevel;
+    const profile = await loadModelProfile(effectiveModelLevel);
 
     const { da, step, runContext } = await loadPipelineContext(
       runId,
@@ -461,7 +464,12 @@ export function makeRunStep(deps: RunStepDeps) {
     }
 
     const effectiveRunner = dispatchRunnerId(resolveStepRunner(loadedRole.runner, resolvedRunnerId, executionProfile));
-    const dispatchRole = { ...loadedRole, runner: effectiveRunner };
+    const dispatchRole = {
+      ...loadedRole,
+      runner: effectiveRunner,
+      ...(launchOverrides?.timeoutMs !== undefined ? { timeoutMs: launchOverrides.timeoutMs } : {}),
+      ...(launchOverrides?.permissionMode !== undefined ? { permissionMode: launchOverrides.permissionMode } : {}),
+    };
     const reporter = writeAgentOutputEvent
       ? createAgentActivityReporter(
           {
@@ -537,6 +545,7 @@ export class PipelineService {
     executionProfile?: ExecutionProfile,
     physicalAttempt?: RunStepPhysicalAttempt,
     acceptedVerdicts?: readonly string[],
+    launchOverrides?: LaunchOverrides,
   ) => Promise<AttemptResult>;
 
 

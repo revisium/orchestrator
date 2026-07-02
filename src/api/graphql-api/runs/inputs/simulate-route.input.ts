@@ -1,5 +1,6 @@
 import { Field, InputType } from '@nestjs/graphql';
 import { GraphQLJSON } from 'graphql-scalars';
+import { ExecutionProfileInput } from './execution-profile.input.js';
 
 @InputType()
 export class SimulateRouteInput {
@@ -17,4 +18,7 @@ export class SimulateRouteInput {
 
   @Field(() => GraphQLJSON, { nullable: true })
   params?: unknown;
+
+  @Field(() => ExecutionProfileInput, { nullable: true })
+  executionProfile?: ExecutionProfileInput;
 }

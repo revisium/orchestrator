@@ -2,6 +2,7 @@ import { Field, InputType, Int } from '@nestjs/graphql';
 import { GraphQLJSON } from 'graphql-scalars';
 import { IssueActionEnum } from '../../share/model/issue-action.model.js';
 import { IssueRefInput } from '../../share/model/issue-ref.model.js';
+import { ExecutionProfileInput } from './execution-profile.input.js';
 
 @InputType()
 export class CreateRunInput {
@@ -37,4 +38,7 @@ export class CreateRunInput {
 
   @Field(() => Boolean, { defaultValue: false })
   start?: boolean;
+
+  @Field(() => ExecutionProfileInput, { nullable: true })
+  executionProfile?: ExecutionProfileInput;
 }

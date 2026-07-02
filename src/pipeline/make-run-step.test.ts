@@ -23,7 +23,7 @@ import type { Step } from '../control-plane/steps.js';
 import type { ControlPlaneDataAccess } from '../control-plane/data-access.js';
 import { ControlPlaneError } from '../control-plane/errors.js';
 import type { AppendEventInput, AppendCostInput, AppendAttemptInput } from '../run/append-event.js';
-import type { ExecutionProfile } from './route-contract.js';
+import type { ExecutionProfile, LaunchOverrides } from './route-contract.js';
 import type { AgentOutputEvent } from '../observability/types.js';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -467,4 +467,82 @@ test('idempotency: appendEvent ROW_CONFLICT on replay is a no-op (no duplicate w
     payload: {},
   });
   // Reaching here (no throw) is the assertion.
+});
+
+// ─── launchOverrides dispatch tests ─────────────────────────────────────────
+
+test('launchOverrides: modelLevel override selects a different model profile (ignored role default)', async () => {
+  const runId = 'run-lo-model';
+  let capturedModelProfile: string | undefined;
+  const { deps, harness } = buildRunStepDeps();
+  deps.loadPipelineContext = async (rId, role, stepKey, stepInput, modelProfile) => {
+    capturedModelProfile = modelProfile;
+    return (makeLoadPipelineContext())(rId, role, stepKey, stepInput, modelProfile);
+  };
+  const runStep = makeRunStep(deps);
+  const profile: ExecutionProfile = { id: 'test', runnerOverrides: {} };
+  const overrides: LaunchOverrides = { modelLevel: 'cheap' };
+
+  // architect role has modelLevel='deep' by default; overrides pick 'cheap'
+  await runStep(runId, 'architect', 'architect', { phase: 'plan' }, 'script', profile, undefined, undefined, overrides);
+
+  assert.equal(capturedModelProfile, 'cheap', 'expected cheap model level from launchOverrides, not deep from role');
+  assert.equal(harness.appendEventArgs.at(-1)?.type, 'step_succeeded');
+});
+
+test('launchOverrides: undefined launchOverrides -> role default model level used', async () => {
+  const runId = 'run-lo-nooverride';
+  let capturedModelProfile: string | undefined;
+  const { deps } = buildRunStepDeps();
+  deps.loadPipelineContext = async (rId, role, stepKey, stepInput, modelProfile) => {
+    capturedModelProfile = modelProfile;
+    return (makeLoadPipelineContext())(rId, role, stepKey, stepInput, modelProfile);
+  };
+  const runStep = makeRunStep(deps);
+  const profile: ExecutionProfile = { id: 'test', runnerOverrides: {} };
+
+  // architect has modelLevel='deep', no override
+  await runStep(runId, 'architect', 'architect', { phase: 'plan' }, 'script', profile);
+
+  assert.equal(capturedModelProfile, 'deep', 'expected deep model level from role definition');
+});
+
+test('launchOverrides: permissionMode and timeoutMs forwarded to dispatchRole for runAgent', async () => {
+  const runId = 'run-lo-pm';
+  let capturedRole: Role | undefined;
+  const { deps, harness } = buildRunStepDeps();
+  const originalRunAgent = deps.runAgent;
+  deps.runAgent = async (input) => {
+    capturedRole = input.role as Role;
+    return originalRunAgent(input);
+  };
+  const runStep = makeRunStep(deps);
+  const profile: ExecutionProfile = { id: 'test', runnerOverrides: {} };
+  const overrides: LaunchOverrides = { timeoutMs: 90000, permissionMode: 'bypassPermissions' };
+
+  await runStep(runId, 'developer', 'developer', { phase: 'implement' }, 'script', profile, undefined, undefined, overrides);
+
+  assert.ok(capturedRole !== undefined, 'runAgent was called');
+  assert.equal((capturedRole as Role & { timeoutMs?: number }).timeoutMs, 90000);
+  assert.equal((capturedRole as Role & { permissionMode?: string }).permissionMode, 'bypassPermissions');
+  assert.equal(harness.appendEventArgs.at(-1)?.type, 'step_succeeded');
+});
+
+test('launchOverrides: null/undefined overrides do not set permissionMode or timeoutMs on dispatchRole', async () => {
+  const runId = 'run-lo-nullpm';
+  let capturedRole: Role | undefined;
+  const { deps } = buildRunStepDeps();
+  const originalRunAgent = deps.runAgent;
+  deps.runAgent = async (input) => {
+    capturedRole = input.role as Role;
+    return originalRunAgent(input);
+  };
+  const runStep = makeRunStep(deps);
+  const profile: ExecutionProfile = { id: 'test', runnerOverrides: {} };
+
+  await runStep(runId, 'developer', 'developer', { phase: 'implement' }, 'script', profile);
+
+  assert.ok(capturedRole !== undefined);
+  assert.equal((capturedRole as Role & { permissionMode?: string }).permissionMode, undefined);
+  assert.equal((capturedRole as Role & { timeoutMs?: number }).timeoutMs, undefined);
 });
