@@ -99,6 +99,18 @@ export async function createRunHarness(opts: RunHarnessOptions = {}): Promise<Ru
     developerWrites,
     ghCalls,
     close: async (): Promise<void> => {
+      // e2e files share ONE process and a process-global DBOS dev-tasks queue
+      // (concurrency-capped). A run left running/parked by this file keeps its
+      // slot and starves later files (they never get a worker → time out at
+      // 'running'). Cancel every non-terminal run before shutting the host down.
+      const TERMINAL = new Set(['completed', 'succeeded', 'failed', 'blocked', 'cancelled']);
+      try {
+        for (const run of await api.listRuns({ limit: 500 })) {
+          if (!TERMINAL.has(run.status)) await api.cancelRun(run.runId).catch(() => undefined);
+        }
+      } catch {
+        // best-effort cleanup — teardown must never throw
+      }
       await lifecycle.onApplicationShutdown();
     },
   };
