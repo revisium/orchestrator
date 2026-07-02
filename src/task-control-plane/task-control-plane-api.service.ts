@@ -15,6 +15,7 @@ import type {
   WatchAgentOutputInput,
 } from '../observability/types.js';
 import { ControlPlaneError } from '../control-plane/errors.js';
+import { VALID_MODEL_LEVELS } from '../control-plane/definitions.js';
 import type { InboxItem } from '../control-plane/inbox.js';
 import { validateManualAdoptionAudit, type ManualAdoptionAuditInput } from '../control-plane/manual-adoption-audit.js';
 import { validateMergeOverrideAudit, type MergeOverrideAuditInput } from '../control-plane/merge-override-audit.js';
@@ -27,7 +28,9 @@ import {
   normalizeExecutionProfile,
   normalizeParams,
   normalizeRouteGates,
+  resolveBindingForRole,
   resolveRunnerForProfile,
+  RUNNER_PERMISSION_MODES,
   type ExecutionProfile,
   type RouteDecision,
   type RouteRoleBinding,
@@ -1447,13 +1450,14 @@ export class TaskControlPlaneApiService {
     return result;
   }
 
-  simulateRoute(input: { title: string; repo?: string; pipeline?: string; playbookId?: string; params?: unknown }) {
+  simulateRoute(input: { title: string; repo?: string; pipeline?: string; playbookId?: string; params?: unknown; executionProfile?: unknown }) {
     return this.resolveRouteDecision({
       title: input.title,
       repo: input.repo ?? '',
       playbookId: input.playbookId,
       pipelineId: input.pipeline,
       params: input.params,
+      executionProfile: input.executionProfile,
       source: input.pipeline ? 'explicit' : 'deterministic-installed-playbook',
     });
   }
@@ -1515,7 +1519,9 @@ export class TaskControlPlaneApiService {
     const pipeline = input.pipelineId
       ? await this.playbooks.resolvePipeline({ playbookId: playbook.id, pipelineId: input.pipelineId })
       : await this.resolveAutoPipeline(playbook.id, [input.title, input.description, input.scope].join(' '));
-    const roleBindings = await this.resolveRouteRoles(playbook.id, pipeline, executionProfile);
+    const allRoles = (await this.roles.listRoles()).filter((role) => role.playbookId === playbook.id);
+    await this.assertExecutionProfileClosed(executionProfile, allRoles);
+    const roleBindings = await this.resolveRouteRoles(playbook.id, pipeline, executionProfile, allRoles);
     return {
       playbookId: playbook.id,
       pipelineId: pipeline.pipelineId,
@@ -1530,6 +1536,141 @@ export class TaskControlPlaneApiService {
       roleBindings,
       params,
     };
+  }
+
+  private async assertExecutionProfileClosed(
+    executionProfile: ExecutionProfile,
+    roles: RoleSummary[],
+  ): Promise<void> {
+    const overrides = executionProfile.bindingOverrides ?? [];
+    if (overrides.length === 0) return;
+    const available = executionProfile.availableRunners;
+    const byPlaybookRole = new Map(roles.map((r) => [r.playbookRoleId || r.name, r]));
+    const cachedProfiles = new Map<string, boolean>();
+
+    for (const override of overrides) {
+      const matchLabel = JSON.stringify(override.match);
+      const { roleId: mRoleId, nodeId: mNodeId, runnerId: mRunnerId } = override.match;
+
+      if (!mRoleId && !mNodeId && !mRunnerId) {
+        throw new ControlPlaneError(
+          'VALIDATION_FAILURE',
+          `PROFILE_SCHEMA_CLOSED: bindingOverride match ${matchLabel} must specify at least one of roleId, nodeId, runnerId`,
+        );
+      }
+
+      // Validate match.runnerId too, not just override.runnerId — an unregistered/typo'd match
+      // target would otherwise silently match nothing and the override becomes a no-op.
+      if (mRunnerId !== undefined) {
+        if (available && !available.includes(mRunnerId)) {
+          throw new ControlPlaneError(
+            'VALIDATION_FAILURE',
+            `PROFILE_SCHEMA_CLOSED: bindingOverride match ${matchLabel} runnerId "${mRunnerId}" not in availableRunners`,
+          );
+        }
+        if (!available && !BUILTIN_RUNNERS.has(mRunnerId)) {
+          throw new ControlPlaneError(
+            'VALIDATION_FAILURE',
+            `PROFILE_SCHEMA_CLOSED: bindingOverride match ${matchLabel} runnerId "${mRunnerId}" is not a registered runner`,
+          );
+        }
+      }
+
+      if (override.runnerId !== undefined) {
+        const ovRunner = override.runnerId;
+        if (available && !available.includes(ovRunner)) {
+          throw new ControlPlaneError(
+            'VALIDATION_FAILURE',
+            `PROFILE_SCHEMA_CLOSED: bindingOverride match ${matchLabel} runnerId "${ovRunner}" not in availableRunners`,
+          );
+        }
+        if (!available && !BUILTIN_RUNNERS.has(ovRunner)) {
+          throw new ControlPlaneError(
+            'VALIDATION_FAILURE',
+            `PROFILE_SCHEMA_CLOSED: bindingOverride match ${matchLabel} runnerId "${ovRunner}" is not a registered runner`,
+          );
+        }
+      }
+
+      if (override.modelLevel !== undefined) {
+        const lvl = override.modelLevel;
+        if (!(VALID_MODEL_LEVELS as readonly string[]).includes(lvl)) {
+          throw new ControlPlaneError(
+            'VALIDATION_FAILURE',
+            `PROFILE_SCHEMA_CLOSED: bindingOverride match ${matchLabel} modelLevel "${lvl}" is unavailable`,
+          );
+        }
+        const cached = cachedProfiles.get(lvl);
+        if (cached === undefined) {
+          try {
+            await this.roles.loadModelProfile(lvl);
+            cachedProfiles.set(lvl, true);
+          } catch (err) {
+            const isNotFound = err instanceof ControlPlaneError && (err.code === 'ROW_NOT_FOUND' || err.code === 'VALIDATION_FAILURE');
+            if (isNotFound) {
+              cachedProfiles.set(lvl, false);
+              throw new ControlPlaneError(
+                'VALIDATION_FAILURE',
+                `PROFILE_SCHEMA_CLOSED: bindingOverride match ${matchLabel} modelLevel "${lvl}" is unavailable`,
+              );
+            }
+            throw err;
+          }
+        } else if (!cached) {
+          throw new ControlPlaneError(
+            'VALIDATION_FAILURE',
+            `PROFILE_SCHEMA_CLOSED: bindingOverride match ${matchLabel} modelLevel "${lvl}" is unavailable`,
+          );
+        }
+      }
+
+      if (override.timeoutMs !== undefined) {
+        const ms = override.timeoutMs;
+        if (!Number.isInteger(ms) || ms <= 0 || ms > 86_400_000) {
+          throw new ControlPlaneError(
+            'VALIDATION_FAILURE',
+            `PROFILE_SCHEMA_CLOSED: bindingOverride match ${matchLabel} timeoutMs must be a positive integer <= 86400000, got ${ms}`,
+          );
+        }
+      }
+
+      if (override.permissionMode !== undefined) {
+        let effectiveRunner: string | undefined;
+        if (override.runnerId) {
+          effectiveRunner = override.runnerId;
+        } else if (mRunnerId) {
+          effectiveRunner = executionProfile.runnerOverrides[mRunnerId] ?? mRunnerId;
+        } else if (mRoleId) {
+          const role = byPlaybookRole.get(mRoleId);
+          if (!role) {
+            throw new ControlPlaneError(
+              'VALIDATION_FAILURE',
+              `PROFILE_SCHEMA_CLOSED: bindingOverride match ${matchLabel} permissionMode override requires a resolvable runner; pin runnerId`,
+            );
+          }
+          effectiveRunner = executionProfile.runnerOverrides[role.runner] ?? role.runner;
+        } else {
+          throw new ControlPlaneError(
+            'VALIDATION_FAILURE',
+            `PROFILE_SCHEMA_CLOSED: bindingOverride match ${matchLabel} permissionMode override requires a resolvable runner; pin runnerId`,
+          );
+        }
+
+        const validModes = RUNNER_PERMISSION_MODES[effectiveRunner];
+        if (!validModes) {
+          throw new ControlPlaneError(
+            'VALIDATION_FAILURE',
+            `PROFILE_SCHEMA_CLOSED: bindingOverride match ${matchLabel} permissionMode not supported for runner ${effectiveRunner}`,
+          );
+        }
+        if (!validModes.includes(override.permissionMode)) {
+          throw new ControlPlaneError(
+            'VALIDATION_FAILURE',
+            `PROFILE_SCHEMA_CLOSED: bindingOverride match ${matchLabel} permissionMode "${override.permissionMode}" is not valid for runner ${effectiveRunner}; expected one of ${validModes.join(', ')}`,
+          );
+        }
+      }
+    }
   }
 
   private async resolveAutoPipeline(playbookId: string, text: string): Promise<PipelineSummary> {
@@ -1563,8 +1704,9 @@ export class TaskControlPlaneApiService {
     playbookId: string,
     pipeline: PipelineSummary,
     executionProfile: ExecutionProfile,
+    preloadedRoles?: RoleSummary[],
   ): Promise<RouteRoleBinding[]> {
-    const roles = (await this.roles.listRoles()).filter((role) => role.playbookId === playbookId);
+    const roles = preloadedRoles ?? (await this.roles.listRoles()).filter((role) => role.playbookId === playbookId);
     const byPlaybookRole = new Map(roles.map((role) => [role.playbookRoleId || role.name, role]));
     const selected = [...pipeline.requiredRoles];
     for (const group of pipeline.alternativeRoles) {
@@ -1588,16 +1730,25 @@ export class TaskControlPlaneApiService {
     return selected.map((roleId): RouteRoleBinding => {
       const role = byPlaybookRole.get(roleId) as RoleSummary;
       assertProductionRunnerBinding(role.runner, 'playbook', roleId);
-      const resolved = resolveRunnerForProfile(role.runner, executionProfile);
-      assertProductionRunnerBinding(resolved.runnerId, resolved.source, roleId);
-      assertRunnerAvailable(resolved.runnerId, executionProfile, roleId);
+      const runnerResolved = resolveRunnerForProfile(role.runner, executionProfile);
+      assertProductionRunnerBinding(runnerResolved.runnerId, runnerResolved.source, roleId);
+      assertRunnerAvailable(runnerResolved.runnerId, executionProfile, roleId);
+      const bindingResolution = resolveBindingForRole(role, roleId, runnerResolved.runnerId, executionProfile);
       return {
         roleId,
         rowId: role.id,
         modelLevel: role.modelLevel,
         runnerId: role.runner,
-        resolvedRunnerId: resolved.runnerId,
-        runnerSource: resolved.source,
+        resolvedRunnerId: runnerResolved.runnerId,
+        runnerSource: runnerResolved.source,
+        resolvedModelLevel: bindingResolution.resolvedModelLevel,
+        modelSource: bindingResolution.modelSource,
+        timeoutMs: role.timeoutMs,
+        resolvedTimeoutMs: bindingResolution.resolvedTimeoutMs,
+        timeoutSource: bindingResolution.timeoutSource,
+        permissionMode: role.permissionMode,
+        resolvedPermissionMode: bindingResolution.resolvedPermissionMode,
+        permissionSource: bindingResolution.permissionSource,
       };
     });
   }

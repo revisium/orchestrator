@@ -351,3 +351,82 @@ test('get_run_events: handler forwards expand to facade', async () => {
 
   assert.deepEqual((received as Record<string, unknown>)['expand'], ['graph']);
 });
+
+test('create_run schema accepts executionProfile with bindingOverrides', async () => {
+  const { server, tools } = makeServer();
+  let received: unknown;
+  const facade = {
+    async createRun(input: unknown) {
+      received = input;
+      return { runId: 'run-1', taskId: 'task-1', stepId: 's-1', eventId: 'e-1', status: 'ready' };
+    },
+    async simulateRoute() {
+      return {
+        playbookId: 'pb', pipelineId: 'local-change', source: 'explicit',
+        routeGates: [], roles: ['developer'], executionPolicy: {
+          template_json: { specVersion: '1.0', pipelineId: 'local-change', entry: 'developer', verdicts: { domain: ['approved'] },
+            nodes: { developer: { id: 'developer', kind: 'agent', roleRef: 'role:developer', next: 'done', onFailure: 'abort' }, done: { id: 'done', kind: 'terminal', status: 'succeeded' } } },
+        },
+        executionProfile: { id: 'ep', runnerOverrides: {} },
+        roleBindings: [{ roleId: 'developer', rowId: 'pb-developer', modelLevel: 'standard', runnerId: 'claude-code', resolvedRunnerId: 'stub-agent', runnerSource: 'execution-profile' }],
+        requiredRoles: ['developer'], optionalRoles: [], params: {}, pipelineRowId: 'pb-local-change',
+      };
+    },
+    async previewPipelineSelection() {
+      return { playbookId: 'pb', candidatePipelines: [], wouldAutoRoute: null };
+    },
+  } as unknown as McpFacadeService;
+  registerRevoMcpTools(server as never, facade);
+
+  const tool = tools.find((registered) => registered.name === 'create_run');
+  assert.ok(tool, 'create_run tool registered');
+
+  await tool.handler({
+    title: 'Test',
+    pipelineId: 'local-change',
+    repo: '.',
+    start: true,
+    executionProfile: {
+      bindingOverrides: [{ match: { roleId: 'developer' }, modelLevel: 'deep', timeoutMs: 60000 }],
+    },
+  } as never);
+
+  const input = received as Record<string, unknown>;
+  const ep = input.executionProfile as Record<string, unknown>;
+  assert.ok(ep !== undefined, 'executionProfile forwarded by create_run handler');
+  assert.ok(Array.isArray(ep.bindingOverrides), 'bindingOverrides present');
+});
+
+test('simulate_route schema accepts executionProfile with bindingOverrides', async () => {
+  const { server, tools } = makeServer();
+  let received: unknown;
+  const facade = {
+    async simulateRoute(input: unknown) {
+      received = input;
+      return {
+        playbookId: 'pb', pipelineId: 'feature-development', source: 'explicit',
+        routeGates: [], roles: [], executionPolicy: {},
+        executionProfile: { id: 'ep', runnerOverrides: {} },
+        roleBindings: [], params: {},
+      };
+    },
+  } as unknown as McpFacadeService;
+  registerRevoMcpTools(server as never, facade);
+
+  const tool = tools.find((registered) => registered.name === 'simulate_route');
+  assert.ok(tool, 'simulate_route tool registered');
+
+  await tool.handler({
+    title: 'Test',
+    pipeline: 'feature-development',
+    executionProfile: {
+      id: 'my-profile',
+      bindingOverrides: [{ match: { runnerId: 'claude-code' }, permissionMode: 'plan' }],
+    },
+  } as never);
+
+  const input = received as Record<string, unknown>;
+  const ep = input.executionProfile as Record<string, unknown>;
+  assert.ok(ep !== undefined, 'executionProfile forwarded by simulate_route handler');
+  assert.equal(ep.id, 'my-profile');
+});

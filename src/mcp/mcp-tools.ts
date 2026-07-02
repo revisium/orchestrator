@@ -23,6 +23,23 @@ const agentStreamSchema = z.enum(['stdout', 'stderr', 'events', 'combined']);
 const agentLogByteSchema = z.number().int().positive().max(1048576).optional();
 const agentLogOffsetSchema = z.number().int().nonnegative().max(1048576).optional();
 const paramsSchema = z.record(z.string(), z.unknown()).optional();
+const bindingOverrideMatchSchema = z.object({
+  roleId: z.string().min(1).optional(),
+  nodeId: z.string().min(1).optional(),
+  runnerId: z.string().min(1).optional(),
+});
+const bindingOverrideSchema = z.object({
+  match: bindingOverrideMatchSchema,
+  runnerId: z.string().min(1).optional(),
+  modelLevel: z.string().min(1).optional(),
+  timeoutMs: z.number().int().positive().max(86_400_000).optional(),
+  permissionMode: z.string().min(1).optional(),
+});
+const executionProfileSchema = z.object({
+  runnerOverrides: z.record(z.string(), z.string()).optional(),
+  availableRunners: z.array(z.string().min(1)).optional(),
+  bindingOverrides: z.array(bindingOverrideSchema).optional(),
+}).optional();
 const manualAdoptionAuditSchema = z.object({
   runId: z.string().trim().min(1),
   step: z.string().trim().min(1),
@@ -167,6 +184,7 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
         playbookId: z.string().min(1).optional(),
         pipelineId: z.string().min(1).optional().describe('Required: the pipeline to use. Omit to receive candidatePipelines for selection (no run is created).'),
         params: paramsSchema,
+        executionProfile: executionProfileSchema,
         issueRef: issueRefSchema,
         issueAction: issueActionSchema.describe('Issue linkage behavior for issue-bound delivery: close, refs, or none. Defaults to close when issueRef is supplied.'),
         priority: z.number().int().optional(),
@@ -604,6 +622,7 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
         pipeline: z.string().optional(),
         playbookId: z.string().optional(),
         params: paramsSchema,
+        executionProfile: executionProfileSchema,
         includeDetails: z.boolean().optional(),
       },
       annotations: { readOnlyHint: true },

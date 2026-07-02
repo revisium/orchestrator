@@ -1,6 +1,6 @@
 import { Injectable, Inject } from '@nestjs/common';
 import type { ControlPlaneTransport } from '../control-plane/data-access.js';
-import { loadRole, loadModelProfile, loadPipelinePolicy, type Role, type ModelProfile, type PipelinePolicy } from '../control-plane/definitions.js';
+import { loadRole, loadModelProfile, loadPipelinePolicy, toOptPosInt, type Role, type ModelProfile, type PipelinePolicy } from '../control-plane/definitions.js';
 import { REVISIUM_TRANSPORT_HEAD } from './tokens.js';
 
 export type RoleSummary = {
@@ -12,6 +12,8 @@ export type RoleSummary = {
   rights: string;
   playbookId: string;
   playbookRoleId: string;
+  timeoutMs?: number;
+  permissionMode?: string;
 };
 
 export type ModelProfileSummary = {
@@ -23,9 +25,6 @@ export type ModelProfileSummary = {
 function str(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
-
-
-
 
 @Injectable()
 export class RolesService {
@@ -52,6 +51,8 @@ export class RolesService {
         rights: str(data.rights),
         playbookId: str(data.playbook_id),
         playbookRoleId: str(data.playbook_role_id),
+        timeoutMs: toOptPosInt(data.timeout_ms),
+        permissionMode: str(data.permission_mode) || undefined,
       }];
     });
   }
@@ -73,7 +74,6 @@ export class RolesService {
       }];
     });
   }
-
 
   loadPipelinePolicy(): Promise<PipelinePolicy> {
     return loadPipelinePolicy(this.head);

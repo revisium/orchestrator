@@ -42,8 +42,8 @@ import {
   type TerminalStatus,
 } from '../pipeline-core/index.js';
 import type { AttemptResult } from '../worker/runner.js';
-import type { ExecutionProfile, RouteDecision, RouteRoleBinding } from './route-contract.js';
-import { runnerNeedsLivePreflight, runnerUsesRealIntegrator } from './route-contract.js';
+import type { ExecutionProfile, LaunchOverrides, RouteDecision, RouteRoleBinding } from './route-contract.js';
+import { resolveLaunchOverrides, runnerNeedsLivePreflight, runnerUsesRealIntegrator } from './route-contract.js';
 import type {
   IntegratorInput,
   IntegratorOutput,
@@ -875,6 +875,7 @@ export function makeDataDrivenTask(
     executionProfile?: ExecutionProfile,
     physicalAttempt?: PhysicalRunStepAttempt,
     acceptedVerdicts?: readonly string[],
+    launchOverrides?: LaunchOverrides,
   ) => Promise<AttemptResult>,
   deps: DataDrivenTaskDeps,
 ) {
@@ -1358,6 +1359,7 @@ export function makeDataDrivenTask(
     for (let attemptNo = 1; attemptNo <= ctx.runnerRetryPolicy.maxAttempts; attemptNo++) {
       const physicalAttempt = physicalAttemptFor(runId, stepKey, attemptNo);
       attemptIds.push(physicalAttempt.attemptId);
+      const launchOverrides = resolveLaunchOverrides(binding, decision.nodeId, ctx.executionProfile);
       const result = await runStepFn(
         runId,
         binding.rowId,
@@ -1367,6 +1369,7 @@ export function makeDataDrivenTask(
         ctx.executionProfile,
         physicalAttempt,
         ctx.template.verdicts.domain,
+        launchOverrides,
       );
 
       const needsHuman = await maybeHandleNeedsHumanRoleResult({

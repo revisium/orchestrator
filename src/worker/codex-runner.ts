@@ -181,6 +181,10 @@ function isWriteToolName(tool: string): boolean {
 }
 
 function sandboxForRole(role: Role): 'read-only' | 'workspace-write' {
+  const pm = normalizedPolicyLabel(role.permissionMode);
+  if (pm === 'workspace-write') return 'workspace-write';
+  if (pm === 'read-only') return 'read-only';
+
   if (role.allowedTools.some(isWriteToolName)) return 'workspace-write';
 
   const rights = normalizedPolicyLabel(role.rights);
