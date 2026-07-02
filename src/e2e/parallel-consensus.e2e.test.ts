@@ -28,6 +28,11 @@ let h: RunHarness;
 let target: TargetRepo;
 
 async function installParallelPlaybook(harness: RunHarness): Promise<void> {
+  // Skip-if-present is mandatory, not an optimization: e2e-setup pre-installs this playbook, and a
+  // repeated install here UPSERTS rows and COMMITS the shared draft mid-suite — every concurrently
+  // running file's cached draft revision then dies with "The revision is not a draft".
+  const installed = await harness.api.listPlaybooks();
+  if (installed.some((p) => p.id === PLAYBOOK_ID)) return;
   try {
     const install = await harness.api.installPlaybook({
       source: PLAYBOOK_SOURCE,

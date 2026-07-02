@@ -22,26 +22,53 @@ async function graphql<T>(query: string, variables?: Record<string, unknown>): P
   return json.data;
 }
 
-function nextSubscription<T>(query: string, variables?: Record<string, unknown>): Promise<T> {
+/**
+ * Subscribe and buffer every payload; `waitFor` resolves with the first one `match` accepts
+ * (buffered or future). The subscription is global and the control-plane is shared across
+ * concurrently running e2e files, so "the first event" can belong to a neighbour file's run —
+ * callers must select their own, and the matching payload may arrive before its id is even known
+ * (hence the buffer, not a one-shot predicate).
+ */
+function subscribeCollect<T>(query: string, variables?: Record<string, unknown>) {
   assert.ok(host, 'GraphQL host must be started');
   const client = createClient({ url: host.url.replace('http://', 'ws://') });
-  return new Promise<T>((resolve, reject) => {
-    const dispose = client.subscribe(
-      { query, variables },
-      {
-        next(value) {
-          dispose();
-          void client.dispose();
-          resolve(value.data as T);
-        },
-        error(error) {
-          void client.dispose();
-          reject(error);
-        },
-        complete() {},
+  const buffer: T[] = [];
+  let failure: unknown;
+  let notify: (() => void) | undefined;
+  const dispose = client.subscribe(
+    { query, variables },
+    {
+      next(value) {
+        buffer.push(value.data as T);
+        notify?.();
       },
-    );
-  });
+      error(error) {
+        failure = error;
+        notify?.();
+      },
+      complete() {},
+    },
+  );
+  return {
+    async waitFor(match: (payload: T) => boolean, timeoutMs = 10_000): Promise<T> {
+      const deadline = Date.now() + timeoutMs;
+      try {
+        for (;;) {
+          if (failure) throw failure;
+          const hit = buffer.find(match);
+          if (hit) return hit;
+          if (Date.now() >= deadline) throw new Error('subscription event not observed before timeout');
+          await new Promise<void>((resolve) => {
+            notify = resolve;
+            setTimeout(resolve, 100);
+          });
+        }
+      } finally {
+        dispose();
+        void client.dispose();
+      }
+    },
+  };
 }
 
 before(async () => {
@@ -61,7 +88,7 @@ test('GraphQL real host: read path → createRun mutation → subscription paylo
   assert.equal(status.status.daemon.running, true);
   assert.equal(status.status.project.org, 'admin');
 
-  const event = nextSubscription<{ runEventAppended: { runId: string; type: string } }>(
+  const events = subscribeCollect<{ runEventAppended: { runId: string; type: string } }>(
     'subscription { runEventAppended { runId type } }',
   );
   const created = await graphql<{ createRun: { runId: string } }>(
@@ -112,7 +139,9 @@ test('GraphQL real host: read path → createRun mutation → subscription paylo
     ].join('\n'),
     { id: created.createRun.runId, attempts: { runId: created.createRun.runId } },
   );
-  const payload = await event;
+  const payload = await events.waitFor(
+    (p) => p.runEventAppended.runId === created.createRun.runId && p.runEventAppended.type === 'run_created',
+  );
   assert.equal(detail.run.id, created.createRun.runId);
   assert.equal(detail.run.status, 'ready');
   assert.equal(detail.run.title, 'GraphQL subscription e2e');
