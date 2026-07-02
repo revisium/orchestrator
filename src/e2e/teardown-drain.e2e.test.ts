@@ -23,7 +23,7 @@ before(async () => {
 });
 
 after(async () => {
-  if (h) await h.close(); // idempotent; the test already closes — this only guards an early throw
+  if (h) await h.close({ keepWorkflowsParked: true }); // idempotent; the test already closes — this only guards an early throw
 });
 
 test('teardown with a workflow parked at a gate returns fast — no drain stall', { skip: e2eSkip }, async () => {
@@ -31,7 +31,9 @@ test('teardown with a workflow parked at a gate returns fast — no drain stall'
   await givenFeatureRunAtPlanGate(h, target); // a real workflow is now parked at DBOS.recv
 
   const started = Date.now();
-  await h.close();
+  // keepWorkflowsParked: the drain cap under a parked workflow IS the subject — the default
+  // teardown sweep would cancel the workflow and leave the drain nothing to stall on.
+  await h.close({ keepWorkflowsParked: true });
   const elapsed = Date.now() - started;
 
   assert.ok(

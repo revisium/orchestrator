@@ -75,6 +75,17 @@ export function resolveDevTasksConcurrency(
 
 const DEV_TASKS_CONCURRENCY = resolveDevTasksConcurrency();
 
+export function resolveDevTasksPollIntervalMs(
+  env: Record<string, string | undefined> = process.env,
+): number | undefined {
+  const value = env['REVO_DEV_TASKS_POLL_INTERVAL_MS']?.trim();
+  if (!value) return undefined;
+  const raw = Number(value);
+  return Number.isSafeInteger(raw) && raw > 0 ? raw : undefined;
+}
+
+const DEV_TASKS_POLL_INTERVAL_MS = resolveDevTasksPollIntervalMs();
+
 const RUNNER_FAILURE_REASON_MAX = 2_000;
 
 type StartDataDrivenTaskOpts = Omit<DataDrivenTaskOpts, 'runnerRetryPolicy'> & {
@@ -654,7 +665,12 @@ export class PipelineService {
       makeDataDrivenTask(this.runStepFn, dataDrivenDeps),
     );
 
-    this.dbos.registerQueue(DEV_TASKS_QUEUE, { concurrency: DEV_TASKS_CONCURRENCY });
+    this.dbos.registerQueue(DEV_TASKS_QUEUE, {
+      concurrency: DEV_TASKS_CONCURRENCY,
+      ...(DEV_TASKS_POLL_INTERVAL_MS !== undefined
+        ? { minPollingIntervalMs: DEV_TASKS_POLL_INTERVAL_MS }
+        : {}),
+    });
   }
 
 

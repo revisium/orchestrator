@@ -49,6 +49,21 @@ async function countEvents(runId: string, type: string): Promise<number> {
   return events.filter((e) => e.type === type).length;
 }
 
+/**
+ * Count once the event query has caught up. The draft event query is read-after-write laggy (the
+ * newest row can be invisible for a beat), and the settle-aware waitState returns milliseconds
+ * after the final step's write — so poll until the expected count appears before asserting.
+ * An overshoot (duplicate event) is returned as soon as it is visible.
+ */
+async function countEventsSettled(runId: string, type: string, expected: number): Promise<number> {
+  let count = await countEvents(runId, type);
+  for (let waited = 0; waited < 8_000 && count < expected; waited += 100) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    count = await countEvents(runId, type);
+  }
+  return count;
+}
+
 test('J1: more runs than the queue concurrency limit all complete (none dropped)', { skip: e2eSkip }, async () => {
   const N = 10; // > REVO_DEV_TASKS_CONCURRENCY (8) → some runs must queue, then all must drain
   const runs = await Promise.all(Array.from({ length: N }, () => startLocalChangeRun(h)));
@@ -76,8 +91,8 @@ test('J2: a concurrent double-start runs the workflow exactly once', { skip: e2e
   await Promise.all([h.api.startRun({ runId: created.runId }), h.api.startRun({ runId: created.runId })]);
   const state = await waitState(h.api, created.runId);
   assert.equal(state.state, 'completed');
-  assert.equal(await countEvents(created.runId, 'run_completed'), 1, 'the workflow must run exactly once');
-  assert.equal(await countEvents(created.runId, 'step_succeeded'), 1, 'developer must execute exactly once');
+  assert.equal(await countEventsSettled(created.runId, 'run_completed', 1), 1, 'the workflow must run exactly once');
+  assert.equal(await countEventsSettled(created.runId, 'step_succeeded', 1), 1, 'developer must execute exactly once');
 });
 
 test('J3: concurrent runs are isolated — each completes with only its own events', { skip: e2eSkip }, async () => {
@@ -87,9 +102,9 @@ test('J3: concurrent runs are isolated — each completes with only its own even
     assert.equal(state.state, 'completed');
     // Each run's event query (server-filtered by run_id) returns exactly its own lifecycle —
     // one run_created, one developer step, one run_completed — proving no cross-contamination.
-    assert.equal(await countEvents(run.runId, 'run_created'), 1, `${run.runId}: one run_created`);
-    assert.equal(await countEvents(run.runId, 'step_succeeded'), 1, `${run.runId}: developer ran once`);
-    assert.equal(await countEvents(run.runId, 'run_completed'), 1, `${run.runId}: one run_completed`);
+    assert.equal(await countEventsSettled(run.runId, 'run_created', 1), 1, `${run.runId}: one run_created`);
+    assert.equal(await countEventsSettled(run.runId, 'step_succeeded', 1), 1, `${run.runId}: developer ran once`);
+    assert.equal(await countEventsSettled(run.runId, 'run_completed', 1), 1, `${run.runId}: one run_completed`);
   }
 });
 
@@ -127,12 +142,10 @@ test('J5: concurrent mixed terminals — approve one gate, reject another — ea
     await waitState(h.api, kill.runId); // let the reject settle the run (waitForRun reports a blocked run as a settled non-gate state)
     const killed = await h.api.getRun({ runId: kill.runId });
     assert.notEqual(killed.run.status, 'completed'); // plan-gate reject blocks the run (B3), even concurrently with another's approval
-    // `merge_confirmed` is written by the confirmMerge step BEFORE the terminal, so it is durable once
-    // the run completes; `run_completed` (written AT the terminal) lags the DBOS-workflow SUCCESS that
-    // the terminal waiter reports, so reading it immediately races on the fast stub path. terminal.state above
-    // already asserts completion; here we assert the approved run merged exactly once.
-    assert.equal(await countEvents(keep.runId, 'merge_confirmed'), 1);
-    assert.equal(await countEvents(kill.runId, 'pipeline_blocked') >= 1, true, 'the rejected run emitted pipeline_blocked');
+    // terminal.state above already asserts completion; here we assert the approved run merged
+    // exactly once and the rejected run recorded its block.
+    assert.equal(await countEventsSettled(keep.runId, 'merge_confirmed', 1), 1);
+    assert.equal((await countEventsSettled(kill.runId, 'pipeline_blocked', 1)) >= 1, true, 'the rejected run emitted pipeline_blocked');
   } finally {
     targets.forEach((t) => t.cleanup());
   }

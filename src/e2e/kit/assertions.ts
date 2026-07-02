@@ -75,7 +75,14 @@ export async function assertUsage(
 
 /** Assert the run did not complete and emitted a `pipeline_blocked` event (preflight/integrate/etc.). */
 export async function assertBlocked(api: Api, runId: string): Promise<void> {
-  const events = await api.getRunEvents({ runId, limit: 500 });
+  // Poll briefly for the same read-after-write lag assertEventsPresent absorbs: the settle-aware
+  // terminal wait returns milliseconds after the blocking step's write, and the draft event query
+  // can miss the newest row for a beat.
+  let events = await api.getRunEvents({ runId, limit: 500 });
+  for (let waited = 0; waited < 8_000 && !events.some((e) => e.type === 'pipeline_blocked'); waited += 100) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    events = await api.getRunEvents({ runId, limit: 500 });
+  }
   assert.ok(events.some((e) => e.type === 'pipeline_blocked'), 'a blocked run must emit pipeline_blocked');
   // #246: recoverable readiness/integration/merge/respond failures route to
   // recovery → blocked, never the old failRun/failedEnd terminal. Guard against a

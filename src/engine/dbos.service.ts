@@ -78,7 +78,7 @@ export type DbosConfigOptions = {
 type PingWorkflowFn = (workflowID: string, sleepMs: number, markerFile: string) => Promise<PingResult>;
 type MarkStepFn = (workflowID: string, markerFile: string) => Promise<number>;
 type SleepStepFn = (ms: number) => Promise<void>;
-type QueueOptions = { concurrency?: number; workerConcurrency?: number };
+type QueueOptions = { concurrency?: number; workerConcurrency?: number; minPollingIntervalMs?: number };
 
 @Injectable()
 export class DbosService {
@@ -177,7 +177,8 @@ export class DbosService {
     if (existing) {
       if (
         existing.concurrency !== opts.concurrency ||
-        existing.workerConcurrency !== opts.workerConcurrency
+        existing.workerConcurrency !== opts.workerConcurrency ||
+        existing.minPollingIntervalMs !== opts.minPollingIntervalMs
       ) {
         throw new Error(`WorkflowQueue ${name} already registered with different options.`);
       }
@@ -351,6 +352,14 @@ export class DbosService {
 
   getWorkflowStatus(id: string) {
     return DBOS.getWorkflowStatus(id);
+  }
+
+  listWorkflows(input: { status?: string | string[]; limit?: number }) {
+    return DBOS.listWorkflows(input as Parameters<typeof DBOS.listWorkflows>[0]);
+  }
+
+  cancelWorkflows(workflowIDs: string[]) {
+    return DBOS.cancelWorkflows(workflowIDs);
   }
 
 
