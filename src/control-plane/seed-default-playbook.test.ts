@@ -26,6 +26,7 @@ import type {
   VersionedMeaningRow,
 } from './versioned-meaning.js';
 import { validateTemplate } from '../pipeline-core/index.js';
+import { materializeTemplate } from '../pipeline-core/materialize.js';
 import {
   seedDefaultPlaybook,
   createDaemonInstaller,
@@ -35,6 +36,7 @@ import {
   type DefaultPlaybookInstaller,
 } from './seed-default-playbook.js';
 import type { PlaybookInstallResult } from '../playbook/playbook-installer.js';
+import { CODEX_CONSENSUS_PROFILE, CONSENSUS_TOGGLE_ALLOWLIST } from './topology-profiles.js';
 
 // ---------------------------------------------------------------------------
 // In-memory versioned-meaning access — records upserts/commits, never touches a daemon.
@@ -94,7 +96,9 @@ test('default playbook: installs as revisium-default with feature-development + 
 type PipelineCatalogEntry = {
   id: string;
   required_roles: string[];
-  execution_policy: { template_json?: unknown };
+  triggers?: string[];
+  route_gates?: string[];
+  execution_policy: { template_json?: unknown; alias?: { basePipelineId: string; profileId: string } };
 };
 
 const catalogDir = join(DEFAULT_PLAYBOOK_SOURCE, 'catalog');
@@ -140,7 +144,7 @@ function capabilityRoleIds(template: { nodes: Record<string, Record<string, unkn
   return [...ids];
 }
 
-test('default playbook: Codex consensus pipeline is Codex-bound and fans out plan + code review', () => {
+test('default playbook: Codex consensus alias entry shape — id/triggers/required_roles/route_gates present, template_json absent', () => {
   const pipeline = pipelines.find((item) => item.id === 'feature-development-codex-consensus');
   assert.ok(pipeline, 'feature-development-codex-consensus is declared');
   assert.deepEqual(pipeline.required_roles, [
@@ -152,6 +156,14 @@ test('default playbook: Codex consensus pipeline is Codex-bound and fans out pla
     'integrator',
     'watcher-codex',
   ]);
+  assert.ok(Array.isArray(pipeline.triggers) && pipeline.triggers.length > 0, 'alias entry retains triggers');
+  assert.ok(Array.isArray(pipeline.route_gates) && pipeline.route_gates.length > 0, 'alias entry retains route_gates');
+  assert.equal(pipeline.execution_policy.template_json, undefined, 'alias entry must NOT carry template_json');
+  assert.deepEqual(
+    pipeline.execution_policy.alias,
+    { basePipelineId: 'feature-development', profileId: 'codex-consensus' },
+    'alias entry must declare basePipelineId and profileId',
+  );
 
   const roles = new Map(
     (roleCatalog as Array<{ id: string; runner_id?: string; default_model_level?: string }>).map((role) => [role.id, role]),
@@ -161,16 +173,17 @@ test('default playbook: Codex consensus pipeline is Codex-bound and fans out pla
     assert.equal(role?.runner_id, 'codex', `${roleId} runs on Codex`);
     assert.match(role?.default_model_level ?? '', /^codex-/, `${roleId} uses a Codex-compatible model profile`);
   }
+});
 
-  const template = pipeline.execution_policy.template_json as { nodes: Record<string, Record<string, unknown>>; pipelineId?: string };
-  const nodes = template.nodes;
-  assert.equal(template.pipelineId, 'feature-development-codex-consensus');
-  assert.equal(nodes['analyst']?.roleRef, 'role:analyst-codex');
-  assert.equal(nodes['developer']?.roleRef, 'role:developer-codex');
-  assert.equal(nodes['reworkDeveloper']?.roleRef, 'role:developer-codex');
-  assert.equal(nodes['ciRework']?.roleRef, 'role:developer-codex');
-  assert.equal(nodes['reviewRework']?.roleRef, 'role:developer-codex');
-  assert.equal(nodes['triage']?.roleRef, 'role:triager-codex');
+test('default playbook: materialized codex-consensus fans out plan + code review with canonical role refs', () => {
+  const base = pipelines.find((p) => p.id === 'feature-development')?.execution_policy?.template_json;
+  assert.ok(base, 'feature-development carries execution_policy.template_json');
+  const allowlist = CONSENSUS_TOGGLE_ALLOWLIST['feature-development'];
+  assert.ok(allowlist, 'feature-development has a toggle allowlist');
+  const { template: materialized, diagnostics } = materializeTemplate(base as never, CODEX_CONSENSUS_PROFILE, { allowlist });
+  assert.deepEqual(diagnostics, [], 'materializeTemplate must emit no diagnostics');
+
+  const nodes = materialized.nodes as Record<string, Record<string, unknown>>;
 
   assert.equal(nodes['analyst']?.next, 'planReviewFanout');
   assert.deepEqual(nodes['planReviewFanout']?.branches, [
@@ -178,8 +191,8 @@ test('default playbook: Codex consensus pipeline is Codex-bound and fans out pla
     { id: 'secondary', entry: 'planReviewSecondary' },
   ]);
   assert.equal(nodes['planReviewFanout']?.join, 'planReviewJoin');
-  assert.equal(nodes['planReviewPrimary']?.roleRef, 'role:reviewer-codex');
-  assert.equal(nodes['planReviewSecondary']?.roleRef, 'role:reviewer-codex');
+  assert.equal(nodes['planReviewPrimary']?.roleRef, 'role:reviewer');
+  assert.equal(nodes['planReviewSecondary']?.roleRef, 'role:reviewer');
   assert.equal(nodes['planReviewJoin']?.next, 'planReviewRouter');
   assert.deepEqual(nodes['planReviewJoin']?.verdictReducer, {
     kind: 'allIn',
@@ -195,8 +208,8 @@ test('default playbook: Codex consensus pipeline is Codex-bound and fans out pla
     { id: 'secondary', entry: 'codeReviewSecondary' },
   ]);
   assert.equal(nodes['codeReviewFanout']?.join, 'codeReviewJoin');
-  assert.equal(nodes['codeReviewPrimary']?.roleRef, 'role:reviewer-codex');
-  assert.equal(nodes['codeReviewSecondary']?.roleRef, 'role:reviewer-codex');
+  assert.equal(nodes['codeReviewPrimary']?.roleRef, 'role:reviewer');
+  assert.equal(nodes['codeReviewSecondary']?.roleRef, 'role:reviewer');
   assert.equal(nodes['codeReviewJoin']?.next, 'codeReviewRouter');
   assert.deepEqual(nodes['codeReviewJoin']?.verdictReducer, {
     kind: 'allIn',
@@ -224,22 +237,26 @@ test('default playbook: every role model level has a bootstrap model profile', (
 });
 
 test('default playbook: stuck code-review gates surface the latest code-change artifact', () => {
-  for (const pipelineId of ['feature-development', 'feature-development-codex-consensus']) {
-    const template = pipelineTemplate(pipelineId) as {
-      nodes?: Record<string, { gatedArtifact?: { node?: string; as?: string } }>;
-    };
-    const gatedArtifact = template.nodes?.['codeStuckGate']?.gatedArtifact;
+  const template = pipelineTemplate('feature-development') as {
+    nodes?: Record<string, { gatedArtifact?: { node?: string; as?: string } }>;
+  };
+  const gatedArtifact = template.nodes?.['codeStuckGate']?.gatedArtifact;
 
-    assert.deepEqual(
-      gatedArtifact,
-      { node: 'reworkDeveloper', as: 'change' },
-      `${pipelineId} codeStuckGate must show the code change, not the plan`,
-    );
-  }
+  assert.deepEqual(
+    gatedArtifact,
+    { node: 'reworkDeveloper', as: 'change' },
+    'feature-development codeStuckGate must show the code change, not the plan',
+  );
 });
 
 for (const pipeline of pipelines) {
+  const isAlias = pipeline.execution_policy.alias !== undefined;
+
   test(`default playbook: ${pipeline.id} template validates via validateTemplate (zero errors)`, () => {
+    if (isAlias) {
+      assert.equal(pipeline.execution_policy.template_json, undefined, `${pipeline.id} is an alias and must NOT carry template_json`);
+      return;
+    }
     const template = pipeline.execution_policy.template_json as
       | { specVersion: string; nodes: Record<string, Record<string, unknown>> }
       | undefined;
@@ -249,6 +266,7 @@ for (const pipeline of pipelines) {
   });
 
   test(`default playbook: ${pipeline.id} capability handles are covered by required_roles + roles catalog`, () => {
+    if (isAlias) return;
     const template = pipeline.execution_policy.template_json as {
       nodes: Record<string, Record<string, unknown>>;
     };

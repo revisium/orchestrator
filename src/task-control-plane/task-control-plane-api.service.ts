@@ -20,6 +20,15 @@ import type { InboxItem } from '../control-plane/inbox.js';
 import { validateManualAdoptionAudit, type ManualAdoptionAuditInput } from '../control-plane/manual-adoption-audit.js';
 import { validateMergeOverrideAudit, type MergeOverrideAuditInput } from '../control-plane/merge-override-audit.js';
 import { fnv1a64Hex } from '../control-plane/steps.js';
+import { POLICY_VERSION } from '../control-plane/default-playbook-policy.js';
+import {
+  CODEX_CONSENSUS_BINDINGS,
+  CODEX_CONSENSUS_PROFILE,
+  CODEX_CONSENSUS_PROFILE_VERSION,
+  CONSENSUS_TOGGLE_ALLOWLIST,
+  resolvePipelineProfile,
+} from '../control-plane/topology-profiles.js';
+import { hashProfile, materializeTemplate, MATERIALIZER_VERSION } from '../pipeline-core/materialize.js';
 import { DbosService } from '../engine/dbos.service.js';
 import { PipelineService, type RunnerMode } from '../pipeline/pipeline.service.js';
 import { RUN_PROGRESS_EVENT_KEY, type DataDrivenProgressCursor } from '../pipeline/data-driven-task.workflow.js';
@@ -672,6 +681,7 @@ export class TaskControlPlaneApiService {
     priority?: number;
     playbookId?: string;
     pipelineId?: string;
+    profileId?: string;
     params?: unknown;
     issueRef?: unknown;
     issueAction?: unknown;
@@ -689,6 +699,7 @@ export class TaskControlPlaneApiService {
       scope: input.scope,
       playbookId: input.playbookId,
       pipelineId: input.pipelineId,
+      profileId: input.profileId,
       params: input.params,
       issueRef: input.issueRef,
       issueAction: input.issueAction,
@@ -1450,12 +1461,13 @@ export class TaskControlPlaneApiService {
     return result;
   }
 
-  simulateRoute(input: { title: string; repo?: string; pipeline?: string; playbookId?: string; params?: unknown; executionProfile?: unknown }) {
+  simulateRoute(input: { title: string; repo?: string; pipeline?: string; profileId?: string; playbookId?: string; params?: unknown; executionProfile?: unknown }) {
     return this.resolveRouteDecision({
       title: input.title,
       repo: input.repo ?? '',
       playbookId: input.playbookId,
       pipelineId: input.pipeline,
+      profileId: input.profileId,
       params: input.params,
       executionProfile: input.executionProfile,
       source: input.pipeline ? 'explicit' : 'deterministic-installed-playbook',
@@ -1507,6 +1519,7 @@ export class TaskControlPlaneApiService {
     scope?: string;
     playbookId?: string;
     pipelineId?: string;
+    profileId?: string;
     params?: unknown;
     issueRef?: unknown;
     issueAction?: unknown;
@@ -1514,27 +1527,92 @@ export class TaskControlPlaneApiService {
     source: RouteDecision['source'];
   }): Promise<RouteDecision> {
     const params = normalizeParams(input.params, input.issueRef, input.issueAction);
-    const executionProfile = normalizeExecutionProfile(input.executionProfile);
+    const callerProfile = normalizeExecutionProfile(input.executionProfile);
     const playbook = await this.playbooks.resolvePlaybook(input.playbookId);
-    const pipeline = input.pipelineId
-      ? await this.playbooks.resolvePipeline({ playbookId: playbook.id, pipelineId: input.pipelineId })
-      : await this.resolveAutoPipeline(playbook.id, [input.title, input.description, input.scope].join(' '));
+
+    const requestedPipelineId = input.pipelineId
+      ?? (await this.resolveAutoPipeline(playbook.id, [input.title, input.description, input.scope].join(' '))).pipelineId;
+
+    let profileResolution: ReturnType<typeof resolvePipelineProfile>;
+    try {
+      profileResolution = resolvePipelineProfile(requestedPipelineId, input.profileId);
+    } catch (err) {
+      throw new ControlPlaneError('VALIDATION_FAILURE', err instanceof Error ? err.message : String(err));
+    }
+
+    const { basePipelineId, profileId } = profileResolution;
+
+    const pipeline = await this.playbooks.resolvePipeline({ playbookId: playbook.id, pipelineId: basePipelineId });
+
+    let executionPolicy = pipeline.executionPolicy;
+    let executionProfile = callerProfile;
+    const provenanceFields: Partial<RouteDecision> = {};
+
+    if (profileId !== undefined) {
+      const profileEntry = profileId === CODEX_CONSENSUS_PROFILE.profileId ? CODEX_CONSENSUS_PROFILE : undefined;
+      if (!profileEntry) {
+        throw new ControlPlaneError('VALIDATION_FAILURE', `unknown profileId "${profileId}"`);
+      }
+
+      const allowlist = CONSENSUS_TOGGLE_ALLOWLIST[basePipelineId];
+      if (!allowlist) {
+        throw new ControlPlaneError('VALIDATION_FAILURE', `no toggle allowlist for pipeline "${basePipelineId}"`);
+      }
+
+      const baseTemplate = (pipeline.executionPolicy as { template_json?: unknown }).template_json;
+      if (!baseTemplate) {
+        throw new ControlPlaneError('VALIDATION_FAILURE', `pipeline "${basePipelineId}" carries no template_json`);
+      }
+
+      const { template: materializedTemplate, materializedTemplateHash } = materializeTemplate(
+        baseTemplate as Parameters<typeof materializeTemplate>[0],
+        profileEntry,
+        { allowlist },
+      );
+
+      executionPolicy = { template_json: materializedTemplate };
+
+      const derivedBindings = CODEX_CONSENSUS_BINDINGS;
+      executionProfile = {
+        ...callerProfile,
+        runnerOverrides: { ...derivedBindings.runnerOverrides, ...callerProfile.runnerOverrides },
+        bindingOverrides: [
+          ...(callerProfile.bindingOverrides ?? []),
+          ...derivedBindings.bindingOverrides,
+        ],
+      };
+
+      provenanceFields.requestedPipelineId = requestedPipelineId;
+      provenanceFields.basePipelineId = basePipelineId;
+      provenanceFields.profileId = profileId;
+      provenanceFields.profileVersion = CODEX_CONSENSUS_PROFILE_VERSION;
+      provenanceFields.profileHash = hashProfile(profileEntry);
+      provenanceFields.materializedTemplateHash = materializedTemplateHash;
+      provenanceFields.materializerVersion = MATERIALIZER_VERSION;
+      provenanceFields.policyVersion = POLICY_VERSION;
+    } else if (requestedPipelineId !== basePipelineId) {
+      provenanceFields.requestedPipelineId = requestedPipelineId;
+      provenanceFields.basePipelineId = basePipelineId;
+    }
+
     const allRoles = (await this.roles.listRoles()).filter((role) => role.playbookId === playbook.id);
     await this.assertExecutionProfileClosed(executionProfile, allRoles);
     const roleBindings = await this.resolveRouteRoles(playbook.id, pipeline, executionProfile, allRoles);
+
     return {
       playbookId: playbook.id,
-      pipelineId: pipeline.pipelineId,
+      pipelineId: requestedPipelineId,
       pipelineRowId: pipeline.id,
       source: input.source,
       roles: roleBindings.map((binding) => binding.roleId),
       requiredRoles: pipeline.requiredRoles,
       optionalRoles: pipeline.optionalRoles,
       routeGates: normalizeRouteGates(pipeline.routeGates),
-      executionPolicy: pipeline.executionPolicy,
+      executionPolicy,
       executionProfile,
       roleBindings,
       params,
+      ...provenanceFields,
     };
   }
 

@@ -64,13 +64,13 @@ test('M0: the bootstrap-seeded default playbook + pipelines are present and vali
     assert.equal(route.pipelineId, pipelineId);
     if (pipelineId === 'feature-development-codex-consensus') {
       assert.deepEqual(route.roles, [
-        'orchestrator-codex',
-        'analyst-codex',
-        'reviewer-codex',
-        'triager-codex',
-        'developer-codex',
+        'orchestrator',
+        'analyst',
+        'reviewer',
+        'triager',
+        'developer',
         'integrator',
-        'watcher-codex',
+        'watcher',
       ]);
     }
     const template = route.executionPolicy.template_json;
@@ -120,7 +120,7 @@ test('M1b: a seeded Codex consensus run executes both plan and code reviewer bra
     scope: 'seeded-default codex consensus e2e',
     playbookId: DEFAULT_PLAYBOOK_ID,
     pipelineId: 'feature-development-codex-consensus',
-    executionProfile: { runnerOverrides: { codex: 'stub-agent', 'revo-integrator': 'stub-agent' } },
+    executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent', 'revo-integrator': 'stub-agent' } },
     start: true,
   });
   if (!('workflow' in run)) throw new Error('start:true must return workflow metadata');
@@ -132,8 +132,8 @@ test('M1b: a seeded Codex consensus run executes both plan and code reviewer bra
   await assertEventsPresent(h.api, run.runId, ['pipeline_fork', 'run_completed']);
 
   const roles = executedRoles(h, run.runId).map(([role]) => role);
-  assert.equal(roles.filter((role) => role === 'reviewer-codex').length, 4, 'two plan reviewers + two code reviewers executed');
-  for (const roleId of ['analyst-codex', 'developer-codex', 'reviewer-codex']) {
+  assert.equal(roles.filter((role) => role === 'reviewer').length, 4, 'two plan reviewers + two code reviewers executed');
+  for (const roleId of ['analyst', 'developer', 'reviewer']) {
     assert.ok(roles.includes(roleId), `${roleId} executed via the Codex-bound route binding`);
   }
 });

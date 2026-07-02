@@ -7,7 +7,7 @@ import type { Template } from '../pipeline-core/types.js';
 import { validateTemplate, classifyTemplateDiff } from '../pipeline-core/validate.js';
 import { materializeTemplate, hashTemplate } from '../pipeline-core/materialize.js';
 import { validateDefaultPlaybookPolicy } from './default-playbook-policy.js';
-import { CODEX_CONSENSUS_PROFILE, CONSENSUS_TOGGLE_ALLOWLIST } from './topology-profiles.js';
+import { CODEX_CONSENSUS_PROFILE, CONSENSUS_TOGGLE_ALLOWLIST, resolvePipelineProfile } from './topology-profiles.js';
 
 type PipelineCatalogEntry = {
   id: string;
@@ -165,14 +165,10 @@ test('topology-profiles: materialized graph uses canonical role refs (not -codex
 
 // ─── product policy ───────────────────────────────────────────────────────────
 
-test('topology-profiles: validateDefaultPlaybookPolicy on materialized output fires exactly DEFAULT_POLICY_CHANGE_HANDOFF_MISSING', () => {
+test('topology-profiles: validateDefaultPlaybookPolicy on materialized output fires zero codes (fanout-aware policy)', () => {
   const materialized = materializeCodexConsensus();
-  const codes = new Set(validateDefaultPlaybookPolicy(materialized).map((d) => d.code));
-  assert.ok(
-    codes.has('DEFAULT_POLICY_CHANGE_HANDOFF_MISSING'),
-    'DEFAULT_POLICY_CHANGE_HANDOFF_MISSING must fire (codeReview check is not yet fanout-aware)',
-  );
-  assert.equal(codes.size, 1, `expected exactly {DEFAULT_POLICY_CHANGE_HANDOFF_MISSING}; got: ${[...codes].join(', ')}`);
+  const codes = validateDefaultPlaybookPolicy(materialized).map((d) => d.code);
+  assert.deepEqual(codes, [], `expected zero policy codes; got: ${codes.join(', ')}`);
 });
 
 test('topology-profiles: recovery-shape policy codes are absent from materialized output', () => {
@@ -194,4 +190,41 @@ test('topology-profiles: recovery-shape policy codes are absent from materialize
   for (const code of recoveryCodes) {
     assert.ok(!codes.has(code), `recovery-shape code ${code} must be absent from materialized output`);
   }
+});
+
+// ─── resolvePipelineProfile ────────────────────────────────────────────────────
+
+test('resolvePipelineProfile: rule (1) alias id expands to base+profile', () => {
+  const r = resolvePipelineProfile('feature-development-codex-consensus');
+  assert.equal(r.requestedPipelineId, 'feature-development-codex-consensus');
+  assert.equal(r.basePipelineId, 'feature-development');
+  assert.equal(r.profileId, 'codex-consensus');
+});
+
+test('resolvePipelineProfile: rule (2) base id + explicit profileId', () => {
+  const r = resolvePipelineProfile('feature-development', 'codex-consensus');
+  assert.equal(r.requestedPipelineId, 'feature-development');
+  assert.equal(r.basePipelineId, 'feature-development');
+  assert.equal(r.profileId, 'codex-consensus');
+});
+
+test('resolvePipelineProfile: rule (3) plain base id, no profile', () => {
+  const r = resolvePipelineProfile('feature-development');
+  assert.equal(r.requestedPipelineId, 'feature-development');
+  assert.equal(r.basePipelineId, 'feature-development');
+  assert.equal(r.profileId, undefined);
+});
+
+test('resolvePipelineProfile: rule (4a) alias id + identical explicit profileId is idempotent', () => {
+  const r = resolvePipelineProfile('feature-development-codex-consensus', 'codex-consensus');
+  assert.equal(r.requestedPipelineId, 'feature-development-codex-consensus');
+  assert.equal(r.basePipelineId, 'feature-development');
+  assert.equal(r.profileId, 'codex-consensus');
+});
+
+test('resolvePipelineProfile: rule (4b) alias id + conflicting explicit profileId throws', () => {
+  assert.throws(
+    () => resolvePipelineProfile('feature-development-codex-consensus', 'other-profile'),
+    (err: unknown) => err instanceof Error && err.message.includes('conflicts'),
+  );
 });

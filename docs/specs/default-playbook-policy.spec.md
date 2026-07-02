@@ -20,9 +20,10 @@ The verifier covers two hand-authored PRODUCT catalog variants in
 `control-plane/default-playbook/catalog/pipelines.json`:
 
 - `feature-development` — the reconciled canonical variant; passes all rules with zero diagnostics.
-- `feature-development-codex-consensus` — the pre-#242 variant; its current violations are documented in
-  `CODEX_LEGACY_WAIVERS` (see Variant Handling). Profile/materializer/pinning rules are owned by #244/#245 and
-  cross-referenced here, NOT duplicated.
+- `feature-development-codex-consensus` — materialized-profile alias (base: `feature-development`, profileId:
+  `codex-consensus`) since #242; validated via `materializeTemplate` + `CODEX_CONSENSUS_PROFILE`; passes all
+  rules with zero diagnostics (`CODEX_LEGACY_WAIVERS = []`). Profile/materializer rules are owned by #244/#245
+  and cross-referenced here, NOT duplicated.
 
 The e2e test fixture at `src/e2e/fixtures/playbook/catalog/pipelines.json` is test infrastructure (a smaller
 pre-escalation graph driven by specific e2e paths) and is out of product-policy scope. The AC's
@@ -73,22 +74,21 @@ The bundled `feature-development` policy verifier reports errors for these stati
 
 ## Variant Handling
 
-The verifier dispatches to the same reconciled rule set for both supported variants. The canonical `feature-development`
-passes with zero diagnostics. `feature-development-codex-consensus` is the pre-#242 old-shaped variant and emits a
-documented set of violations.
+The verifier dispatches to the same reconciled rule set for both supported variants. Both variants pass with zero
+diagnostics since #242.
 
-`CODEX_LEGACY_WAIVERS` (in `default-playbook-policy.ts`) is derived empirically — by running the reconciled rule set
-over codex — and frozen as the #242 debt snapshot. When #242 reconciles the codex graph, the actual violation set
-shrinks and `VARIANT_PARITY_DRIFT` fires, prompting removal of entries. Once codex is fully reconciled, `CODEX_LEGACY_WAIVERS`
-empties and `feature-development-codex-consensus` joins the canonical as a zero-diagnostic variant.
+`feature-development-codex-consensus` is a materialized-profile alias: the verifier resolves it via
+`materializeTemplate(base, CODEX_CONSENSUS_PROFILE, { allowlist })` before applying the rule set. `CODEX_LEGACY_WAIVERS`
+is `[]`; `VARIANT_POLICY_GAP` and `VARIANT_PARITY_DRIFT` guard that the materialized variant stays at zero
+diagnostics — any future graph divergence fires one of these codes.
 
 To update `CODEX_LEGACY_WAIVERS`: run `validateDefaultPlaybookPolicy(codexTemplate)`, capture the unique code set,
 replace the constant, and commit with a reference to the issue that changed the graph.
 
 Cross-references:
-- #242 — reconciles the codex graph; empties `CODEX_LEGACY_WAIVERS`.
+- #242 — migrated codex to materialized-profile alias; emptied `CODEX_LEGACY_WAIVERS`.
 - #244 — typed profile bindings; owns `PROFILE_*` codes (not duplicated here).
-- #245 — topology materializer and materialized-variant rules; adds materialized variants to coverage after landing.
+- #245 — topology materializer and materialized-variant rules.
 - #248 — runtime/replay/e2e matrix for policy rules.
 
 The `PR_FRESHNESS_WIRING_MISSING` code remains for the `pollPr -> mergeReadiness -> mergeGate` path. The post-approval
@@ -115,6 +115,9 @@ contract: the verifier does not prove that GitHub/provider state was fresh at ru
 
 ## Changelog
 
+- 2026-07-02: #242 — migrated `feature-development-codex-consensus` from hand-authored catalog entry to
+  materialized-profile alias (`base: feature-development`, `profileId: codex-consensus`); emptied
+  `CODEX_LEGACY_WAIVERS`; both variants now validate with zero diagnostics.
 - 2026-07-02: Generalized verifier to cover `feature-development` + `feature-development-codex-consensus`; added 9
   new static rules (RECOVERABLE_CATCH_TERMINAL, CAP_EXHAUSTION_OFFRAMP_MISSING, APPROVE_REVERIFY_MISSING,
   MERGE_READINESS_FRESHNESS_MISSING, CONFIRM_MERGE_FAILURE_TERMINAL, POST_MERGE_CLEANUP_MISSING,

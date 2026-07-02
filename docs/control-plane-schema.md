@@ -41,6 +41,12 @@ route_decision, execution_profile, created_by, created_at, updated_at`.
 
 Serialized JSON fields: `params`, `route_decision`, `execution_profile`.
 
+`route_decision` provenance stamps (since #242): `requestedPipelineId` (caller-supplied, may be an alias),
+`basePipelineId` (resolved base pipeline), `profileId`/`profileVersion`/`profileHash` (topology profile stamps;
+absent when no profile applied), `materializedTemplateHash` (content hash of the materialized template),
+`materializerVersion`, `policyVersion`. Read-only audit fields for observability and test assertions; not used
+for routing decisions.
+
 `execution_profile` shape: `{ id: string, runnerOverrides?: Record<string,string>, availableRunners?: string[], bindingOverrides?: BindingOverride[] }`. A `BindingOverride` targets a role, node, or runner via `match: { roleId?, nodeId?, runnerId? }` and may set `runnerId`, `modelLevel`, `timeoutMs` (positive integer, ≤ 86 400 000 ms), or `permissionMode`. Phase A validates the whole profile pre-start (error code `PROFILE_SCHEMA_CLOSED`); Phase B records provenance on each `RouteRoleBinding` (`modelSource`, `timeoutSource`, `permissionSource`, each `'playbook' | 'execution-profile'`).
 
 `params.issueRef` is the canonical issue traceability location for issue-bound runs. Shape:

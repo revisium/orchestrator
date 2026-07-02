@@ -14,6 +14,9 @@ export class SimulateRouteInput {
   pipeline?: string;
 
   @Field(() => String, { nullable: true })
+  profileId?: string;
+
+  @Field(() => String, { nullable: true })
   playbookId?: string;
 
   @Field(() => GraphQLJSON, { nullable: true })

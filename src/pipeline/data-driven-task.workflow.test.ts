@@ -14,6 +14,8 @@ import { readFileSync } from 'node:fs';
 import { makeDataDrivenTask, resolveRunnerTransientRetryPolicy, type DataDrivenProgressCursor, type DataDrivenTaskDeps, type GateSummary, type RunnerTransientRetryPolicy } from './data-driven-task.workflow.js';
 import { templateFromExecutionPolicy } from './data-driven-template.js';
 import { featureDevelopment, featureDevelopmentPrReview, confirmMergeFlow, localChange } from '../pipeline-core/kit/fixtures.js';
+import { materializeTemplate } from '../pipeline-core/materialize.js';
+import { CODEX_CONSENSUS_PROFILE, CONSENSUS_TOGGLE_ALLOWLIST } from '../control-plane/topology-profiles.js';
 import type { Template } from '../pipeline-core/index.js';
 import type { AttemptResult } from '../worker/runner.js';
 import type { AppendEventInput } from '../run/append-event.js';
@@ -73,29 +75,32 @@ function makeRoute(options: { developerRunnerId?: string; integratorRunnerId?: s
 }
 
 function defaultCodexConsensusTemplate(): Template {
-  const pipeline = defaultPlaybookPipelines.find((candidate) => candidate.id === 'feature-development-codex-consensus');
-  assert.ok(pipeline, 'bundled feature-development-codex-consensus pipeline exists');
-  const parsed = templateFromExecutionPolicy(pipeline.execution_policy);
-  assert.ok(parsed, 'bundled feature-development-codex-consensus carries a valid template_json');
-  return parsed;
+  const pipeline = defaultPlaybookPipelines.find((candidate) => candidate.id === 'feature-development');
+  assert.ok(pipeline, 'bundled feature-development pipeline exists');
+  const base = templateFromExecutionPolicy(pipeline.execution_policy);
+  assert.ok(base, 'bundled feature-development carries a valid template_json');
+  const allowlist = CONSENSUS_TOGGLE_ALLOWLIST['feature-development'];
+  assert.ok(allowlist, 'feature-development must have a toggle allowlist');
+  const { template } = materializeTemplate(base, CODEX_CONSENSUS_PROFILE, { allowlist });
+  return template;
 }
 
 function codexBinding(roleId: string): RouteRoleBinding {
   if (roleId === 'integrator') {
     return { roleId, rowId: roleId, modelLevel: 'standard', runnerId: 'revo-integrator', resolvedRunnerId: 'revo-integrator', runnerSource: 'playbook' };
   }
-  return { roleId, rowId: roleId, modelLevel: 'codex-standard', runnerId: 'codex', resolvedRunnerId: 'codex', runnerSource: 'playbook' };
+  return { roleId, rowId: roleId, modelLevel: 'codex-standard', runnerId: 'claude-code', resolvedRunnerId: 'codex', runnerSource: 'execution-profile' };
 }
 
 function makeCodexConsensusRoute(): RouteDecision {
   const roles = [
-    'orchestrator-codex',
-    'analyst-codex',
-    'reviewer-codex',
-    'triager-codex',
-    'developer-codex',
+    'orchestrator',
+    'analyst',
+    'reviewer',
+    'triager',
+    'developer',
     'integrator',
-    'watcher-codex',
+    'watcher',
   ];
   return {
     playbookId: 'revisium-default',
@@ -768,10 +773,10 @@ test('DD-default-codex: repeated plan consensus failures hit planStuckGate at th
 
   const result = await run();
 
-  assert.equal(result.status, 'blocked');
-  assert.equal(attemptCount(rec, 'analyst'), 4);
-  assert.equal(attemptCount(rec, 'planReviewPrimary'), 4);
-  assert.equal(attemptCount(rec, 'planReviewSecondary'), 4);
+  assert.equal(result.status, 'cancelled');
+  assert.equal(attemptCount(rec, 'analyst'), 5);
+  assert.equal(attemptCount(rec, 'planReviewPrimary'), 5);
+  assert.equal(attemptCount(rec, 'planReviewSecondary'), 5);
   assert.equal(attemptCount(rec, 'developer'), 0, 'developer never runs before plan consensus is unstuck');
   assert.equal(rec.integrateCalls, 0);
   assert.deepEqual(rec.gateSummaries.map((summary) => summary.nodeId), ['planStuckGate']);
@@ -845,10 +850,10 @@ test('DD-default-codex: failed stuck rework routes to final stuck gate without a
 
   assert.equal(result.status, 'blocked');
   assert.equal(attemptCount(rec, 'stuckReworkDeveloper'), 1);
-  assert.equal(attemptCount(rec, 'codeReviewPrimary'), 5);
-  assert.equal(attemptCount(rec, 'codeReviewSecondary'), 5);
+  assert.equal(attemptCount(rec, 'codeReviewPrimary'), 8);
+  assert.equal(attemptCount(rec, 'codeReviewSecondary'), 8);
   assert.equal(rec.integrateCalls, 0);
-  assert.deepEqual(rec.gateSummaries.map((summary) => summary.nodeId), ['planGate', 'codeStuckGate', 'codeFinalStuckGate']);
+  assert.deepEqual(rec.gateSummaries.map((summary) => summary.nodeId), ['planGate', 'codeStuckGate', 'codeStuckGate']);
 });
 
 test('DD1b: adapter publishes graph progress cursors through its sealed dep', async () => {
