@@ -27,6 +27,9 @@ export class RunWorkflowPipelineModel {
 
   @Field(() => String)
   status!: string;
+
+  @Field(() => GraphQLJSON, { nullable: true })
+  provenance!: unknown;
 }
 
 @ObjectType()

@@ -151,7 +151,20 @@ test('runs query handlers delegate and shape run data', async () => {
     },
     async getRunWorkflow(runId: string) {
       assert.equal(runId, 'run_1');
-      return { run: { id: runId, status: 'blocked' }, nodes: [] };
+      return {
+        run: { id: runId, status: 'blocked' },
+        nodes: [],
+        pipeline: {
+          id: 'pipeline_row_1',
+          pipelineId: 'feature-development',
+          playbookId: 'playbook_1',
+          title: 'Feature Development',
+          routeGates: [],
+          activeNodeIds: [],
+          status: 'running',
+          provenance: { materializedTemplateHash: 'abc123', profileId: 'codex-consensus', profileHash: 'def456' },
+        },
+      };
     },
     async simulateRoute(input: unknown) {
       assert.deepEqual(input, { title: 'Build', repo: '.' });
@@ -189,6 +202,9 @@ test('runs query handlers delegate and shape run data', async () => {
   const digest = await new GetRunDigestHandler(api).execute(new GetRunDigestQuery({ runId: 'run_1' }));
   assert.equal(digest.latestEvents[0]?.id, 'event_1');
   assert.deepEqual(digest.run.issueRef, issueRef);
-  assert.equal((await new GetRunWorkflowHandler(api).execute(new GetRunWorkflowQuery({ runId: 'run_1' }))).run.status, 'blocked');
+  const workflow = await new GetRunWorkflowHandler(api).execute(new GetRunWorkflowQuery({ runId: 'run_1' }));
+  assert.equal(workflow.run.status, 'blocked');
+  const prov = (workflow.pipeline as unknown as { provenance: { materializedTemplateHash: string } }).provenance;
+  assert.equal(prov.materializedTemplateHash, 'abc123');
   assert.deepEqual(await new SimulateRouteHandler(api).execute(new SimulateRouteQuery({ title: 'Build', repo: '.' })), { pipelineId: 'default' });
 });
