@@ -63,7 +63,7 @@ Resolution rules:
 - optional missing input: omitted.
 - required missing input: emit a dedicated failure event and block/fail the run with `revo.InputMissing`.
 
-Hydrated inputs are injected into the runner prompt under a stable `## Inputs (from previous steps)` section.
+The adapter injects hydrated inputs into the runner prompt under a stable `## Inputs (from previous steps)` section.
 
 After an effect node succeeds, the adapter shape-checks the result against the node's `resultSchema`, redacts
 secrets, enforces the payload cap/spill policy, appends a `run_outputs` row if `produces` is declared, and feeds
@@ -115,7 +115,8 @@ Rules:
 
 ### `schema:change` Produced Artifact
 
-A successful live developer change producer records the agent's output with an attached `change` pointer:
+After a live developer change producer succeeds, the adapter records the agent's output with an attached `change`
+pointer:
 
 ```ts
 type ProducedChangeArtifact = {
@@ -128,7 +129,7 @@ type ProducedChangeArtifact = {
 };
 ```
 
-The adapter captures this pointer after the role succeeds and before reviewer or integrator handoff. Integrator
+The adapter captures this pointer before reviewer or integrator handoff. Integrator
 script nodes consume the latest relevant change pointer and push that exact `headSha`. When a produced change is
 available, they MUST NOT inspect the shared/base checkout. A "nothing to integrate" no-op is valid only when the
 produced `headSha` already equals the open PR head.

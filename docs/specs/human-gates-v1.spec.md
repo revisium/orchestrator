@@ -12,6 +12,8 @@
 Human gates are durable pauses in a run that require a user or reviewer decision. The gate is represented as a
 pipeline `humanGate` node and an inbox row. Resolving the inbox row signals the parked DBOS workflow.
 
+The key words MUST, MUST NOT, SHOULD, SHOULD NOT, MAY are to be interpreted as in RFC 2119 / BCP 14.
+
 ## Gate Node Contract
 
 ```ts
@@ -108,9 +110,6 @@ GraphQL subscriptions:
 - `inboxItemAdded`
 - `inboxItemResolved`
 
-`get_run_attention` is the canonical normal observation surface. `get_run_status` is for neutral
-dashboard/status checks. `watch_run_changes` is the advanced cursor-based delivery API.
-
 ## Run Observation Contract
 
 Three intent-named tools replace the former transport-named surface:
@@ -185,7 +184,7 @@ Rules:
   attempt, digest, and log surfaces (`runner_retry_scheduled`, `runner_retry_exhausted`, per-attempt rows, and
   per-attempt agent logs). `retrying` remains reserved for a future transition shape.
 
-## Operator monitoring directive
+## Operator Monitoring Directive
 
 When `create_run` or `start_run` succeeds, the response includes a `monitoring` object that instructs the calling agent to act as operator/humanGate for the run. The directive is emitted by default; pass `includeMonitoringGuidance: false` to suppress it.
 
