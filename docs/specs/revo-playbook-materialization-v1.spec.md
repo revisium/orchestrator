@@ -144,8 +144,8 @@ type RevoSelectedReferences = {
 ```
 
 All paths are relative to `.revo/playbook` and MUST exist in `manifest.json`. The selected set SHOULD include the role
-document and role core reference. It MAY include the full canonical snapshot in the file system, but the selected list
-is the role's first-read contract.
+document and role core reference. The materialized bundle MAY contain the full canonical snapshot, but the selected
+list is the role's first-read contract.
 
 The materialized selected-reference file MUST be a faithful path projection of the matching
 `PlaybookSelectionPin.nodeSelections[]` entry from the durable route decision. Runtime MUST validate that

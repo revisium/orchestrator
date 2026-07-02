@@ -13,8 +13,8 @@
 This spec enumerates every field of a manifest's `capabilities` block — type, meaning, and the exact hardcoded
 behavior it replaces.
 
-It does not govern selection (which runner satisfies a run's requirements) — that primary consumer is #170. The
-manifest envelope and the StdoutParser/PermissionStyle contracts are in
+It does not govern selection (which runner satisfies a run's requirements); selection (#170) is the primary
+consumer of this vocabulary. The manifest field schema and the StdoutParser/PermissionStyle contracts are in
 [runner-manifest-v1.spec.md](./runner-manifest-v1.spec.md); the structured-output tier is in
 [runner-result-envelope-v1.spec.md](./runner-result-envelope-v1.spec.md).
 
@@ -46,8 +46,8 @@ Today there is no `capabilities` block. The same decisions live as hardcoded bra
   (`src/worker/codex-runner.ts:179-186`, `isOpenAiCompatibleProvider` at `:109-112`).
 - The default runner id is the literal `'claude-code'` in `loadRole` (`src/control-plane/definitions.ts:112`).
 
-The structured-output reliability difference between runners is not modeled at all today — both live runners simply
-have a native schema flag.
+The structured-output reliability difference between runners is not modeled today — both live runners have a
+native schema flag.
 
 ## Target Migration
 
@@ -60,7 +60,7 @@ the `capabilities` block below is the proposal (ADR-0004 is Status: Draft).
 |---|---|---|
 | `provider` | string | Provider family the runner targets (e.g. `anthropic`, `openai-compatible`, `provider-gateway`). Data; recorded in provenance. Keep concrete account/model names out (canonical-method discipline). |
 | `authMode` | enum `cli-session`\|`api-key`\|`gateway-token`\|`none` | How the runner authenticates. Feeds `needsLivePreflight` doctor checks. |
-| `privacyClass` | enum `external`\|`self-hosted`\|`local` | Data-egress class of the provider. Lets routing/profile policy exclude external providers for sensitive runs. Consumed by selection (#170), not by this ADR. |
+| `privacyClass` | enum `external`\|`self-hosted`\|`local` | Data-egress class of the provider. Lets routing/profile policy exclude external providers for sensitive runs. Consumed by selection (#170), not by this spec. |
 | `supportsWorkspaceWrite` | boolean | Whether the runner can write the worktree at all. Distinct from per-role permission: a read-only role on a write-capable runner is fine. Relates to Codex `sandbox-enum` (`src/worker/codex-runner.ts:144-155`). |
 | `supportsStructuredOutput` | enum `native-schema`\|`tool-call`\|`prompt-only` | The structured-output tier (not a boolean). Defined in [runner-result-envelope-v1.spec.md](./runner-result-envelope-v1.spec.md). Routing may require a minimum tier. |
 | `needsLivePreflight` | boolean | Whether the runner requires a live auth/binary/reachability probe before dispatch. |
@@ -77,9 +77,6 @@ the `capabilities` block below is the proposal (ADR-0004 is Status: Draft).
 | `stdoutParser` + `permissionStyle` (manifest ids, not under `capabilities`) → registry lookup | `dispatchRunnerId(runnerId)` switch (`src/pipeline/route-contract.ts:110-114`) consumed at `src/pipeline/pipeline.service.ts:470`, and `switch (role.runner)` (`src/worker/runner-dispatch.ts:8-20`) | `stub-agent`→`script`; `claude-code`/`codex`/`script` pass through; `revo-*`→`script`; else identity. After: resolve the manifest by `runner.id`, dispatch by its `(stdoutParser, permissionStyle)` pair. |
 | `constraints.allowedProviders` (manifest, see manifest spec) | `requireCompatibleProfile(profile)` throw (`src/worker/codex-runner.ts:179-186`, `isOpenAiCompatibleProvider` at `:109-112`) | Codex rejects a non-OpenAI-compatible provider. After: declarative provider match; a mismatch is a typed precondition failure routed to a lesson, not a hard throw inside the adapter. |
 | default-runner config id | literal `'claude-code'` default in `loadRole` (`src/control-plane/definitions.ts:112`) | A role row with no `runner_id`/`runner` defaults to `claude-code`. After: the default runner id is named config, not a literal in `loadRole`. |
-
-`dispatchRunnerId` plus the `switch (role.runner)` factory are two surfaces of the same dispatch decision; both
-collapse into a single registry lookup keyed by `runner.id` → manifest → `(stdoutParser, permissionStyle)` pair.
 
 ## Validation
 
