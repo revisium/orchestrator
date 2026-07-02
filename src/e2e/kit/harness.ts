@@ -45,8 +45,12 @@ export type RunHarness = {
   developerWrites: DeveloperWrites;
   /** Recorded `gh` argv (populated by the default emulator). */
   ghCalls: string[][];
-  /** Shut the host down (DBOS drain); the standalone daemon is intentionally left running. */
-  close: () => Promise<void>;
+  /**
+   * Shut the host down (DBOS drain); the standalone daemon is intentionally left running.
+   * `keepWorkflowsParked` skips the DBOS-level workflow cancel sweep — only for tests whose
+   * subject IS a workflow parked across teardown (teardown-drain).
+   */
+  close: (opts?: { keepWorkflowsParked?: boolean }) => Promise<void>;
 };
 
 /**
@@ -98,11 +102,15 @@ export async function createRunHarness(opts: RunHarnessOptions = {}): Promise<Ru
     agentCalls,
     developerWrites,
     ghCalls,
-    close: async (): Promise<void> => {
-      // e2e files share ONE process and a process-global DBOS dev-tasks queue
-      // (concurrency-capped). A run left running/parked by this file keeps its
-      // slot and starves later files (they never get a worker → time out at
-      // 'running'). Cancel every non-terminal run before shutting the host down.
+    close: async (opts?: { keepWorkflowsParked?: boolean }): Promise<void> => {
+      // e2e files share one DBOS system DB + dev-tasks queue (concurrency-capped) across their
+      // per-file processes. Cancelling the RUN ROW is not enough: cancelRun never cancels the DBOS
+      // workflow, so a workflow parked at a gate stays PENDING, is recovered by every later file's
+      // boot, and permanently occupies a dev-tasks concurrency slot. Once ≥ concurrency zombies
+      // accumulate the queue starves and every later run times out at 'running' (the CI tail wedge:
+      // recovery F1–F3, seed M1/M2, run-lifecycle). Their recovered re-execution also races live
+      // tests' control-plane writes. So teardown cancels at BOTH levels: run rows for control-plane
+      // hygiene, then DBOS workflows so the next boot has nothing to recover.
       const TERMINAL = new Set(['completed', 'succeeded', 'failed', 'blocked', 'cancelled']);
       try {
         for (const run of await api.listRuns({ limit: 500 })) {
@@ -110,6 +118,15 @@ export async function createRunHarness(opts: RunHarnessOptions = {}): Promise<Ru
         }
       } catch {
         // best-effort cleanup — teardown must never throw
+      }
+      if (!opts?.keepWorkflowsParked) {
+        try {
+          const active = await dbos.listWorkflows({ status: ['PENDING', 'ENQUEUED'], limit: 500 });
+          const ids = active.map((wf) => wf.workflowID);
+          if (ids.length > 0) await dbos.cancelWorkflows(ids);
+        } catch {
+          // best-effort cleanup — teardown must never throw
+        }
       }
       await lifecycle.onApplicationShutdown();
     },
