@@ -39,16 +39,16 @@ type HumanGateNode = {
 
 Rules:
 
-- `outcomes` must be a subset of the template's domain verdicts.
+- `outcomes` MUST be a subset of the template's domain verdicts.
 - Branch guards route on the human verdict.
 - A missing timeout means the gate can wait indefinitely.
-- `gatedArtifact` and `verdictFrom` enrich the inbox row; they do not change routing semantics.
-- A gate may `produce` a gate-resolution artifact for downstream nodes. The adapter payload includes
+- `gatedArtifact` and `verdictFrom` enrich the inbox row; they MUST NOT change routing semantics.
+- A gate MAY `produce` a gate-resolution artifact for downstream nodes. The adapter payload includes
   `outcome`, optional `note`, `resolvedBy`, `resolvedAt`, `inboxId`, and the legacy `decision`.
 
 ## Inbox Contract
 
-Inbox rows are runtime draft rows and are not committed as versioned meaning. Logical fields:
+Inbox rows are runtime draft rows and MUST NOT be committed as versioned meaning. Logical fields:
 
 ```text
 inbox {
@@ -91,18 +91,18 @@ GraphQL mutations:
 - `answerQuestion`
 - `resolveInboxItem`
 
-`resolve_gate` / `resolveGate` is the named-outcome resolver for gates whose `options` are not simply
-approve/reject. It validates that `outcome` is one of the pending inbox row options and requires a non-empty note
-for `approve_anyway`. `approve_gate` and `reject_gate` remain compatibility wrappers for simple two-way gates, but
-they reject multi-outcome gates such as plan, merge, and stuck-review gates instead of silently mapping approve to
-`approve_anyway` or reject to a recovery, recheck, cancel, or abort outcome.
+`resolve_gate` / `resolveGate` is the named-outcome resolver for gates whose `options` are not simply approve/reject.
+
+- `resolve_gate` / `resolveGate` MUST validate that `outcome` is one of the pending inbox row options.
+- It MUST require a non-empty note for `approve_anyway`.
+- `approve_gate` / `reject_gate` remain compatibility wrappers for simple two-way gates and MUST reject multi-outcome gates (plan, merge, stuck-review) rather than mapping approve to `approve_anyway` or reject to a recovery, recheck, cancel, or abort outcome.
 
 Verification environment blocks open a recovery gate with outcomes `rerun_with_permissions`, `continue_in_revo`,
-`adopt_patch_manually`, and `abort`. Revo-owned work remains owned by Revo unless the selected outcome is
-`adopt_patch_manually` and every public resolver path persists a complete `adoptionAudit`. The audit payload requires
+`adopt_patch_manually`, and `abort`. Revo-owned work MUST remain owned by Revo unless the selected outcome is
+`adopt_patch_manually` and every public resolver path persists a complete `adoptionAudit`. The audit MUST include
 non-empty `runId`, `step`, `role`, `targetRepo`, `targetBranch`, `actor`, `scope`, `risk`,
 `verificationResponsibility`, and either `artifactRef` or `worktreeRef`; when the inbox row has a run id, the audit
-`runId` must match it. `resolve_gate` / `resolveGate` carries this payload as `adoptionAudit`; `resolve_inbox_item` /
+`runId` MUST match it. `resolve_gate` / `resolveGate` carries this payload as `adoptionAudit`; `resolve_inbox_item` /
 `resolveInboxItem` carries it inside the arbitrary answer object.
 
 GraphQL subscriptions:
@@ -140,7 +140,7 @@ analyst as an iteration over the existing plan and comments, not as a new task.
 
 ### get_run_status
 
-Single-shot. Neutral current state for dashboards and status checks. Must not include `nextAction` or `suggestedTools`.
+Single-shot. Neutral current state for dashboards and status checks. MUST NOT include `nextAction` or `suggestedTools`.
 
 ```ts
 type RunStatusResult = {
@@ -169,14 +169,14 @@ type WatchResult = { transitions: RunTransition[]; cursor: string; timedOut: boo
 Rules:
 
 - `cursor` in `watch_run_changes` suppresses already-delivered transitions. Re-calling with the returned cursor
-  must not re-deliver the same gate, blocked, failed, completed, or retrying transition.
-- MCP schemas cap cursor length; over-cap cursors are ignored before base64 decode or JSON parse.
-- `get_run_attention` and `get_run_status` accept only `{runId}`; they never accept a cursor.
-- Activity is best-effort bounded enrichment (250ms cap). A slow, unavailable, or wedged activity projection must
-  not delay delivery; clients should treat missing `activeAttempt` as "not available from this observation call",
+  MUST NOT re-deliver the same gate, blocked, failed, completed, or retrying transition.
+- MCP schemas cap cursor length; over-cap cursors MUST be ignored before base64 decode or JSON parse.
+- `get_run_attention` and `get_run_status` accept only `{runId}`; they MUST NOT accept a cursor.
+- Activity is best-effort bounded enrichment (250ms cap). A slow, unavailable, or wedged activity projection MUST
+  NOT delay delivery; clients SHOULD treat missing `activeAttempt` as "not available from this observation call",
   not as proof that no work is running.
-- `activeAttempt` is suppressed on completed runs in `get_run_attention`.
-- Normal observation must not require `get_run(includeEvents: true)`, full logs, raw log text, full event history,
+- `activeAttempt` MUST be suppressed on completed runs in `get_run_attention`.
+- Normal observation MUST NOT require `get_run(includeEvents: true)`, full logs, raw log text, full event history,
   or unbounded payloads.
 - `nextAction: 'ask_human'` means resolve the inbox item through gate/question tools. `inspect_digest` means call
   `get_run_digest`. `inspect_log` means use bounded `get_agent_log` reads with offsets or `tailBytes`.
@@ -208,9 +208,9 @@ type MonitoringDirective = {
 Rules:
 
 - `monitoring` is a nested object; it does not conflict with any top-level `nextAction` field.
-- Suppressed on `confirmationRequired` (no run created) and on `nextAction: 'resume_run'` (recoverable preflight block).
+- MUST be suppressed on `confirmationRequired` (no run created) and on `nextAction: 'resume_run'` (recoverable preflight block).
 - `protocol` is the same array exported from `src/mcp/monitoring-directive.ts` as `OPERATOR_MONITORING_PROTOCOL` — identical to the `task_monitoring_loop` steps in `MCP_INSTRUCTIONS` and the `get_run_attention` description. A consistency test guards against drift.
-- `clientHints` is advisory only. No field in the directive requires a client-specific primitive.
+- `clientHints` is advisory only. The directive MUST NOT require a client-specific primitive.
 - The directive references only protocol intent. The client-side sleep/wake engine is not part of this MCP layer; it belongs to each client harness.
 - Durable cross-session monitoring (daemon push, cloud schedules) is a separate daemon-side concern not covered here.
 
@@ -225,7 +225,7 @@ Plan gate:
 Merge gate:
 
 - Appears after integration/review checks and before merge.
-- Agents do not merge without this gate when the selected pipeline includes it.
+- Agents MUST NOT merge without this gate when the selected pipeline includes it.
 - Exposes `approved`, `recheck`, `address_review_threads`, `return_to_development`, `override_merge`, and `cancel`
   outcomes. `address_review_threads` and `return_to_development` both route to `triage`; `override_merge` routes to
   `confirmMerge`; `cancel` routes to `cancelledEnd`.
@@ -266,31 +266,34 @@ Contracts:
 - CI/Sonar failures route to developer rework.
 - Review comments route to analyst triage first.
 - Ambiguous comments route to a question gate.
-- Pending provider/check readiness stays internal as a `recheck` PR feedback verdict; it does not surface as clean or
+- Pending provider/check readiness stays internal as a `recheck` PR feedback verdict; it MUST NOT surface as clean or
   terminally block while it can still be re-polled.
-- `pollPr` / `mergeReadiness` emit `clean` only when ALL three independent blockers are clear: required CI checks pass,
-  mergeability is clean (`mergeable=MERGEABLE` AND `mergeStateStatus ∈ {CLEAN, UNSTABLE, HAS_HOOKS}`), and no unresolved
-  non-outdated review threads exist. A definite-negative merge state (`DIRTY`, `BLOCKED`, `BEHIND`, or
-  `mergeable=CONFLICTING`) routes to `blockedEnd` (reason: `poll-pr`) with the raw fields in the lesson pending the
-  #246/#247 classifier. An async/unknown mergeability (`UNKNOWN`, empty, unrecognized) routes to `recheck` — never
-  `clean`. Advisory (non-required) check failures do NOT burn `ciLoop` or route to rework when required checks and
+- `pollPr` / `mergeReadiness` emit `clean` only when all three independent blockers are clear: required CI checks pass,
+  mergeability is clean (`mergeable=MERGEABLE` and `mergeStateStatus ∈ {CLEAN, UNSTABLE, HAS_HOOKS}`), and no unresolved
+  non-outdated review threads exist.
+- A definite-negative merge state (`DIRTY`, `BLOCKED`, `BEHIND`, or `mergeable=CONFLICTING`) routes to `blockedEnd`
+  (reason: `poll-pr`) with the raw fields in the lesson pending the #246/#247 classifier.
+- An async/unknown mergeability (`UNKNOWN`, empty, unrecognized) routes to `recheck` and MUST NOT be reported as
+  `clean`.
+- Advisory (non-required) check failures MUST NOT burn `ciLoop` or route to rework when required checks and
   mergeability are clean.
-- `respondThreads` replies to and resolves only the threads it triaged as `fix` or `wontfix`.
+- `respondThreads` MUST reply to and resolve only the threads it triaged as `fix` or `wontfix`.
 - Resolved or reopened threads are detected by the next PR poll.
 - Thread maps and triage decisions ride `run_outputs`; no separate durable PR-thread table exists in v1.
-- Unresolved review threads are an independent blocker: `pollPr` / `mergeReadiness` emit `review_changes` when threads
+- Unresolved review threads are an independent blocker: `pollPr` / `mergeReadiness` MUST emit `review_changes` when threads
   exist, even when CI is green. A run blocked at `mergeGate` with live unresolved threads uses
   `address_review_threads` or `return_to_development` (both route to triage) rather than `recheck` (which only
   re-polls providers).
-- `override_merge` bypasses thread resolution. It requires a `mergeOverrideAudit` payload on the `resolve_gate` call:
+- `override_merge` bypasses thread resolution. It MUST carry a `mergeOverrideAudit` payload on the `resolve_gate` call:
   `threadIds`, `actor`, `reason`, `risk`, `verificationResponsibility`, and `headSha` (recorded for accountability;
   the SHA is not live-checked at gate-resolve time — the existing SHA guard in `confirmMerge` remains the merge-time
-  fence). The audit is persisted in the gate-resolution artifact.
-- Known informational bots (`sonarqubecloud`, `cursor`, `linear-app`, `deepsource-autofix`) are suppressed into
-  `ignoredNoise`; all other bot comments surface in `developerFixes` with `source: 'bot_comment'`.
+  fence). The audit MUST be persisted in the gate-resolution artifact.
+- Known informational bots (`sonarqubecloud`, `cursor`, `linear-app`, `deepsource-autofix`) MUST be suppressed into
+  `ignoredNoise`; all other bot comments MUST surface in `developerFixes` with `source: 'bot_comment'`.
 
 ## Changelog
 
+- 2026-07-02: Normative-language / canon-discipline pass on human-gates-v1 (RFC-2119 keywords, ALL-CAPS discipline reserved for keywords/acronyms/enum literals, atomic normative statements); no contract change.
 - 2026-07-02: Made `pollPr`/`mergeReadiness` readiness-honest: `clean` now requires required checks passing,
   mergeability clean, AND no unresolved non-outdated threads. `UNKNOWN`/async mergeability → `recheck`; definite-negative
   merge state → `blockedEnd` reason `poll-pr` with raw fields for future #246/#247 classifier (issue #240).
