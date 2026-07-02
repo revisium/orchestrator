@@ -326,7 +326,7 @@ out of scope — #186.)
 
 The snapshot makes the routing *decision* deterministic; it does not make the external CLI's behavior deterministic.
 CLI version, locale, and process env are not pinned, so the standard DBOS external-effect caveat applies — a step
-re-executed after the external world changed can diverge — and is explicitly out of this ADR's scope.
+re-executed after the external world changed can diverge — and is explicitly out of this spec's scope.
 
 ## Validation
 

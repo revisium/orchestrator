@@ -17,7 +17,7 @@ the boundary.
 
 The key words MUST, MUST NOT, SHOULD, SHOULD NOT, MAY are to be interpreted as in RFC 2119 / BCP 14.
 
-The manifest envelope and the StdoutParser/PermissionStyle contracts are in
+The manifest field schema and the StdoutParser/PermissionStyle contracts are in
 [runner-manifest-v1.spec.md](./runner-manifest-v1.spec.md); the full `capabilities` field list is in
 [runner-capabilities-v1.spec.md](./runner-capabilities-v1.spec.md).
 
@@ -25,7 +25,7 @@ Paths under `src/...` are relative to the `@revisium/orchestrator` package root.
 
 ## Current Contract
 
-Today there is no tier model. Only the two live CLI AGENT runners (claude-code, codex) use native schema delivery;
+Today there is no tier model. Only the two live CLI agent runners (claude-code, codex) use native schema delivery;
 the deterministic `script`/`stub-agent` runner returns a typed `AttemptResult` directly (no schema flag). The
 validate seam is already shipped. What ships:
 
@@ -82,8 +82,8 @@ Field contract:
 - `nextSteps` is REQUIRED (`[]` when there are none).
 - `artifacts`, `needsHuman`, and `lesson` are OPTIONAL.
 
-Claude and Codex differ only in strictness: Codex requires all six keys and allows `null`; Claude requires the two
-REQUIRED keys and omits the rest. A runner's `schemaDelivery`/tier decides which concrete schema body is delivered.
+Claude and Codex differ only in strictness: Codex requires all six keys and allows `null`; Claude requires only
+`verdict` and `output` and omits the rest. A runner's `schemaDelivery`/tier decides which concrete schema body is delivered.
 
 #### Verdict lift (all tiers)
 

@@ -23,7 +23,7 @@ need that snapshot inside the run worktree rather than reading a moving checkout
 
 The target also needs a data model for relationships across playbook items. Pipelines reference roles; roles and
 stacks reference documents; route-time selection resolves role, surface, stack, framework, practice, tooling, and
-repo-overlay context. Revisium does not currently need self-relations for this. The first stable contract can store
+repo-overlay context. Expressing this does not currently require Revisium self-relations. The first stable contract can store
 relations as typed string/id references and validate that the referenced ids or paths exist inside the same immutable
 snapshot.
 
