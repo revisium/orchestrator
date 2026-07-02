@@ -10,6 +10,15 @@ export const DEFAULT_PLAYBOOK_POLICY_DIAGNOSTIC_CODES = [
   'DEFAULT_POLICY_BLOCKED_TERMINAL_MISSING',
   'DEFAULT_POLICY_CANCELLED_TERMINAL_MISSING',
   'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
+  'DEFAULT_POLICY_RECOVERABLE_CATCH_TERMINAL',
+  'DEFAULT_POLICY_CAP_EXHAUSTION_OFFRAMP_MISSING',
+  'DEFAULT_POLICY_APPROVE_REVERIFY_MISSING',
+  'DEFAULT_POLICY_MERGE_READINESS_FRESHNESS_MISSING',
+  'DEFAULT_POLICY_CONFIRM_MERGE_FAILURE_TERMINAL',
+  'DEFAULT_POLICY_POST_MERGE_CLEANUP_MISSING',
+  'DEFAULT_POLICY_GATE_OUTCOMES_IMPLICIT',
+  'DEFAULT_POLICY_VARIANT_POLICY_GAP',
+  'DEFAULT_POLICY_VARIANT_PARITY_DRIFT',
 ] as const;
 
 export type DefaultPlaybookPolicyDiagnosticCode =
@@ -28,6 +37,24 @@ export type DefaultPlaybookPolicyDiagnostic = {
 
 type EffectNode = Extract<Node, { kind: 'agent' | 'script' }>;
 type RoutingNode = Extract<Node, { kind: 'choice' | 'humanGate' }>;
+
+const SUPPORTED_PIPELINE_IDS = ['feature-development', 'feature-development-codex-consensus'] as const;
+
+// #242 debt snapshot — codes the reconciled rule set emits on feature-development-codex-consensus today.
+// When #242 reconciles the codex graph this set empties and VARIANT_PARITY_DRIFT fires, prompting removal.
+// To update: run validateDefaultPlaybookPolicy(codexTemplate), capture the unique code set, replace below.
+const CODEX_LEGACY_WAIVERS: readonly DefaultPlaybookPolicyDiagnosticCode[] = [
+  'DEFAULT_POLICY_APPROVE_REVERIFY_MISSING',
+  'DEFAULT_POLICY_CAP_EXHAUSTION_OFFRAMP_MISSING',
+  'DEFAULT_POLICY_CHANGE_HANDOFF_MISSING',
+  'DEFAULT_POLICY_CONFIRM_MERGE_FAILURE_TERMINAL',
+  'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
+  'DEFAULT_POLICY_MERGE_READINESS_FRESHNESS_MISSING',
+  'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
+  'DEFAULT_POLICY_POST_MERGE_CLEANUP_MISSING',
+  'DEFAULT_POLICY_RECOVERABLE_CATCH_TERMINAL',
+  'DEFAULT_POLICY_REVIEW_CHANGES_ROUTE_MISSING',
+] as const;
 
 class PolicySink {
   readonly diagnostics: DefaultPlaybookPolicyDiagnostic[] = [];
@@ -49,16 +76,16 @@ class PolicySink {
   }
 }
 
-export function validateDefaultFeatureDevelopmentPolicy(
+export function validateDefaultPlaybookPolicy(
   template: Template,
 ): DefaultPlaybookPolicyDiagnostic[] {
   const sink = new PolicySink(template.pipelineId);
 
-  if (template.pipelineId !== 'feature-development') {
+  if (!(SUPPORTED_PIPELINE_IDS as readonly string[]).includes(template.pipelineId)) {
     sink.error(
       'DEFAULT_POLICY_WRONG_PIPELINE',
-      'default playbook policy verifier only applies to feature-development',
-      { expected: 'feature-development', actual: template.pipelineId },
+      'default playbook policy verifier only applies to feature-development variants',
+      { expected: SUPPORTED_PIPELINE_IDS.join('|'), actual: template.pipelineId },
     );
     return sink.diagnostics;
   }
@@ -67,9 +94,45 @@ export function validateDefaultFeatureDevelopmentPolicy(
   checkCancelledTerminal(template, sink);
   checkProducedChangeHandoff(template, sink);
   checkPrFreshnessWiring(template, sink);
+  checkApproveReverifyBeforeMerge(template, sink);
+  checkMergeConsumesFreshReadiness(template, sink);
   checkMergeGateRecheckRouting(template, sink);
   checkReviewFeedbackLoop(template, sink);
   checkLoopExhaustionEscalation(template, sink);
+  checkRecoverableCatches(template, sink);
+  checkCapExhaustionOffRamp(template, sink);
+  checkConfirmMergeFailureRecoverable(template, sink);
+  checkPostMergeCleanup(template, sink);
+  checkGateOutcomesExplicit(template, sink);
+
+  return sink.diagnostics;
+}
+
+export function validateVariantParity(template: Template): DefaultPlaybookPolicyDiagnostic[] {
+  const sink = new PolicySink(template.pipelineId);
+
+  const actualCodes = new Set(validateDefaultPlaybookPolicy(template).map((d) => d.code));
+  const waivedCodes = new Set<DefaultPlaybookPolicyDiagnosticCode>(CODEX_LEGACY_WAIVERS);
+
+  for (const code of actualCodes) {
+    if (!waivedCodes.has(code)) {
+      sink.error(
+        'DEFAULT_POLICY_VARIANT_POLICY_GAP',
+        `codex variant fires ${code} but it is not listed in CODEX_LEGACY_WAIVERS`,
+        { expected: 'code listed in CODEX_LEGACY_WAIVERS', actual: code },
+      );
+    }
+  }
+
+  const actualSorted = [...actualCodes].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).join(',');
+  const waivedSorted = [...waivedCodes].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).join(',');
+  if (actualSorted !== waivedSorted) {
+    sink.error(
+      'DEFAULT_POLICY_VARIANT_PARITY_DRIFT',
+      'codex variant violation set differs from CODEX_LEGACY_WAIVERS',
+      { expected: waivedSorted, actual: actualSorted },
+    );
+  }
 
   return sink.diagnostics;
 }
@@ -195,14 +258,17 @@ function checkPrFreshnessWiring(template: Template, sink: PolicySink): void {
     producerId: 'mergeReadiness',
     as: 'prFeedback',
   });
+}
+
+function checkApproveReverifyBeforeMerge(template: Template, sink: PolicySink): void {
   expectRoute(template, sink, {
-    code: 'DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING',
+    code: 'DEFAULT_POLICY_APPROVE_REVERIFY_MISSING',
     nodeId: 'mergeGate',
     verdict: 'approved',
     target: 'mergeApproveReverify',
   });
   expectScript(template, sink, {
-    code: 'DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING',
+    code: 'DEFAULT_POLICY_APPROVE_REVERIFY_MISSING',
     nodeId: 'mergeApproveReverify',
     scriptRef: 'script:pollPr',
     next: 'mergeApproveReverifyRouter',
@@ -210,13 +276,16 @@ function checkPrFreshnessWiring(template: Template, sink: PolicySink): void {
     produces: 'prFeedback',
   });
   expectRoute(template, sink, {
-    code: 'DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING',
+    code: 'DEFAULT_POLICY_APPROVE_REVERIFY_MISSING',
     nodeId: 'mergeApproveReverifyRouter',
     verdict: 'clean',
     target: 'confirmMerge',
   });
+}
+
+function checkMergeConsumesFreshReadiness(template: Template, sink: PolicySink): void {
   expectConsume(template, sink, {
-    code: 'DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING',
+    code: 'DEFAULT_POLICY_MERGE_READINESS_FRESHNESS_MISSING',
     consumerId: 'confirmMerge',
     producerId: 'mergeApproveReverify',
     as: 'mergeReadiness',
@@ -497,6 +566,122 @@ function checkLoopExhaustionEscalation(template: Template, sink: PolicySink): vo
     cap: 3,
     parent: null,
   });
+}
+
+function checkRecoverableCatches(template: Template, sink: PolicySink): void {
+  const recoverableNodes = [
+    'pollPr',
+    'mergeReadiness',
+    'mergeRecheck',
+    'mergeApproveReverify',
+    'integrator',
+    'reviewIntegrator',
+    'respondThreads',
+  ];
+
+  for (const nodeId of recoverableNodes) {
+    const node = effectNode(template, nodeId);
+    if (!node) continue;
+    for (const entry of node.catch ?? []) {
+      if (isTerminalNode(template, entry.goto)) {
+        sink.error(
+          'DEFAULT_POLICY_RECOVERABLE_CATCH_TERMINAL',
+          `node ${nodeId} catch for ${entry.onError} must not route to a terminal`,
+          {
+            nodeId,
+            expected: `${entry.onError} -> non-terminal`,
+            actual: `${entry.onError} -> ${entry.goto}`,
+          },
+        );
+      }
+    }
+  }
+}
+
+function checkCapExhaustionOffRamp(template: Template, sink: PolicySink): void {
+  const capRouters = [
+    'prRouter',
+    'mergeReadinessRouter',
+    'mergeRecheckRouter',
+    'triageRouter',
+    'recoveryRouter',
+    'planReviewRouter',
+    'codeReviewRouter',
+  ];
+
+  for (const nodeId of capRouters) {
+    const node = routingNode(template, nodeId);
+    if (!node) continue;
+    const target = defaultBranchTarget(node);
+    const targetNode = target ? template.nodes[target] : undefined;
+    const isHumanGate = targetNode?.kind === 'humanGate';
+    const isClassifier = target === 'classifyRecovery';
+    if (!isHumanGate && !isClassifier) {
+      sink.error(
+        'DEFAULT_POLICY_CAP_EXHAUSTION_OFFRAMP_MISSING',
+        `cap-router ${nodeId} default must route to a humanGate or classifyRecovery, not a terminal`,
+        {
+          nodeId,
+          expected: 'default -> humanGate or classifyRecovery',
+          actual: target ? `default -> ${target} (${targetNode?.kind ?? 'missing'})` : 'missing default branch',
+        },
+      );
+    }
+  }
+}
+
+function checkConfirmMergeFailureRecoverable(template: Template, sink: PolicySink): void {
+  const node = effectNode(template, 'confirmMerge');
+  if (!node) return;
+  for (const entry of node.catch ?? []) {
+    if (isTerminalNode(template, entry.goto)) {
+      sink.error(
+        'DEFAULT_POLICY_CONFIRM_MERGE_FAILURE_TERMINAL',
+        `confirmMerge catch for ${entry.onError} must not route to a terminal`,
+        {
+          nodeId: 'confirmMerge',
+          expected: `${entry.onError} -> non-terminal`,
+          actual: `${entry.onError} -> ${entry.goto}`,
+        },
+      );
+    }
+  }
+}
+
+function checkPostMergeCleanup(template: Template, sink: PolicySink): void {
+  expectNodeNext(template, sink, {
+    code: 'DEFAULT_POLICY_POST_MERGE_CLEANUP_MISSING',
+    nodeId: 'confirmMerge',
+    target: 'cleanupWorktree',
+  });
+  expectScript(template, sink, {
+    code: 'DEFAULT_POLICY_POST_MERGE_CLEANUP_MISSING',
+    nodeId: 'cleanupWorktree',
+    scriptRef: 'script:cleanupWorktree',
+    next: 'mergedEnd',
+    resultSchema: 'schema:integration',
+  });
+}
+
+function checkGateOutcomesExplicit(template: Template, sink: PolicySink): void {
+  for (const [nodeId, node] of Object.entries(template.nodes)) {
+    if (node.kind !== 'humanGate') continue;
+    for (const outcome of node.outcomes) {
+      if (outcome !== 'cancel' && outcome !== 'rework') continue;
+      const branch = guardedBranchForVerdict(node, outcome);
+      if (!branch) {
+        sink.error(
+          'DEFAULT_POLICY_GATE_OUTCOMES_IMPLICIT',
+          `gate ${nodeId} declares ${outcome} but has no guarded branch for it`,
+          {
+            nodeId,
+            expected: `guarded branch for ${outcome}`,
+            actual: 'missing guarded branch',
+          },
+        );
+      }
+    }
+  }
 }
 
 function expectChangeProducer(template: Template, sink: PolicySink, nodeId: string): void {
@@ -831,6 +1016,10 @@ function expectRouterDefaultGate(
       actual: gate ? `kind=${gate.kind} ${approveVerdict}=${approveTarget ?? 'missing'} default=${gateDefault ?? 'missing'}` : 'missing gate',
     },
   );
+}
+
+function isTerminalNode(template: Template, nodeId: string): boolean {
+  return template.nodes[nodeId]?.kind === 'terminal';
 }
 
 function effectNode(template: Template, nodeId: string): EffectNode | undefined {
