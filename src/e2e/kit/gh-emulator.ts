@@ -21,7 +21,9 @@ export type GhScenario =
   | 'review-comment' //     pollPr: one UNRESOLVED review thread until respondThreads resolves it; CI green (plan 0018)
   | 'gh-error' //           every gh call throws (rate-limit / network family) → DBOS retries the step
   | 'gh-token-leak' //      throws an error embedding a gho_ token → asserts redaction in the lesson
-  | 'always-ci-red'; //    pollPr rollup: all CI checks permanently failing → ciLoop exhaustion → recoveryGate (#246)
+  | 'always-ci-red' //     pollPr rollup: all CI checks permanently failing → ciLoop exhaustion → recoveryGate (#246)
+  | 'merge-unknown-then-clean' // pollPr: UNKNOWN×1 then CLEAN; bounded recheck loop converges to merge (#248)
+  | 'merge-stale-at-reverify'; // pollPr+mergeReadiness: CLEAN; mergeApproveReverify: DIRTY → classifyRecovery (#248)
 
 /** Branch from a `gh pr <view|merge|ready> <branch> …` argv (integrator/confirmMerge pass it as args[2]). */
 function branchArg(args: string[]): string {
@@ -66,6 +68,14 @@ type GhState = {
   repushedBranches: Set<string>;
   /** Per-branch unresolved review-thread ids (review-comment scenario). resolve removes one. */
   unresolvedThreads: Map<string, Set<string>>;
+  /**
+   * Count of `gh pr ready` invocations. `pr ready` fires once per pollPr/mergeReadiness/
+   * mergeApproveReverify node BEFORE the grace-view loop that determines the verdict, so this
+   * counter increments at node entry. Used by node-boundary flip scenarios to change merge state
+   * after a known number of nodes have been processed. Requires reviewGracePolls >= 1 (holds at
+   * default 4; test:e2e does not override the grace count).
+   */
+  readyCount: number;
 };
 
 function newGhState(): GhState {
@@ -75,6 +85,7 @@ function newGhState(): GhState {
     createdBranches: new Set(),
     repushedBranches: new Set(),
     unresolvedThreads: new Map(),
+    readyCount: 0,
   };
 }
 
@@ -156,8 +167,8 @@ function ghBehavior(scenario: GhScenario, args: string[], st: GhState): string {
     return `${PR_URL}\n`;
   }
   if (args[0] === 'pr' && args[1] === 'ready') {
-    // confirmMerge marks the draft ready before merging.
     st.readyBranches.add(branchArg(args));
+    st.readyCount++;
     return '';
   }
   if (args[0] === 'pr' && args[1] === 'merge') {
@@ -179,9 +190,25 @@ function ghBehavior(scenario: GhScenario, args: string[], st: GhState): string {
       // by the second `pr create` (idempotent integrator) NOT firing — so we flip on the integrator's push
       // recorded as a re-list; here we approximate: red until the branch is re-pushed at least once.
       const ciRed = (scenario === 'ci-red-then-green' && !st.repushedBranches.has(branch)) || scenario === 'always-ci-red';
-      // record that pollPr saw the branch; the NEXT integrate re-push will flip it green
       if (scenario === 'ci-red-then-green' && ciRed) st.repushedBranches.add(branch);
       const mergeConflict = scenario === 'merge-conflict';
+      // Compute merge state for node-boundary flip scenarios.
+      // readyCount is post-increment: `pr ready` fires BEFORE the grace views, so grace views (which
+      // determine the verdict) see the updated count. Both new scenarios keep CI green so pr ready
+      // always fires and the count advances on every node entry.
+      let mergeStateStatus = mergeConflict ? 'DIRTY' : 'CLEAN';
+      let mergeable = mergeConflict ? 'CONFLICTING' : 'MERGEABLE';
+      if (scenario === 'merge-unknown-then-clean') {
+        // readyCount < 2: first pollPr node fires pr-ready (→1); grace views see readyCount=1 → UNKNOWN.
+        // Second pollPr (after prRouter recheck self-loop) fires pr-ready (→2); grace views see
+        // readyCount=2 → CLEAN. Exactly one prRouter recheck; converges to merge gate.
+        if (st.readyCount < 2) { mergeStateStatus = 'UNKNOWN'; mergeable = 'UNKNOWN'; }
+      } else if (scenario === 'merge-stale-at-reverify') {
+        // readyCount < 3: pollPr (→1) and mergeReadiness (→2) both CLEAN (2 pre-gate nodes).
+        // mergeApproveReverify fires pr-ready (→3); grace views see readyCount=3 → DIRTY →
+        // mergeSignal blocked → {needsHuman} → catch → classifyRecovery → recoveryGate.
+        if (st.readyCount >= 3) { mergeStateStatus = 'DIRTY'; mergeable = 'CONFLICTING'; }
+      }
       return JSON.stringify({
         number: 7,
         url: PR_URL,
@@ -190,9 +217,9 @@ function ghBehavior(scenario: GhScenario, args: string[], st: GhState): string {
         baseRefName: BASE,
         headRefName: branch,
         headRefOid: 'deadbeefcafe',
-        mergeStateStatus: mergeConflict ? 'DIRTY' : 'CLEAN',
+        mergeStateStatus,
         reviewDecision: '',
-        mergeable: mergeConflict ? 'CONFLICTING' : 'MERGEABLE',
+        mergeable,
         statusCheckRollup: ciRed
           ? [{ __typename: 'CheckRun', name: 'build', status: 'COMPLETED', conclusion: 'FAILURE' }]
           : [{ __typename: 'CheckRun', name: 'build', status: 'COMPLETED', conclusion: 'SUCCESS' }],

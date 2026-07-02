@@ -2315,3 +2315,109 @@ test('dispatch: no launchOverrides when binding has only playbook sources', asyn
   const developerLaunchOverrides = capturedLaunchOverrides.get('developer');
   assert.equal(developerLaunchOverrides, undefined, 'no launchOverrides for playbook-only binding');
 });
+
+// ─── reverify-path tests: AC#2 (stale/unmergeable at mergeApproveReverify → recovery) ───────────
+
+test('DD-reverify-a: blocked at mergeApproveReverify → catch → classifyRecovery → recoveryGate → cancel (AC#2 catch path)', async () => {
+  // pollPr calls 1+2 = pollPr + mergeReadiness (clean, pre-gate); call 3 = mergeApproveReverify (blocked).
+  // Blocked returns {needsHuman} → errorCode revo.ScriptBlocked → catch → classifyRecovery.
+  // classifyRecovery returns default (not 'fix') → recoveryRouter default → recoveryGate opens.
+  // Gate decider cancels recoveryGate → cancelled terminal, confirmMerge never called.
+  let pollCount = 0;
+  const { run, rec } = buildAdapter({
+    template: featureDevelopmentPrReview(),
+    verdicts: { codeReview: 'approved' },
+    gate: (_topic, gateKey) => gateKey.startsWith('recoveryGate') ? { outcome: 'cancel' } : { decision: 'approve' },
+    pollPr: (): PrFeedback | IntegratorBlocked => {
+      pollCount++;
+      if (pollCount === 3) return { needsHuman: true as const, lesson: 'PR is stale (DIRTY) after approval' };
+      return { prNumber: 1, headSha: `sha-${pollCount}`, evidence: [`poll ${pollCount}: clean`], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
+    },
+  });
+  const result = await run();
+  assert.equal(result.status, 'cancelled', 'blocked at reverify routes to recoveryGate → cancel → cancelled');
+  assert.equal(rec.confirmMergeCalls, 0, 'confirmMerge must not be called when reverify blocks');
+  assert.ok(rec.gates.includes('merge'), 'recoveryGate (topic merge) must open');
+});
+
+test('DD-reverify-b: review_changes at mergeApproveReverify → router default → classifyRecovery → recoveryGate → cancel (AC#2 router path)', async () => {
+  // pollPr call 3 = mergeApproveReverify returns review_changes → mergeApproveReverifyRouter default →
+  // classifyRecovery → recoveryRouter default → recoveryGate → cancel → cancelled.
+  let pollCount = 0;
+  const { run, rec } = buildAdapter({
+    template: featureDevelopmentPrReview(),
+    verdicts: { codeReview: 'approved' },
+    gate: (_topic, gateKey) => gateKey.startsWith('recoveryGate') ? { outcome: 'cancel' } : { decision: 'approve' },
+    pollPr: (): PrFeedback | IntegratorBlocked => {
+      pollCount++;
+      if (pollCount === 3) return { prNumber: 1, headSha: 'sha-3', evidence: ['pr has review comments'], verdict: 'review_changes' as const, ciFailures: [], reviewThreads: [] };
+      return { prNumber: 1, headSha: `sha-${pollCount}`, evidence: [`poll ${pollCount}: clean`], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
+    },
+  });
+  const result = await run();
+  assert.equal(result.status, 'cancelled', 'review_changes at reverify routes to classifyRecovery → recoveryGate → cancelled');
+  assert.equal(rec.confirmMergeCalls, 0, 'confirmMerge must not be called when reverify returns review_changes');
+  assert.ok(rec.gates.includes('merge'), 'recoveryGate opens');
+});
+
+test('DD-reverify-c: pollPr UNKNOWN recheck → second poll CLEAN → merges (AC#3 bounded recheck then merge)', async () => {
+  // pollPr call 1 returns recheck (UNKNOWN); prRouter.recheck self-loops; call 2 returns clean.
+  // Proceeds to mergeReadiness (call 3 clean) → mergeGate → mergeApproveReverify (call 4 clean) → merge.
+  let pollCount = 0;
+  const { run, rec } = buildAdapter({
+    template: featureDevelopmentPrReview(),
+    verdicts: { codeReview: 'approved' },
+    gate: () => ({ decision: 'approve' }),
+    pollPr: (): PrFeedback | IntegratorBlocked => {
+      pollCount++;
+      if (pollCount === 1) return { prNumber: 1, headSha: 'sha-1', evidence: ['unsettled: UNKNOWN'], verdict: 'recheck' as const, ciFailures: [], reviewThreads: [] };
+      return { prNumber: 1, headSha: `sha-${pollCount}`, evidence: [`poll ${pollCount}: clean`], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
+    },
+  });
+  const result = await run();
+  assert.equal(result.status, 'succeeded', 'bounded recheck then CLEAN → merges to succeeded');
+  assert.equal(rec.confirmMergeCalls, 1, 'confirmMerge called once after CLEAN');
+  assert.ok(pollCount >= 2, 'at least one recheck self-loop occurred');
+});
+
+test('DD-reverify-d: pollPr UNKNOWN recheck → blocked at reverify → recoveryGate → cancel (AC#3 no-merge)', async () => {
+  // Call 1: recheck (UNKNOWN). Call 2: clean (pollPr again after recheck self-loop). Call 3: clean
+  // (mergeReadiness). mergeGate approved. Call 4: blocked at mergeApproveReverify → classifyRecovery →
+  // recoveryGate → cancel → cancelled, NOT terminal blocked.
+  let pollCount = 0;
+  const { run, rec } = buildAdapter({
+    template: featureDevelopmentPrReview(),
+    verdicts: { codeReview: 'approved' },
+    gate: (_topic, gateKey) => gateKey.startsWith('recoveryGate') ? { outcome: 'cancel' } : { decision: 'approve' },
+    pollPr: (): PrFeedback | IntegratorBlocked => {
+      pollCount++;
+      if (pollCount === 1) return { prNumber: 1, headSha: 'sha-1', evidence: ['unsettled: UNKNOWN'], verdict: 'recheck' as const, ciFailures: [], reviewThreads: [] };
+      if (pollCount === 4) return { needsHuman: true as const, lesson: 'DIRTY at reverify after UNKNOWN recheck' };
+      return { prNumber: 1, headSha: `sha-${pollCount}`, evidence: [`poll ${pollCount}: clean`], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
+    },
+  });
+  const result = await run();
+  assert.equal(result.status, 'cancelled', 'UNKNOWN→recheck then blocked at reverify → recoveryGate cancel → cancelled (not terminal blocked)');
+  assert.equal(rec.confirmMergeCalls, 0, 'confirmMerge must not be called');
+});
+
+test('DD-reverify-a-codex: blocked at mergeApproveReverify → recoveryGate on materialized codex-consensus graph (AC#2 + AC#6)', async () => {
+  // Same as DD-reverify-a but on the real materialized codex-consensus template to verify the
+  // parallel/join edges also route correctly through the recovery path.
+  let pollCount = 0;
+  const { run, rec } = buildAdapter({
+    template: defaultCodexConsensusTemplate(),
+    route: makeCodexConsensusRoute(),
+    verdicts: { codeReview: 'approved', planReview: 'approved' },
+    gate: (_topic, gateKey) => gateKey.startsWith('recoveryGate') ? { outcome: 'cancel' } : { decision: 'approve' },
+    pollPr: (): PrFeedback | IntegratorBlocked => {
+      pollCount++;
+      if (pollCount === 3) return { needsHuman: true as const, lesson: 'stale at reverify on codex graph' };
+      return { prNumber: 1, headSha: `sha-${pollCount}`, evidence: [`poll ${pollCount}: clean`], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
+    },
+  });
+  const result = await run();
+  assert.equal(result.status, 'cancelled', 'codex-consensus graph: blocked at reverify → recoveryGate cancel → cancelled');
+  assert.equal(rec.confirmMergeCalls, 0, 'confirmMerge must not be called on codex graph');
+  assert.ok(rec.gates.includes('merge'), 'recoveryGate opens on codex graph');
+});

@@ -1031,6 +1031,20 @@ export class TaskControlPlaneApiService {
         routeGates: route.routeGates,
         activeNodeIds: activeIds,
         status: cursorStatus(progress),
+        provenance: Object.fromEntries(
+          (
+            [
+              ['requestedPipelineId', route.requestedPipelineId],
+              ['basePipelineId', route.basePipelineId],
+              ['profileId', route.profileId],
+              ['profileVersion', route.profileVersion],
+              ['profileHash', route.profileHash],
+              ['materializedTemplateHash', route.materializedTemplateHash],
+              ['materializerVersion', route.materializerVersion],
+              ['policyVersion', route.policyVersion],
+            ] as [string, string | undefined][]
+          ).filter(([, v]) => v !== undefined),
+        ),
       },
       nodes,
       edges,
