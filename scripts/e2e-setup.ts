@@ -54,14 +54,30 @@ async function resetHome(): Promise<void> {
   await ensureRevisium(); // fresh spawn recreates the data dir + embedded Postgres
 }
 
-async function installPlaybook(): Promise<void> {
+// Every playbook any e2e file needs is installed HERE, before the first test file runs, so head
+// stays static for the whole suite. A mid-suite head commit invalidates other files' cached head
+// scopes (the stale-head trap above) — harmless when files run one at a time, a race when they run
+// in parallel. The in-file installs stay as skip-if-present guards.
+const SUITE_PLAYBOOKS: { name: string; version?: string }[] = [
+  { name: PLAYBOOK_ID },
+  { name: 'revisium-agent-playbook-parallel-e2e', version: 'parallel-consensus-e2e' },
+];
+
+async function installPlaybooks(): Promise<void> {
   const playbooks = new PlaybooksService(createClientTransport('head'));
-  try {
-    const r = await playbooks.install({ source: PLAYBOOK_SOURCE, name: PLAYBOOK_ID, commit: true });
-    console.log(`[e2e setup] installed playbook ${r.playbookId} (${r.roles} roles, ${r.pipelines} pipelines)`);
-  } catch (err) {
-    if (!/not a draft|already|nothing to commit|ROW_CONFLICT/i.test(String(err))) throw err;
-    console.log('[e2e setup] playbook install raced/duplicate — tolerated');
+  for (const { name, version } of SUITE_PLAYBOOKS) {
+    try {
+      const r = await playbooks.install({
+        source: PLAYBOOK_SOURCE,
+        name,
+        ...(version ? { version } : {}),
+        commit: true,
+      });
+      console.log(`[e2e setup] installed playbook ${r.playbookId} (${r.roles} roles, ${r.pipelines} pipelines)`);
+    } catch (err) {
+      if (!/not a draft|already|nothing to commit|ROW_CONFLICT/i.test(String(err))) throw err;
+      console.log(`[e2e setup] playbook ${name} install raced/duplicate — tolerated`);
+    }
   }
 }
 
@@ -83,7 +99,7 @@ async function main(): Promise<void> {
   console.log('[e2e setup] resetting the test home (deterministic cold start, matches CI)');
   await resetHome();
   await applyBootstrapAndDefaultSeed();
-  await installPlaybook();
+  await installPlaybooks();
 }
 
 await main();

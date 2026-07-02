@@ -103,8 +103,13 @@ jobs:
       # (REVO_DATA_DIR/REVO_PORT/REVO_PG_PORT → its own embedded Postgres + DBOS db, set in the npm
       # script), bootstraps the control-plane, and installs the playbook — then the test files run.
       # No separate start/bootstrap steps, and no collision with a developer's dogfooding daemon.
+      # File concurrency 2 on CI: the hosted runner's 4 shared vCPUs are saturated by the embedded
+      # Postgres + daemon already, so 4-way file parallelism runs SLOWER there than 2-way (measured
+      # on #260: 4-way 168s vs serial 146s). Local machines keep the default 4 from the npm script.
       - name: Run E2E (REVO_E2E_REAL=1)
         run: pnpm run test:e2e
+        env:
+          REVO_E2E_FILE_CONCURRENCY: 2
 
   # SonarCloud analysis. Automatic Analysis is DISABLED in the SonarCloud project, so this CI scan is the
   # sole analysis path (it uploads the lcov from `verify`). Non-required (not in `checks`): the SonarCloud

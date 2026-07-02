@@ -73,26 +73,35 @@ expensive (~9 s/file, ~125 s across the suite):
 Production leaves `REVO_SHUTDOWN_DRAIN_TIMEOUT_MS` unset → the 8 s default stays in force; `--test-force-exit`
 is test-only. Never set the knob to `0` (that means "await the full drain", i.e. hang on a parked gate).
 
-Three more invariants keep the suite fast AND deterministic:
+The files run **4 at a time** (`--test-concurrency=4`). What makes that safe, fast, and deterministic:
 
+- **Per-file DBOS system db.** `src/e2e/kit/env.ts` derives `REVO_DBOS_DB` from the test file name (host boot
+  CREATEs the db on demand), so queues and workflows never cross between files: no cross-file recovery, no
+  shared dev-tasks slots. Crash-recovery child processes inherit the parent's env and stay in the parent's db.
+  Historical context: on a SHARED db, `cancelRun` leaving DBOS workflows alive (it only patches the run row)
+  let gate-parked zombies accumulate one dev-tasks slot each until the queue starved — the old CI tail wedge.
 - **Queue tick.** The DBOS dev-tasks dispatcher polls at `REVO_DEV_TASKS_POLL_INTERVAL_MS` (25 ms under
   `test:e2e`; unset in production → SDK default 1000 ms). Without it every run waits ~0.5–1 s before its
   workflow starts (~70 s across the suite).
-- **No zombie workflows.** `cancelRun` only patches the run row — it never cancels the DBOS workflow, so a run
-  left parked at a gate stays PENDING, is recovered by every later file's boot, and permanently occupies a
-  dev-tasks concurrency slot. Once ≥ `REVO_DEV_TASKS_CONCURRENCY` zombies accumulate, the queue starves and
-  every later run times out at 'running' (the historical CI tail wedge: recovery F1–F3, seed M1/M1b/M2,
-  run-lifecycle). `harness.close()` cancels PENDING/ENQUEUED workflows at the DBOS level (`keepWorkflowsParked`
-  opts out — only for teardown-drain, whose subject IS a parked workflow), and `scripts/e2e-setup.ts` resets
-  the whole test home on every suite run (a reused draft also degrades the event query into read-after-write
-  staleness — flaky event assertions).
+- **Teardown workflow cancel.** `harness.close()` cancels this file's PENDING/ENQUEUED workflows at the DBOS
+  level (`keepWorkflowsParked` opts out — only for teardown-drain, whose subject IS a parked workflow). Do NOT
+  add a run-ROW cancel sweep there: the control-plane is shared, so `listRuns → cancelRun` murders neighbour
+  files' live runs.
+- **Home reset per suite run.** `scripts/e2e-setup.ts` resets the whole test home every run (a reused draft
+  degrades the event query into read-after-write staleness — flaky event assertions) and pre-installs EVERY
+  playbook the suite needs. Never commit the shared draft mid-suite (e.g. an unguarded `installPlaybook`):
+  a commit kills every other file's cached draft revision — "The revision is not a draft" storms.
 - **Settled waits.** `drive.ts` polls at 25 ms but returns only settled states (terminal run row AND terminal
   DBOS workflow status; gates once the inbox row is visible). Do not assert on event counts with a single read
   right after a wait — poll like `assertEventsPresent`/`countEventsSettled` (the draft event query can miss the
   newest row for a beat).
+- **Cross-file reads must filter.** The control-plane (runs, events, inbox, subscriptions) is shared across
+  concurrently running files — never assert on "the first/newest" row of an unfiltered query or subscription;
+  select by your own runId (see `subscribeCollect` in graphql-subscriptions).
 
-Target wall-clock: `pnpm test:e2e` ≈ 110–135 s. If it regresses toward ~200 s, suspect teardown (a dropped
-flag), the queue-tick knob, or zombie accumulation (`Recovering N workflows` climbing per file in the log)
-before blaming test bodies. `src/e2e/teardown-drain.e2e.test.ts` guards the drain cap: teardown with a parked
-gate must return < 500 ms. The 30 s `WAIT_TIMEOUT_MS` in `drive.ts` is a deliberate stuck-detector — do not
-raise it to absorb slowness.
+Target wall-clock: `pnpm test:e2e` ≈ 70–90 s. If it regresses toward ~150 s, suspect teardown (a dropped
+flag), the queue-tick knob, a dropped `--test-concurrency`, or per-file db derivation before blaming test
+bodies. `src/e2e/teardown-drain.e2e.test.ts` guards the drain cap: teardown with a parked gate must return
+< 500 ms. The 30 s `WAIT_TIMEOUT_MS` in `drive.ts` is a deliberate stuck-detector — do not raise it to absorb
+slowness. Embedded Postgres headroom at 4-way parallelism: ~50 of 100 connections — do not raise the test
+concurrency without checking `pg_stat_activity`.

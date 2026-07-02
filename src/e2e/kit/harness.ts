@@ -103,22 +103,13 @@ export async function createRunHarness(opts: RunHarnessOptions = {}): Promise<Ru
     developerWrites,
     ghCalls,
     close: async (opts?: { keepWorkflowsParked?: boolean }): Promise<void> => {
-      // e2e files share one DBOS system DB + dev-tasks queue (concurrency-capped) across their
-      // per-file processes. Cancelling the RUN ROW is not enough: cancelRun never cancels the DBOS
-      // workflow, so a workflow parked at a gate stays PENDING, is recovered by every later file's
-      // boot, and permanently occupies a dev-tasks concurrency slot. Once ≥ concurrency zombies
-      // accumulate the queue starves and every later run times out at 'running' (the CI tail wedge:
-      // recovery F1–F3, seed M1/M2, run-lifecycle). Their recovered re-execution also races live
-      // tests' control-plane writes. So teardown cancels at BOTH levels: run rows for control-plane
-      // hygiene, then DBOS workflows so the next boot has nothing to recover.
-      const TERMINAL = new Set(['completed', 'succeeded', 'failed', 'blocked', 'cancelled']);
-      try {
-        for (const run of await api.listRuns({ limit: 500 })) {
-          if (!TERMINAL.has(run.status)) await api.cancelRun(run.runId).catch(() => undefined);
-        }
-      } catch {
-        // best-effort cleanup — teardown must never throw
-      }
+      // Teardown cancels this file's leftover DBOS workflows: a workflow parked at a gate stays
+      // PENDING forever (cancelRun never cancels the workflow), would be recovered by this file's
+      // next boot (crash-recovery scenarios), and holds a dev-tasks concurrency slot. The sweep is
+      // scoped to this FILE's DBOS system db (REVO_DBOS_DB is per-file), so it can never touch a
+      // concurrently running file. Do NOT cancel run ROWS here: the control-plane is shared across
+      // files, so a row-level `listRuns → cancelRun` sweep murders neighbours' live runs when files
+      // run in parallel — and it is unnecessary, the home is wiped by e2e-setup every suite run.
       if (!opts?.keepWorkflowsParked) {
         try {
           const active = await dbos.listWorkflows({ status: ['PENDING', 'ENQUEUED'], limit: 500 });
