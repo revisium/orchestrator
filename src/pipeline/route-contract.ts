@@ -85,11 +85,6 @@ function asStringArray(value: unknown): string[] | undefined {
   return value.filter((item): item is string => typeof item === 'string' && item.trim() !== '');
 }
 
-function asOptPosInt(value: unknown): number | undefined {
-  const n = typeof value === 'number' ? value : Number(value);
-  return Number.isFinite(n) && Number.isInteger(n) && n > 0 ? n : undefined;
-}
-
 function normalizeBindingOverride(raw: unknown): BindingOverride | null {
   const obj = asRecord(raw);
   if (!obj) return null;
@@ -102,8 +97,11 @@ function normalizeBindingOverride(raw: unknown): BindingOverride | null {
   const override: BindingOverride = { match };
   if (typeof obj.runnerId === 'string' && obj.runnerId.trim()) override.runnerId = obj.runnerId.trim();
   if (typeof obj.modelLevel === 'string' && obj.modelLevel.trim()) override.modelLevel = obj.modelLevel.trim();
-  const ms = asOptPosInt(obj.timeoutMs);
-  if (ms !== undefined) override.timeoutMs = ms;
+  // Preserve a provided-but-invalid timeoutMs (rather than normalizing it away to undefined) so
+  // Phase A's PROFILE_SCHEMA_CLOSED range check can reject it instead of silently ignoring it.
+  if (obj.timeoutMs !== undefined) {
+    override.timeoutMs = typeof obj.timeoutMs === 'number' ? obj.timeoutMs : Number(obj.timeoutMs);
+  }
   if (typeof obj.permissionMode === 'string' && obj.permissionMode.trim()) override.permissionMode = obj.permissionMode.trim();
   return override;
 }

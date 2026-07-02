@@ -1559,6 +1559,23 @@ export class TaskControlPlaneApiService {
         );
       }
 
+      // Validate match.runnerId too, not just override.runnerId — an unregistered/typo'd match
+      // target would otherwise silently match nothing and the override becomes a no-op.
+      if (mRunnerId !== undefined) {
+        if (available && !available.includes(mRunnerId)) {
+          throw new ControlPlaneError(
+            'VALIDATION_FAILURE',
+            `PROFILE_SCHEMA_CLOSED: bindingOverride match ${matchLabel} runnerId "${mRunnerId}" not in availableRunners`,
+          );
+        }
+        if (!available && !BUILTIN_RUNNERS.has(mRunnerId)) {
+          throw new ControlPlaneError(
+            'VALIDATION_FAILURE',
+            `PROFILE_SCHEMA_CLOSED: bindingOverride match ${matchLabel} runnerId "${mRunnerId}" is not a registered runner`,
+          );
+        }
+      }
+
       if (override.runnerId !== undefined) {
         const ovRunner = override.runnerId;
         if (available && !available.includes(ovRunner)) {

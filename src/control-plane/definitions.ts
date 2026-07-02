@@ -95,7 +95,7 @@ function toNonNegNum(value: unknown, fallback: number): number {
 }
 
 
-function toOptPosInt(value: unknown): number | undefined {
+export function toOptPosInt(value: unknown): number | undefined {
   const n = typeof value === 'number' ? value : Number(value);
   return Number.isFinite(n) && Number.isInteger(n) && n > 0 ? n : undefined;
 }

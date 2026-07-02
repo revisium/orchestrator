@@ -51,6 +51,17 @@ test('normalizeExecutionProfile: snake_case binding_overrides parsed', () => {
   assert.equal(result.bindingOverrides?.[0]?.timeoutMs, 60000);
 });
 
+test('normalizeExecutionProfile: preserves an invalid timeoutMs instead of silently dropping it (PROFILE_SCHEMA_CLOSED)', () => {
+  const result = normalizeExecutionProfile({
+    bindingOverrides: [{ match: { roleId: 'developer' }, timeoutMs: -5 }],
+  });
+  assert.equal(
+    result.bindingOverrides?.[0]?.timeoutMs,
+    -5,
+    'an invalid timeoutMs must survive normalization so Phase A validation can reject it, not vanish into undefined',
+  );
+});
+
 test('normalizeExecutionProfile: ignores entries without match', () => {
   const result = normalizeExecutionProfile({
     bindingOverrides: [{ modelLevel: 'deep' }, { match: { roleId: 'analyst' }, modelLevel: 'cheap' }],

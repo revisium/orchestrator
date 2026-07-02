@@ -3478,6 +3478,42 @@ test('PROFILE_SCHEMA_CLOSED: rejects node-only override with unknown runner (reg
   );
 });
 
+test('PROFILE_SCHEMA_CLOSED: rejects a typo in match.runnerId instead of silently matching nothing', async () => {
+  const api = makeApiForProfileTests();
+  await assert.rejects(
+    () => api.simulateRoute({
+      title: 'test',
+      pipeline: 'local-change',
+      executionProfile: {
+        bindingOverrides: [{ match: { runnerId: 'cladue-code' }, modelLevel: 'deep' }],
+      },
+    }),
+    (err: ControlPlaneError) => {
+      assert.ok(err.message.includes('PROFILE_SCHEMA_CLOSED'), `expected PROFILE_SCHEMA_CLOSED in: ${err.message}`);
+      assert.ok(err.message.includes('cladue-code'), `expected the typo'd match.runnerId in: ${err.message}`);
+      return true;
+    },
+  );
+});
+
+test('PROFILE_SCHEMA_CLOSED: rejects an invalid bindingOverride timeoutMs instead of silently ignoring it', async () => {
+  const api = makeApiForProfileTests();
+  await assert.rejects(
+    () => api.simulateRoute({
+      title: 'test',
+      pipeline: 'local-change',
+      executionProfile: {
+        bindingOverrides: [{ match: { roleId: 'developer' }, timeoutMs: -5 }],
+      },
+    }),
+    (err: ControlPlaneError) => {
+      assert.ok(err.message.includes('PROFILE_SCHEMA_CLOSED'), `expected PROFILE_SCHEMA_CLOSED in: ${err.message}`);
+      assert.ok(err.message.includes('timeoutMs'), `expected timeoutMs named in: ${err.message}`);
+      return true;
+    },
+  );
+});
+
 test('PROFILE_SCHEMA_CLOSED: rejects bindingOverride with empty match', async () => {
   const api = makeApiForProfileTests();
   await assert.rejects(
@@ -3514,20 +3550,22 @@ test('PROFILE_SCHEMA_CLOSED: rejects modelLevel unavailable (ROW_NOT_FOUND from 
   );
 });
 
-test('PROFILE_SCHEMA_CLOSED: accepts valid timeoutMs and passes normalization (timeoutMs: 0 silently stripped by normalizer)', async () => {
+test('PROFILE_SCHEMA_CLOSED: rejects timeoutMs: 0 instead of silently stripping it', async () => {
   const api = makeApiForProfileTests();
-  // timeoutMs: 0 is stripped by normalizeBindingOverride → the override becomes empty but valid (no timeoutMs field).
-  // Confirm no error is thrown and the route succeeds.
-  const result = await api.simulateRoute({
-    title: 'test',
-    pipeline: 'local-change',
-    executionProfile: {
-      bindingOverrides: [{ match: { roleId: 'developer' }, timeoutMs: 0 }],
+  await assert.rejects(
+    () => api.simulateRoute({
+      title: 'test',
+      pipeline: 'local-change',
+      executionProfile: {
+        bindingOverrides: [{ match: { roleId: 'developer' }, timeoutMs: 0 }],
+      },
+    }),
+    (err: ControlPlaneError) => {
+      assert.ok(err.message.includes('PROFILE_SCHEMA_CLOSED'), `expected PROFILE_SCHEMA_CLOSED in: ${err.message}`);
+      assert.ok(err.message.includes('timeoutMs'), `expected timeoutMs named in: ${err.message}`);
+      return true;
     },
-  });
-  assert.ok(result);
-  // The normalized binding should have no timeoutMs override.
-  assert.equal(result.executionProfile.bindingOverrides?.[0]?.timeoutMs, undefined);
+  );
 });
 
 test('PROFILE_SCHEMA_CLOSED: rejects timeoutMs > 86400000', async () => {

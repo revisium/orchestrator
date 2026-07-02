@@ -1,6 +1,6 @@
 import { Injectable, Inject } from '@nestjs/common';
 import type { ControlPlaneTransport } from '../control-plane/data-access.js';
-import { loadRole, loadModelProfile, loadPipelinePolicy, type Role, type ModelProfile, type PipelinePolicy } from '../control-plane/definitions.js';
+import { loadRole, loadModelProfile, loadPipelinePolicy, toOptPosInt, type Role, type ModelProfile, type PipelinePolicy } from '../control-plane/definitions.js';
 import { REVISIUM_TRANSPORT_HEAD } from './tokens.js';
 
 export type RoleSummary = {
@@ -24,11 +24,6 @@ export type ModelProfileSummary = {
 
 function str(value: unknown): string {
   return typeof value === 'string' ? value : '';
-}
-
-function toOptPosInt(value: unknown): number | undefined {
-  const n = typeof value === 'number' ? value : Number(value);
-  return Number.isFinite(n) && Number.isInteger(n) && n > 0 ? n : undefined;
 }
 
 @Injectable()
