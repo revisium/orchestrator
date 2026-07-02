@@ -314,13 +314,16 @@ test('D8: a non-github origin remote blocks at integrate (unparseable owner/repo
   }
 });
 
-test('D14: a gh error during integrate fails the run (throw → failRun, never a silent pass)', { skip: e2eSkip }, async () => {
+test('D14: a gh error during integrate routes to recovery → blocked (#246; never a silent pass)', { skip: e2eSkip }, async () => {
   const target = createTargetRepo();
   try {
     const run = await startFeature(target, { gh: 'gh-error' });
     const terminal = await approveUntilTerminal(h.api, run.runId);
-    assert.equal(terminal.state, 'failed'); // integrate throws → workflow catch → failRun
-    await assertEventsPresent(h.api, run.runId, ['run_failed']);
+    // #246: integrator ScriptFailed (gh threw) no longer terminal-fails; the catch routes to
+    // classifyRecovery → recoveryGate. approveUntilTerminal resolves the recovery gate with 'approved'
+    // (→ recoveryGate default → blockedEnd) — a surfaced, human-readable block, never a silent pass.
+    assert.equal(terminal.state, 'blocked');
+    await assertBlocked(h.api, run.runId);
   } finally {
     target.cleanup();
   }
@@ -357,8 +360,8 @@ test('D16: a stub (script-mode) integrator completes with no git/gh', { skip: e2
 
 // ── Mocked integrate outcomes (external git/gh boundary faked; workflow real) ─
 // D7/D13/D15 inject the integrator's RESULT — the external boundary is exactly what we mock — and
-// assert the workflow's handling: needsHuman → block + surface the reason; throw → failRun; a token
-// in a surfaced lesson → redacted at the persist boundary.
+// assert the workflow's handling: needsHuman → block + surface the reason; throw → recovery → blocked
+// (#246); a token in a surfaced lesson → redacted at the persist boundary.
 
 test('D7: an unresolved pinned gh account fails loud (refuses ambient) → blocks and surfaces why', { skip: e2eSkip }, async () => {
   const target = createTargetRepo();
