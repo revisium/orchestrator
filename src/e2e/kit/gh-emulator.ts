@@ -1,5 +1,6 @@
 import type { ExecGhFn } from '../../poller/pr-readiness.js';
 import { taskBranchPrefix } from '../../runners/integrator-branch-naming.js';
+import type { RunCase } from './scenario.js';
 
 const PR_URL = 'https://github.com/e2e/repo/pull/1';
 const PR_URL_2 = 'https://github.com/e2e/repo/pull/2';
@@ -23,7 +24,11 @@ export type GhScenario =
   | 'gh-token-leak' //      throws an error embedding a gho_ token → asserts redaction in the lesson
   | 'always-ci-red' //     pollPr rollup: all CI checks permanently failing → ciLoop exhaustion → recoveryGate (#246)
   | 'merge-unknown-then-clean' // pollPr: UNKNOWN×1 then CLEAN; bounded recheck loop converges to merge (#248)
-  | 'merge-stale-at-reverify'; // pollPr+mergeReadiness: CLEAN; mergeApproveReverify: DIRTY → classifyRecovery (#248)
+  | 'merge-stale-at-reverify' // pollPr+mergeReadiness: CLEAN; mergeApproveReverify: DIRTY → classifyRecovery (#248)
+  | 'merged-externally'
+  | 'head-moved-after-approve'
+  | 'empty-graphql-data'
+  | 'no-checks-registered';
 
 /** Branch from a `gh pr <view|merge|ready> <branch> …` argv (integrator/confirmMerge pass it as args[2]). */
 function branchArg(args: string[]): string {
@@ -115,6 +120,7 @@ function ghBehavior(scenario: GhScenario, args: string[], st: GhState): string {
   // ── plan 0018 — GraphQL review-thread query + reply/resolve mutations (gh api graphql) ──
   if (args[0] === 'api' && args[1] === 'graphql') {
     const query = gqlQuery(args);
+    if (scenario === 'empty-graphql-data') return JSON.stringify({ data: {} });
     if (query.includes('reviewThreads')) {
       // collectPrReadiness reads reviewThreads by owner/name/number.
       const branch = onlyBranch(st);
@@ -146,6 +152,23 @@ function ghBehavior(scenario: GhScenario, args: string[], st: GhState): string {
     if (query.includes('addPullRequestReviewThreadReply')) {
       return JSON.stringify({ data: { addPullRequestReviewThreadReply: { clientMutationId: null } } });
     }
+    if (query.includes('statusCheckRollup')) {
+      return JSON.stringify({
+        data: {
+          repository: {
+            pullRequest: {
+              statusCheckRollup: {
+                contexts: {
+                  nodes: scenario === 'no-checks-registered'
+                    ? []
+                    : [{ __typename: 'CheckRun', name: 'build', isRequired: true }],
+                },
+              },
+            },
+          },
+        },
+      });
+    }
     throw new Error(`unexpected gh api graphql call: ${args.join(' ')}`);
   }
 
@@ -176,6 +199,12 @@ function ghBehavior(scenario: GhScenario, args: string[], st: GhState): string {
     if (!st.readyBranches.has(branchArg(args))) {
       throw new Error('gh: Pull Request is still a draft (mergePullRequest)');
     }
+    if (scenario === 'head-moved-after-approve') {
+      const expected = flagValue(args, '--match-head-commit');
+      if (expected && expected !== 'feedfacecafe') {
+        throw new Error(`gh: Head commit moved from ${expected} to feedfacecafe`);
+      }
+    }
     // confirmMerge: record the merge so the verifying re-view reports MERGED.
     st.mergedBranches.add(branchArg(args));
     return '';
@@ -185,6 +214,21 @@ function ghBehavior(scenario: GhScenario, args: string[], st: GhState): string {
     const branch = branchArg(args);
     const wantsRollup = args.some((a) => a.includes('statusCheckRollup'));
     if (wantsRollup) {
+      if (scenario === 'merged-externally') {
+        return JSON.stringify({
+          number: 7,
+          url: PR_URL,
+          state: 'MERGED',
+          isDraft: false,
+          baseRefName: BASE,
+          headRefName: branch,
+          headRefOid: 'deadbeefcafe',
+          mergeStateStatus: 'CLEAN',
+          reviewDecision: '',
+          mergeable: 'MERGEABLE',
+          statusCheckRollup: [{ __typename: 'CheckRun', name: 'build', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+        });
+      }
       // pollPr's collectPrReadiness view: report the CI rollup + draft/state. ci-red-then-green starts
       // FAILING and flips to SUCCESS once a developer re-pushed (repushedBranches). A re-push is modelled
       // by the second `pr create` (idempotent integrator) NOT firing — so we flip on the integrator's push
@@ -209,6 +253,7 @@ function ghBehavior(scenario: GhScenario, args: string[], st: GhState): string {
         // mergeSignal blocked → {needsHuman} → catch → classifyRecovery → recoveryGate.
         if (st.readyCount >= 3) { mergeStateStatus = 'DIRTY'; mergeable = 'CONFLICTING'; }
       }
+      const headRefOid = scenario === 'head-moved-after-approve' && st.readyCount >= 3 ? 'feedfacecafe' : 'deadbeefcafe';
       return JSON.stringify({
         number: 7,
         url: PR_URL,
@@ -216,11 +261,13 @@ function ghBehavior(scenario: GhScenario, args: string[], st: GhState): string {
         isDraft: false,
         baseRefName: BASE,
         headRefName: branch,
-        headRefOid: 'deadbeefcafe',
+        headRefOid,
         mergeStateStatus,
         reviewDecision: '',
         mergeable,
-        statusCheckRollup: ciRed
+        statusCheckRollup: scenario === 'no-checks-registered'
+          ? []
+          : ciRed
           ? [{ __typename: 'CheckRun', name: 'build', status: 'COMPLETED', conclusion: 'FAILURE' }]
           : [{ __typename: 'CheckRun', name: 'build', status: 'COMPLETED', conclusion: 'SUCCESS' }],
       });
@@ -230,7 +277,7 @@ function ghBehavior(scenario: GhScenario, args: string[], st: GhState): string {
     return JSON.stringify({
       url: PR_URL,
       number: 1,
-      state: st.mergedBranches.has(branch) ? 'MERGED' : 'OPEN',
+      state: scenario === 'merged-externally' || st.mergedBranches.has(branch) ? 'MERGED' : 'OPEN',
       isDraft: !st.readyBranches.has(branch),
       mergeStateStatus: scenario === 'merge-not-clean' ? 'BLOCKED' : 'CLEAN',
     });
@@ -254,28 +301,33 @@ export function createGhEmulator(calls: string[][], scenario: GhScenario = 'happ
 
 /**
  * Per-run fake `gh`: routes to a scenario by the feature branch (`feat/<taskId>-…`) present in the
- * gh argv, so one shared harness can drive many runs with different gh outcomes. Register a run's
- * scenario in `scenarios` (keyed by taskId) before starting it; unregistered runs get `happy`.
+ * gh argv, so one shared harness can drive many runs with different gh outcomes. Register a run case
+ * keyed by runId before starting it; unregistered runs get `happy`.
  *
- * Each taskId gets its OWN {@link GhState} so per-branch CI/thread/merge state never bleeds across runs.
+ * Each run gets its OWN {@link GhState} so per-branch CI/thread/merge state never bleeds across runs.
  */
-export function routedGhEmulator(scenarios: Map<string, GhScenario>, calls: string[][]): ExecGhFn {
-  const stByTask = new Map<string, GhState>();
+export function routedGhEmulator(runCases: Map<string, RunCase>, calls: string[][]): ExecGhFn {
+  const stByRun = new Map<string, GhState>();
   const fallback = newGhState();
   // GraphQL review-thread calls carry owner/name/number, NOT the feature branch — they cannot be routed
   // by branch. collectPrReadiness always issues a branch-carrying `pr list`/`pr view` immediately BEFORE
   // its reviewThreads query within one poll, so the last branch-routed taskId is the right owner for it.
-  let lastTaskId: string | undefined;
+  let lastRunId: string | undefined;
   return (args: string[]): string => {
     calls.push(args);
-    const branchTaskId = [...scenarios.keys()].find((id) => args.some((a) => a.includes(taskBranchPrefix(id))));
-    if (branchTaskId !== undefined) lastTaskId = branchTaskId;
-    const taskId = branchTaskId ?? lastTaskId;
-    const scenario = (taskId !== undefined ? scenarios.get(taskId) : undefined) ?? 'happy';
+    const hasFeatureBranch = args.some((arg) => arg.includes('feat/'));
+    const branchRun = [...runCases.values()].find((runCase) => args.some((a) => a.includes(taskBranchPrefix(runCase.taskId))));
+    if (branchRun !== undefined) {
+      lastRunId = branchRun.runId;
+    } else if (hasFeatureBranch) {
+      lastRunId = undefined;
+    }
+    const runCase = branchRun ?? (!hasFeatureBranch && lastRunId !== undefined ? runCases.get(lastRunId) : undefined);
+    const scenario = runCase?.gh ?? 'happy';
     let st = fallback;
-    if (taskId !== undefined) {
-      st = stByTask.get(taskId) ?? newGhState();
-      stByTask.set(taskId, st);
+    if (runCase !== undefined) {
+      st = stByRun.get(runCase.runId) ?? newGhState();
+      stByRun.set(runCase.runId, st);
     }
     return ghBehavior(scenario, args, st);
   };
