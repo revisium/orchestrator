@@ -79,6 +79,7 @@ function runBehavior(
       verdict: decision,
       nextSteps: [],
       costs: [{ modelProfile: ctx.level, currency: 'USD', inputTokens: 10, outputTokens: 5, costAmount: 0.001 }],
+      needsHuman: false,
     };
   }
   const writeRepo = ctx.logicalRole === 'developer' ? resolveWriteDir(sink.developerWrites.get(ctx.runId), ctx.context) : undefined;

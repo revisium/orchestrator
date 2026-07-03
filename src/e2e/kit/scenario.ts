@@ -31,6 +31,9 @@ type ScenarioExpect = {
 
 type ScenarioRepo = string | TargetRepo;
 
+const NO_EVENT_SETTLE_MS = 1_000;
+const NO_EVENT_POLL_MS = 100;
+
 export type RunCase = {
   runId: string;
   taskId: string;
@@ -108,9 +111,13 @@ async function assertEventPath(api: TaskControlPlaneApiService, runId: string, p
 }
 
 async function assertNoEvents(api: TaskControlPlaneApiService, runId: string, types: string[]): Promise<void> {
-  const events = await api.getRunEvents({ runId, limit: 500 });
-  for (const type of types) {
-    assert.ok(!events.some((event) => event.type === type), `event "${type}" must not be visible`);
+  for (let waited = 0; waited <= NO_EVENT_SETTLE_MS; waited += NO_EVENT_POLL_MS) {
+    const events = await api.getRunEvents({ runId, limit: 500 });
+    for (const type of types) {
+      assert.ok(!events.some((event) => event.type === type), `event "${type}" must not be visible`);
+    }
+    if (waited === NO_EVENT_SETTLE_MS) return;
+    await new Promise((resolve) => setTimeout(resolve, NO_EVENT_POLL_MS));
   }
 }
 
