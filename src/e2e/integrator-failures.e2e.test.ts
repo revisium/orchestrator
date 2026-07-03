@@ -1,11 +1,10 @@
 import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { getConfig } from '../config.js';
 import { worktreeMarkerFor, worktreePathFor } from '../control-plane/resolve-cwd.js';
 import { branchName } from '../runners/integrator.js';
-import type { RunAgent, AttemptResult } from '../worker/runner.js';
 import {
   RUN_REAL_E2E,
   e2eSkip,
@@ -19,8 +18,9 @@ import {
   routedGhEmulator,
   routedIntegrator,
   type IntegratorOutcome,
-  type AgentSink,
-  resolveWriteDir,
+  routedRunCaseAgent,
+  type AgentSpec,
+  type RunCase,
   waitState,
   waitForGate,
   approveUntilTerminal,
@@ -33,54 +33,16 @@ import {
 } from './kit/index.js';
 
 // Group D — integrator / git / gh failure modes, exercised through the REAL integrator + real git on
-// a temp repo + a per-run gh emulator. One real host per file; gh outcomes routed by taskId.
+// a temp repo + per-run external behavior registered by runId.
 let h: RunHarness;
-const ghScenarios = new Map<string, GhScenario>();
-const integratorOutcomes = new Map<string, IntegratorOutcome>(); // per-run mocked integrate results
-
-// plan 0018 — per-run triage decisions (keyed by runId) the `triager` role emits. The emulator seeds a
-// review thread id `PRRT_T1` (review-comment scenario); the triager decides fix/wontfix/question on it.
-type TriageDecision = 'fix' | 'wontfix' | 'question';
-const triageDecisions = new Map<string, TriageDecision[]>(); // a sequence so the question gate can re-triage
-
-/**
- * A triager-aware test agent: the `triager` role returns a real `triage` object (so respondThreads
- * replies + resolves the emulator's seeded thread); every other role behaves like the deterministic
- * agent (developer writes a change so the integrator/CI-rework has a diff). plan 0018.
- */
-function prReviewAgent(sink: AgentSink): RunAgent {
-  const triageCounts = new Map<string, number>();
-  return async ({ role, profile, attemptId, step, context }): Promise<AttemptResult> => {
-    const logicalRole = role.playbookRoleId ?? role.name;
-    sink.agentCalls.push({ role: logicalRole, runner: role.runner, attemptId, runId: step.runId, context });
-    const cost = [{ modelProfile: profile.level, currency: 'USD', inputTokens: 10, outputTokens: 5, costAmount: 0.001 }];
-    if (logicalRole === 'triager') {
-      const seq = triageDecisions.get(step.runId) ?? ['fix'];
-      const n = triageCounts.get(step.runId) ?? 0;
-      triageCounts.set(step.runId, n + 1);
-      const decision = seq[Math.min(n, seq.length - 1)] ?? 'wontfix';
-      // The emulator's review-comment scenario seeds exactly one unresolved thread, id PRRT_T1.
-      const output = {
-        items: [{ threadId: 'PRRT_T1', decision, guidance: 'address the review comment', replyText: 'done in the latest push' }],
-        needsHuman: decision === 'question',
-      };
-      return { output, verdict: decision, nextSteps: [], costs: cost };
-    }
-    // developer writes a change file so the real integrator has a diff to commit/re-push. Plan 0017:
-    // write into the run's ISOLATED worktree (resolveWriteDir parses Repo: from context, which build-context
-    // sets to the worktree for live runs — slice 143), NOT the registered base checkout.
-    const writeRepo = logicalRole === 'developer' ? resolveWriteDir(sink.developerWrites.get(step.runId), context) : undefined;
-    if (writeRepo) writeFileSync(join(writeRepo, `developer-${attemptId}.txt`), `change from ${attemptId}\n`);
-    return { output: { role: logicalRole }, verdict: logicalRole === 'watcher' ? 'clean' : 'approved', nextSteps: [], costs: cost };
-  };
-}
+const runCases = new Map<string, RunCase>();
 
 before(async () => {
   if (!RUN_REAL_E2E) return;
   h = await createRunHarness({
-    gh: (ghCalls) => routedGhEmulator(ghScenarios, ghCalls),
-    integrator: (base) => routedIntegrator(integratorOutcomes, base),
-    agent: (sink) => prReviewAgent(sink),
+    gh: (ghCalls) => routedGhEmulator(runCases, ghCalls),
+    integrator: (base) => routedIntegrator(runCases, base),
+    agent: (sink) => routedRunCaseAgent(runCases, sink),
   });
   await givenInstalledPlaybook(h);
 });
@@ -92,11 +54,12 @@ after(async () => {
 /** Create + start a feature run; optionally pick its gh scenario, mocked integrate outcome, and whether the developer writes. */
 async function startFeature(
   target: TargetRepo,
-  opts: { gh?: GhScenario; integrate?: IntegratorOutcome; write?: boolean } = {},
+  opts: { gh?: GhScenario; integrate?: IntegratorOutcome; agent?: AgentSpec; write?: boolean } = {},
 ): Promise<{ runId: string; taskId: string }> {
+  const title = 'E2E integrator-failure feature run';
   const created = await h.api.createRun({
     repo: target.worktree,
-    title: 'E2E integrator-failure feature run',
+    title,
     description: 'Group D — integrator/git/gh failure injection.',
     scope: 'Only mutate the temporary e2e target repository.',
     playbookId: PLAYBOOK_ID,
@@ -104,9 +67,17 @@ async function startFeature(
     executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent' } },
     start: false,
   });
-  if (opts.gh) ghScenarios.set(created.taskId, opts.gh);
-  if (opts.integrate) integratorOutcomes.set(created.taskId, opts.integrate);
-  if (opts.write !== false) h.developerWrites.set(created.runId, target.worktree);
+  const runCase: RunCase = {
+    runId: created.runId,
+    taskId: created.taskId,
+    title,
+    ...(opts.gh ? { gh: opts.gh } : {}),
+    ...(opts.integrate ? { integrator: opts.integrate } : {}),
+    ...(opts.agent ? { agent: opts.agent } : {}),
+    ...(opts.write === false ? {} : { developerWrite: target.worktree }),
+  };
+  runCases.set(created.runId, runCase);
+  if (runCase.developerWrite) h.developerWrites.set(created.runId, runCase.developerWrite);
   await h.api.startRun({ runId: created.runId });
   return { runId: created.runId, taskId: created.taskId };
 }
@@ -479,8 +450,10 @@ test('D31: review-comment → triage(fix) → developer → reply+resolve → me
     // The first poll reports one unresolved review thread (review_changes) → triage decides `fix` → the
     // developer reworks → the integrator re-pushes → respondThreads replies + RESOLVES the thread (the
     // emulator drops it from the unresolved set) → the next poll is clean → merge.
-    const run = await startFeature(target, { gh: 'review-comment' });
-    triageDecisions.set(run.runId, ['fix']);
+    const run = await startFeature(target, {
+      gh: 'review-comment',
+      agent: { byRole: { triager: { kind: 'triage', decisions: ['fix'] } } },
+    });
     const terminal = await approveUntilTerminal(h.api, run.runId);
     assert.equal(terminal.state, 'completed', 'a fixed review thread is replied/resolved and the run merges');
     await assertEventsPresent(h.api, run.runId, ['pr_polled', 'threads_responded', 'merge_confirmed', 'run_completed']);
@@ -494,8 +467,10 @@ test('D32: review-comment → triage(wontfix) → reply+resolve (no re-push) →
   try {
     // `wontfix` auto-resolves with the analyst's reason — no developer re-push — then the next poll is
     // clean (the thread was resolved) → merge.
-    const run = await startFeature(target, { gh: 'review-comment' });
-    triageDecisions.set(run.runId, ['wontfix']);
+    const run = await startFeature(target, {
+      gh: 'review-comment',
+      agent: { byRole: { triager: { kind: 'triage', decisions: ['wontfix'] } } },
+    });
     const terminal = await approveUntilTerminal(h.api, run.runId);
     assert.equal(terminal.state, 'completed', 'a wontfix thread is replied/resolved and the run merges');
     await assertEventsPresent(h.api, run.runId, ['pr_polled', 'threads_responded', 'merge_confirmed', 'run_completed']);
@@ -510,8 +485,10 @@ test('D33: review-comment → triage(question) → questionGate(approve) → tri
     // The first triage marks the thread a `question` → the SEPARATE review-question gate fires; on
     // approve the run re-triages (now `wontfix`) → reply+resolve → clean → merge. approveUntilTerminal
     // approves the plan, the review-question, and the merge gates in order.
-    const run = await startFeature(target, { gh: 'review-comment' });
-    triageDecisions.set(run.runId, ['question', 'wontfix']);
+    const run = await startFeature(target, {
+      gh: 'review-comment',
+      agent: { byRole: { triager: { kind: 'triage', decisions: ['question', 'wontfix'] } } },
+    });
     const terminal = await approveUntilTerminal(h.api, run.runId);
     assert.equal(terminal.state, 'completed', 'a question is answered at the gate, then the thread is resolved and merged');
     await assertEventsPresent(h.api, run.runId, ['pr_polled', 'threads_responded', 'merge_confirmed', 'run_completed']);

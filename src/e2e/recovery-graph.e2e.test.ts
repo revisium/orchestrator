@@ -1,65 +1,30 @@
 import { before, after, test } from 'node:test';
-import assert from 'node:assert/strict';
 import {
   RUN_REAL_E2E,
   e2eSkip,
   createRunHarness,
   type RunHarness,
-  givenInstalledPlaybook,
-  PLAYBOOK_ID,
+  givenSeededDefaultPlaybook,
   createTargetRepo,
   type TargetRepo,
-  type GhScenario,
   routedGhEmulator,
-  waitForGate,
-  waitState,
-  assertCompleted,
-  assertEventsPresent,
-  assertGhNotCalled,
+  pipelineScenario,
+  type PipelineScenario,
+  type RunCase,
 } from './kit/index.js';
 
-// Group R — #246 recovery-policy graph: mergeApproveReverify + recoveryGate.
-//
-// The `feature-development` pipeline in the e2e fixture carries the full #246 recovery graph:
-// mergeGate(approved|recheck|override_merge|cancel) → mergeApproveReverify → classifyRecovery →
-// recoveryRouter → recoveryGate. These cases exercise each new branch in stub mode (no real git/gh)
-// so the graph routing is tested end-to-end without external service dependencies.
-//
-// Gate TOPICS are bucketed by `gateTopicFor` (data-driven-task.workflow.ts) from the gate REASON:
-// anything matching /merge/i → 'merge', /question/i → 'question', else → 'plan'. So the fixture's
-// reasons map to topics: 'plan-review' → 'plan'; 'merge-review' → 'merge'; 'merge-recovery' → 'merge'
-// (recoveryGate shares the 'merge' topic because its reason contains "merge").
-
+const STUB_AGENT = { runnerOverrides: { 'claude-code': 'stub-agent' } };
 const STUB_FULL = { runnerOverrides: { 'claude-code': 'stub-agent', 'revo-integrator': 'stub-agent' } };
-
-async function startPrReviewRun(h: RunHarness, repo: string) {
-  const created = await h.api.createRun({
-    repo,
-    title: 'E2E recovery-graph #246 run',
-    description: 'Group R — mergeApproveReverify + recoveryGate on real DBOS/Revisium.',
-    scope: 'recovery-graph e2e',
-    playbookId: PLAYBOOK_ID,
-    pipelineId: 'feature-development',
-    executionProfile: STUB_FULL,
-    start: true,
-  });
-  if (!('workflow' in created)) throw new Error('start:true must return workflow metadata');
-  return created;
-}
 
 let h: RunHarness;
 let target: TargetRepo;
-// Per-run gh scenarios keyed by taskId (RG-E needs `always-ci-red`; RG-A..D are stub-integrator and
-// never touch gh). One shared harness per file — DBOS is process-global, so a SECOND coexisting host
-// would let the file-level worker pick up another run and execute its developer step without this
-// run's developerWrites, blocking integrate on "nothing to integrate". Route gh per run instead.
-const ghScenarios = new Map<string, GhScenario>();
+const runCases = new Map<string, RunCase>();
 
 before(async () => {
   if (!RUN_REAL_E2E) return;
   target = createTargetRepo();
-  h = await createRunHarness({ gh: (calls) => routedGhEmulator(ghScenarios, calls) });
-  await givenInstalledPlaybook(h);
+  h = await createRunHarness({ gh: (calls) => routedGhEmulator(runCases, calls) });
+  await givenSeededDefaultPlaybook(h);
 });
 
 after(async () => {
@@ -67,196 +32,103 @@ after(async () => {
   if (target) target.cleanup();
 });
 
-test('RG-A: mergeGate approve → mergeApproveReverify(stub:clean) → confirmMerge → completed', { skip: e2eSkip }, async () => {
-  const run = await startPrReviewRun(h, target.worktree);
-  const plan = await waitForGate(h.api, run.runId);
-  assert.equal(plan.topic, 'plan', 'first gate is the plan gate (reason plan-review → topic plan)');
-  await h.api.resolveGate({ inboxId: plan.inboxId, outcome: 'approved', resolvedBy: 'e2e' });
-
-  const merge = await waitForGate(h.api, run.runId);
-  assert.equal(merge.topic, 'merge', 'second gate is the merge gate (reason merge-review → topic merge)');
-  await h.api.resolveGate({ inboxId: merge.inboxId, outcome: 'approved', resolvedBy: 'e2e' });
-
-  const terminal = await waitState(h.api, run.runId);
-  assert.equal(terminal.state, 'completed', 'approve path: mergeApproveReverify(clean) → confirmMerge → completed');
-});
-
-test('RG-B: mergeGate cancel → cancelledEnd → cancelled', { skip: e2eSkip }, async () => {
-  const run = await startPrReviewRun(h, target.worktree);
-  const plan = await waitForGate(h.api, run.runId);
-  await h.api.resolveGate({ inboxId: plan.inboxId, outcome: 'approved', resolvedBy: 'e2e' });
-
-  const merge = await waitForGate(h.api, run.runId);
-  assert.equal(merge.topic, 'merge');
-  await h.api.resolveGate({ inboxId: merge.inboxId, outcome: 'cancel', resolvedBy: 'e2e' });
-
-  const terminal = await waitState(h.api, run.runId);
-  assert.equal(terminal.state, 'cancelled', 'cancel outcome routes to cancelledEnd');
-});
-
-test('RG-C: mergeGate override_merge → mergeApproveReverify(stub:clean) → confirmMerge → completed', { skip: e2eSkip }, async () => {
-  const run = await startPrReviewRun(h, target.worktree);
-  const plan = await waitForGate(h.api, run.runId);
-  await h.api.resolveGate({ inboxId: plan.inboxId, outcome: 'approved', resolvedBy: 'e2e' });
-
-  const merge = await waitForGate(h.api, run.runId);
-  assert.equal(merge.topic, 'merge');
-  // override_merge is a guarded outcome: the reviewer must attach a mergeOverrideAudit recording WHICH
-  // threads they are overriding and WHO owns the residual risk (validateMergeOverrideAudit). A bare
-  // override is rejected — supply a complete audit record so the gate resolves.
-  await h.api.resolveGate({
-    inboxId: merge.inboxId,
-    outcome: 'override_merge',
-    resolvedBy: 'e2e',
-    mergeOverrideAudit: {
-      threadIds: ['PRRT_OVERRIDE'],
-      actor: 'e2e',
-      reason: 'e2e override: reviewed and accepting the open thread',
-      risk: 'low — synthetic stub run, no real merge side effects',
-      verificationResponsibility: 'e2e harness',
-      headSha: 'e2e-stub-head',
-    },
+function recoveryScenario(title: string, scenario: Omit<PipelineScenario, 'title' | 'playbook' | 'repo'>): void {
+  test(title, { skip: e2eSkip }, async () => {
+    await pipelineScenario(h, runCases, { title, playbook: 'default', repo: target, ...scenario });
   });
+}
 
-  const terminal = await waitState(h.api, run.runId);
-  assert.equal(terminal.state, 'completed', 'override_merge also routes through mergeApproveReverify → completed');
+recoveryScenario('RG-A: mergeGate approve -> mergeApproveReverify(stub:clean) -> confirmMerge -> completed', {
+  executionProfile: STUB_FULL,
+  gates: [['plan', 'approved'], ['merge', 'approved']],
+  expect: { terminal: 'completed' },
 });
 
-test('RG-D: mergeGate recheck → mergeRecheck(stub:clean) → blockedEnd → blocked', { skip: e2eSkip }, async () => {
-  // A human `recheck` on the merge gate re-polls readiness via mergeRecheck; if the re-poll returns
-  // `clean` (mergeRecheckRouter.clean → blockedEnd) the run settles as blocked — an explicit abort by
-  // the reviewer who found nothing changed since the gate opened.
-  const run = await startPrReviewRun(h, target.worktree);
-  const plan = await waitForGate(h.api, run.runId);
-  await h.api.resolveGate({ inboxId: plan.inboxId, outcome: 'approved', resolvedBy: 'e2e' });
-
-  const merge = await waitForGate(h.api, run.runId);
-  assert.equal(merge.topic, 'merge');
-  await h.api.resolveGate({ inboxId: merge.inboxId, outcome: 'recheck', resolvedBy: 'e2e' });
-
-  const terminal = await waitState(h.api, run.runId);
-  assert.equal(terminal.state, 'blocked', 'recheck + still-clean re-poll routes to blockedEnd (explicit abort)');
+recoveryScenario('RG-B: mergeGate cancel -> cancelledEnd -> cancelled', {
+  executionProfile: STUB_FULL,
+  gates: [['plan', 'approved'], ['merge', 'cancel']],
+  expect: { terminal: 'cancelled' },
 });
 
-test('RG-E: always-ci-red → ciLoop exhaustion → recoveryGate(merge-recovery) → cancel → cancelled', { skip: e2eSkip }, async () => {
-  // Uses the REAL integrator (revo-integrator NOT stubbed) with the shared harness's gh routed to
-  // `always-ci-red`, so every pollPr returns `ci_changes`. After 3 ciRework cycles prRouter.otherwise →
-  // recoveryGate; the human cancels. Runs on the shared file harness `h` (never a second coexisting
-  // host) so the file worker executes THIS run's developer step with its developerWrites — otherwise the
-  // developer writes nothing and integrate blocks on "nothing to integrate".
+recoveryScenario('RG-C: mergeGate override_merge -> mergeApproveReverify(stub:clean) -> confirmMerge -> completed', {
+  executionProfile: STUB_FULL,
+  gates: [
+    ['plan', 'approved'],
+    {
+      topic: 'merge',
+      outcome: 'override_merge',
+      mergeOverrideAudit: {
+        threadIds: ['PRRT_OVERRIDE'],
+        actor: 'e2e',
+        reason: 'e2e override: reviewed and accepting the open thread',
+        risk: 'low: synthetic stub run, no real merge side effects',
+        verificationResponsibility: 'e2e harness',
+        headSha: 'e2e-stub-head',
+      },
+    },
+  ],
+  expect: { terminal: 'completed' },
+});
+
+recoveryScenario('RG-D: mergeGate recheck -> mergeRecheck(stub:clean) -> blockedEnd -> blocked', {
+  executionProfile: STUB_FULL,
+  gates: [['plan', 'approved'], ['merge', 'recheck']],
+  expect: { terminal: 'blocked' },
+});
+
+test('RG-E: always-ci-red -> ciLoop exhaustion -> recoveryGate(merge-recovery) -> cancel -> cancelled', { skip: e2eSkip }, async () => {
   const targetE = createTargetRepo();
   try {
-    const created = await h.api.createRun({
-      repo: targetE.worktree,
-      title: 'RG-E always-ci-red run',
-      description: 'RG-E — ciLoop exhaustion → recoveryGate → cancel.',
-      scope: 'recovery-graph e2e',
-      playbookId: PLAYBOOK_ID,
-      pipelineId: 'feature-development',
-      executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent' } },
-      start: false,
+    await pipelineScenario(h, runCases, {
+      title: 'RG-E: always-ci-red -> ciLoop exhaustion -> recoveryGate(merge-recovery) -> cancel -> cancelled',
+      playbook: 'default',
+      repo: targetE,
+      executionProfile: STUB_AGENT,
+      gh: 'always-ci-red',
+      gates: [['plan', 'approved'], ['merge', 'cancel']],
+      expect: { terminal: 'cancelled' },
     });
-    // Register the per-run gh scenario + developer write BEFORE starting so pollPr sees always-red CI
-    // and the developer produces a diff for the real integrator to push.
-    ghScenarios.set(created.taskId, 'always-ci-red');
-    h.developerWrites.set(created.runId, targetE.worktree);
-    await h.api.startRun({ runId: created.runId });
-
-    const plan = await waitForGate(h.api, created.runId);
-    await h.api.resolveGate({ inboxId: plan.inboxId, outcome: 'approved', resolvedBy: 'e2e' });
-
-    // ciLoop exhausts → recoveryGate opens (reason 'merge-recovery' → topic 'merge', per gateTopicFor)
-    const recovery = await waitForGate(h.api, created.runId);
-    assert.equal(recovery.topic, 'merge', 'ciLoop exhaustion opens recoveryGate (merge-recovery reason → merge topic)');
-    await h.api.resolveGate({ inboxId: recovery.inboxId, outcome: 'cancel', resolvedBy: 'e2e' });
-
-    const terminal = await waitState(h.api, created.runId);
-    assert.equal(terminal.state, 'cancelled', 'cancel outcome at recoveryGate → cancelledEnd → cancelled');
   } finally {
     targetE.cleanup();
   }
 });
 
-test('RG-F: merge-unknown-then-clean → bounded UNKNOWN recheck → merge gate → completed (AC#3)', { skip: e2eSkip }, async () => {
-  // Real integrator: pollPr node returns UNKNOWN (readyCount<2) → prRouter recheck self-loop → second
-  // poll returns CLEAN → mergeReadiness → mergeGate. After approval → mergeApproveReverify (CLEAN) →
-  // confirmMerge → completed. Asserts pr_polled(recheck) precedes merge_confirmed.
+test('RG-F: merge-unknown-then-clean -> bounded UNKNOWN recheck -> merge gate -> completed (AC#3)', { skip: e2eSkip }, async () => {
   const targetF = createTargetRepo();
   try {
-    const created = await h.api.createRun({
-      repo: targetF.worktree,
-      title: 'RG-F merge-unknown-then-clean run',
-      description: 'RG-F — UNKNOWN recheck → CLEAN → merge.',
-      scope: 'recovery-graph e2e',
-      playbookId: PLAYBOOK_ID,
-      pipelineId: 'feature-development',
-      executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent' } },
-      start: false,
+    await pipelineScenario(h, runCases, {
+      title: 'RG-F: merge-unknown-then-clean -> bounded UNKNOWN recheck -> merge gate -> completed (AC#3)',
+      playbook: 'default',
+      repo: targetF,
+      executionProfile: STUB_AGENT,
+      gh: 'merge-unknown-then-clean',
+      gates: [['plan', 'approved'], ['merge', 'approved']],
+      expect: {
+        terminal: 'completed',
+        path: [{ type: 'pr_polled', payload: { verdict: 'recheck' } }, 'merge_confirmed'],
+      },
     });
-    ghScenarios.set(created.taskId, 'merge-unknown-then-clean');
-    h.developerWrites.set(created.runId, targetF.worktree);
-    await h.api.startRun({ runId: created.runId });
-
-    const plan = await waitForGate(h.api, created.runId);
-    await h.api.resolveGate({ inboxId: plan.inboxId, outcome: 'approved', resolvedBy: 'e2e' });
-
-    const merge = await waitForGate(h.api, created.runId);
-    assert.equal(merge.topic, 'merge', 'merge gate opens after UNKNOWN recheck resolved to CLEAN');
-    await h.api.resolveGate({ inboxId: merge.inboxId, outcome: 'approved', resolvedBy: 'e2e' });
-
-    await assertCompleted(h.api, created.runId);
-
-    await assertEventsPresent(h.api, created.runId, ['pr_polled', 'merge_confirmed']);
-    const events = await h.api.getRunEvents({ runId: created.runId, limit: 500 });
-    const recheckIdx = events.findIndex(
-      (e) => e.type === 'pr_polled' && (e.payload as { verdict?: string } | undefined)?.verdict === 'recheck',
-    );
-    const mergeIdx = events.findIndex((e) => e.type === 'merge_confirmed');
-    assert.ok(recheckIdx >= 0, 'pr_polled(verdict=recheck) must be present (UNKNOWN caused a bounded recheck)');
-    assert.ok(recheckIdx < mergeIdx, 'recheck event must precede merge_confirmed (no premature merge while UNKNOWN)');
   } finally {
     targetF.cleanup();
   }
 });
 
-test('RG-G: merge-stale-at-reverify → mergeGate approved → recoveryGate → cancel (AC#2)', { skip: e2eSkip }, async () => {
-  // Real integrator: pollPr + mergeReadiness CLEAN (readyCount<3). After mergeGate approval,
-  // mergeApproveReverify (readyCount≥3) sees DIRTY → {needsHuman} → catch → classifyRecovery →
-  // recoveryGate opens. Cancel → cancelledEnd. gh pr merge must not be called.
+test('RG-G: merge-stale-at-reverify -> mergeGate approved -> recoveryGate -> cancel (AC#2)', { skip: e2eSkip }, async () => {
   const targetG = createTargetRepo();
   try {
-    const created = await h.api.createRun({
-      repo: targetG.worktree,
-      title: 'RG-G merge-stale-at-reverify run',
-      description: 'RG-G — stale at reverify → recoveryGate → cancel.',
-      scope: 'recovery-graph e2e',
-      playbookId: PLAYBOOK_ID,
-      pipelineId: 'feature-development',
-      executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent' } },
-      start: false,
+    await pipelineScenario(h, runCases, {
+      title: 'RG-G: merge-stale-at-reverify -> mergeGate approved -> recoveryGate -> cancel (AC#2)',
+      playbook: 'default',
+      repo: targetG,
+      executionProfile: STUB_AGENT,
+      gh: 'merge-stale-at-reverify',
+      gates: [['plan', 'approved'], ['merge', 'approved'], ['merge', 'cancel']],
+      expect: {
+        terminal: 'cancelled',
+        noEvents: ['merge_confirmed'],
+        ghNotCalled: [['pr', 'merge']],
+      },
     });
-    ghScenarios.set(created.taskId, 'merge-stale-at-reverify');
-    h.developerWrites.set(created.runId, targetG.worktree);
-    await h.api.startRun({ runId: created.runId });
-
-    const plan = await waitForGate(h.api, created.runId);
-    await h.api.resolveGate({ inboxId: plan.inboxId, outcome: 'approved', resolvedBy: 'e2e' });
-
-    const merge = await waitForGate(h.api, created.runId);
-    assert.equal(merge.topic, 'merge', 'mergeGate opens (readiness was CLEAN before approval)');
-    await h.api.resolveGate({ inboxId: merge.inboxId, outcome: 'approved', resolvedBy: 'e2e' });
-
-    // mergeApproveReverify sees DIRTY → {needsHuman} → classifyRecovery → recoveryGate (same topic 'merge')
-    const recovery = await waitForGate(h.api, created.runId);
-    assert.equal(recovery.topic, 'merge', 'recoveryGate opens after stale reverify (merge-recovery reason → merge topic)');
-    await h.api.resolveGate({ inboxId: recovery.inboxId, outcome: 'cancel', resolvedBy: 'e2e' });
-
-    const terminal = await waitState(h.api, created.runId);
-    assert.equal(terminal.state, 'cancelled', 'recoveryGate cancel → cancelledEnd → cancelled');
-
-    assertGhNotCalled(h, created.taskId, ['pr', 'merge']);
-    const events = await h.api.getRunEvents({ runId: created.runId, limit: 500 });
-    assert.ok(!events.some((e) => e.type === 'merge_confirmed'), 'merge_confirmed must not be emitted when reverify fails');
   } finally {
     targetG.cleanup();
   }

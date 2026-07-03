@@ -20,6 +20,7 @@ import {
 import type { RunService } from '../../revisium/run.service.js';
 import type { ExecGhFn } from '../../poller/pr-readiness.js';
 import { execGit } from './git-target-repo.js';
+import type { RunCase } from './scenario.js';
 
 /**
  * Build an `IntegratorService`-shaped object wired to the real `integrate`/`preflightLive`/
@@ -68,17 +69,17 @@ export type IntegratorOutcome =
   | { kind: 'throw'; message: string }; //    integrate throws → workflow's top-level catch failRuns it (D13)
 
 /**
- * Wrap a base IntegratorService so runs whose taskId is registered in `outcomes` get a mocked
+ * Wrap a base IntegratorService so runs whose runId is registered in `runCases` get a mocked
  * integrate result (needsHuman or throw); all others delegate to `base` (real integrate/preflight).
  * Mirrors the per-run gh/agent routers — the external boundary is mocked, the workflow is real.
  */
 export function routedIntegrator(
-  outcomes: Map<string, IntegratorOutcome>,
+  runCases: Map<string, RunCase>,
   base: IntegratorService,
 ): IntegratorService {
   return {
     runIntegrate: (input: IntegratorInput): Promise<IntegratorOutput | IntegratorBlocked> => {
-      const outcome = outcomes.get(input.taskId);
+      const outcome = runCases.get(input.runId)?.integrator;
       if (outcome?.kind === 'throw') return Promise.reject(new Error(outcome.message));
       if (outcome?.kind === 'needsHuman') return Promise.resolve({ needsHuman: true, lesson: outcome.lesson });
       return base.runIntegrate(input);

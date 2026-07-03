@@ -1,6 +1,7 @@
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AttemptResult, RunAgent } from '../../worker/runner.js';
+import type { RunCase } from './scenario.js';
 
 /**
  * Anti-masking write dir: parse the `Repo:` path from the agent context string, which build-context
@@ -25,11 +26,14 @@ export type DeveloperWrites = Map<string, string>;
 /** Mutable recorders a harness exposes; passed to an agent factory so a custom agent records too. */
 export type AgentSink = { agentCalls: AgentCall[]; developerWrites: DeveloperWrites };
 
+export type TriageDecision = 'fix' | 'wontfix' | 'question';
+
 /** Per-role behaviour for {@link scriptedAgent}/{@link routedScriptedAgent}. */
 export type RoleBehavior =
   | { kind: 'pass' } //                                       top-level default domain verdict
   | { kind: 'verdict'; verdict: string } //                   top-level domain verdict
   | { kind: 'domainVerdict'; verdict: string } //             arbitrary DOMAIN verdict label (0015 data-driven)
+  | { kind: 'triage'; decisions: TriageDecision[]; threadId?: string; guidance?: string; replyText?: string }
   | { kind: 'invalidNoVerdict'; output?: string } //          malformed result: no top-level verdict
   | { kind: 'throw'; message?: string } //                    runner throws → step_failed, BLOCKER, needsHuman
   | { kind: 'needsHuman'; lesson?: string } //                parks the step (awaiting_approval)
@@ -55,9 +59,28 @@ function runBehavior(
   behavior: RoleBehavior,
   ctx: { logicalRole: string; runner: string; attemptId: string; runId: string; level: string; context: string },
   sink: AgentSink,
+  callIndex: number,
 ): AttemptResult {
   if (behavior.kind === 'throw') {
     throw new Error(behavior.message ?? `scripted failure from ${ctx.logicalRole}`);
+  }
+  if (behavior.kind === 'triage') {
+    const decision = behavior.decisions[Math.min(callIndex, behavior.decisions.length - 1)] ?? 'fix';
+    return {
+      output: {
+        items: [{
+          threadId: behavior.threadId ?? 'PRRT_T1',
+          decision,
+          guidance: behavior.guidance ?? 'address the review comment',
+          replyText: behavior.replyText ?? 'done in the latest push',
+        }],
+        needsHuman: decision === 'question',
+      },
+      verdict: decision,
+      nextSteps: [],
+      costs: [{ modelProfile: ctx.level, currency: 'USD', inputTokens: 10, outputTokens: 5, costAmount: 0.001 }],
+      needsHuman: false,
+    };
   }
   const writeRepo = ctx.logicalRole === 'developer' ? resolveWriteDir(sink.developerWrites.get(ctx.runId), ctx.context) : undefined;
   if (writeRepo && behavior.kind !== 'needsHuman') {
@@ -105,7 +128,7 @@ export function scriptedAgent(spec: AgentSpec, sink: AgentSink): RunAgent {
       runId: step.runId,
       level: profile.level,
       context,
-    }, sink);
+    }, sink, n);
   };
 }
 
@@ -130,7 +153,27 @@ export function routedScriptedAgent(specs: Map<string, AgentSpec>, sink: AgentSi
       runId: step.runId,
       level: profile.level,
       context,
-    }, sink);
+    }, sink, n);
+  };
+}
+
+export function routedRunCaseAgent(runCases: Map<string, RunCase>, sink: AgentSink): RunAgent {
+  const counts = new Map<string, number>();
+  return async ({ role, profile, attemptId, step, context }): Promise<AttemptResult> => {
+    const logicalRole = role.playbookRoleId ?? role.name;
+    sink.agentCalls.push({ role: logicalRole, runner: role.runner, attemptId, runId: step.runId, context });
+    const key = `${step.runId}::${logicalRole}`;
+    const n = counts.get(key) ?? 0;
+    counts.set(key, n + 1);
+    const spec = runCases.get(step.runId)?.agent ?? {};
+    return runBehavior(pickBehavior(spec, logicalRole, n), {
+      logicalRole,
+      runner: role.runner,
+      attemptId,
+      runId: step.runId,
+      level: profile.level,
+      context,
+    }, sink, n);
   };
 }
 
