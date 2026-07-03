@@ -3,6 +3,9 @@
 Specs are durable contracts for implemented or approved product surfaces. They hold exact types, schemas,
 API behavior, state-machine grammar, validation rules, examples, and changelog notes.
 
+Draft specs may live here when they are tied to a draft ADR or active design decision. They must be marked
+`Status: Draft` and must clearly separate current shipped behavior from target migration.
+
 Work orders, slices, task lists, and delivery sequencing do not live here. Track those in GitHub Issues or Revo
 dogfooding runs. Obsolete plans are recovered from git history when needed; this repository does not keep a docs
 archive of superseded plans.
@@ -19,6 +22,7 @@ archive of superseded plans.
 | [runner-manifest-v1.spec.md](./runner-manifest-v1.spec.md) | Runner manifest field schema, StdoutParser/PermissionStyle code contracts, route-time capability snapshot, and replay determinism |
 | [runner-result-envelope-v1.spec.md](./runner-result-envelope-v1.spec.md) | Canonical result envelope, structured-output tiers, `submit_result` tool-call mechanism, tier degradation, and the verdict-presence validate seam |
 | [runner-capabilities-v1.spec.md](./runner-capabilities-v1.spec.md) | Runner capability vocabulary replacing the hardcoded branch functions, with one-to-one replacement mapping and worked `capabilities` examples |
+| [run-profiles-v1.spec.md](./run-profiles-v1.spec.md) | Draft public run-profile contract for provider-neutral `feature-development`, profile-driven topology/bindings, MCP ergonomics, and replay pins |
 | [playbook-storage-v1.spec.md](./playbook-storage-v1.spec.md) | Versioned playbook snapshot storage, document/entity projections, relation records, and route-time pins |
 | [revo-playbook-materialization-v1.spec.md](./revo-playbook-materialization-v1.spec.md) | `.revo/playbook` worktree bundle layout, manifest validation, per-step selected references, and worker prompt discovery |
 

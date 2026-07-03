@@ -36,10 +36,10 @@ There is no internal archive of obsolete plans. Git history is the archive.
 | Step output production or prompt hydration | [run dataflow spec](./specs/run-dataflow-v1.spec.md) | `src/pipeline-core/validate-dataflow.ts`, `src/pipeline/data-driven-task.workflow.ts`, `src/run/run-outputs.ts` |
 | Human approvals, questions, inbox semantics | [human gates spec](./specs/human-gates-v1.spec.md) | `src/pipeline/await-human.ts`, `src/control-plane/inbox.ts`, MCP and GraphQL gate methods |
 | GraphQL schema, resolver shape, UI contract | [GraphQL admin API v1 spec](./specs/graphql-admin-api-v1.spec.md) | `src/api/graphql-api/**`, feature API services, schema drift tests |
-| MCP tool surface or agent-facing verbs | [getting-started.md](./getting-started.md), [human gates spec](./specs/human-gates-v1.spec.md) | `src/mcp/**`, feature API services, MCP capability tests |
+| MCP tool surface or agent-facing verbs | [getting-started.md](./getting-started.md), [human gates spec](./specs/human-gates-v1.spec.md), [run profiles v1](./specs/run-profiles-v1.spec.md) | `src/mcp/**`, feature API services, MCP capability tests |
 | Control-plane tables or ownership classes | [control-plane-schema.md](./control-plane-schema.md) | `control-plane/bootstrap.config.json`, `src/control-plane/**`, `src/revisium/**` |
 | Playbook import or built-in playbook catalogs | [architecture-overview.md](./architecture-overview.md), [pipeline state machine spec](./specs/pipeline-state-machine-v1.spec.md), [default playbook policy spec](./specs/default-playbook-policy.spec.md) | `control-plane/default-playbook/**`, `src/playbook/**`, `@revisium/agent-playbook` catalog compatibility |
-| Model profiles, routing policy, budgets, limits | [control-plane-schema.md](./control-plane-schema.md), [pipeline state machine spec](./specs/pipeline-state-machine-v1.spec.md) | `src/control-plane/definitions.ts`, default playbook policy rows, cost tests |
+| Model profiles, routing policy, budgets, limits | [control-plane-schema.md](./control-plane-schema.md), [pipeline state machine spec](./specs/pipeline-state-machine-v1.spec.md), [run profiles v1](./specs/run-profiles-v1.spec.md) | `src/control-plane/definitions.ts`, `src/control-plane/topology-profiles.ts`, default playbook policy rows, cost tests |
 | Runner behavior or external effects | [runner-contract.md](./runner-contract.md) | `src/runners/**`, `src/worker/**`, e2e runner scenarios |
 | Context compression or prompt inputs | [context-budget.md](./context-budget.md) | `src/worker/build-context.ts`, run output references, role prompt composition |
 
@@ -55,6 +55,9 @@ generated PNG diagrams unless the asset is genuinely visual and cannot be repres
 | [ADR-0001](./adr/0001-execution-engine-and-host.md) | DBOS durable engine and NestJS host |
 | [ADR-0002](./adr/0002-data-driven-pipeline-state-machine.md) | Pipeline-as-data engine |
 | [ADR-0003](./adr/0003-graphql-graph-shape.md) | GraphQL admin API graph-shaped contract |
+| [ADR-0004](./adr/0004-runner-execution-contract.md) | Runner execution contract |
+| [ADR-0005](./adr/0005-versioned-playbook-storage-and-revo-materialization.md) | Versioned playbook storage and Revo materialization |
+| [ADR-0006](./adr/0006-run-profiles-and-provider-neutral-pipelines.md) | Run profiles and provider-neutral feature-development |
 
 ## Specs
 
@@ -65,6 +68,7 @@ generated PNG diagrams unless the asset is genuinely visual and cannot be repres
 | [Run dataflow v1](./specs/run-dataflow-v1.spec.md) | Step outputs, prompt hydration, output storage, validation |
 | [Human gates v1](./specs/human-gates-v1.spec.md) | Inbox-backed gates, questions, watch tools, PR review feedback loop |
 | [Default playbook policy](./specs/default-playbook-policy.spec.md) | Bundled `feature-development` policy rules, static verifier scope, and merge-gate recheck behavior |
+| [Run profiles v1](./specs/run-profiles-v1.spec.md) | Draft run-profile contract for provider-neutral `feature-development`, profile-driven topology/bindings, MCP ergonomics, and replay pins |
 
 ## Guides and References
 
