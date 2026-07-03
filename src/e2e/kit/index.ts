@@ -9,6 +9,7 @@ export * from './fake-integrator.js';
 export * from './harness.js';
 export * from './drive.js';
 export * from './scenarios.js';
+export * from './scenario.js';
 export * from './assertions.js';
 export * from './crash.js';
 export * from './mcp.js';
