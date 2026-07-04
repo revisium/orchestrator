@@ -183,50 +183,93 @@ function conditionHasCounterReadApplicableToVerdict(
   scopes: ReadonlySet<string>,
   verdict: string,
 ): boolean {
-  switch (cond.op) {
-    case 'counter.lt':
-    case 'counter.gte':
-      return scopes.has(cond.scope);
-    case 'all':
-      return cond.of.every((item) => conditionCanApplyToVerdict(item, verdict))
-        && cond.of.some((item) => conditionHasCounterReadApplicableToVerdict(item, scopes, verdict));
-    case 'any':
-      return cond.of.some((item) => conditionHasCounterReadApplicableToVerdict(item, scopes, verdict));
-    case 'not':
-      return conditionCanApplyToVerdict(cond, verdict)
-        && conditionHasCounterReadApplicableToVerdict(cond.cond, scopes, verdict);
-    default:
-      return false;
-  }
+  const summary = summarizeConditionForVerdict(cond, scopes, verdict);
+  return summary.canBeTrue && summary.relevantCounterCanAffect;
 }
 
 function conditionCanApplyToVerdict(cond: Condition, verdict: string): boolean {
+  return summarizeConditionForVerdict(cond, new Set<string>(), verdict).canBeTrue;
+}
+
+type ConditionVerdictSummary = {
+  canBeTrue: boolean;
+  canBeFalse: boolean;
+  relevantCounterCanAffect: boolean;
+};
+
+function summarizeConditionForVerdict(
+  cond: Condition,
+  scopes: ReadonlySet<string>,
+  verdict: string,
+): ConditionVerdictSummary {
   switch (cond.op) {
     case 'verdict.eq':
-      return cond.value === verdict;
+      return constantCondition(cond.value === verdict);
     case 'verdict.in':
-      return cond.value.includes(verdict);
+      return constantCondition(cond.value.includes(verdict));
     case 'counter.lt':
     case 'counter.gte':
-      return true;
+      return { canBeTrue: true, canBeFalse: true, relevantCounterCanAffect: scopes.has(cond.scope) };
     case 'all':
-      return cond.of.every((item) => conditionCanApplyToVerdict(item, verdict));
+      return summarizeAllCondition(cond.of.map((item) => summarizeConditionForVerdict(item, scopes, verdict)));
     case 'any':
-      return cond.of.some((item) => conditionCanApplyToVerdict(item, verdict));
-    case 'not':
-      return conditionCanApplyToVerdictNegation(cond.cond, verdict);
+      return summarizeAnyCondition(cond.of, cond.of.map((item) => summarizeConditionForVerdict(item, scopes, verdict)));
+    case 'not': {
+      const inner = summarizeConditionForVerdict(cond.cond, scopes, verdict);
+      return {
+        canBeTrue: inner.canBeFalse,
+        canBeFalse: inner.canBeTrue,
+        relevantCounterCanAffect: inner.relevantCounterCanAffect,
+      };
+    }
   }
 }
 
-function conditionCanApplyToVerdictNegation(cond: Condition, verdict: string): boolean {
-  switch (cond.op) {
-    case 'verdict.eq':
-      return cond.value !== verdict;
-    case 'verdict.in':
-      return !cond.value.includes(verdict);
-    default:
-      return true;
+function summarizeAllCondition(items: ConditionVerdictSummary[]): ConditionVerdictSummary {
+  return {
+    canBeTrue: items.every((item) => item.canBeTrue),
+    canBeFalse: items.some((item) => item.canBeFalse),
+    relevantCounterCanAffect: items.some(
+      (item, index) => item.relevantCounterCanAffect && items.every((other, otherIndex) => otherIndex === index || other.canBeTrue),
+    ),
+  };
+}
+
+function summarizeAnyCondition(conditions: Condition[], items: ConditionVerdictSummary[]): ConditionVerdictSummary {
+  if (hasComplementaryCounterDisjunction(conditions)) {
+    return { canBeTrue: true, canBeFalse: false, relevantCounterCanAffect: false };
   }
+  return {
+    canBeTrue: items.some((item) => item.canBeTrue),
+    canBeFalse: items.every((item) => item.canBeFalse),
+    relevantCounterCanAffect: items.some(
+      (item, index) => item.relevantCounterCanAffect && items.every((other, otherIndex) => otherIndex === index || other.canBeFalse),
+    ),
+  };
+}
+
+function constantCondition(value: boolean): ConditionVerdictSummary {
+  return { canBeTrue: value, canBeFalse: !value, relevantCounterCanAffect: false };
+}
+
+function hasComplementaryCounterDisjunction(conditions: Condition[]): boolean {
+  const gteByScope = new Map<string, number[]>();
+  const ltByScope = new Map<string, number[]>();
+  for (const condition of conditions) {
+    if (condition.op !== 'counter.gte' && condition.op !== 'counter.lt') continue;
+    if (condition.op === 'counter.gte') {
+      if ((ltByScope.get(condition.scope) ?? []).some((value) => value >= condition.value)) return true;
+      const values = gteByScope.get(condition.scope) ?? [];
+      values.push(condition.value);
+      gteByScope.set(condition.scope, values);
+    } else {
+      if ((gteByScope.get(condition.scope) ?? []).some((value) => condition.value >= value)) return true;
+      const values = ltByScope.get(condition.scope) ?? [];
+      values.push(condition.value);
+      ltByScope.set(condition.scope, values);
+    }
+  }
+  return false;
 }
 
 function conditionPositivelyMentionsAnyVerdict(cond: Condition): boolean {
