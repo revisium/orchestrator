@@ -120,7 +120,7 @@ test('C4: markdown output without top-level verdict terminal-fails as invalid re
 // pause for an answer). Un-skip once role-needsHuman is wired to pushInbox(question) + DBOS.recv/send.
 // Tracked in 05-HYPOTHESES as H-AgentQuestionResume.
 test('B (gap): an agent question parks the run; answering it resumes to completion', {
-  skip: 'pending feature: agent-question resume not implemented (only plan/merge gates park+resume; invariant #5)',
+  skip: '#234: pending agent-question resume not implemented (only plan/merge gates park+resume)',
 }, async () => {
   const target = createTargetRepo();
   try {

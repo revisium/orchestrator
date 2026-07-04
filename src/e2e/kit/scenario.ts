@@ -10,7 +10,7 @@ import { assertEventsPresent } from './assertions.js';
 import { waitForGate, waitState } from './drive.js';
 import { DEFAULT_PLAYBOOK_ID, PLAYBOOK_ID } from './scenarios.js';
 
-type GateTopic = 'plan' | 'merge';
+type GateTopic = 'plan' | 'merge' | 'question';
 type GateStep =
   | readonly [GateTopic, string]
   | {
@@ -26,6 +26,7 @@ type ScenarioExpect = {
   events?: string[];
   noEvents?: string[];
   path?: EventPathItem[];
+  ghCalled?: Array<readonly string[]>;
   ghNotCalled?: Array<readonly [string, string]>;
 };
 
@@ -56,6 +57,7 @@ export type PipelineScenario = {
   integrator?: IntegratorOutcome;
   agent?: AgentSpec;
   developerWrite?: boolean;
+  cleanup?: { releaseWorktreeFails?: boolean };
   gates?: GateStep[];
   expect: ScenarioExpect;
 };
@@ -129,6 +131,14 @@ function assertGhNotCalledForRun(h: RunHarness, runCase: RunCase, sub: readonly 
   );
 }
 
+function assertGhCalledForRun(h: RunHarness, runCase: RunCase, expected: readonly string[]): void {
+  const prefix = taskBranchPrefix(runCase.taskId);
+  assert.ok(
+    h.ghCalls.some((call) => call.some((arg) => arg.startsWith(prefix)) && expected.every((arg) => call.includes(arg))),
+    `gh call containing ${expected.join(' ')} must be called for ${runCase.runId}`,
+  );
+}
+
 export async function pipelineScenario(
   h: RunHarness,
   runCases: Map<string, RunCase>,
@@ -176,6 +186,9 @@ export async function pipelineScenario(
   if (scenario.expect.events) await assertEventsPresent(h.api, created.runId, scenario.expect.events);
   if (scenario.expect.noEvents) await assertNoEvents(h.api, created.runId, scenario.expect.noEvents);
   if (scenario.expect.path) await assertEventPath(h.api, created.runId, scenario.expect.path);
+  for (const expected of scenario.expect.ghCalled ?? []) {
+    assertGhCalledForRun(h, runCase, expected);
+  }
   for (const sub of scenario.expect.ghNotCalled ?? []) {
     assertGhNotCalledForRun(h, runCase, sub);
   }
