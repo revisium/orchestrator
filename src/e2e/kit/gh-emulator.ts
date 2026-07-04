@@ -26,9 +26,12 @@ export type GhScenario =
   | 'merge-unknown-then-clean' // pollPr: UNKNOWN×1 then CLEAN; bounded recheck loop converges to merge (#248)
   | 'merge-stale-at-reverify' // pollPr+mergeReadiness: CLEAN; mergeApproveReverify: DIRTY → classifyRecovery (#248)
   | 'merged-externally'
+  | 'closed-externally'
   | 'head-moved-after-approve'
   | 'empty-graphql-data'
-  | 'no-checks-registered';
+  | 'no-checks-registered'
+  | 'checks-never-settle'
+  | 'force-advisory-thread';
 
 /** Branch from a `gh pr <view|merge|ready> <branch> …` argv (integrator/confirmMerge pass it as args[2]). */
 function branchArg(args: string[]): string {
@@ -94,8 +97,17 @@ function newGhState(): GhState {
   };
 }
 
+function isExternallyTerminal(scenario: GhScenario): boolean {
+  return scenario === 'merged-externally' || scenario === 'closed-externally';
+}
+
+function externalTerminalState(scenario: GhScenario): 'MERGED' | 'CLOSED' {
+  return scenario === 'merged-externally' ? 'MERGED' : 'CLOSED';
+}
+
 /** True once the integrator created (or the scenario pre-seeds) a PR for `branch`. */
 function hasOpenPr(scenario: GhScenario, st: GhState, branch: string): boolean {
+  if (isExternallyTerminal(scenario) && st.createdBranches.has(branch)) return false;
   return scenario === 'pr-already-exists' || st.createdBranches.has(branch);
 }
 
@@ -103,9 +115,10 @@ function hasOpenPr(scenario: GhScenario, st: GhState, branch: string): boolean {
 function threadsFor(scenario: GhScenario, st: GhState, branch: string): Set<string> {
   let set = st.unresolvedThreads.get(branch);
   if (!set) {
-    set = new Set(scenario === 'review-comment' ? ['PRRT_T1'] : []);
+    set = new Set(scenario === 'review-comment' || (scenario === 'force-advisory-thread' && st.readyCount >= 3) ? ['PRRT_T1'] : []);
     st.unresolvedThreads.set(branch, set);
   }
+  if (scenario === 'force-advisory-thread' && st.readyCount >= 3 && set.size === 0) set.add('PRRT_T1');
   return set;
 }
 
@@ -180,6 +193,20 @@ function ghBehavior(scenario: GhScenario, args: string[], st: GhState): string {
       ]);
     }
     const head = flagValue(args, '--head');
+    const requestedState = flagValue(args, '--state') || 'open';
+    if (isExternallyTerminal(scenario) && st.createdBranches.has(head) && requestedState !== 'open') {
+      return JSON.stringify([
+        {
+          number: 7,
+          url: PR_URL,
+          baseRefName: BASE,
+          state: externalTerminalState(scenario),
+          headRefOid: 'deadbeefcafe',
+          title: 'Externally terminal PR',
+          body: '',
+        },
+      ]);
+    }
     if (hasOpenPr(scenario, st, head)) {
       return JSON.stringify([{ number: 7, url: PR_URL, baseRefName: BASE, state: 'OPEN' }]);
     }
@@ -229,6 +256,21 @@ function ghBehavior(scenario: GhScenario, args: string[], st: GhState): string {
           statusCheckRollup: [{ __typename: 'CheckRun', name: 'build', status: 'COMPLETED', conclusion: 'SUCCESS' }],
         });
       }
+      if (scenario === 'closed-externally') {
+        return JSON.stringify({
+          number: 7,
+          url: PR_URL,
+          state: 'CLOSED',
+          isDraft: false,
+          baseRefName: BASE,
+          headRefName: branch,
+          headRefOid: 'deadbeefcafe',
+          mergeStateStatus: 'CLEAN',
+          reviewDecision: '',
+          mergeable: 'MERGEABLE',
+          statusCheckRollup: [],
+        });
+      }
       // pollPr's collectPrReadiness view: report the CI rollup + draft/state. ci-red-then-green starts
       // FAILING and flips to SUCCESS once a developer re-pushed (repushedBranches). A re-push is modelled
       // by the second `pr create` (idempotent integrator) NOT firing — so we flip on the integrator's push
@@ -242,7 +284,10 @@ function ghBehavior(scenario: GhScenario, args: string[], st: GhState): string {
       // always fires and the count advances on every node entry.
       let mergeStateStatus = mergeConflict ? 'DIRTY' : 'CLEAN';
       let mergeable = mergeConflict ? 'CONFLICTING' : 'MERGEABLE';
-      if (scenario === 'merge-unknown-then-clean') {
+      if (scenario === 'checks-never-settle') {
+        mergeStateStatus = 'UNKNOWN';
+        mergeable = 'UNKNOWN';
+      } else if (scenario === 'merge-unknown-then-clean') {
         // readyCount < 2: first pollPr node fires pr-ready (→1); grace views see readyCount=1 → UNKNOWN.
         // Second pollPr (after prRouter recheck self-loop) fires pr-ready (→2); grace views see
         // readyCount=2 → CLEAN. Exactly one prRouter recheck; converges to merge gate.
@@ -267,6 +312,8 @@ function ghBehavior(scenario: GhScenario, args: string[], st: GhState): string {
         mergeable,
         statusCheckRollup: scenario === 'no-checks-registered'
           ? []
+          : scenario === 'checks-never-settle'
+          ? [{ __typename: 'CheckRun', name: 'build', status: 'IN_PROGRESS', conclusion: null }]
           : ciRed
           ? [{ __typename: 'CheckRun', name: 'build', status: 'COMPLETED', conclusion: 'FAILURE' }]
           : [{ __typename: 'CheckRun', name: 'build', status: 'COMPLETED', conclusion: 'SUCCESS' }],
@@ -277,7 +324,11 @@ function ghBehavior(scenario: GhScenario, args: string[], st: GhState): string {
     return JSON.stringify({
       url: PR_URL,
       number: 1,
-      state: scenario === 'merged-externally' || st.mergedBranches.has(branch) ? 'MERGED' : 'OPEN',
+      state: scenario === 'merged-externally' || st.mergedBranches.has(branch)
+        ? 'MERGED'
+        : scenario === 'closed-externally'
+        ? 'CLOSED'
+        : 'OPEN',
       isDraft: !st.readyBranches.has(branch),
       mergeStateStatus: scenario === 'merge-not-clean' ? 'BLOCKED' : 'CLEAN',
     });

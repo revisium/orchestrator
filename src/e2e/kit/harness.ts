@@ -32,6 +32,8 @@ export type RunHarnessOptions = {
   gh?: GhScenario | ((ghCalls: string[][]) => ExecGhFn);
   /** Wrap the (fake) integrator — e.g. `routedIntegrator` for per-run mocked integrate outcomes. */
   integrator?: (base: IntegratorService) => IntegratorService;
+  /** Test-only override for the cleanupWorktree release step. */
+  releaseWorktree?: (runId: string, taskId: string) => Promise<void>;
 };
 
 export type RunHarness = {
@@ -82,6 +84,7 @@ export async function createRunHarness(opts: RunHarnessOptions = {}): Promise<Ru
     : deterministicAgent(agentCalls, developerWrites);
 
   const worktrees = new WorktreeService(runs);
+  if (opts.releaseWorktree) worktrees.release = opts.releaseWorktree;
   const pipeline = new PipelineService(dbos, roles, runs, inbox, integrator, worktrees, agent);
   const observability = new AgentObservabilityService({
     artifactRoot: join(getConfig().dataDir, 'run-artifacts'),

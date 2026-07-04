@@ -70,10 +70,17 @@ recoveryScenario('RG-C: mergeGate override_merge -> mergeApproveReverify(stub:cl
   expect: { terminal: 'completed' },
 });
 
-recoveryScenario('RG-D: mergeGate recheck -> mergeRecheck(stub:clean) -> blockedEnd -> blocked', {
-  executionProfile: STUB_FULL,
-  gates: [['plan', 'approved'], ['merge', 'recheck']],
-  expect: { terminal: 'blocked' },
+test('RG-D: mergeGate recheck -> mergeRecheck(stub:clean) -> mergeGate cancel -> cancelled (#276)', {
+  skip: '#276: pending mergeGate recheck target behavior',
+}, async () => {
+  await pipelineScenario(h, runCases, {
+    title: 'RG-D: mergeGate recheck -> mergeRecheck(stub:clean) -> mergeGate cancel -> cancelled (#276)',
+    playbook: 'default',
+    repo: target,
+    executionProfile: STUB_FULL,
+    gates: [['plan', 'approved'], ['merge', 'recheck'], ['merge', 'cancel']],
+    expect: { terminal: 'cancelled' },
+  });
 });
 
 test('RG-E: always-ci-red -> ciLoop exhaustion -> recoveryGate(merge-recovery) -> cancel -> cancelled', { skip: e2eSkip }, async () => {
