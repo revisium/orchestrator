@@ -1,5 +1,5 @@
 import { isDefaultBranch, isGuardedBranch } from './types.js';
-import type { Condition, Template } from './types.js';
+import type { Branch, Condition, Template } from './types.js';
 import { DiagSink } from './validate-sink.js';
 import { backwardReach, forwardReach, structuralEdges } from './validate-graph.js';
 
@@ -74,17 +74,7 @@ function ruleVerdictCyclesHaveCounterOrHumanGate(template: Template, d: DiagSink
   for (const node of Object.values(template.nodes)) {
     if (node.kind !== 'choice' && node.kind !== 'humanGate') continue;
     for (const branch of node.branches) {
-      if (isDefaultBranch(branch) || !conditionPositivelyMentionsAnyVerdict(branch.when)) continue;
-      if (!conditionPositivelyMentionsVerdict(branch.when, 'recheck')) continue;
-      if (!forwardReach(template, branch.goto).has(node.id)) continue;
-
-      const cycle = cycleThroughEdge(template, node.id, branch.goto);
-      if (hasHumanGate(template, cycle)) continue;
-      if (cycleHasCounterBound(template, cycle)) continue;
-
-      const key = `${node.id}->${branch.goto}`;
-      if (emitted.has(key)) continue;
-      emitted.add(key);
+      if (!shouldWarnOnVerdictCycle(template, node.id, branch, emitted)) continue;
       d.warn(
         'CYCLE_WITHOUT_COUNTER',
         `verdict branch ${node.id} → ${branch.goto} forms an automated cycle with no human gate or counter cap`,
@@ -92,6 +82,31 @@ function ruleVerdictCyclesHaveCounterOrHumanGate(template: Template, d: DiagSink
       );
     }
   }
+}
+
+function shouldWarnOnVerdictCycle(
+  template: Template,
+  nodeId: string,
+  branch: Branch,
+  emitted: Set<string>,
+): branch is Extract<Branch, { when: Condition; goto: string }> {
+  if (!isRecheckVerdictBranch(branch)) return false;
+  if (!forwardReach(template, branch.goto).has(nodeId)) return false;
+
+  const cycle = cycleThroughEdge(template, nodeId, branch.goto);
+  if (hasHumanGate(template, cycle)) return false;
+  if (cycleHasCounterBound(template, cycle)) return false;
+
+  const key = `${nodeId}->${branch.goto}`;
+  if (emitted.has(key)) return false;
+  emitted.add(key);
+  return true;
+}
+
+function isRecheckVerdictBranch(branch: Branch): branch is Extract<Branch, { when: Condition; goto: string }> {
+  return !isDefaultBranch(branch)
+    && conditionPositivelyMentionsAnyVerdict(branch.when)
+    && conditionPositivelyMentionsVerdict(branch.when, 'recheck');
 }
 
 function cycleThroughEdge(template: Template, from: string, to: string): Set<string> {
