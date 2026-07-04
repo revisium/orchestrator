@@ -2,6 +2,7 @@ import { isDefaultBranch, isGuardedBranch } from './types.js';
 import type { Branch, Condition, Template } from './types.js';
 import { DiagSink } from './validate-sink.js';
 import { backwardReach, forwardReach, structuralEdges } from './validate-graph.js';
+import { conditionReadsAnyScope } from './condition-scopes.js';
 
 export function ruleResilienceWarnings(template: Template, d: DiagSink): void {
   ruleGateOutcomesExplicitlyRouted(template, d);
@@ -158,7 +159,7 @@ function cycleHasCounterBound(template: Template, cycle: Set<string>): boolean {
     if (node?.kind !== 'choice' && node?.kind !== 'humanGate') return false;
     return node.branches
       .filter(isGuardedBranch)
-      .some((branch) => conditionReadsAnyScope(branch.when, incremented));
+      .some((branch) => cycle.has(branch.goto) && conditionReadsAnyScope(branch.when, incremented));
   });
 }
 
@@ -188,21 +189,6 @@ function conditionPositivelyMentionsVerdict(cond: Condition, verdict: string): b
       return cond.of.some((item) => conditionPositivelyMentionsVerdict(item, verdict));
     case 'not':
       return false;
-    default:
-      return false;
-  }
-}
-
-function conditionReadsAnyScope(cond: Condition, scopes: ReadonlySet<string>): boolean {
-  switch (cond.op) {
-    case 'counter.lt':
-    case 'counter.gte':
-      return scopes.has(cond.scope);
-    case 'all':
-    case 'any':
-      return cond.of.some((item) => conditionReadsAnyScope(item, scopes));
-    case 'not':
-      return conditionReadsAnyScope(cond.cond, scopes);
     default:
       return false;
   }

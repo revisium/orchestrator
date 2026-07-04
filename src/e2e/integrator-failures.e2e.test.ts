@@ -285,7 +285,7 @@ test('D8: a non-github origin remote blocks at integrate (unparseable owner/repo
   }
 });
 
-test('D14: a gh error during integrate opens recoveryGate without approved and cancel stops deliberately (#276)', {
+test('D14: a gh error during integrate opens recoveryGate with fixture outcomes and cancel stops deliberately (#276)', {
   skip: '#276: pending recoveryGate target outcomes',
 }, async () => {
   const target = createTargetRepo();
@@ -298,7 +298,7 @@ test('D14: a gh error during integrate opens recoveryGate without approved and c
     const pending = await h.api.getPendingDecisions(run.runId);
     const recoveryItem = pending.find((item) => item.id === recovery.inboxId);
     const context = recoveryItem?.context as { summary?: { outcomes?: unknown } } | undefined;
-    assert.deepEqual(context?.summary?.outcomes, ['recheck', 'cancel']);
+    assert.deepEqual(context?.summary?.outcomes, ['recheck', 'cancel', 'approved']);
 
     await h.api.resolveGate({ inboxId: recovery.inboxId, outcome: 'cancel', resolvedBy: 'e2e' });
     const terminal = await waitState(h.api, run.runId);

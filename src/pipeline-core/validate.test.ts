@@ -40,6 +40,7 @@ import {
   invalidUnreachable,
   invalidVerdictUndeclared,
   allOf,
+  counterGte,
   counterLt,
   joinAll,
   localChange,
@@ -414,6 +415,35 @@ test('warning: CYCLE_WITHOUT_COUNTER fires on current bundled default template',
     'mergeReadinessRouter',
     'prRouter',
   ]);
+});
+
+test('warning: CYCLE_WITHOUT_COUNTER ignores counter reads on unrelated exit branches', () => {
+  const t = template('unrelated-counter-bound')
+    .entry('poll')
+    .domain('cancel', 'recheck')
+    .scope('rechecks', { cap: 3, parent: null })
+    .add(
+      node.script('poll', 'script:pollPr', 'router', {
+        incrementCounters: ['rechecks'],
+        onFailure: 'route',
+        catch: [{ onError: 'revo.ScriptFailed', goto: 'blockedEnd' }],
+      }),
+      node.choice('router', [
+        on(verdictEq('recheck'), 'poll'),
+        on(counterGte('rechecks', 3), 'manualGate'),
+        otherwise('blockedEnd'),
+      ]),
+      node.humanGate('manualGate', 'review', ['cancel'], [
+        on(verdictEq('cancel'), 'cancelledEnd'),
+        otherwise('blockedEnd'),
+      ]),
+      node.terminal('blockedEnd', 'blocked'),
+      node.terminal('cancelledEnd', 'cancelled'),
+    )
+    .build();
+
+  const diags = validateTemplate(t);
+  assert.ok(diags.some((diag) => diag.code === 'CYCLE_WITHOUT_COUNTER' && diag.nodeId === 'router'));
 });
 
 test('warning: SCRIPT_FAILURE_UNROUTED fires on current bundled default template', () => {

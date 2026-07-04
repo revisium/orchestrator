@@ -139,7 +139,7 @@ test('#276: questionGate changes_requested routes to review rework and resolves 
   await runTargetScenario('#276: questionGate changes_requested routes to review rework and resolves threads', {
     executionProfile: STUB_AGENT,
     gh: 'review-comment',
-    agent: { byRole: { triager: { kind: 'triage', decisions: ['question'] } } },
+    agent: { byRole: { triager: { kind: 'triage', decisions: ['question', 'wontfix'] } } },
     gates: [['plan', 'approved'], ['question', 'changes_requested'], ['merge', 'approved']],
     expect: {
       terminal: 'completed',
