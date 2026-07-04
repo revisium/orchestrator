@@ -2,7 +2,6 @@ import { isDefaultBranch, isGuardedBranch } from './types.js';
 import type { Branch, Condition, Template } from './types.js';
 import { DiagSink } from './validate-sink.js';
 import { backwardReach, forwardReach, structuralEdges } from './validate-graph.js';
-import { conditionReadsAnyScope } from './condition-scopes.js';
 
 export function ruleResilienceWarnings(template: Template, d: DiagSink): void {
   ruleGateOutcomesExplicitlyRouted(template, d);
@@ -96,7 +95,7 @@ function shouldWarnOnVerdictCycle(
 
   const cycle = cycleThroughEdge(template, nodeId, branch.goto);
   if (hasHumanGate(template, cycle)) return false;
-  if (cycleHasCounterBound(template, cycle)) return false;
+  if (cycleHasCounterBound(template, cycle, 'recheck')) return false;
 
   const key = `${nodeId}->${branch.goto}`;
   if (emitted.has(key)) return false;
@@ -145,7 +144,7 @@ function hasHumanGate(template: Template, cycle: Set<string>): boolean {
   return [...cycle].some((id) => template.nodes[id]?.kind === 'humanGate');
 }
 
-function cycleHasCounterBound(template: Template, cycle: Set<string>): boolean {
+function cycleHasCounterBound(template: Template, cycle: Set<string>, verdict: string): boolean {
   const incremented = new Set<string>();
   for (const id of cycle) {
     const node = template.nodes[id];
@@ -157,10 +156,77 @@ function cycleHasCounterBound(template: Template, cycle: Set<string>): boolean {
   return [...cycle].some((id) => {
     const node = template.nodes[id];
     if (node?.kind !== 'choice' && node?.kind !== 'humanGate') return false;
-    return node.branches
-      .filter(isGuardedBranch)
-      .some((branch) => cycle.has(branch.goto) && conditionReadsAnyScope(branch.when, incremented));
+    return branchesHaveCounterBoundBeforeCycleContinues(node.branches, cycle, incremented, verdict);
   });
+}
+
+function branchesHaveCounterBoundBeforeCycleContinues(
+  branches: Branch[],
+  cycle: Set<string>,
+  incremented: ReadonlySet<string>,
+  verdict: string,
+): boolean {
+  let sawCycleBranch = false;
+  for (const branch of branches) {
+    if (!isGuardedBranch(branch)) continue;
+    const staysInCycle = cycle.has(branch.goto);
+    const appliesToVerdict = conditionCanApplyToVerdict(branch.when, verdict);
+    const readsCounter = conditionHasCounterReadApplicableToVerdict(branch.when, incremented, verdict);
+    if (readsCounter && (staysInCycle || !sawCycleBranch)) return true;
+    if (staysInCycle && appliesToVerdict) sawCycleBranch = true;
+  }
+  return false;
+}
+
+function conditionHasCounterReadApplicableToVerdict(
+  cond: Condition,
+  scopes: ReadonlySet<string>,
+  verdict: string,
+): boolean {
+  switch (cond.op) {
+    case 'counter.lt':
+    case 'counter.gte':
+      return scopes.has(cond.scope);
+    case 'all':
+      return cond.of.every((item) => conditionCanApplyToVerdict(item, verdict))
+        && cond.of.some((item) => conditionHasCounterReadApplicableToVerdict(item, scopes, verdict));
+    case 'any':
+      return cond.of.some((item) => conditionHasCounterReadApplicableToVerdict(item, scopes, verdict));
+    case 'not':
+      return conditionCanApplyToVerdict(cond, verdict)
+        && conditionHasCounterReadApplicableToVerdict(cond.cond, scopes, verdict);
+    default:
+      return false;
+  }
+}
+
+function conditionCanApplyToVerdict(cond: Condition, verdict: string): boolean {
+  switch (cond.op) {
+    case 'verdict.eq':
+      return cond.value === verdict;
+    case 'verdict.in':
+      return cond.value.includes(verdict);
+    case 'counter.lt':
+    case 'counter.gte':
+      return true;
+    case 'all':
+      return cond.of.every((item) => conditionCanApplyToVerdict(item, verdict));
+    case 'any':
+      return cond.of.some((item) => conditionCanApplyToVerdict(item, verdict));
+    case 'not':
+      return conditionCanApplyToVerdictNegation(cond.cond, verdict);
+  }
+}
+
+function conditionCanApplyToVerdictNegation(cond: Condition, verdict: string): boolean {
+  switch (cond.op) {
+    case 'verdict.eq':
+      return cond.value !== verdict;
+    case 'verdict.in':
+      return !cond.value.includes(verdict);
+    default:
+      return true;
+  }
 }
 
 function conditionPositivelyMentionsAnyVerdict(cond: Condition): boolean {

@@ -40,6 +40,7 @@ import {
   invalidUnreachable,
   invalidVerdictUndeclared,
   allOf,
+  anyOf,
   counterGte,
   counterLt,
   joinAll,
@@ -431,6 +432,120 @@ test('warning: CYCLE_WITHOUT_COUNTER ignores counter reads on unrelated exit bra
       node.choice('router', [
         on(verdictEq('recheck'), 'poll'),
         on(counterGte('rechecks', 3), 'manualGate'),
+        otherwise('blockedEnd'),
+      ]),
+      node.humanGate('manualGate', 'review', ['cancel'], [
+        on(verdictEq('cancel'), 'cancelledEnd'),
+        otherwise('blockedEnd'),
+      ]),
+      node.terminal('blockedEnd', 'blocked'),
+      node.terminal('cancelledEnd', 'cancelled'),
+    )
+    .build();
+
+  const diags = validateTemplate(t);
+  assert.ok(diags.some((diag) => diag.code === 'CYCLE_WITHOUT_COUNTER' && diag.nodeId === 'router'));
+});
+
+test('warning: CYCLE_WITHOUT_COUNTER accepts a counter exit branch before the loop branch', () => {
+  const t = template('preemptive-counter-bound')
+    .entry('poll')
+    .domain('cancel', 'recheck')
+    .scope('rechecks', { cap: 3, parent: null })
+    .add(
+      node.script('poll', 'script:pollPr', 'router', {
+        incrementCounters: ['rechecks'],
+        onFailure: 'route',
+        catch: [{ onError: 'revo.ScriptFailed', goto: 'blockedEnd' }],
+      }),
+      node.choice('router', [
+        on(counterGte('rechecks', 3), 'manualGate'),
+        on(verdictEq('recheck'), 'poll'),
+        otherwise('blockedEnd'),
+      ]),
+      node.humanGate('manualGate', 'review', ['cancel'], [
+        on(verdictEq('cancel'), 'cancelledEnd'),
+        otherwise('blockedEnd'),
+      ]),
+      node.terminal('blockedEnd', 'blocked'),
+      node.terminal('cancelledEnd', 'cancelled'),
+    )
+    .build();
+
+  assertNoDiagnostic(t, 'CYCLE_WITHOUT_COUNTER');
+});
+
+test('warning: CYCLE_WITHOUT_COUNTER ignores unrelated cycle branches before a counter exit', () => {
+  const t = template('unrelated-cycle-branch-before-counter-bound')
+    .entry('poll')
+    .domain('cancel', 'other', 'recheck')
+    .scope('rechecks', { cap: 3, parent: null })
+    .add(
+      node.script('poll', 'script:pollPr', 'router', {
+        incrementCounters: ['rechecks'],
+        onFailure: 'route',
+        catch: [{ onError: 'revo.ScriptFailed', goto: 'blockedEnd' }],
+      }),
+      node.choice('router', [
+        on(verdictEq('other'), 'poll'),
+        on(counterGte('rechecks', 3), 'manualGate'),
+        on(verdictEq('recheck'), 'poll'),
+        otherwise('blockedEnd'),
+      ]),
+      node.humanGate('manualGate', 'review', ['cancel'], [
+        on(verdictEq('cancel'), 'cancelledEnd'),
+        otherwise('blockedEnd'),
+      ]),
+      node.terminal('blockedEnd', 'blocked'),
+      node.terminal('cancelledEnd', 'cancelled'),
+    )
+    .build();
+
+  assertNoDiagnostic(t, 'CYCLE_WITHOUT_COUNTER');
+});
+
+test('warning: CYCLE_WITHOUT_COUNTER accepts a disjunctive counter exit branch before the loop branch', () => {
+  const t = template('disjunctive-counter-bound')
+    .entry('poll')
+    .domain('cancel', 'other', 'recheck')
+    .scope('rechecks', { cap: 3, parent: null })
+    .add(
+      node.script('poll', 'script:pollPr', 'router', {
+        incrementCounters: ['rechecks'],
+        onFailure: 'route',
+        catch: [{ onError: 'revo.ScriptFailed', goto: 'blockedEnd' }],
+      }),
+      node.choice('router', [
+        on(anyOf(verdictEq('other'), counterGte('rechecks', 3)), 'manualGate'),
+        on(verdictEq('recheck'), 'poll'),
+        otherwise('blockedEnd'),
+      ]),
+      node.humanGate('manualGate', 'review', ['cancel'], [
+        on(verdictEq('cancel'), 'cancelledEnd'),
+        otherwise('blockedEnd'),
+      ]),
+      node.terminal('blockedEnd', 'blocked'),
+      node.terminal('cancelledEnd', 'cancelled'),
+    )
+    .build();
+
+  assertNoDiagnostic(t, 'CYCLE_WITHOUT_COUNTER');
+});
+
+test('warning: CYCLE_WITHOUT_COUNTER warns for conjunctive counter branches gated by unrelated verdicts', () => {
+  const t = template('unrelated-verdict-counter-bound')
+    .entry('poll')
+    .domain('cancel', 'other', 'recheck')
+    .scope('rechecks', { cap: 3, parent: null })
+    .add(
+      node.script('poll', 'script:pollPr', 'router', {
+        incrementCounters: ['rechecks'],
+        onFailure: 'route',
+        catch: [{ onError: 'revo.ScriptFailed', goto: 'blockedEnd' }],
+      }),
+      node.choice('router', [
+        on(allOf(verdictEq('other'), counterGte('rechecks', 3)), 'manualGate'),
+        on(verdictEq('recheck'), 'poll'),
         otherwise('blockedEnd'),
       ]),
       node.humanGate('manualGate', 'review', ['cancel'], [
