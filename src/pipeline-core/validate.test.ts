@@ -8,8 +8,9 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { validateTemplate } from './validate.js';
-import type { ConsumesRef } from './types.js';
+import type { ConsumesRef, DiagnosticCode, Template } from './types.js';
 import {
   assertDiagnostics,
   assertHasDiagnostic,
@@ -39,17 +40,46 @@ import {
   invalidUnreachable,
   invalidVerdictUndeclared,
   allOf,
+  anyOf,
+  counterGte,
   counterLt,
   joinAll,
   localChange,
   nestedScopeLoop,
   node,
+  notCond,
   on,
   otherwise,
   parallelReview,
   template,
   verdictEq,
+  verdictIn,
 } from './kit/index.js';
+
+type PipelineCatalogEntry = {
+  id: string;
+  execution_policy?: { template_json?: Template };
+};
+
+function bundledFeatureDevelopment(): Template {
+  const pipelines = JSON.parse(
+    readFileSync(new URL('../../control-plane/default-playbook/catalog/pipelines.json', import.meta.url), 'utf8'),
+  ) as PipelineCatalogEntry[];
+  const templateJson = pipelines.find((pipeline) => pipeline.id === 'feature-development')
+    ?.execution_policy?.template_json;
+  assert.ok(templateJson, 'bundled feature-development template_json exists');
+  return templateJson;
+}
+
+function bundledWarningSites(code: DiagnosticCode): string[] {
+  return validateTemplate(bundledFeatureDevelopment())
+    .filter((diagnostic) => diagnostic.code === code)
+    .map((diagnostic) => {
+      assert.equal(diagnostic.severity, 'warning', `${code} stays at warning severity`);
+      return diagnostic.path ? `${diagnostic.nodeId}:${diagnostic.path}` : (diagnostic.nodeId ?? '');
+    })
+    .sort();
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Valid templates → no errors (the real pipelines + targeted fixtures).
@@ -372,6 +402,343 @@ test('rule 9: a declared-but-unused domain label → VERDICT_DECLARED_UNUSED (wa
   const unused = diags.find((d) => d.code === 'VERDICT_DECLARED_UNUSED');
   assert.ok(unused, 'feature-development declares `dirty`/`clean` etc.; an unused one warns');
   assert.equal(unused.severity, 'warning');
+});
+
+test('warning: GATE_OUTCOME_UNROUTED fires on current bundled default template', () => {
+  assert.deepEqual(bundledWarningSites('GATE_OUTCOME_UNROUTED'), [
+    'questionGate:outcomes.changes_requested',
+    'recoveryGate:outcomes.approved',
+  ]);
+});
+
+test('warning: CYCLE_WITHOUT_COUNTER fires on current bundled default template', () => {
+  assert.deepEqual(bundledWarningSites('CYCLE_WITHOUT_COUNTER'), [
+    'mergeReadinessRouter',
+    'prRouter',
+  ]);
+});
+
+test('warning: CYCLE_WITHOUT_COUNTER ignores counter reads on unrelated exit branches', () => {
+  const t = template('unrelated-counter-bound')
+    .entry('poll')
+    .domain('cancel', 'recheck')
+    .scope('rechecks', { cap: 3, parent: null })
+    .add(
+      node.script('poll', 'script:pollPr', 'router', {
+        incrementCounters: ['rechecks'],
+        onFailure: 'route',
+        catch: [{ onError: 'revo.ScriptFailed', goto: 'blockedEnd' }],
+      }),
+      node.choice('router', [
+        on(verdictEq('recheck'), 'poll'),
+        on(counterGte('rechecks', 3), 'manualGate'),
+        otherwise('blockedEnd'),
+      ]),
+      node.humanGate('manualGate', 'review', ['cancel'], [
+        on(verdictEq('cancel'), 'cancelledEnd'),
+        otherwise('blockedEnd'),
+      ]),
+      node.terminal('blockedEnd', 'blocked'),
+      node.terminal('cancelledEnd', 'cancelled'),
+    )
+    .build();
+
+  const diags = validateTemplate(t);
+  assert.ok(diags.some((diag) => diag.code === 'CYCLE_WITHOUT_COUNTER' && diag.nodeId === 'router'));
+});
+
+test('warning: CYCLE_WITHOUT_COUNTER accepts a counter exit branch before the loop branch', () => {
+  const t = template('preemptive-counter-bound')
+    .entry('poll')
+    .domain('cancel', 'recheck')
+    .scope('rechecks', { cap: 3, parent: null })
+    .add(
+      node.script('poll', 'script:pollPr', 'router', {
+        incrementCounters: ['rechecks'],
+        onFailure: 'route',
+        catch: [{ onError: 'revo.ScriptFailed', goto: 'blockedEnd' }],
+      }),
+      node.choice('router', [
+        on(counterGte('rechecks', 3), 'manualGate'),
+        on(verdictEq('recheck'), 'poll'),
+        otherwise('blockedEnd'),
+      ]),
+      node.humanGate('manualGate', 'review', ['cancel'], [
+        on(verdictEq('cancel'), 'cancelledEnd'),
+        otherwise('blockedEnd'),
+      ]),
+      node.terminal('blockedEnd', 'blocked'),
+      node.terminal('cancelledEnd', 'cancelled'),
+    )
+    .build();
+
+  assertNoDiagnostic(t, 'CYCLE_WITHOUT_COUNTER');
+});
+
+test('warning: CYCLE_WITHOUT_COUNTER ignores unrelated cycle branches before a counter exit', () => {
+  const t = template('unrelated-cycle-branch-before-counter-bound')
+    .entry('poll')
+    .domain('cancel', 'other', 'recheck')
+    .scope('rechecks', { cap: 3, parent: null })
+    .add(
+      node.script('poll', 'script:pollPr', 'router', {
+        incrementCounters: ['rechecks'],
+        onFailure: 'route',
+        catch: [{ onError: 'revo.ScriptFailed', goto: 'blockedEnd' }],
+      }),
+      node.choice('router', [
+        on(verdictEq('other'), 'poll'),
+        on(counterGte('rechecks', 3), 'manualGate'),
+        on(verdictEq('recheck'), 'poll'),
+        otherwise('blockedEnd'),
+      ]),
+      node.humanGate('manualGate', 'review', ['cancel'], [
+        on(verdictEq('cancel'), 'cancelledEnd'),
+        otherwise('blockedEnd'),
+      ]),
+      node.terminal('blockedEnd', 'blocked'),
+      node.terminal('cancelledEnd', 'cancelled'),
+    )
+    .build();
+
+  assertNoDiagnostic(t, 'CYCLE_WITHOUT_COUNTER');
+});
+
+test('warning: CYCLE_WITHOUT_COUNTER accepts a disjunctive counter exit branch before the loop branch', () => {
+  const t = template('disjunctive-counter-bound')
+    .entry('poll')
+    .domain('cancel', 'other', 'recheck')
+    .scope('rechecks', { cap: 3, parent: null })
+    .add(
+      node.script('poll', 'script:pollPr', 'router', {
+        incrementCounters: ['rechecks'],
+        onFailure: 'route',
+        catch: [{ onError: 'revo.ScriptFailed', goto: 'blockedEnd' }],
+      }),
+      node.choice('router', [
+        on(anyOf(verdictEq('other'), counterGte('rechecks', 3)), 'manualGate'),
+        on(verdictEq('recheck'), 'poll'),
+        otherwise('blockedEnd'),
+      ]),
+      node.humanGate('manualGate', 'review', ['cancel'], [
+        on(verdictEq('cancel'), 'cancelledEnd'),
+        otherwise('blockedEnd'),
+      ]),
+      node.terminal('blockedEnd', 'blocked'),
+      node.terminal('cancelledEnd', 'cancelled'),
+    )
+    .build();
+
+  assertNoDiagnostic(t, 'CYCLE_WITHOUT_COUNTER');
+});
+
+test('warning: CYCLE_WITHOUT_COUNTER accepts a negated counter cap before the loop branch', () => {
+  const t = template('negated-counter-bound')
+    .entry('poll')
+    .domain('cancel', 'recheck')
+    .scope('rechecks', { cap: 3, parent: null })
+    .add(
+      node.script('poll', 'script:pollPr', 'router', {
+        incrementCounters: ['rechecks'],
+        onFailure: 'route',
+        catch: [{ onError: 'revo.ScriptFailed', goto: 'blockedEnd' }],
+      }),
+      node.choice('router', [
+        on(notCond(counterLt('rechecks', 3)), 'manualGate'),
+        on(verdictEq('recheck'), 'poll'),
+        otherwise('blockedEnd'),
+      ]),
+      node.humanGate('manualGate', 'review', ['cancel'], [
+        on(verdictEq('cancel'), 'cancelledEnd'),
+        otherwise('blockedEnd'),
+      ]),
+      node.terminal('blockedEnd', 'blocked'),
+      node.terminal('cancelledEnd', 'cancelled'),
+    )
+    .build();
+
+  assertNoDiagnostic(t, 'CYCLE_WITHOUT_COUNTER');
+});
+
+test('warning: CYCLE_WITHOUT_COUNTER warns for negated disjunctions impossible for recheck', () => {
+  const t = template('negated-impossible-disjunctive-counter-bound')
+    .entry('poll')
+    .domain('cancel', 'recheck')
+    .scope('rechecks', { cap: 3, parent: null })
+    .add(
+      node.script('poll', 'script:pollPr', 'router', {
+        incrementCounters: ['rechecks'],
+        onFailure: 'route',
+        catch: [{ onError: 'revo.ScriptFailed', goto: 'blockedEnd' }],
+      }),
+      node.choice('router', [
+        on(notCond(anyOf(verdictEq('recheck'), counterGte('rechecks', 3))), 'manualGate'),
+        on(verdictEq('recheck'), 'poll'),
+        otherwise('blockedEnd'),
+      ]),
+      node.humanGate('manualGate', 'review', ['cancel'], [
+        on(verdictEq('cancel'), 'cancelledEnd'),
+        otherwise('blockedEnd'),
+      ]),
+      node.terminal('blockedEnd', 'blocked'),
+      node.terminal('cancelledEnd', 'cancelled'),
+    )
+    .build();
+
+  const diags = validateTemplate(t);
+  assert.ok(diags.some((diag) => diag.code === 'CYCLE_WITHOUT_COUNTER' && diag.nodeId === 'router'));
+});
+
+test('warning: CYCLE_WITHOUT_COUNTER warns for negated complementary counter disjunctions', () => {
+  const t = template('negated-complementary-counter-bound')
+    .entry('poll')
+    .domain('cancel', 'recheck')
+    .scope('rechecks', { cap: 3, parent: null })
+    .add(
+      node.script('poll', 'script:pollPr', 'router', {
+        incrementCounters: ['rechecks'],
+        onFailure: 'route',
+        catch: [{ onError: 'revo.ScriptFailed', goto: 'blockedEnd' }],
+      }),
+      node.choice('router', [
+        on(notCond(anyOf(counterGte('rechecks', 3), counterLt('rechecks', 3))), 'manualGate'),
+        on(verdictEq('recheck'), 'poll'),
+        otherwise('blockedEnd'),
+      ]),
+      node.humanGate('manualGate', 'review', ['cancel'], [
+        on(verdictEq('cancel'), 'cancelledEnd'),
+        otherwise('blockedEnd'),
+      ]),
+      node.terminal('blockedEnd', 'blocked'),
+      node.terminal('cancelledEnd', 'cancelled'),
+    )
+    .build();
+
+  const diags = validateTemplate(t);
+  assert.ok(diags.some((diag) => diag.code === 'CYCLE_WITHOUT_COUNTER' && diag.nodeId === 'router'));
+});
+
+test('warning: CYCLE_WITHOUT_COUNTER warns for negated overlapping counter disjunctions', () => {
+  const t = template('negated-overlapping-counter-bound')
+    .entry('poll')
+    .domain('cancel', 'recheck')
+    .scope('rechecks', { cap: 4, parent: null })
+    .add(
+      node.script('poll', 'script:pollPr', 'router', {
+        incrementCounters: ['rechecks'],
+        onFailure: 'route',
+        catch: [{ onError: 'revo.ScriptFailed', goto: 'blockedEnd' }],
+      }),
+      node.choice('router', [
+        on(notCond(anyOf(counterGte('rechecks', 3), counterLt('rechecks', 4))), 'manualGate'),
+        on(verdictEq('recheck'), 'poll'),
+        otherwise('blockedEnd'),
+      ]),
+      node.humanGate('manualGate', 'review', ['cancel'], [
+        on(verdictEq('cancel'), 'cancelledEnd'),
+        otherwise('blockedEnd'),
+      ]),
+      node.terminal('blockedEnd', 'blocked'),
+      node.terminal('cancelledEnd', 'cancelled'),
+    )
+    .build();
+
+  const diags = validateTemplate(t);
+  assert.ok(diags.some((diag) => diag.code === 'CYCLE_WITHOUT_COUNTER' && diag.nodeId === 'router'));
+});
+
+test('warning: CYCLE_WITHOUT_COUNTER warns for conjunctive counter branches gated by unrelated verdicts', () => {
+  const t = template('unrelated-verdict-counter-bound')
+    .entry('poll')
+    .domain('cancel', 'other', 'recheck')
+    .scope('rechecks', { cap: 3, parent: null })
+    .add(
+      node.script('poll', 'script:pollPr', 'router', {
+        incrementCounters: ['rechecks'],
+        onFailure: 'route',
+        catch: [{ onError: 'revo.ScriptFailed', goto: 'blockedEnd' }],
+      }),
+      node.choice('router', [
+        on(allOf(verdictEq('other'), counterGte('rechecks', 3)), 'manualGate'),
+        on(verdictEq('recheck'), 'poll'),
+        otherwise('blockedEnd'),
+      ]),
+      node.humanGate('manualGate', 'review', ['cancel'], [
+        on(verdictEq('cancel'), 'cancelledEnd'),
+        otherwise('blockedEnd'),
+      ]),
+      node.terminal('blockedEnd', 'blocked'),
+      node.terminal('cancelledEnd', 'cancelled'),
+    )
+    .build();
+
+  const diags = validateTemplate(t);
+  assert.ok(diags.some((diag) => diag.code === 'CYCLE_WITHOUT_COUNTER' && diag.nodeId === 'router'));
+});
+
+test('warning: SCRIPT_FAILURE_UNROUTED fires on current bundled default template', () => {
+  assert.deepEqual(bundledWarningSites('SCRIPT_FAILURE_UNROUTED'), ['cleanupWorktree']);
+});
+
+test('warning: HUMAN_OFFRAMP_UNREACHABLE fires on current bundled default template', () => {
+  assert.deepEqual(bundledWarningSites('HUMAN_OFFRAMP_UNREACHABLE'), ['questionGate']);
+});
+
+test('warning: AGENT_FAILURE_UNROUTED fires on current bundled default template', () => {
+  assert.deepEqual(bundledWarningSites('AGENT_FAILURE_UNROUTED'), [
+    'analyst',
+    'ciRework',
+    'classifyRecovery',
+    'codeReview',
+    'developer',
+    'planReviewer',
+    'reviewRework',
+    'reworkDeveloper',
+    'stuckReworkDeveloper',
+    'triage',
+  ]);
+});
+
+test('warning: negated verdict equality does not count as explicit gate outcome routing', () => {
+  const t = template('negated-outcome')
+    .entry('gate')
+    .domain('cancel')
+    .add(
+      node.humanGate('gate', 'review', ['cancel'], [
+        on(notCond(verdictEq('cancel')), 'cancelledEnd'),
+        otherwise('blockedEnd'),
+      ]),
+      node.terminal('cancelledEnd', 'cancelled'),
+      node.terminal('blockedEnd', 'blocked'),
+    )
+    .build();
+
+  const diags = validateTemplate(t);
+  assert.ok(diags.some((diag) => diag.code === 'GATE_OUTCOME_UNROUTED' && diag.nodeId === 'gate' && diag.path === 'outcomes.cancel'));
+  assert.ok(diags.some((diag) => diag.code === 'HUMAN_OFFRAMP_UNREACHABLE' && diag.nodeId === 'gate'));
+});
+
+test('warning: negated verdict set does not count as explicit gate outcome routing', () => {
+  const t = template('negated-outcome-set')
+    .entry('gate')
+    .domain('changes_requested', 'approved')
+    .add(
+      node.humanGate('gate', 'review', ['changes_requested', 'approved'], [
+        on(notCond(verdictIn('changes_requested')), 'approvedEnd'),
+        on(verdictEq('approved'), 'approvedEnd'),
+        otherwise('blockedEnd'),
+      ]),
+      node.terminal('approvedEnd', 'succeeded'),
+      node.terminal('blockedEnd', 'blocked'),
+    )
+    .build();
+
+  const diags = validateTemplate(t);
+  assert.ok(
+    diags.some(
+      (diag) => diag.code === 'GATE_OUTCOME_UNROUTED' && diag.nodeId === 'gate' && diag.path === 'outcomes.changes_requested',
+    ),
+  );
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -285,16 +285,24 @@ test('D8: a non-github origin remote blocks at integrate (unparseable owner/repo
   }
 });
 
-test('D14: a gh error during integrate routes to recovery → blocked (#246; never a silent pass)', { skip: e2eSkip }, async () => {
+test('D14: a gh error during integrate opens recoveryGate with fixture outcomes and cancel stops deliberately (#276)', {
+  skip: '#276: pending recoveryGate target outcomes',
+}, async () => {
   const target = createTargetRepo();
   try {
     const run = await startFeature(target, { gh: 'gh-error' });
-    const terminal = await approveUntilTerminal(h.api, run.runId);
-    // #246: integrator ScriptFailed (gh threw) no longer terminal-fails; the catch routes to
-    // classifyRecovery → recoveryGate. approveUntilTerminal resolves the recovery gate with 'approved'
-    // (→ recoveryGate default → blockedEnd) — a surfaced, human-readable block, never a silent pass.
-    assert.equal(terminal.state, 'blocked');
-    await assertBlocked(h.api, run.runId);
+    const plan = await waitForGate(h.api, run.runId, 'plan');
+    await h.api.resolveGate({ inboxId: plan.inboxId, outcome: 'approved', resolvedBy: 'e2e' });
+
+    const recovery = await waitForGate(h.api, run.runId, 'merge');
+    const pending = await h.api.getPendingDecisions(run.runId);
+    const recoveryItem = pending.find((item) => item.id === recovery.inboxId);
+    const context = recoveryItem?.context as { summary?: { outcomes?: unknown } } | undefined;
+    assert.deepEqual(context?.summary?.outcomes, ['recheck', 'cancel', 'approved']);
+
+    await h.api.resolveGate({ inboxId: recovery.inboxId, outcome: 'cancel', resolvedBy: 'e2e' });
+    const terminal = await waitState(h.api, run.runId);
+    assert.equal(terminal.state, 'cancelled');
   } finally {
     target.cleanup();
   }

@@ -22,6 +22,7 @@ import { ruleVerdictClosure } from './validate-verdict.js';
 import { ruleDataflow } from './validate-dataflow.js';
 import { ruleConflictMatrix } from './validate-conflicts.js';
 import { ruleCapabilityRefs } from './validate-capability.js';
+import { ruleResilienceWarnings } from './validate-resilience.js';
 
 export { classifyTemplateDiff } from './validate-diff.js';
 export type { DiffKind, TemplateDiff } from './validate-diff.js';
@@ -50,6 +51,7 @@ export function validateTemplate(template: Template): Diagnostic[] {
   ruleConflictMatrix(normalized, d);
   ruleCapabilityRefs(normalized, d);
   ruleDataflow(normalized, ids, d);
+  ruleResilienceWarnings(normalized, d);
 
   return d.items;
 }

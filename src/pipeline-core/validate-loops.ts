@@ -2,6 +2,7 @@ import { isGuardedBranch } from './types.js';
 import type { Condition, Node, Scope, Template } from './types.js';
 import { DiagSink } from './validate-sink.js';
 import { backwardReach, branchSubgraph, cycleNodes, findBackEdges, forwardReach, guardConditionsOf } from './validate-graph.js';
+import { conditionReadsAnyScope } from './condition-scopes.js';
 
 
 export function ruleLoopCap(template: Template, d: DiagSink): void {
@@ -33,23 +34,7 @@ function scopesIncrementedOnCycle(template: Template, cycle: Set<string>): Set<s
 function choiceGatesCycleByCounter(template: Template, id: string, incrementedOnCycle: Set<string>): boolean {
   const node = template.nodes[id];
   if (node?.kind !== 'choice') return false;
-  return node.branches.filter(isGuardedBranch).some((b) => conditionGatesOnScopes(b.when, incrementedOnCycle));
-}
-
-
-function conditionGatesOnScopes(cond: Condition, scopes: Set<string>): boolean {
-  switch (cond.op) {
-    case 'counter.lt':
-    case 'counter.gte':
-      return scopes.has(cond.scope);
-    case 'all':
-    case 'any':
-      return cond.of.some((c) => conditionGatesOnScopes(c, scopes));
-    case 'not':
-      return conditionGatesOnScopes(cond.cond, scopes);
-    default:
-      return false;
-  }
+  return node.branches.filter(isGuardedBranch).some((b) => conditionReadsAnyScope(b.when, incrementedOnCycle));
 }
 
 export function ruleCounterScopes(template: Template, d: DiagSink): void {
