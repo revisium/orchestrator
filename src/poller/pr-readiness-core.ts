@@ -75,7 +75,9 @@ export type ReviewEntry = {
 export type CommentEntry = {
   user: { login: string; type?: string } | null;
   path?: string;
-  line?: number;
+  line?: number | null;
+  originalLine?: number;
+  original_line?: number;
   body: string;
 };
 
@@ -384,6 +386,7 @@ export type ReviewThread = {
   isOutdated: boolean;
   path?: string;
   line?: number;
+  originalLine?: number;
   author?: string;
   body: string;
   url?: string;
@@ -422,7 +425,16 @@ function mapReviewThreads(raw: unknown): ReviewThread[] {
       isResolved: Boolean(thread.isResolved),
       isOutdated: Boolean(thread.isOutdated),
       path: asStr(thread.path) || undefined,
-      line: typeof thread.line === 'number' ? thread.line : undefined,
+      line: typeof thread.line === 'number'
+        ? thread.line
+        : typeof firstComment?.['line'] === 'number'
+          ? firstComment.line
+          : undefined,
+      originalLine: typeof thread.originalLine === 'number'
+        ? thread.originalLine
+        : typeof firstComment?.['originalLine'] === 'number'
+          ? firstComment.originalLine
+          : undefined,
       author: asStr(author?.['login']) || undefined,
       body: compactBody(asStr(firstComment?.['body'])),
       url: asStr(firstComment?.['url']) || undefined,
@@ -440,7 +452,7 @@ function fetchReviewThreads(repo: string, prNumber: number, execGh: ExecGhFn): R
   const { owner, name } = splitRepo(repo);
   const raw = execGh([
     'api', 'graphql',
-    '-f', 'query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{id,isResolved,isOutdated,path,line,comments(first:1){nodes{body,url,author{login}}}}}}}}',
+    '-f', 'query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{id,isResolved,isOutdated,path,line,comments(first:1){nodes{body,url,line,originalLine,author{login}}}}}}}}',
     '-f', `owner=${owner}`,
     '-f', `name=${name}`,
     '-F', `number=${prNumber}`,
@@ -485,13 +497,35 @@ export function fetchRequiredCheckNames(repo: string, prNumber: number, execGh: 
   return mapRequiredCheckNames(parseGhJson<unknown>(raw, `required-checks #${prNumber}`));
 }
 
-function collectReviewThreads(input: PrReadinessInput, prNumber: number, execGh: ExecGhFn): PrReadinessResult['reviewThreads'] {
+function preciseReviewLocationOf(item: { path?: string; line?: number | null; originalLine?: number; original_line?: number }) {
+  const line = typeof item.line === 'number'
+    ? item.line
+    : typeof item.originalLine === 'number'
+      ? item.originalLine
+      : item.original_line;
+  return item.path && typeof line === 'number' ? `${item.path}:${line}` : '';
+}
+
+type ReviewThreadCollection = {
+  reviewThreads: PrReadinessResult['reviewThreads'];
+  staleThreadLocations: Set<string>;
+};
+
+function collectReviewThreads(input: PrReadinessInput, prNumber: number, execGh: ExecGhFn): ReviewThreadCollection {
   const threads = input.includeReviewThreads === false ? [] : fetchReviewThreads(input.repo, prNumber, execGh);
   const unresolved = threads.filter((thread) => !thread.isResolved && !thread.isOutdated);
   return {
-    included: input.includeReviewThreads !== false,
-    unresolvedCount: unresolved.length,
-    items: unresolved.slice(0, 20),
+    reviewThreads: {
+      included: input.includeReviewThreads !== false,
+      unresolvedCount: unresolved.length,
+      items: unresolved.slice(0, 20),
+    },
+    staleThreadLocations: new Set(
+      threads
+        .filter((thread) => thread.isResolved || thread.isOutdated)
+        .map(preciseReviewLocationOf)
+        .filter((location) => location !== ''),
+    ),
   };
 }
 
@@ -687,9 +721,9 @@ function providerState(checks: Array<{ name: string; result: string }>, botComme
   return {};
 }
 
-function locationOf(item: { component?: string; path?: string; line?: number }) {
+function locationOf(item: { component?: string; path?: string; line?: number | null }) {
   const path = item.path ?? item.component ?? '';
-  return item.line ? `${path}:${item.line}` : path;
+  return typeof item.line === 'number' ? `${path}:${item.line}` : path;
 }
 
 
@@ -784,6 +818,7 @@ function buildFeedback(input: {
   humanReviews: ReviewEntry[];
   humanComments: CommentEntry[];
   botComments: CommentEntry[];
+  staleThreadLocations?: Set<string>;
   coderabbitReviews?: ReviewEntry[];
   issueRef?: IssueRef;
   issueAction?: IssueAction;
@@ -829,6 +864,10 @@ function buildFeedback(input: {
     ),
     ...input.botComments
       .filter((comment) => !isCodeRabbit(comment.user) && !KNOWN_INFORMATIONAL_BOTS.has(comment.user?.login ?? ''))
+      .filter((comment) => {
+        const location = preciseReviewLocationOf(comment);
+        return location === '' || input.staleThreadLocations?.has(location) !== true;
+      })
       .map((comment) => ({
         source: 'bot_comment',
         summary: compactBody(comment.body),
@@ -1129,7 +1168,7 @@ export async function collectPrReadiness(
   const checks = prView.statusCheckRollup ?? [];
   const ci = collectCiChecks(checks);
   const checkLists = compactCheckLists(ci.checks);
-  const reviewThreads = collectReviewThreads(input, prNumber, execGh);
+  const { reviewThreads, staleThreadLocations } = collectReviewThreads(input, prNumber, execGh);
   const sonarConfigured = Boolean(input.sonarProject);
 
   if (prView.isDraft === true) {
@@ -1183,6 +1222,7 @@ export async function collectPrReadiness(
     humanReviews: comments.human_reviews,
     humanComments: comments.human_comments,
     botComments: comments.bot_comments,
+    staleThreadLocations,
     coderabbitReviews: comments.coderabbit_reviews,
     issueRef: input.issueRef,
     issueAction: input.issueAction,
