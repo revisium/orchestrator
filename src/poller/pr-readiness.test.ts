@@ -1984,6 +1984,52 @@ test('#270: stale thread with same body does not hide fresh Cubic comment with a
   );
 });
 
+test('#270: stale Cubic reply in a resolved thread is filtered from bot comments', async () => {
+  const terminalView = prViewResponse([checkRun('CI', 'COMPLETED', 'SUCCESS')], {
+    number: 286,
+    state: 'OPEN',
+    mergeStateStatus: 'CLEAN',
+    reviewDecision: 'APPROVED',
+  });
+  const staleReply = {
+    user: { login: 'cubic[bot]', type: 'Bot' },
+    path: 'src/poller/pr-readiness-core.ts',
+    line: 569,
+    html_url: 'https://github.com/revisium/orchestrator/pull/286#discussion_r3525005396',
+    body: 'Cubic stale reply finding from a resolved thread.',
+  };
+  const threads = reviewThreadsResponse([
+    reviewThreadNode({
+      id: 'resolved-cubic-reply-thread',
+      isResolved: true,
+      path: staleReply.path,
+      line: staleReply.line,
+      comments: {
+        nodes: [
+          {
+            body: 'Parent review thread comment that is not the bot finding.',
+            url: 'https://github.com/revisium/orchestrator/pull/286#discussion_r3525005000',
+            author: { login: 'reviewer' },
+          },
+          {
+            body: staleReply.body,
+            url: staleReply.html_url,
+            author: { login: 'cubic[bot]' },
+            line: staleReply.line,
+          },
+        ],
+      },
+    }),
+  ]);
+  const execGh = makeFullResponses(terminalView, [], [staleReply], [], null, threads);
+
+  const readiness = await collectPrReadiness({ repo: 'revisium/orchestrator', prNumber: 286, includeReviewThreads: true }, execGh);
+
+  assert.equal(readiness.verdict, 'ready');
+  assert.equal(readiness.nextAction, 'ready_for_merge_gate');
+  assert.deepEqual(readiness.feedback.developerFixes, []);
+});
+
 test('#270: outdated Cubic inline finding matches by originalLine when line is null', async () => {
   const terminalView = prViewResponse([checkRun('CI', 'COMPLETED', 'SUCCESS')], {
     number: 267,
