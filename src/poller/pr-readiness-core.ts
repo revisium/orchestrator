@@ -78,6 +78,8 @@ export type CommentEntry = {
   line?: number | null;
   originalLine?: number;
   original_line?: number;
+  url?: string;
+  html_url?: string;
   body: string;
 };
 
@@ -401,6 +403,13 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
+function firstNumber(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    if (typeof value === 'number') return value;
+  }
+  return undefined;
+}
+
 // gh api graphql wraps responses in {"data":{...}}; unwrap tolerantly so unit fixtures still work.
 function unwrapGraphqlData(raw: unknown): unknown {
   const top = asRecord(raw);
@@ -420,21 +429,15 @@ function mapReviewThreads(raw: unknown): ReviewThread[] {
     const comments = asRecord(thread.comments);
     const firstComment = Array.isArray(comments?.['nodes']) ? asRecord(comments.nodes[0]) : null;
     const author = asRecord(firstComment?.['author']);
+    const line = firstNumber(thread.line, firstComment?.['line']);
+    const originalLine = firstNumber(thread.originalLine, firstComment?.['originalLine']);
     return [{
       id: asStr(thread.id),
       isResolved: Boolean(thread.isResolved),
       isOutdated: Boolean(thread.isOutdated),
       path: asStr(thread.path) || undefined,
-      line: typeof thread.line === 'number'
-        ? thread.line
-        : typeof firstComment?.['line'] === 'number'
-          ? firstComment.line
-          : undefined,
-      originalLine: typeof thread.originalLine === 'number'
-        ? thread.originalLine
-        : typeof firstComment?.['originalLine'] === 'number'
-          ? firstComment.originalLine
-          : undefined,
+      line,
+      originalLine,
       author: asStr(author?.['login']) || undefined,
       body: compactBody(asStr(firstComment?.['body'])),
       url: asStr(firstComment?.['url']) || undefined,
@@ -497,18 +500,59 @@ export function fetchRequiredCheckNames(repo: string, prNumber: number, execGh: 
   return mapRequiredCheckNames(parseGhJson<unknown>(raw, `required-checks #${prNumber}`));
 }
 
+type FeedbackMatchInput = {
+  path?: string;
+  line?: number | null;
+  originalLine?: number;
+  original_line?: number;
+  author?: string;
+  user?: { login: string } | null;
+  body: string;
+  url?: string;
+  html_url?: string;
+};
+
+type FeedbackMatchEvidence = {
+  location: string;
+  url: string;
+  contentKey: string;
+};
+
+function reviewLineOf(item: { line?: number | null; originalLine?: number; original_line?: number }) {
+  return firstNumber(item.line, item.originalLine, item.original_line);
+}
+
 function preciseReviewLocationOf(item: { path?: string; line?: number | null; originalLine?: number; original_line?: number }) {
-  const line = typeof item.line === 'number'
-    ? item.line
-    : typeof item.originalLine === 'number'
-      ? item.originalLine
-      : item.original_line;
+  const line = reviewLineOf(item);
   return item.path && typeof line === 'number' ? `${item.path}:${line}` : '';
+}
+
+function feedbackMatchEvidence(item: FeedbackMatchInput): FeedbackMatchEvidence | null {
+  const location = preciseReviewLocationOf(item);
+  if (location === '') return null;
+  const url = item.html_url ?? item.url ?? '';
+  const author = (item.author ?? item.user?.login ?? '').toLowerCase();
+  const body = compactBody(item.body);
+  const contentKey = author !== '' && body !== '' ? [author, body].join('\0') : '';
+  return { location, url, contentKey };
+}
+
+function isStaleThreadFeedback(comment: FeedbackMatchInput, staleThreadEvidence: FeedbackMatchEvidence[] | undefined) {
+  const commentEvidence = feedbackMatchEvidence(comment);
+  if (!commentEvidence || !staleThreadEvidence) return false;
+  return staleThreadEvidence
+    .filter((staleEvidence) => staleEvidence.location === commentEvidence.location)
+    .some((staleEvidence) => {
+      if (commentEvidence.url !== '' && staleEvidence.url !== '') {
+        return commentEvidence.url === staleEvidence.url;
+      }
+      return commentEvidence.contentKey !== '' && commentEvidence.contentKey === staleEvidence.contentKey;
+    });
 }
 
 type ReviewThreadCollection = {
   reviewThreads: PrReadinessResult['reviewThreads'];
-  staleThreadLocations: Set<string>;
+  staleThreadEvidence: FeedbackMatchEvidence[];
 };
 
 function collectReviewThreads(input: PrReadinessInput, prNumber: number, execGh: ExecGhFn): ReviewThreadCollection {
@@ -520,12 +564,10 @@ function collectReviewThreads(input: PrReadinessInput, prNumber: number, execGh:
       unresolvedCount: unresolved.length,
       items: unresolved.slice(0, 20),
     },
-    staleThreadLocations: new Set(
-      threads
-        .filter((thread) => thread.isResolved || thread.isOutdated)
-        .map(preciseReviewLocationOf)
-        .filter((location) => location !== ''),
-    ),
+    staleThreadEvidence: threads
+      .filter((thread) => thread.isResolved || thread.isOutdated)
+      .map(feedbackMatchEvidence)
+      .filter((evidence): evidence is FeedbackMatchEvidence => evidence !== null),
   };
 }
 
@@ -818,7 +860,7 @@ function buildFeedback(input: {
   humanReviews: ReviewEntry[];
   humanComments: CommentEntry[];
   botComments: CommentEntry[];
-  staleThreadLocations?: Set<string>;
+  staleThreadEvidence?: FeedbackMatchEvidence[];
   coderabbitReviews?: ReviewEntry[];
   issueRef?: IssueRef;
   issueAction?: IssueAction;
@@ -864,10 +906,7 @@ function buildFeedback(input: {
     ),
     ...input.botComments
       .filter((comment) => !isCodeRabbit(comment.user) && !KNOWN_INFORMATIONAL_BOTS.has(comment.user?.login ?? ''))
-      .filter((comment) => {
-        const location = preciseReviewLocationOf(comment);
-        return location === '' || input.staleThreadLocations?.has(location) !== true;
-      })
+      .filter((comment) => !isStaleThreadFeedback(comment, input.staleThreadEvidence))
       .map((comment) => ({
         source: 'bot_comment',
         summary: compactBody(comment.body),
@@ -1168,7 +1207,7 @@ export async function collectPrReadiness(
   const checks = prView.statusCheckRollup ?? [];
   const ci = collectCiChecks(checks);
   const checkLists = compactCheckLists(ci.checks);
-  const { reviewThreads, staleThreadLocations } = collectReviewThreads(input, prNumber, execGh);
+  const { reviewThreads, staleThreadEvidence } = collectReviewThreads(input, prNumber, execGh);
   const sonarConfigured = Boolean(input.sonarProject);
 
   if (prView.isDraft === true) {
@@ -1222,7 +1261,7 @@ export async function collectPrReadiness(
     humanReviews: comments.human_reviews,
     humanComments: comments.human_comments,
     botComments: comments.bot_comments,
-    staleThreadLocations,
+    staleThreadEvidence,
     coderabbitReviews: comments.coderabbit_reviews,
     issueRef: input.issueRef,
     issueAction: input.issueAction,

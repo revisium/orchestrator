@@ -1891,6 +1891,99 @@ test('#270/#267 replay: resolved and outdated Cubic inline bot findings do not b
   assert.deepEqual(readiness.feedback.developerFixes, []);
 });
 
+test('#270: stale thread at same path:line does not hide a different fresh Cubic bot comment', async () => {
+  const terminalView = prViewResponse([checkRun('CI', 'COMPLETED', 'SUCCESS')], {
+    number: 286,
+    state: 'OPEN',
+    mergeStateStatus: 'CLEAN',
+    reviewDecision: 'APPROVED',
+  });
+  const staleFinding = {
+    user: { login: 'cubic[bot]', type: 'Bot' },
+    path: 'src/poller/pr-readiness-core.ts',
+    line: 869,
+    body: 'Old resolved Cubic finding.',
+  };
+  const freshFinding = {
+    user: { login: 'cubic[bot]', type: 'Bot' },
+    path: staleFinding.path,
+    line: staleFinding.line,
+    body: 'Fresh Cubic finding at the same current location.',
+  };
+  const threads = reviewThreadsResponse([
+    reviewThreadNode({
+      id: 'resolved-cubic-same-location',
+      isResolved: true,
+      path: staleFinding.path,
+      line: staleFinding.line,
+      comments: {
+        nodes: [{
+          body: staleFinding.body,
+          url: 'https://github.com/revisium/orchestrator/pull/286#discussion_r5',
+          author: { login: 'cubic[bot]' },
+        }],
+      },
+    }),
+  ]);
+  const execGh = makeFullResponses(terminalView, [], [staleFinding, freshFinding], [], null, threads);
+
+  const readiness = await collectPrReadiness({ repo: 'revisium/orchestrator', prNumber: 286, includeReviewThreads: true }, execGh);
+
+  assert.equal(readiness.verdict, 'needs_work');
+  assert.deepEqual(
+    readiness.feedback.developerFixes.map((fix) => fix.summary),
+    [freshFinding.body],
+  );
+});
+
+test('#270: stale thread with same body does not hide fresh Cubic comment with a different URL', async () => {
+  const terminalView = prViewResponse([checkRun('CI', 'COMPLETED', 'SUCCESS')], {
+    number: 286,
+    state: 'OPEN',
+    mergeStateStatus: 'CLEAN',
+    reviewDecision: 'APPROVED',
+  });
+  const repeatedBody = 'Cubic repeated finding text.';
+  const staleFinding = {
+    user: { login: 'cubic[bot]', type: 'Bot' },
+    path: 'src/poller/pr-readiness-core.ts',
+    line: 893,
+    html_url: 'https://github.com/revisium/orchestrator/pull/286#discussion_r_old',
+    body: repeatedBody,
+  };
+  const freshFinding = {
+    user: { login: 'cubic[bot]', type: 'Bot' },
+    path: staleFinding.path,
+    line: staleFinding.line,
+    html_url: 'https://github.com/revisium/orchestrator/pull/286#discussion_r_fresh',
+    body: repeatedBody,
+  };
+  const threads = reviewThreadsResponse([
+    reviewThreadNode({
+      id: 'resolved-cubic-same-content-different-url',
+      isResolved: true,
+      path: staleFinding.path,
+      line: staleFinding.line,
+      comments: {
+        nodes: [{
+          body: staleFinding.body,
+          url: staleFinding.html_url,
+          author: { login: 'cubic[bot]' },
+        }],
+      },
+    }),
+  ]);
+  const execGh = makeFullResponses(terminalView, [], [staleFinding, freshFinding], [], null, threads);
+
+  const readiness = await collectPrReadiness({ repo: 'revisium/orchestrator', prNumber: 286, includeReviewThreads: true }, execGh);
+
+  assert.equal(readiness.verdict, 'needs_work');
+  assert.deepEqual(
+    readiness.feedback.developerFixes.map((fix) => fix.summary),
+    [freshFinding.body],
+  );
+});
+
 test('#270: outdated Cubic inline finding matches by originalLine when line is null', async () => {
   const terminalView = prViewResponse([checkRun('CI', 'COMPLETED', 'SUCCESS')], {
     number: 267,
