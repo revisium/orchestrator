@@ -1832,3 +1832,286 @@ test('#233: ignoredNoise closed allowlist — unrecognized bot comment surfaces 
     'known informational bot stays in ignoredNoise',
   );
 });
+
+test('#270/#267 replay: resolved and outdated Cubic inline bot findings do not block readiness', async () => {
+  const terminalView = prViewResponse([checkRun('CI', 'COMPLETED', 'SUCCESS')], {
+    number: 267,
+    state: 'OPEN',
+    mergeStateStatus: 'CLEAN',
+    reviewDecision: 'APPROVED',
+    url: 'https://github.com/revisium/orchestrator/pull/267',
+  });
+  const resolvedFinding = {
+    user: { login: 'cubic[bot]', type: 'Bot' },
+    path: 'src/poller/pr-readiness-core.ts',
+    line: 830,
+    body: 'P1 stale Cubic finding from an earlier commit.',
+  };
+  const outdatedFinding = {
+    user: { login: 'cubic[bot]', type: 'Bot' },
+    path: 'src/task-control-plane/pr-readiness.service.ts',
+    line: 38,
+    body: 'P2 outdated Cubic finding from an earlier commit.',
+  };
+  const threads = reviewThreadsResponse([
+    reviewThreadNode({
+      id: 'resolved-cubic-thread',
+      isResolved: true,
+      path: resolvedFinding.path,
+      line: resolvedFinding.line,
+      comments: {
+        nodes: [{
+          body: resolvedFinding.body,
+          url: 'https://github.com/revisium/orchestrator/pull/267#discussion_r1',
+          author: { login: 'cubic[bot]' },
+        }],
+      },
+    }),
+    reviewThreadNode({
+      id: 'outdated-cubic-thread',
+      isOutdated: true,
+      path: outdatedFinding.path,
+      line: outdatedFinding.line,
+      comments: {
+        nodes: [{
+          body: outdatedFinding.body,
+          url: 'https://github.com/revisium/orchestrator/pull/267#discussion_r2',
+          author: { login: 'cubic[bot]' },
+        }],
+      },
+    }),
+  ]);
+  const execGh = makeFullResponses(terminalView, [], [resolvedFinding, outdatedFinding], [], null, threads);
+
+  const readiness = await collectPrReadiness({ repo: 'revisium/orchestrator', prNumber: 267, includeReviewThreads: true }, execGh);
+
+  assert.equal(readiness.verdict, 'ready');
+  assert.equal(readiness.nextAction, 'ready_for_merge_gate');
+  assert.equal(readiness.reviewThreads.unresolvedCount, 0);
+  assert.deepEqual(readiness.feedback.developerFixes, []);
+});
+
+test('#270: stale thread at same path:line does not hide a different fresh Cubic bot comment', async () => {
+  const terminalView = prViewResponse([checkRun('CI', 'COMPLETED', 'SUCCESS')], {
+    number: 286,
+    state: 'OPEN',
+    mergeStateStatus: 'CLEAN',
+    reviewDecision: 'APPROVED',
+  });
+  const staleFinding = {
+    user: { login: 'cubic[bot]', type: 'Bot' },
+    path: 'src/poller/pr-readiness-core.ts',
+    line: 869,
+    body: 'Old resolved Cubic finding.',
+  };
+  const freshFinding = {
+    user: { login: 'cubic[bot]', type: 'Bot' },
+    path: staleFinding.path,
+    line: staleFinding.line,
+    body: 'Fresh Cubic finding at the same current location.',
+  };
+  const threads = reviewThreadsResponse([
+    reviewThreadNode({
+      id: 'resolved-cubic-same-location',
+      isResolved: true,
+      path: staleFinding.path,
+      line: staleFinding.line,
+      comments: {
+        nodes: [{
+          body: staleFinding.body,
+          url: 'https://github.com/revisium/orchestrator/pull/286#discussion_r5',
+          author: { login: 'cubic[bot]' },
+        }],
+      },
+    }),
+  ]);
+  const execGh = makeFullResponses(terminalView, [], [staleFinding, freshFinding], [], null, threads);
+
+  const readiness = await collectPrReadiness({ repo: 'revisium/orchestrator', prNumber: 286, includeReviewThreads: true }, execGh);
+
+  assert.equal(readiness.verdict, 'needs_work');
+  assert.deepEqual(
+    readiness.feedback.developerFixes.map((fix) => fix.summary),
+    [freshFinding.body],
+  );
+});
+
+test('#270: stale thread with same body does not hide fresh Cubic comment with a different URL', async () => {
+  const terminalView = prViewResponse([checkRun('CI', 'COMPLETED', 'SUCCESS')], {
+    number: 286,
+    state: 'OPEN',
+    mergeStateStatus: 'CLEAN',
+    reviewDecision: 'APPROVED',
+  });
+  const repeatedBody = 'Cubic repeated finding text.';
+  const staleFinding = {
+    user: { login: 'cubic[bot]', type: 'Bot' },
+    path: 'src/poller/pr-readiness-core.ts',
+    line: 893,
+    html_url: 'https://github.com/revisium/orchestrator/pull/286#discussion_r_old',
+    body: repeatedBody,
+  };
+  const freshFinding = {
+    user: { login: 'cubic[bot]', type: 'Bot' },
+    path: staleFinding.path,
+    line: staleFinding.line,
+    html_url: 'https://github.com/revisium/orchestrator/pull/286#discussion_r_fresh',
+    body: repeatedBody,
+  };
+  const threads = reviewThreadsResponse([
+    reviewThreadNode({
+      id: 'resolved-cubic-same-content-different-url',
+      isResolved: true,
+      path: staleFinding.path,
+      line: staleFinding.line,
+      comments: {
+        nodes: [{
+          body: staleFinding.body,
+          url: staleFinding.html_url,
+          author: { login: 'cubic[bot]' },
+        }],
+      },
+    }),
+  ]);
+  const execGh = makeFullResponses(terminalView, [], [staleFinding, freshFinding], [], null, threads);
+
+  const readiness = await collectPrReadiness({ repo: 'revisium/orchestrator', prNumber: 286, includeReviewThreads: true }, execGh);
+
+  assert.equal(readiness.verdict, 'needs_work');
+  assert.deepEqual(
+    readiness.feedback.developerFixes.map((fix) => fix.summary),
+    [freshFinding.body],
+  );
+});
+
+test('#270: stale Cubic reply in a resolved thread is filtered from bot comments', async () => {
+  const terminalView = prViewResponse([checkRun('CI', 'COMPLETED', 'SUCCESS')], {
+    number: 286,
+    state: 'OPEN',
+    mergeStateStatus: 'CLEAN',
+    reviewDecision: 'APPROVED',
+  });
+  const staleReply = {
+    user: { login: 'cubic[bot]', type: 'Bot' },
+    path: 'src/poller/pr-readiness-core.ts',
+    line: 569,
+    html_url: 'https://github.com/revisium/orchestrator/pull/286#discussion_r3525005396',
+    body: 'Cubic stale reply finding from a resolved thread.',
+  };
+  const threads = reviewThreadsResponse([
+    reviewThreadNode({
+      id: 'resolved-cubic-reply-thread',
+      isResolved: true,
+      path: staleReply.path,
+      line: staleReply.line,
+      comments: {
+        nodes: [
+          {
+            body: 'Parent review thread comment that is not the bot finding.',
+            url: 'https://github.com/revisium/orchestrator/pull/286#discussion_r3525005000',
+            author: { login: 'reviewer' },
+          },
+          {
+            body: staleReply.body,
+            url: staleReply.html_url,
+            author: { login: 'cubic[bot]' },
+            line: staleReply.line,
+          },
+        ],
+      },
+    }),
+  ]);
+  const execGh = makeFullResponses(terminalView, [], [staleReply], [], null, threads);
+
+  const readiness = await collectPrReadiness({ repo: 'revisium/orchestrator', prNumber: 286, includeReviewThreads: true }, execGh);
+
+  assert.equal(readiness.verdict, 'ready');
+  assert.equal(readiness.nextAction, 'ready_for_merge_gate');
+  assert.deepEqual(readiness.feedback.developerFixes, []);
+});
+
+test('#270: outdated Cubic inline finding matches by originalLine when line is null', async () => {
+  const terminalView = prViewResponse([checkRun('CI', 'COMPLETED', 'SUCCESS')], {
+    number: 267,
+    state: 'OPEN',
+    mergeStateStatus: 'CLEAN',
+    reviewDecision: 'APPROVED',
+  });
+  const outdatedFinding = {
+    user: { login: 'cubic[bot]', type: 'Bot' },
+    path: 'src/poller/pr-readiness-core.ts',
+    line: null,
+    originalLine: 830,
+    body: 'P1 stale Cubic finding with a null current line.',
+  };
+  const threads = reviewThreadsResponse([
+    reviewThreadNode({
+      id: 'outdated-cubic-original-line',
+      isOutdated: true,
+      path: outdatedFinding.path,
+      line: null,
+      originalLine: outdatedFinding.originalLine,
+      comments: {
+        nodes: [{
+          body: outdatedFinding.body,
+          url: 'https://github.com/revisium/orchestrator/pull/267#discussion_r4',
+          author: { login: 'cubic[bot]' },
+          line: null,
+          originalLine: outdatedFinding.originalLine,
+        }],
+      },
+    }),
+  ]);
+  const execGh = makeFullResponses(terminalView, [], [outdatedFinding], [], null, threads);
+
+  const readiness = await collectPrReadiness({ repo: 'revisium/orchestrator', prNumber: 267, includeReviewThreads: true }, execGh);
+
+  assert.equal(readiness.verdict, 'ready');
+  assert.equal(readiness.nextAction, 'ready_for_merge_gate');
+  assert.equal(readiness.reviewThreads.unresolvedCount, 0);
+  assert.deepEqual(readiness.feedback.developerFixes, []);
+});
+
+test('#270: unresolved Cubic review thread remains actionable', async () => {
+  const terminalView = prViewResponse([checkRun('CI', 'COMPLETED', 'SUCCESS')], { number: 42, state: 'OPEN' });
+  const threads = reviewThreadsResponse([
+    reviewThreadNode({
+      id: 'unresolved-cubic-thread',
+      author: 'cubic[bot]',
+      comments: {
+        nodes: [{
+          body: 'Cubic still needs this code path fixed.',
+          url: 'https://github.com/owner/repo/pull/42#discussion_r3',
+          author: { login: 'cubic[bot]' },
+        }],
+      },
+    }),
+  ]);
+  const execGh = makeFullResponses(terminalView, [], [], [], null, threads);
+
+  const readiness = await collectPrReadiness({ repo: 'owner/repo', prNumber: 42, includeReviewThreads: true }, execGh);
+
+  assert.equal(readiness.verdict, 'needs_work');
+  assert.equal(readiness.nextAction, 'developer_fix');
+  assert.ok(
+    readiness.feedback.developerFixes.some((fix) => fix.source === 'review_thread' && fix.author === 'cubic[bot]'),
+    'unresolved Cubic thread must remain in developerFixes',
+  );
+});
+
+test('#270: flat unknown bot PR comment remains actionable', async () => {
+  const terminalView = prViewResponse([checkRun('CI', 'COMPLETED', 'SUCCESS')], { number: 42, state: 'OPEN' });
+  const flatBotComment = {
+    user: { login: 'unknown-reviewer[bot]', type: 'Bot' },
+    body: 'Please update the release checklist before merging.',
+  };
+  const execGh = makeFullResponses(terminalView, [], [], [flatBotComment], null, reviewThreadsResponse([]));
+
+  const readiness = await collectPrReadiness({ repo: 'owner/repo', prNumber: 42, includeReviewThreads: true }, execGh);
+
+  assert.equal(readiness.verdict, 'needs_work');
+  assert.ok(
+    readiness.feedback.developerFixes.some((fix) => fix.source === 'bot_comment' && fix.author === 'unknown-reviewer[bot]'),
+    'flat unknown bot comments stay actionable',
+  );
+});

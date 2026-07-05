@@ -75,7 +75,11 @@ export type ReviewEntry = {
 export type CommentEntry = {
   user: { login: string; type?: string } | null;
   path?: string;
-  line?: number;
+  line?: number | null;
+  originalLine?: number;
+  original_line?: number;
+  url?: string;
+  html_url?: string;
   body: string;
 };
 
@@ -384,9 +388,15 @@ export type ReviewThread = {
   isOutdated: boolean;
   path?: string;
   line?: number;
+  originalLine?: number;
   author?: string;
   body: string;
   url?: string;
+};
+
+type FetchedReviewThread = {
+  item: ReviewThread;
+  comments: FeedbackMatchInput[];
 };
 
 function compactBody(body: string): string {
@@ -398,6 +408,13 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
+function firstNumber(...values: unknown[]): number | undefined {
+  for (const value of values) {
+    if (typeof value === 'number') return value;
+  }
+  return undefined;
+}
+
 // gh api graphql wraps responses in {"data":{...}}; unwrap tolerantly so unit fixtures still work.
 function unwrapGraphqlData(raw: unknown): unknown {
   const top = asRecord(raw);
@@ -405,27 +422,48 @@ function unwrapGraphqlData(raw: unknown): unknown {
   return data ?? raw;
 }
 
-function mapReviewThreads(raw: unknown): ReviewThread[] {
+function mapReviewThreads(raw: unknown): FetchedReviewThread[] {
   const root = asRecord(unwrapGraphqlData(raw));
   const repository = asRecord(root?.['repository']);
   const pullRequest = asRecord(repository?.['pullRequest']);
   const reviewThreads = asRecord(pullRequest?.['reviewThreads']);
   const nodes = Array.isArray(reviewThreads?.['nodes']) ? reviewThreads.nodes : [];
-  return nodes.flatMap((node): ReviewThread[] => {
+  return nodes.flatMap((node): FetchedReviewThread[] => {
     const thread = asRecord(node);
     if (!thread) return [];
     const comments = asRecord(thread.comments);
-    const firstComment = Array.isArray(comments?.['nodes']) ? asRecord(comments.nodes[0]) : null;
+    const commentNodes = Array.isArray(comments?.['nodes']) ? comments.nodes.flatMap((comment) => {
+      const record = asRecord(comment);
+      return record ? [record] : [];
+    }) : [];
+    const firstComment = commentNodes[0] ?? null;
     const author = asRecord(firstComment?.['author']);
+    const path = asStr(thread.path) || undefined;
+    const line = firstNumber(thread.line, firstComment?.['line']);
+    const originalLine = firstNumber(thread.originalLine, firstComment?.['originalLine']);
     return [{
-      id: asStr(thread.id),
-      isResolved: Boolean(thread.isResolved),
-      isOutdated: Boolean(thread.isOutdated),
-      path: asStr(thread.path) || undefined,
-      line: typeof thread.line === 'number' ? thread.line : undefined,
-      author: asStr(author?.['login']) || undefined,
-      body: compactBody(asStr(firstComment?.['body'])),
-      url: asStr(firstComment?.['url']) || undefined,
+      item: {
+        id: asStr(thread.id),
+        isResolved: Boolean(thread.isResolved),
+        isOutdated: Boolean(thread.isOutdated),
+        path,
+        line,
+        originalLine,
+        author: asStr(author?.['login']) || undefined,
+        body: compactBody(asStr(firstComment?.['body'])),
+        url: asStr(firstComment?.['url']) || undefined,
+      },
+      comments: commentNodes.map((comment) => {
+        const commentAuthor = asRecord(comment['author']);
+        return {
+          path,
+          line: firstNumber(comment['line'], thread.line),
+          originalLine: firstNumber(comment['originalLine'], thread.originalLine),
+          author: asStr(commentAuthor?.['login']) || undefined,
+          body: asStr(comment['body']),
+          url: asStr(comment['url']) || undefined,
+        };
+      }),
     }];
   });
 }
@@ -436,11 +474,11 @@ function splitRepo(repo: string): { owner: string; name: string } {
   return { owner, name };
 }
 
-function fetchReviewThreads(repo: string, prNumber: number, execGh: ExecGhFn): ReviewThread[] {
+function fetchReviewThreads(repo: string, prNumber: number, execGh: ExecGhFn): FetchedReviewThread[] {
   const { owner, name } = splitRepo(repo);
   const raw = execGh([
     'api', 'graphql',
-    '-f', 'query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{id,isResolved,isOutdated,path,line,comments(first:1){nodes{body,url,author{login}}}}}}}}',
+    '-f', 'query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{id,isResolved,isOutdated,path,line,originalLine,comments(first:100){nodes{body,url,line,originalLine,author{login}}}}}}}}',
     '-f', `owner=${owner}`,
     '-f', `name=${name}`,
     '-F', `number=${prNumber}`,
@@ -485,13 +523,77 @@ export function fetchRequiredCheckNames(repo: string, prNumber: number, execGh: 
   return mapRequiredCheckNames(parseGhJson<unknown>(raw, `required-checks #${prNumber}`));
 }
 
-function collectReviewThreads(input: PrReadinessInput, prNumber: number, execGh: ExecGhFn): PrReadinessResult['reviewThreads'] {
+type FeedbackMatchInput = {
+  path?: string;
+  line?: number | null;
+  originalLine?: number;
+  original_line?: number;
+  author?: string;
+  user?: { login: string } | null;
+  body: string;
+  url?: string;
+  html_url?: string;
+};
+
+type FeedbackMatchEvidence = {
+  location: string;
+  url: string;
+  contentKey: string;
+};
+
+function reviewLineOf(item: { line?: number | null; originalLine?: number; original_line?: number }) {
+  return firstNumber(item.line, item.originalLine, item.original_line);
+}
+
+function preciseReviewLocationOf(item: { path?: string; line?: number | null; originalLine?: number; original_line?: number }) {
+  const line = reviewLineOf(item);
+  return item.path && typeof line === 'number' ? `${item.path}:${line}` : '';
+}
+
+function feedbackMatchEvidence(item: FeedbackMatchInput): FeedbackMatchEvidence | null {
+  const location = preciseReviewLocationOf(item);
+  if (location === '') return null;
+  const url = item.html_url ?? item.url ?? '';
+  const author = (item.author ?? item.user?.login ?? '').toLowerCase();
+  const body = compactBody(item.body);
+  const contentKey = author !== '' && body !== '' ? [author, body].join('\0') : '';
+  return { location, url, contentKey };
+}
+
+function isStaleThreadFeedback(comment: FeedbackMatchInput, staleThreadEvidence: FeedbackMatchEvidence[] | undefined) {
+  const commentEvidence = feedbackMatchEvidence(comment);
+  if (!commentEvidence || !staleThreadEvidence) return false;
+  return staleThreadEvidence
+    .filter((staleEvidence) => staleEvidence.location === commentEvidence.location)
+    .some((staleEvidence) => {
+      if (commentEvidence.url !== '' && staleEvidence.url !== '') {
+        return commentEvidence.url === staleEvidence.url;
+      }
+      return commentEvidence.contentKey !== '' && commentEvidence.contentKey === staleEvidence.contentKey;
+    });
+}
+
+type ReviewThreadCollection = {
+  reviewThreads: PrReadinessResult['reviewThreads'];
+  staleThreadEvidence: FeedbackMatchEvidence[];
+};
+
+function collectReviewThreads(input: PrReadinessInput, prNumber: number, execGh: ExecGhFn): ReviewThreadCollection {
   const threads = input.includeReviewThreads === false ? [] : fetchReviewThreads(input.repo, prNumber, execGh);
-  const unresolved = threads.filter((thread) => !thread.isResolved && !thread.isOutdated);
+  const unresolved = threads
+    .filter((thread) => !thread.item.isResolved && !thread.item.isOutdated)
+    .map((thread) => thread.item);
   return {
-    included: input.includeReviewThreads !== false,
-    unresolvedCount: unresolved.length,
-    items: unresolved.slice(0, 20),
+    reviewThreads: {
+      included: input.includeReviewThreads !== false,
+      unresolvedCount: unresolved.length,
+      items: unresolved.slice(0, 20),
+    },
+    staleThreadEvidence: threads
+      .filter((thread) => thread.item.isResolved || thread.item.isOutdated)
+      .flatMap((thread) => thread.comments)
+      .map(feedbackMatchEvidence)
+      .filter((evidence): evidence is FeedbackMatchEvidence => evidence !== null),
   };
 }
 
@@ -687,9 +789,9 @@ function providerState(checks: Array<{ name: string; result: string }>, botComme
   return {};
 }
 
-function locationOf(item: { component?: string; path?: string; line?: number }) {
+function locationOf(item: { component?: string; path?: string; line?: number | null }) {
   const path = item.path ?? item.component ?? '';
-  return item.line ? `${path}:${item.line}` : path;
+  return typeof item.line === 'number' ? `${path}:${item.line}` : path;
 }
 
 
@@ -784,6 +886,7 @@ function buildFeedback(input: {
   humanReviews: ReviewEntry[];
   humanComments: CommentEntry[];
   botComments: CommentEntry[];
+  staleThreadEvidence?: FeedbackMatchEvidence[];
   coderabbitReviews?: ReviewEntry[];
   issueRef?: IssueRef;
   issueAction?: IssueAction;
@@ -829,6 +932,7 @@ function buildFeedback(input: {
     ),
     ...input.botComments
       .filter((comment) => !isCodeRabbit(comment.user) && !KNOWN_INFORMATIONAL_BOTS.has(comment.user?.login ?? ''))
+      .filter((comment) => !isStaleThreadFeedback(comment, input.staleThreadEvidence))
       .map((comment) => ({
         source: 'bot_comment',
         summary: compactBody(comment.body),
@@ -1129,7 +1233,7 @@ export async function collectPrReadiness(
   const checks = prView.statusCheckRollup ?? [];
   const ci = collectCiChecks(checks);
   const checkLists = compactCheckLists(ci.checks);
-  const reviewThreads = collectReviewThreads(input, prNumber, execGh);
+  const { reviewThreads, staleThreadEvidence } = collectReviewThreads(input, prNumber, execGh);
   const sonarConfigured = Boolean(input.sonarProject);
 
   if (prView.isDraft === true) {
@@ -1183,6 +1287,7 @@ export async function collectPrReadiness(
     humanReviews: comments.human_reviews,
     humanComments: comments.human_comments,
     botComments: comments.bot_comments,
+    staleThreadEvidence,
     coderabbitReviews: comments.coderabbit_reviews,
     issueRef: input.issueRef,
     issueAction: input.issueAction,
