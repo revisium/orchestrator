@@ -1943,6 +1943,7 @@ test('blocked script failure does not reuse a previous explicit script failure r
 
   assert.equal(result.status, 'failed');
   assert.equal(calls, 2);
+  assert.equal(rec.failed.length, 1);
   assert.equal(rec.failed[0], 'data-driven pipeline reached a failed terminal (lastVerdict=blocked)');
   assert.doesNotMatch(rec.failed[0] ?? '', /first explicit script failure/);
 });
