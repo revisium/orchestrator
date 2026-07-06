@@ -253,6 +253,11 @@ function checkPrFreshnessWiring(template: Template, sink: PolicySink): void {
     resultSchema: 'schema:prFeedback',
     produces: 'prFeedback',
   });
+  expectIncrementCounters(template, sink, {
+    code: 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
+    nodeId: 'pollPr',
+    scopes: ['pollLoop'],
+  });
   expectRoute(template, sink, {
     code: 'DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING',
     nodeId: 'prRouter',
@@ -274,6 +279,11 @@ function checkPrFreshnessWiring(template: Template, sink: PolicySink): void {
     next: 'mergeReadinessRouter',
     resultSchema: 'schema:prFeedback',
     produces: 'prFeedback',
+  });
+  expectIncrementCounters(template, sink, {
+    code: 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
+    nodeId: 'mergeReadiness',
+    scopes: ['pollLoop'],
   });
   expectRoute(template, sink, {
     code: 'DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING',
@@ -853,6 +863,29 @@ function expectScript(
     nodeId: rule.nodeId,
     expected: `script ${rule.scriptRef} next=${rule.next} resultSchema=${rule.resultSchema}`,
     actual: describeNode(node),
+  });
+}
+
+function expectIncrementCounters(
+  template: Template,
+  sink: PolicySink,
+  rule: {
+    code: DefaultPlaybookPolicyDiagnosticCode;
+    nodeId: string;
+    scopes: string[];
+  },
+): void {
+  const node = effectNode(template, rule.nodeId);
+  const actual = node?.incrementCounters ?? [];
+  if (node && actual.length === rule.scopes.length && actual.every((scope, index) => scope === rule.scopes[index])) {
+    return;
+  }
+
+  sink.error(rule.code, `node ${rule.nodeId} must increment ${rule.scopes.join(',')}`, {
+    nodeId: rule.nodeId,
+    path: 'incrementCounters',
+    expected: `incrementCounters=${rule.scopes.join(',')}`,
+    actual: node ? `incrementCounters=${actual.join(',')}` : describeNode(template.nodes[rule.nodeId]),
   });
 }
 

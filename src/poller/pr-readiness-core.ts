@@ -54,7 +54,7 @@ export type CheckRunNode = {
 export type StatusContextNode = {
   __typename: 'StatusContext';
   context: string;
-  state: 'PENDING' | 'SUCCESS' | 'FAILURE' | 'ERROR';
+  state: 'EXPECTED' | 'PENDING' | 'SUCCESS' | 'FAILURE' | 'ERROR';
 };
 
 export type UnknownCheckNode = {
@@ -344,7 +344,7 @@ function resolveOpenPr(input: PrReadinessInput, baseBranch: string, execGh: Exec
 
 function isTerminal(item: UnknownCheckNode): boolean {
   if (item.__typename === 'CheckRun') return item.status === 'COMPLETED';
-  return item.state !== 'PENDING';
+  return item.state !== 'EXPECTED' && item.state !== 'PENDING';
 }
 
 function isPassed(item: UnknownCheckNode): boolean {
@@ -370,6 +370,8 @@ function isBot(user: { login: string; type?: string } | null | undefined): boole
   return user?.type === 'Bot';
 }
 
+const GITHUB_CHECK_ROLLUP_UNAVAILABLE = 'GitHub check rollup unavailable (re-polling for checks)';
+
 export function collectCiChecks(
   items: UnknownCheckNode[],
   opts: { emptyIsPending?: boolean } = {},
@@ -379,7 +381,7 @@ export function collectCiChecks(
   const pendingNames = items
     .filter((item) => !isTerminal(item))
     .map(checkName);
-  if (opts.emptyIsPending === true && items.length === 0) pendingNames.push('statusCheckRollup');
+  if (opts.emptyIsPending === true && items.length === 0) pendingNames.push(GITHUB_CHECK_ROLLUP_UNAVAILABLE);
   const checks = items.map((item) => ({ name: checkName(item), result: checkResult(item) }));
   return { pending, ci_passed, checks, pendingNames };
 }
@@ -745,7 +747,7 @@ function compactCheckLists(checks: Array<{ name: string; result: string }>) {
   const pass: string[] = [];
   const fail: string[] = [];
   for (const check of checks) {
-    if (['QUEUED', 'IN_PROGRESS', 'PENDING'].includes(check.result)) {
+    if (['EXPECTED', 'QUEUED', 'IN_PROGRESS', 'PENDING'].includes(check.result)) {
       pending.push(check.name);
       continue;
     }
