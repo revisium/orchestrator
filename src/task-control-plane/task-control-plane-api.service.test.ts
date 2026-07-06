@@ -1013,6 +1013,22 @@ test('TaskControlPlaneApiService approve/reject wrappers reject ambiguous named 
   await assert.rejects(() => api.rejectGate({ inboxId: 'inbox-1' }), /use resolve_gate/);
 });
 
+test('TaskControlPlaneApiService approve/reject wrappers reject question gates that require notes', async () => {
+  const api = makeApi({
+    inboxService: {
+      async getInbox() {
+        return makeInboxItem({
+          options: ['fix', 'wontfix'],
+          context: { topic: 'question', summary: { nodeId: 'questionGate', outcomes: ['fix', 'wontfix'] } },
+        });
+      },
+    },
+  });
+
+  await assert.rejects(() => api.approveGate({ inboxId: 'inbox-1' }), /use resolve_gate/);
+  await assert.rejects(() => api.rejectGate({ inboxId: 'inbox-1' }), /use resolve_gate/);
+});
+
 test('TaskControlPlaneApiService.rejectGate uses legacy reject when named gates have no rejection outcome', async () => {
   const signals: unknown[] = [];
   const api = makeApi({

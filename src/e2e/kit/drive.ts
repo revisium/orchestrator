@@ -86,6 +86,7 @@ export async function approveUntilTerminal(
       ?? outcomes.find((candidate) => candidate === 'approve_anyway')
       ?? outcomes.find((candidate) => candidate === 'cancel')
       ?? outcomes.find((candidate) => candidate === 'abort')
+      ?? outcomes[0]
       ?? 'approved';
     await api.resolveGate({ inboxId: inbox.id, outcome, resolvedBy: 'e2e' });
   }

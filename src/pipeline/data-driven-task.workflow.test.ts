@@ -401,6 +401,29 @@ function cancelGateTemplate(): Template {
     .build();
 }
 
+function mergeRecheckWaitGateTemplate(): Template {
+  return template('merge-recheck-wait-gate')
+    .specVersion('1.0')
+    .entry('mergeRecheck')
+    .domain('clean', 'approved', 'cancel')
+    .add(
+      node.script('mergeRecheck', 'script:pollPr', 'settle', {
+        resultSchema: 'schema:prFeedback',
+        produces: { name: 'prFeedback' },
+      }),
+      node.wait('settle', 'PT1S', 'mergeGate'),
+      node.humanGate('mergeGate', 'merge-review', ['approved', 'cancel'], [
+        on(verdictEq('approved'), 'done'),
+        on(verdictEq('cancel'), 'cancelled'),
+        otherwise('blocked'),
+      ]),
+      node.terminal('done', 'succeeded'),
+      node.terminal('blocked', 'blocked'),
+      node.terminal('cancelled', 'cancelled'),
+    )
+    .build();
+}
+
 function parallelConsensusTemplate(): Template {
   return template('parallel-consensus')
     .specVersion('1.0')
@@ -534,6 +557,30 @@ test('cancel gate outcome reaches cancelled terminal and calls cancelRun', async
   assert.equal(rec.blocked.length, 0);
   assert.equal(rec.failed.length, 0);
   assert.ok(rec.events.includes('pipeline_cancelled:pipeline'));
+});
+
+test('gate summaries preserve the latest produced artifact across non-producing adapter effects', async () => {
+  const { run, rec } = buildAdapter({
+    template: mergeRecheckWaitGateTemplate(),
+    gate: () => ({ outcome: 'cancel' }),
+  });
+
+  const result = await run();
+
+  assert.equal(result.status, 'cancelled');
+  assert.equal(rec.gateSummaries[0]?.nodeId, 'mergeGate');
+  assert.equal(rec.gateSummaries[0]?.gatedArtifact?.nodeId, 'mergeRecheck');
+  assert.deepEqual(
+    rec.gateSummaries[0]?.gatedArtifact?.payload,
+    {
+      prNumber: 1,
+      headSha: 'sha-1',
+      evidence: ['pollPr call 1: clean'],
+      verdict: 'clean',
+      ciFailures: [],
+      reviewThreads: [],
+    },
+  );
 });
 
 test('DD-parallel: fork executes both reviewer branches and feeds two join arrivals', async () => {

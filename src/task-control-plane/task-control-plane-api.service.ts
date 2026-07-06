@@ -1249,7 +1249,7 @@ export class TaskControlPlaneApiService {
   async approveGate(input: { inboxId: string; resolvedBy?: string }) {
     const item = await this.getInboxItem(input.inboxId);
     const outcomes = gateDeclaredOutcomes(item);
-    this.assertLegacyGateWrapperAllowed(input.inboxId, outcomes);
+    this.assertLegacyGateWrapperAllowed(item, input.inboxId, outcomes);
     if (outcomes.length === 0 || (outcomes.length === 1 && outcomes[0] === 'approved')) {
       const resolvedBy = input.resolvedBy ?? 'mcp';
       return this.resolveLegacyGate(item, { decision: 'approve', resolvedBy }, resolvedBy, input.inboxId);
@@ -1264,7 +1264,7 @@ export class TaskControlPlaneApiService {
   async rejectGate(input: { inboxId: string; resolvedBy?: string }) {
     const item = await this.getInboxItem(input.inboxId);
     const outcomes = gateDeclaredOutcomes(item);
-    this.assertLegacyGateWrapperAllowed(input.inboxId, outcomes);
+    this.assertLegacyGateWrapperAllowed(item, input.inboxId, outcomes);
     if (outcomes.length === 0) {
       const resolvedBy = input.resolvedBy ?? 'mcp';
       return this.resolveLegacyGate(item, { decision: 'reject', resolvedBy }, resolvedBy, input.inboxId);
@@ -1331,8 +1331,12 @@ export class TaskControlPlaneApiService {
     };
   }
 
-  private assertLegacyGateWrapperAllowed(inboxId: string, outcomes: string[]) {
-    if (outcomes.length > 2 || outcomes.includes('approve_anyway')) {
+  private assertLegacyGateWrapperAllowed(item: InboxItem, inboxId: string, outcomes: string[]) {
+    if (
+      outcomes.length > 2
+      || outcomes.includes('approve_anyway')
+      || outcomes.some((outcome) => isQuestionGateReasonOutcome(item, outcome))
+    ) {
       throw new ControlPlaneError(
         'VALIDATION_FAILURE',
         `inbox item has named gate outcomes; use resolve_gate with an explicit outcome: ${inboxId}`,

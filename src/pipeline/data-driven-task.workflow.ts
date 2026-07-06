@@ -1068,7 +1068,7 @@ export function makeDataDrivenTask(
       }
       lastResult = eff.lastResult;
       lastVerdict = eff.lastVerdict ?? lastVerdict;
-      lastProducedOutput = eff.producedOutput;
+      lastProducedOutput = eff.producedOutput ?? lastProducedOutput;
       lastFailureReason = eff.failureReason ?? '';
     }
 
@@ -1229,7 +1229,7 @@ export function makeDataDrivenTask(
       if (eff.stateOverride) state = eff.stateOverride;
       lastResult = eff.lastResult;
       if (eff.lastVerdict !== undefined) lastVerdict = eff.lastVerdict;
-      lastProducedOutput = eff.producedOutput;
+      lastProducedOutput = eff.producedOutput ?? lastProducedOutput;
     }
 
     throw new InterpretError(

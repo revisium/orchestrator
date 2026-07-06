@@ -44,8 +44,9 @@ async function runTargetScenario(title: string, scenario: Omit<PipelineScenario,
     : await targetHarness();
   try {
     if (scenario.cleanup?.releaseWorktreeFails) await givenSeededDefaultPlaybook(h);
+    const ghCallStart = h.ghCalls.length;
     await pipelineScenario(h, runCases, { title, playbook: 'default', repo: target, ...scenario });
-    return [...h.ghCalls];
+    return h.ghCalls.slice(ghCallStart);
   } finally {
     if (scenario.cleanup?.releaseWorktreeFails) await h.close();
     target.cleanup();
