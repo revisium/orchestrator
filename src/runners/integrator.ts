@@ -845,60 +845,28 @@ export function mergeSignal(mergeStateStatus: string | undefined, mergeable: str
   return 'unknown';
 }
 
-const STANDARD_CHECK_RESULTS = new Set([
-  'ACTION_REQUIRED',
-  'CANCELLED',
-  'ERROR',
-  'EXPECTED',
-  'FAILURE',
-  'IN_PROGRESS',
-  'NEUTRAL',
-  'PENDING',
-  'QUEUED',
-  'SKIPPED',
-  'STALE',
-  'STARTUP_FAILURE',
-  'SUCCESS',
-  'TIMED_OUT',
-  'UNKNOWN',
-]);
+const STANDARD_CHECK_RESULTS = new Set('ACTION_REQUIRED CANCELLED ERROR EXPECTED FAILURE IN_PROGRESS NEUTRAL PENDING QUEUED SKIPPED STALE STARTUP_FAILURE SUCCESS TIMED_OUT UNKNOWN'.split(' '));
+const STANDARD_MERGE_STATE_STATUSES = new Set('BEHIND BLOCKED CLEAN DIRTY DRAFT HAS_HOOKS UNKNOWN UNSTABLE'.split(' '));
+const STANDARD_MERGEABLE_STATES = new Set('CONFLICTING MERGEABLE UNKNOWN'.split(' '));
 
-const STANDARD_MERGE_STATE_STATUSES = new Set([
-  'BEHIND',
-  'BLOCKED',
-  'CLEAN',
-  'DIRTY',
-  'DRAFT',
-  'HAS_HOOKS',
-  'UNKNOWN',
-  'UNSTABLE',
-]);
-
-const STANDARD_MERGEABLE_STATES = new Set([
-  'CONFLICTING',
-  'MERGEABLE',
-  'UNKNOWN',
-]);
-
-function nonEmptyUpper(value: string | undefined): string {
-  return (value ?? '').trim().toUpperCase();
-}
+function nonEmptyUpper(value: string | undefined): string { return (value ?? '').trim().toUpperCase(); }
 
 function unclassifiablePollState(readiness: PollPrReadiness): string[] {
-  const states = readiness.checks.list
-    .map((check) => nonEmptyUpper(check.result))
-    .filter((result) => result !== '' && !STANDARD_CHECK_RESULTS.has(result))
-    .map((result) => `check result ${result}`);
-  const mergeStateStatus = nonEmptyUpper(readiness.mergeStateStatus);
-  if (mergeStateStatus !== '' && !STANDARD_MERGE_STATE_STATUSES.has(mergeStateStatus)) {
-    states.push(`mergeStateStatus ${mergeStateStatus}`);
-  }
-  const mergeable = nonEmptyUpper(readiness.mergeable);
-  if (mergeable !== '' && !STANDARD_MERGEABLE_STATES.has(mergeable)) {
-    states.push(`mergeable ${mergeable}`);
+  const states = readiness.checks.list.flatMap((check) => {
+    const result = nonEmptyUpper(check.result);
+    return result !== '' && !STANDARD_CHECK_RESULTS.has(result) ? [`check result ${result}`] : [];
+  });
+  for (const [label, value, known] of [
+    ['mergeStateStatus', readiness.mergeStateStatus, STANDARD_MERGE_STATE_STATUSES],
+    ['mergeable', readiness.mergeable, STANDARD_MERGEABLE_STATES],
+  ] as const) {
+    const result = nonEmptyUpper(value);
+    if (result !== '' && !known.has(result)) states.push(`${label} ${result}`);
   }
   return states;
 }
+
+function unclassifiableReadinessBlock(readiness: PollPrReadiness, states: string[]): IntegratorBlocked { return { needsHuman: true, lesson: [...readiness.evidence, ...readinessEvidence(readiness), `pollPr unclassifiable readiness state: ${states.join(', ')}`, `PR headSha=${readiness.pr.headSha}`].join('; ') }; }
 
 
 
@@ -952,15 +920,7 @@ export async function pollPr(
 
   const unclassifiable = unclassifiablePollState(settled);
   if (unclassifiable.length > 0) {
-    return {
-      needsHuman: true,
-      lesson: [
-        ...settled.evidence,
-        ...readinessEvidence(settled),
-        `pollPr unclassifiable readiness state: ${unclassifiable.join(', ')}`,
-        `PR headSha=${settled.pr.headSha}`,
-      ].join('; '),
-    };
+    return unclassifiableReadinessBlock(settled, unclassifiable);
   }
 
   const initialCiFailures = ciFailuresFrom(settled);
@@ -979,15 +939,7 @@ export async function pollPr(
 
   const finalUnclassifiable = unclassifiablePollState(settled);
   if (finalUnclassifiable.length > 0) {
-    return {
-      needsHuman: true,
-      lesson: [
-        ...settled.evidence,
-        ...readinessEvidence(settled),
-        `pollPr unclassifiable readiness state: ${finalUnclassifiable.join(', ')}`,
-        `PR headSha=${settled.pr.headSha}`,
-      ].join('; '),
-    };
+    return unclassifiableReadinessBlock(settled, finalUnclassifiable);
   }
 
   if (settled.checks.pending.length > 0) {

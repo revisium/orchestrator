@@ -839,13 +839,13 @@
                   "op": "all",
                   "of": [
                     {
-                      "op": "verdict.eq",
-                      "value": "recheck"
-                    },
-                    {
                       "op": "counter.lt",
                       "scope": "pollLoop",
                       "value": 8
+                    },
+                    {
+                      "op": "verdict.eq",
+                      "value": "recheck"
                     }
                   ]
                 },
