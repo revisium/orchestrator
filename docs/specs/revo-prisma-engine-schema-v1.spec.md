@@ -5,7 +5,8 @@
 - **Owners:** Revo runtime, Prisma runtime, embedded Revisium engine integration
 - **Source files:** future `prisma/schema.prisma`, future `src/storage/**`, future `src/revisium-store/**`,
   `revisium-engine/prisma/schema.prisma`, `revisium-core/prisma/schema.prisma`
-- **Related ADRs:** [ADR-0007](../adr/0007-revo-storage-foundation.md)
+- **Related ADRs:** [ADR-0007](../adr/0007-revo-storage-foundation.md),
+  [ADR-0008](../adr/0008-revo-projects-and-versioned-knowledge.md)
 
 ## Scope
 
@@ -51,8 +52,7 @@ project model because Revo has different product semantics.
 Revo MUST have one Prisma schema for the Revo product database. That schema includes:
 
 - Revo-owned product/runtime models;
-- engine-required physical models;
-- Revo migration metadata and template ledgers.
+- engine-required physical models.
 
 There is no separate Revo-managed Prisma schema for the engine database because there is no separate engine database.
 
@@ -64,14 +64,17 @@ Minimum engine constraints:
 
 ```prisma
 model Branch {
-  id        String     @id
-  createdAt DateTime   @default(now())
-  isRoot    Boolean    @default(false)
-  name      String
-  projectId String
-  revisions Revision[]
+  id          String      @id
+  createdAt   DateTime    @default(now())
+  isRoot      Boolean     @default(false)
+  name        String
+  projectId   String
+  // Revo-additive relation; the pinned engine fragment still owns the scalar projectId field.
+  revoProject RevoProject @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  revisions   Revision[]
 
   @@unique([name, projectId])
+  @@index([projectId])
 }
 
 model Revision {
@@ -100,13 +103,20 @@ Hard rules:
 - `Revision.sequence` remains globally unique (`@unique`) and autoincrementing.
 - `Branch.projectId` remains named `projectId`; do not rename to `revisiumProjectId`.
 - Engine fields are not hidden behind Prisma `@map` aliases unless the engine package explicitly supports that.
-- Revo does not add a Prisma relation from `Branch.projectId` to `RevoProject` in v1. It is an opaque integration key.
+- Revo adds a Revo-owned Prisma relation and FK from `Branch.projectId` to `RevoProject.id` with `onDelete: Restrict`.
+- Only `Branch.projectId` carries that database FK in v1. Engine rows such as `FileBlob` and `ProjectFileUsage` keep
+  their engine-required `projectId` fields without Revo-owned FK constraints; doctor checks detect orphaned non-branch
+  engine rows.
 - Revo does not create a Revisium table called `revo_projects`.
 
 The authoritative engine schema fragment MUST be generated/imported/verified from `@revisium/engine` rather than
 hand-copied. The v1 target is a generated schema fragment plus CI drift verification against the pinned engine
 package. The drift check must distinguish engine-required fields/indexes from explicitly Revo-owned additive indexes
-or constraints.
+or constraints, including the `Branch.projectId -> RevoProject.id` FK.
+
+The runtime Revo `schema.prisma` is a superset of the pinned engine schema fragment: it contains the engine-required
+models plus Revo-owned product/runtime models and additive Revo relations. The engine fragment is the verification
+reference, not a second runtime Prisma ownership plane.
 
 Manual copy/paste review is not an acceptable schema integration mechanism.
 
@@ -121,28 +131,38 @@ Example draft:
 enum RevoProjectStatus {
   ACTIVE
   ARCHIVED
-  DELETING
+  DELETED
+}
+
+enum RevoProjectKind {
+  USER
+  SYSTEM
 }
 
 model RevoProject {
-  id        String            @id @default(cuid())
-  createdAt DateTime          @default(now())
-  updatedAt DateTime          @updatedAt
+  id        String             @id @default(cuid())
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+  deletedAt DateTime?
+  kind      RevoProjectKind    @default(USER)
   name      String
-  slug      String            @unique
-  status    RevoProjectStatus @default(ACTIVE)
+  slug      String             @unique
+  status    RevoProjectStatus  @default(ACTIVE)
 
-  repositories RevoRepository[]
-  runs         TaskRun[]
+  repositories    RevoRepository[]
+  // Future Revo runtime relations, such as TaskRun[], belong in the Revo-owned schema.
+  revisiumBranches Branch[]
 
   @@index([status])
+  @@index([kind, status])
+  @@index([deletedAt])
 }
 
 model RevoRepository {
   id        String      @id @default(cuid())
   createdAt DateTime    @default(now())
   updatedAt DateTime    @updatedAt
-  project   RevoProject @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project   RevoProject @relation(fields: [projectId], references: [id], onDelete: Restrict)
   projectId String
   name      String
   remoteUrl String?
@@ -156,8 +176,20 @@ model RevoRepository {
 The exact field names can change during implementation, but the ownership boundary cannot: Revo project identity is a
 Prisma product entity, not an engine table and not a Revisium row.
 
-Virtual Revisium project ids are not stored on `RevoProject`. They are stored in, or deterministically derived by,
-the `RevisiumVirtualProject` registry described by the virtual-projects spec.
+`RevoProject.id` is the engine project id. User projects use generated ids. The reserved system row uses deterministic
+id and slug `control-plane` for playbooks, roles, pipelines, and control-plane versioned meaning. System projects are
+hidden from user project lists and cannot be archived, deleted, or renamed through user APIs.
+
+`status = DELETED` and `deletedAt IS NOT NULL` must move together. `ARCHIVED` projects are read-only and visible only
+in archived/admin views. V1 may enforce this through product services and tests before adding database check
+constraints. Revo keeps `slug @unique` in v1; deleted project slugs are not reused.
+
+ADR and KB data are Revisium tables and rows inside the same user project engine store. Engine migration state belongs
+to the embedded engine's built-in `TableMigration` and system tables. Revo does not add a separate engine-project
+registry, migration state table, or mirror project rows into Revisium.
+
+`RevoRepository` uses `onDelete: Restrict` because v1 project deletion is soft-only and repository cleanup must be an
+explicit product operation, not a cascade side effect.
 
 ### Runtime table groups
 
@@ -165,6 +197,7 @@ The first Revo Prisma runtime schema SHOULD include these groups:
 
 | Group | Purpose |
 | --- | --- |
+| Projects/repositories | `RevoProject`, repository membership, project settings, soft-delete state |
 | Runs | `TaskRun`, run status, route decision pins, profile pins, requested operation |
 | Tasks/nodes | current graph cursor or node-level execution state if needed outside DBOS |
 | Attempts | physical runner attempts, verdict, cost, token usage, artifact refs, bounded stdout/stderr tails |
@@ -173,7 +206,6 @@ The first Revo Prisma runtime schema SHOULD include these groups:
 | Outputs | named node outputs and output summaries |
 | Costs | cost ledger by run/node/attempt/provider/model |
 | Artifacts | file/worktree/artifact index rows pointing to filesystem storage |
-| Template migrations | per-virtual-project template version ledger |
 
 Runtime constraints SHOULD include:
 
@@ -208,13 +240,10 @@ Development flow:
 5. run schema-level and runtime tests;
 6. verify the engine schema fragment drift check.
 
-Release flow:
-
-1. start embedded PostgreSQL;
-2. create Revo product DB if missing;
-3. run Revo Prisma migrations;
-4. run Revo template/data migrations;
-5. initialize engine and DBOS.
+Release flow: follow the canonical bootstrap order in
+[storage database layout v1](./storage-database-layout-v1.spec.md#bootstrap-order). For this schema spec, the
+load-bearing ordering is that Prisma migrations run before reserved `RevoProject` rows are idempotently seeded, and
+the reserved rows exist before embedded engine branches are initialized.
 
 ## Validation
 
@@ -222,8 +251,12 @@ Required tests:
 
 - schema composition includes all engine-required models and indexes;
 - drift check fails if engine-required model fields differ from the pinned engine package;
+- drift check allows Revo-owned additive constraints such as `Branch.projectId -> RevoProject.id`;
 - `Revision.sequence` is globally unique;
-- Revo project creation can derive and pass opaque engine project ids;
+- bootstrap creates the reserved `control-plane` system `RevoProject`;
+- Revo project creation can create branch/revision/table/row data with `Branch.projectId = RevoProject.id`;
+- `Branch.projectId` rejects branches for missing `RevoProject` rows;
+- user APIs do not list, archive, delete, or rename system projects;
 - engine can create branch/revision/table/row through the embedded Revo DB setup;
 - DBOS tables are absent from Revo Prisma;
 - runtime idempotency constraints protect repeated DBOS step writes.
@@ -235,30 +268,40 @@ No legacy local data compatibility is required for v1.
 If `@revisium/engine` changes its required schema, Revo must update the generated/imported fragment and create a
 normal Revo Prisma migration. Revo must not let engine schema drift silently.
 
-Because `Revision.sequence` is global in one physical table, sequences are globally ordered across ADR, KB, and other
-virtual projects. Consumers must not infer per-project contiguous revision numbers from `sequence`.
+Because `Revision.sequence` is global in one physical table, sequences are globally ordered across all Revo projects
+and their ADR/KB/system tables. Consumers must not infer per-project contiguous revision numbers from `sequence`.
 
 ## Examples
 
-Opaque engine ids for one Revo project:
+Engine project id for one Revo project:
 
 ```text
 RevoProject.id: revo_project_01
-ADR virtual Revisium project id: revo_project_01:adr
-KB virtual Revisium project id: revo_project_01:kb
+Branch.projectId: revo_project_01
+ADR tables: adr_documents, adr_proposals
+KB tables: kb_documents, kb_facts
 ```
 
 Engine receives only:
 
 ```ts
 await engine.createRevision({
-  projectId: 'revo_project_01:adr',
+  projectId: 'revo_project_01',
   branchName: 'main',
-  comment: 'Initialize ADR store',
+  comment: 'Initialize project knowledge store',
 });
 ```
 
 It does not load or own the `RevoProject` row.
+
+System control-plane engine id:
+
+```text
+RevoProject.id: control-plane
+RevoProject.kind: SYSTEM
+Branch.projectId: control-plane
+Control-plane tables: playbooks, roles, pipelines
+```
 
 ## Changelog
 

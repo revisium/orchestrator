@@ -27,7 +27,7 @@ archive of superseded plans.
 | [revo-playbook-materialization-v1.spec.md](./revo-playbook-materialization-v1.spec.md) | `.revo/playbook` worktree bundle layout, manifest validation, per-step selected references, and worker prompt discovery |
 | [storage-database-layout-v1.spec.md](./storage-database-layout-v1.spec.md) | Draft storage v2 topology, database ownership, bootstrap order, and migration planes |
 | [revo-prisma-engine-schema-v1.spec.md](./revo-prisma-engine-schema-v1.spec.md) | Draft Revo product DB schema ownership and embedded engine table compatibility |
-| [revisium-virtual-projects-and-migrations-v1.spec.md](./revisium-virtual-projects-and-migrations-v1.spec.md) | Draft ADR/KB virtual-project provisioning and template migration contract |
+| [revo-project-knowledge-migrations-v1.spec.md](./revo-project-knowledge-migrations-v1.spec.md) | Draft Revo project ADR/KB table initialization and engine migration contract |
 
 ## Authoring rules
 

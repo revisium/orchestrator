@@ -41,7 +41,7 @@ There is no internal archive of obsolete plans. Git history is the archive.
 | Playbook import or built-in playbook catalogs | [architecture-overview.md](./architecture-overview.md), [pipeline state machine spec](./specs/pipeline-state-machine-v1.spec.md), [default playbook policy spec](./specs/default-playbook-policy.spec.md) | `control-plane/default-playbook/**`, `src/playbook/**`, `@revisium/agent-playbook` catalog compatibility |
 | Model profiles, routing policy, budgets, limits | [control-plane-schema.md](./control-plane-schema.md), [pipeline state machine spec](./specs/pipeline-state-machine-v1.spec.md), [run profiles v1](./specs/run-profiles-v1.spec.md) | `src/control-plane/definitions.ts`, `src/control-plane/topology-profiles.ts`, default playbook policy rows, cost tests |
 | Storage bootstrap, Prisma schema, DBOS placement, or embedded engine integration | [ADR-0007](./adr/0007-revo-storage-foundation.md), [storage database layout v1](./specs/storage-database-layout-v1.spec.md), [Revo Prisma and engine schema v1](./specs/revo-prisma-engine-schema-v1.spec.md) | future `prisma/schema.prisma`, `src/engine/**`, future storage bootstrap services |
-| Revo projects, ADR/KB stores, or template migrations | [ADR-0008](./adr/0008-revo-projects-and-versioned-knowledge.md), [Revisium virtual projects and migrations v1](./specs/revisium-virtual-projects-and-migrations-v1.spec.md) | future `src/projects/**`, future `src/revisium-store/**`, future `src/revisium-migrations/**` |
+| Revo projects, ADR/KB stores, or template migrations | [ADR-0008](./adr/0008-revo-projects-and-versioned-knowledge.md), [Revo project knowledge and migrations v1](./specs/revo-project-knowledge-migrations-v1.spec.md) | future `src/projects/**`, future `src/revisium-store/**`, future `src/revisium-migrations/**` |
 | Runner behavior or external effects | [runner-contract.md](./runner-contract.md) | `src/runners/**`, `src/worker/**`, e2e runner scenarios |
 | Context compression or prompt inputs | [context-budget.md](./context-budget.md) | `src/worker/build-context.ts`, run output references, role prompt composition |
 
@@ -75,7 +75,7 @@ generated PNG diagrams unless the asset is genuinely visual and cannot be repres
 | [Run profiles v1](./specs/run-profiles-v1.spec.md) | Draft run-profile contract for provider-neutral `feature-development`, profile-driven topology/bindings, MCP ergonomics, and replay pins |
 | [Storage database layout v1](./specs/storage-database-layout-v1.spec.md) | Draft storage v2 topology, database ownership, bootstrap order, and migration planes |
 | [Revo Prisma and engine schema v1](./specs/revo-prisma-engine-schema-v1.spec.md) | Draft Revo product DB schema ownership and embedded engine table compatibility |
-| [Revisium virtual projects and migrations v1](./specs/revisium-virtual-projects-and-migrations-v1.spec.md) | Draft ADR/KB virtual-project provisioning and template migration contract |
+| [Revo project knowledge and migrations v1](./specs/revo-project-knowledge-migrations-v1.spec.md) | Draft Revo project ADR/KB table initialization and engine migration contract |
 
 ## Guides and References
 
