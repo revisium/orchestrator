@@ -31,7 +31,7 @@ import {
 import { hashProfile, materializeTemplate, MATERIALIZER_VERSION } from '../pipeline-core/materialize.js';
 import { DbosService } from '../engine/dbos.service.js';
 import { PipelineService, type RunnerMode } from '../pipeline/pipeline.service.js';
-import { RUN_PROGRESS_EVENT_KEY, type DataDrivenProgressCursor } from '../pipeline/data-driven-task.workflow.js';
+import { INTEGRATOR_PROGRESS_EVENT_TYPES, RUN_PROGRESS_EVENT_KEY, type DataDrivenProgressCursor } from '../pipeline/data-driven-task.workflow.js';
 import { templateFromExecutionPolicy } from '../pipeline/data-driven-template.js';
 import {
   normalizeExecutionProfile,
@@ -63,6 +63,11 @@ const execFileAsync = promisify(execFile);
 const GATE_TOPICS = new Set<string>(['plan', 'merge', 'question']);
 const WORKFLOW_SUCCESS_EVENT_TYPES = new Set(['step_succeeded', 'gate_signaled']);
 const WORKFLOW_FAILURE_EVENT_TYPES = new Set(['step_failed', 'attempt_failed']);
+export const WORKFLOW_PROGRESS_EVENT_TYPES = new Set<string>([
+  'pipeline_blocked',
+  'pr_polled',
+  ...INTEGRATOR_PROGRESS_EVENT_TYPES,
+]);
 const BUILTIN_RUNNERS = new Set(['claude-code', 'codex', 'script', 'stub-agent', 'revo-integrator', 'revo-merger', 'revo-deterministic']);
 
 export type RunnerModeInput = RunnerMode;
@@ -235,14 +240,12 @@ function normalizedRunStatus(status: string): string {
   return status === 'paused' ? 'blocked' : status;
 }
 
-function hasWorkflowProgress(events: EventSummary[]): boolean {
+export function hasWorkflowProgress(events: EventSummary[]): boolean {
   return events.some((event) => (
     event.type.startsWith('step_')
     || event.type.startsWith('attempt_')
     || event.type.startsWith('gate_')
-    || event.type === 'pipeline_blocked'
-    || event.type === 'pr_polled'
-    || event.type === 'integrate_succeeded'
+    || WORKFLOW_PROGRESS_EVENT_TYPES.has(event.type)
   ));
 }
 

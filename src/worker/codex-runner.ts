@@ -141,7 +141,7 @@ function writeCodexOutputSchema(processDir: string, acceptedVerdicts: readonly s
 }
 
 function buildPrompt(context: string, attemptId: string, acceptedVerdicts: readonly string[] | undefined): string {
-  const idempotencyLine = `Attempt-Id: ${attemptId} - idempotency key. Reference it on any external effect you create.`;
+  const idempotencyLine = `Attempt-Id: ${attemptId} - idempotency key for this role attempt.`;
   return [context, idempotencyLine, structuredResultNote(acceptedVerdicts)].join('\n');
 }
 

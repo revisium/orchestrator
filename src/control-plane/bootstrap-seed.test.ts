@@ -190,6 +190,20 @@ test('seed (0008 #5): loadRole surfaces per-role timeout_ms + permission_mode', 
   assert.equal(architect.permissionMode, 'default', 'architect permission_mode must resolve from the seed');
 });
 
+test('seed: developer prompt is working-tree only and contains no publication vocabulary', () => {
+  const developer = seedRows.find((row) => row.tableId === 'roles' && row.rowId === 'developer');
+  assert.ok(developer, 'developer seed role must exist');
+  const prompt = developer.data.system_prompt;
+  assert.equal(typeof prompt, 'string', 'developer seed role must carry a prompt');
+  const promptText = prompt as string;
+  assert.doesNotMatch(
+    promptText,
+    /\bPRs?\b|\bpull request\b|\bpush(?:es|ed|ing)?\b|\bship(?:s|ped|ping)?\b|\bcommit(?:s|ted|ting)?\b|\bgh\b|\bGitHub\b/i,
+    'developer seed prompt must not teach publication vocabulary',
+  );
+  assert.match(promptText, /task working tree/i, 'developer seed prompt must constrain scope to task-working-tree changes');
+});
+
 test('seed (0008 #5): loadPipelinePolicy resolves the routing_policy "pipeline" row', async () => {
   const policy = await loadPipelinePolicy(transport);
   assert.equal(policy.maxReviewIterations, 3, 'max_review_iterations must come from the seed');

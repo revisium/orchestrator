@@ -202,12 +202,14 @@ test('codex runner: builds documented codex exec invocation and writes schema fi
     );
     assert.deepEqual(req.args.slice(req.args.indexOf('--model'), req.args.indexOf('--model') + 2), ['--model', 'gpt-5.5']);
     assert.deepEqual(req.args.slice(req.args.indexOf('--sandbox'), req.args.indexOf('--sandbox') + 2), ['--sandbox', 'workspace-write']);
+    assert.equal(req.args.includes('--disallowedTools'), false, 'Codex does not use Claude deny flags');
     assert.deepEqual(req.args.slice(req.args.indexOf('--cd'), req.args.indexOf('--cd') + 2), ['--cd', '/workspace/repo']);
     assert.equal(req.args.at(-1), '-', 'prompt is read from stdin');
     assert.equal(req.args.includes('--profile'), false, '--profile is forbidden');
     assert.equal(req.args.includes('--output-last-message'), false, '--output-last-message is forbidden');
     assert.match(req.input ?? '', /Attempt-Id:/);
     assert.match(req.input ?? '', new RegExp(ATTEMPT_ID));
+    assert.doesNotMatch(req.input ?? '', /external effect/i);
 
     const schemaPath = req.args[3] ?? '';
     const schema = JSON.parse(readFileSync(schemaPath, 'utf8')) as typeof CODEX_OUTPUT_SCHEMA;
