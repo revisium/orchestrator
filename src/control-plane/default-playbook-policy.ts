@@ -240,6 +240,11 @@ function checkProducedChangeHandoff(template: Template, sink: PolicySink): void 
 }
 
 function checkPrFreshnessWiring(template: Template, sink: PolicySink): void {
+  expectScopeConfig(template, sink, {
+    scopeId: 'pollLoop',
+    cap: 8,
+    parent: null,
+  });
   expectScript(template, sink, {
     code: 'DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING',
     nodeId: 'pollPr',
@@ -254,6 +259,14 @@ function checkPrFreshnessWiring(template: Template, sink: PolicySink): void {
     verdict: 'clean',
     target: 'mergeReadiness',
   });
+  expectBoundedRoute(template, sink, {
+    code: 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
+    nodeId: 'prRouter',
+    verdict: 'recheck',
+    target: 'pollPr',
+    scope: 'pollLoop',
+    value: 8,
+  });
   expectScript(template, sink, {
     code: 'DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING',
     nodeId: 'mergeReadiness',
@@ -267,6 +280,14 @@ function checkPrFreshnessWiring(template: Template, sink: PolicySink): void {
     nodeId: 'mergeReadinessRouter',
     verdict: 'clean',
     target: 'mergeGate',
+  });
+  expectBoundedRoute(template, sink, {
+    code: 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
+    nodeId: 'mergeReadinessRouter',
+    verdict: 'recheck',
+    target: 'mergeReadiness',
+    scope: 'pollLoop',
+    value: 8,
   });
   expectGateArtifact(template, sink, {
     code: 'DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING',

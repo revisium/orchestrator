@@ -2020,6 +2020,48 @@ test('pollPr: all green, no threads → clean', async () => {
   if (!('needsHuman' in r)) assert.equal(r.verdict, 'clean');
 });
 
+test('pollPr: no registered checks with clean mergeability → clean with advisory on first poll', async () => {
+  let calls = 0;
+  const collect = async (): Promise<PollPrReadiness> => {
+    calls++;
+    return readiness({
+      list: [],
+      evidence: ['checks: none registered'],
+      mergeStateStatus: 'CLEAN',
+      mergeable: 'MERGEABLE',
+    });
+  };
+
+  const r = await pollPr(POLL_INPUT, pollDeps(collect, { reviewGracePolls: 0, maxPolls: 3 }));
+
+  assert.equal(calls, 1, 'zero-CI readiness is detected on the first poll');
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) {
+    assert.equal(r.verdict, 'clean');
+    assert.ok(r.evidence.some((item) => item.includes('checks: none registered')));
+  }
+});
+
+test('pollPr: unclassifiable check or mergeability state blocks for recovery classification', async () => {
+  const collect = async (): Promise<PollPrReadiness> =>
+    readiness({
+      fail: ['???'],
+      list: [{ name: '???', result: 'WAT' }],
+      mergeStateStatus: 'ALIEN',
+      mergeable: 'BANANA',
+    });
+
+  const r = await pollPr(POLL_INPUT, pollDeps(collect));
+
+  assert.ok('needsHuman' in r, 'unclassifiable poll state must enter the script-blocked recovery path');
+  if ('needsHuman' in r) {
+    assert.match(r.lesson, /unclassifiable readiness state/);
+    assert.match(r.lesson, /WAT/);
+    assert.match(r.lesson, /ALIEN/);
+    assert.match(r.lesson, /BANANA/);
+  }
+});
+
 test('pollPr: readiness human decision is not classified as clean', async () => {
   const collect = async (): Promise<PollPrReadiness> => ({
     ...readiness({ evidence: ['Review decision is CHANGES_REQUESTED'] }),

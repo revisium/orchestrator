@@ -89,17 +89,14 @@ export async function givenInstalledPlaybook(h: RunHarness): Promise<void> {
  * NOT install the e2e fixture: Group M tests the SHIPPED default, distinct from {@link PLAYBOOK_ID}.
  */
 export async function givenSeededDefaultPlaybook(h: RunHarness): Promise<void> {
-  const installed = await h.api.listPlaybooks();
-  if (installed.some((p) => p.id === DEFAULT_PLAYBOOK_ID)) return;
-  const { repoRoot } = await import('../../config.js');
-  const { join } = await import('node:path');
-  const source = join(repoRoot, 'control-plane', 'default-playbook');
-  try {
-    const install = await h.api.installPlaybook({ source, name: DEFAULT_PLAYBOOK_ID, commit: true });
-    assert.equal(install.playbookId, DEFAULT_PLAYBOOK_ID);
-    assert.ok(install.pipelines >= 2, 'default playbook install must load the seeded pipelines');
-  } catch (err) {
-    if (!/not a draft|already|nothing to commit|ROW_CONFLICT/i.test(String(err))) throw err;
+  const { seedDefaultPlaybook } = await import('../../control-plane/seed-default-playbook.js');
+  const outcome = await seedDefaultPlaybook({
+    listPlaybooks: () => h.api.listPlaybooks(),
+    install: (options) => h.api.installPlaybook(options),
+  });
+  if (outcome.status === 'installed') {
+    assert.equal(outcome.result.playbookId, DEFAULT_PLAYBOOK_ID);
+    assert.ok(outcome.result.pipelines >= 2, 'default playbook install must load the seeded pipelines');
   }
 }
 

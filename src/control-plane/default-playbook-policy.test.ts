@@ -156,6 +156,22 @@ test('default playbook policy: merge gate must surface mergeReadiness evidence',
   assert.equal(diagnostic.path, 'gatedArtifact');
 });
 
+test('default playbook policy: poll recheck routes must stay bounded by pollLoop', () => {
+  const diagnostic = assertDiagnostic(
+    mutateTemplate((template) => {
+      guardedBranchContaining(template, 'prRouter', 'recheck').when = {
+        op: 'verdict.eq',
+        value: 'recheck',
+      };
+    }),
+    'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
+  );
+
+  assert.equal(diagnostic.nodeId, 'prRouter');
+  assert.match(diagnostic.expected ?? '', /recheck \+ pollLoop<8 -> pollPr/);
+  assert.match(diagnostic.actual ?? '', /conjunctiveBound=false/);
+});
+
 test('default playbook policy: missing review_changes route to triage is diagnostic', () => {
   const diagnostic = assertDiagnostic(
     mutateTemplate((template) => {

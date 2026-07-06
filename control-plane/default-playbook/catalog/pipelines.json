@@ -614,6 +614,9 @@
             "produces": {
               "name": "prFeedback"
             },
+            "incrementCounters": [
+              "pollLoop"
+            ],
             "catch": [
               {
                 "onError": "revo.ScriptBlocked",
@@ -638,8 +641,18 @@
               },
               {
                 "when": {
-                  "op": "verdict.eq",
-                  "value": "recheck"
+                  "op": "all",
+                  "of": [
+                    {
+                      "op": "verdict.eq",
+                      "value": "recheck"
+                    },
+                    {
+                      "op": "counter.lt",
+                      "scope": "pollLoop",
+                      "value": 8
+                    }
+                  ]
                 },
                 "goto": "pollPr"
               },
@@ -682,6 +695,9 @@
             "produces": {
               "name": "prFeedback"
             },
+            "incrementCounters": [
+              "pollLoop"
+            ],
             "catch": [
               {
                 "onError": "revo.ScriptBlocked",
@@ -706,8 +722,18 @@
               },
               {
                 "when": {
-                  "op": "verdict.eq",
-                  "value": "recheck"
+                  "op": "all",
+                  "of": [
+                    {
+                      "op": "verdict.eq",
+                      "value": "recheck"
+                    },
+                    {
+                      "op": "counter.lt",
+                      "scope": "pollLoop",
+                      "value": 8
+                    }
+                  ]
                 },
                 "goto": "mergeReadiness"
               },
@@ -1234,6 +1260,10 @@
           },
           "ciLoop": {
             "cap": 3,
+            "parent": null
+          },
+          "pollLoop": {
+            "cap": 8,
             "parent": null
           },
           "reviewLoop": {
