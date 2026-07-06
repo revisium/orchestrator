@@ -245,36 +245,74 @@ function parseGhJson<T>(raw: string, label: string): T {
 }
 
 type PrListEntry = { number: number; baseRefName: string; state: string };
+type BranchPrResult =
+  | { kind: 'open'; prNumber: number }
+  | { kind: 'merged'; prNumber: number }
+  | { kind: 'closed'; prNumber: number }
+  | { needsHuman: true; lesson: string };
 
 type OpenPrResult =
   | { kind: 'open'; prNumber: number; prView: PrViewData }
   | { kind: 'merged'; prNumber: number; prView?: PrViewData }
   | { kind: 'needsHuman'; verdict: string; lesson: string; prNumber?: number; prView?: PrViewData };
+type BranchOpenPrResult =
+  | { kind: 'open'; prNumber: number }
+  | Exclude<OpenPrResult, { kind: 'open' }>;
 
 const NOT_FOUND_RE = /could not resolve|could not find|no pull requests? found|not found/i;
+
+function listPrsByBranch(repo: string, headBranch: string, state: 'open' | 'all', execGh: ExecGhFn): PrListEntry[] {
+  const raw = execGh([
+    'pr', 'list', '--repo', repo, '--head', headBranch, '--state', state,
+    '--json', 'number,baseRefName,state',
+  ]);
+  const stateLabel = state === 'all' ? ' --state all' : '';
+  return parseGhJson<PrListEntry[]>(raw, `pr list --head ${headBranch}${stateLabel}`);
+}
+
+function ambiguousBranchPrs(
+  scope: 'open' | 'terminal',
+  matches: PrListEntry[],
+  headBranch: string,
+  baseBranch: string,
+): BranchPrResult {
+  const candidates = matches.map((p) => p.number).join(', ');
+  return {
+    needsHuman: true,
+    lesson: `Ambiguous: ${matches.length} ${scope} PRs for head branch "${headBranch}" targeting base "${baseBranch}" - candidates #${candidates} - manual review needed`,
+  };
+}
 
 function resolvePrByBranch(
   repo: string,
   headBranch: string,
   baseBranch: string,
   execGh: ExecGhFn,
-): { pr_number: number } | { needsHuman: true; lesson: string } {
-  const raw = execGh([
-    'pr', 'list', '--repo', repo, '--head', headBranch, '--state', 'open',
-    '--json', 'number,baseRefName,state',
-  ]);
-  const prs = parseGhJson<PrListEntry[]>(raw, `pr list --head ${headBranch}`);
-  const onBase = prs.filter((p) => p.baseRefName === baseBranch);
+): BranchPrResult {
+  const openPrs = listPrsByBranch(repo, headBranch, 'open', execGh);
+  const openOnBase = openPrs.filter((p) => p.baseRefName === baseBranch);
 
-  if (onBase.length === 0) {
-    return { needsHuman: true, lesson: `No open PR for head branch "${headBranch}" with base "${baseBranch}" in ${repo} - manual review needed` };
+  if (openOnBase.length === 1) return { kind: 'open', prNumber: openOnBase[0].number };
+  if (openOnBase.length > 1) return ambiguousBranchPrs('open', openOnBase, headBranch, baseBranch);
+
+  const allPrs = listPrsByBranch(repo, headBranch, 'all', execGh);
+  const terminalOnBase = allPrs.filter((p) => p.baseRefName === baseBranch && p.state.toUpperCase() !== 'OPEN');
+
+  if (terminalOnBase.length === 1) {
+    const pr = terminalOnBase[0];
+    const state = pr.state.toUpperCase();
+    if (state === 'MERGED') return { kind: 'merged', prNumber: pr.number };
+    if (state === 'CLOSED') return { kind: 'closed', prNumber: pr.number };
+    return {
+      needsHuman: true,
+      lesson: `Unexpected terminal PR state ${pr.state} for head branch "${headBranch}" targeting base "${baseBranch}" - manual review needed`,
+    };
   }
-  if (onBase.length === 1) return { pr_number: onBase[0].number };
+  if (terminalOnBase.length > 1) return ambiguousBranchPrs('terminal', terminalOnBase, headBranch, baseBranch);
 
-  const candidates = onBase.map((p) => p.number).join(', ');
   return {
     needsHuman: true,
-    lesson: `Ambiguous: ${onBase.length} open PRs for head branch "${headBranch}" targeting base "${baseBranch}" - candidates #${candidates} - manual review needed`,
+    lesson: `No open PR for head branch "${headBranch}" with base "${baseBranch}" in ${repo} - manual review needed`,
   };
 }
 
@@ -286,6 +324,39 @@ function fetchPrView(prNumber: number, repo: string, execGh: ExecGhFn): PrViewDa
   return parseGhJson<PrViewData>(raw, `pr view #${prNumber}`);
 }
 
+function terminalBranchResult(
+  result: Extract<BranchPrResult, { kind: 'merged' | 'closed' }>,
+  headBranch: string,
+  prView: PrViewData,
+): Exclude<OpenPrResult, { kind: 'open' }> {
+  if (result.kind === 'merged') return { kind: 'merged', prNumber: result.prNumber, prView };
+  return {
+    kind: 'needsHuman',
+    verdict: 'closed',
+    lesson: `pr_closed_externally: PR #${result.prNumber} for "${headBranch}" was closed without merging - manual review needed`,
+    prNumber: result.prNumber,
+    prView,
+  };
+}
+
+function resolveBranchForOpenPr(
+  input: PrReadinessInput,
+  headBranch: string,
+  baseBranch: string,
+  execGh: ExecGhFn,
+): BranchOpenPrResult {
+  const result = resolvePrByBranch(input.repo, headBranch, baseBranch, execGh);
+  if ('needsHuman' in result) {
+    return { kind: 'needsHuman', verdict: 'unresolved', lesson: result.lesson };
+  }
+  if (result.kind === 'open') return { kind: 'open', prNumber: result.prNumber };
+  return terminalBranchResult(result, headBranch, fetchPrView(result.prNumber, input.repo, execGh));
+}
+
+function canRecoverFromMissingPr(headBranch: string | undefined, resolvedFromBranch: boolean, err: unknown): headBranch is string {
+  return Boolean(headBranch && !resolvedFromBranch && NOT_FOUND_RE.test(String(err)));
+}
+
 function handleClosedPr(
   prNumber: number,
   resolvedFromBranch: boolean,
@@ -295,18 +366,19 @@ function handleClosedPr(
   prView?: PrViewData,
 ): OpenPrResult {
   if (!input.headBranch || resolvedFromBranch) {
-    return { kind: 'needsHuman', verdict: 'closed', lesson: `PR #${prNumber} was closed without merging - manual review needed`, prNumber, prView };
+    return { kind: 'needsHuman', verdict: 'closed', lesson: `pr_closed_externally: PR #${prNumber} was closed without merging - manual review needed`, prNumber, prView };
   }
   const r = resolvePrByBranch(input.repo, input.headBranch, baseBranch, execGh);
   if ('needsHuman' in r) {
-    return { kind: 'needsHuman', verdict: 'closed', lesson: `PR #${prNumber} was closed; ${r.lesson}`, prNumber, prView };
+    return { kind: 'needsHuman', verdict: 'closed', lesson: `pr_closed_externally: PR #${prNumber} was closed; ${r.lesson}`, prNumber, prView };
   }
-  const newPrView = fetchPrView(r.pr_number, input.repo, execGh);
-  if (newPrView.state === 'MERGED') return { kind: 'merged', prNumber: r.pr_number, prView: newPrView };
+  const newPrView = fetchPrView(r.prNumber, input.repo, execGh);
+  if (r.kind !== 'open') return terminalBranchResult(r, input.headBranch, newPrView);
+  if (newPrView.state === 'MERGED') return { kind: 'merged', prNumber: r.prNumber, prView: newPrView };
   if (newPrView.state === 'CLOSED') {
-    return { kind: 'needsHuman', verdict: 'closed', lesson: `PR #${r.pr_number} (recovered via "${input.headBranch}") is also closed - manual review needed`, prNumber: r.pr_number, prView: newPrView };
+    return { kind: 'needsHuman', verdict: 'closed', lesson: `pr_closed_externally: PR #${r.prNumber} (recovered via "${input.headBranch}") is also closed - manual review needed`, prNumber: r.prNumber, prView: newPrView };
   }
-  return { kind: 'open', prNumber: r.pr_number, prView: newPrView };
+  return { kind: 'open', prNumber: r.prNumber, prView: newPrView };
 }
 
 function resolveOpenPr(input: PrReadinessInput, baseBranch: string, execGh: ExecGhFn): OpenPrResult {
@@ -317,9 +389,9 @@ function resolveOpenPr(input: PrReadinessInput, baseBranch: string, execGh: Exec
     if (!input.headBranch) {
       return { kind: 'needsHuman', verdict: 'unresolved', lesson: 'ci-poller step has neither pr_number nor head_branch - cannot identify a PR to watch' };
     }
-    const r = resolvePrByBranch(input.repo, input.headBranch, baseBranch, execGh);
-    if ('needsHuman' in r) return { kind: 'needsHuman', verdict: 'unresolved', lesson: r.lesson };
-    prNumber = r.pr_number;
+    const resolved = resolveBranchForOpenPr(input, input.headBranch, baseBranch, execGh);
+    if (resolved.kind !== 'open') return resolved;
+    prNumber = resolved.prNumber;
     resolvedFromBranch = true;
   }
 
@@ -327,12 +399,11 @@ function resolveOpenPr(input: PrReadinessInput, baseBranch: string, execGh: Exec
   try {
     prView = fetchPrView(prNumber, input.repo, execGh);
   } catch (err) {
-    if (!input.headBranch || resolvedFromBranch || !NOT_FOUND_RE.test(String(err))) {
-      throw err;
-    }
-    const r = resolvePrByBranch(input.repo, input.headBranch, baseBranch, execGh);
-    if ('needsHuman' in r) return { kind: 'needsHuman', verdict: 'unresolved', lesson: r.lesson };
-    prNumber = r.pr_number;
+    const recoveryHeadBranch = input.headBranch;
+    if (!canRecoverFromMissingPr(recoveryHeadBranch, resolvedFromBranch, err)) throw err;
+    const resolved = resolveBranchForOpenPr(input, recoveryHeadBranch, baseBranch, execGh);
+    if (resolved.kind !== 'open') return resolved;
+    prNumber = resolved.prNumber;
     resolvedFromBranch = true;
     prView = fetchPrView(prNumber, input.repo, execGh);
   }

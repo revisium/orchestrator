@@ -49,7 +49,9 @@
             "cancel",
             "address_review_threads",
             "return_to_development",
-            "override_merge"
+            "override_merge",
+            "merged",
+            "closed"
           ]
         },
         "nodes": {
@@ -530,6 +532,20 @@
               {
                 "when": {
                   "op": "verdict.eq",
+                  "value": "merged"
+                },
+                "goto": "cleanupWorktree"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "closed"
+                },
+                "goto": "recoveryGate"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
                   "value": "review_changes"
                 },
                 "goto": "triage"
@@ -641,6 +657,20 @@
               },
               {
                 "when": {
+                  "op": "verdict.eq",
+                  "value": "merged"
+                },
+                "goto": "cleanupWorktree"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "closed"
+                },
+                "goto": "recoveryGate"
+              },
+              {
+                "when": {
                   "op": "all",
                   "of": [
                     {
@@ -719,6 +749,20 @@
                   "value": "clean"
                 },
                 "goto": "mergeGate"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "merged"
+                },
+                "goto": "cleanupWorktree"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "closed"
+                },
+                "goto": "recoveryGate"
               },
               {
                 "when": {
@@ -1128,6 +1172,20 @@
                   "value": "clean"
                 },
                 "goto": "confirmMerge"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "merged"
+                },
+                "goto": "cleanupWorktree"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "closed"
+                },
+                "goto": "recoveryGate"
               },
               {
                 "default": "classifyRecovery"

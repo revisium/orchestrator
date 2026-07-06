@@ -2020,6 +2020,99 @@ test('pollPr: all green, no threads → clean', async () => {
   if (!('needsHuman' in r)) assert.equal(r.verdict, 'clean');
 });
 
+test('pollPr: externally merged readiness bypasses ready/merge checks and returns merged', async () => {
+  const ghCalls: string[][] = [];
+  const collect = async (): Promise<PollPrReadiness> =>
+    readiness({
+      readinessVerdict: 'merged',
+      nextAction: 'none',
+      evidence: ['PR #5 is merged.'],
+    });
+
+  const r = await pollPr(POLL_INPUT, pollDeps(collect, { execGh: (args) => { ghCalls.push(args); return ''; } }));
+
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) {
+    assert.equal(r.verdict, 'merged');
+    assert.ok(r.evidence.some((item) => item === 'pollPr verdict=merged'));
+  }
+  assert.deepEqual(ghCalls, [], 'terminal merged PR must not call gh pr ready');
+});
+
+test('pollPr: externally closed readiness bypasses grace polling and returns closed reason', async () => {
+  const ghCalls: string[][] = [];
+  let collects = 0;
+  const collect = async (): Promise<PollPrReadiness> => {
+    collects++;
+    return readiness({
+      readinessVerdict: 'closed',
+      nextAction: 'human_decision',
+      evidence: ['pr_closed_externally: PR #5 was closed without merging - manual review needed'],
+    });
+  };
+
+  const r = await pollPr(POLL_INPUT, pollDeps(collect, { execGh: (args) => { ghCalls.push(args); return ''; }, reviewGracePolls: 4 }));
+
+  assert.equal(collects, 1, 'closed PR must not enter review grace polling');
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) {
+    assert.equal(r.verdict, 'closed');
+    assert.ok(r.evidence.some((item) => item.includes('pr_closed_externally')));
+  }
+  assert.deepEqual(ghCalls, [], 'terminal closed PR must not call gh pr ready');
+});
+
+test('pollPr: externally merged during review grace returns merged, not clean', async () => {
+  let collects = 0;
+  const collect = async (): Promise<PollPrReadiness> => {
+    collects++;
+    return collects === 1
+      ? readiness({ headSha: 'open-clean-sha' })
+      : readiness({
+          headSha: 'merged-sha',
+          readinessVerdict: 'merged',
+          nextAction: 'none',
+          evidence: ['PR #5 is merged.'],
+        });
+  };
+
+  const r = await pollPr(POLL_INPUT, pollDeps(collect, { reviewGracePolls: 1 }));
+
+  assert.equal(collects, 2, 'review grace observes the terminal merged snapshot');
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) {
+    assert.equal(r.verdict, 'merged');
+    assert.equal(r.headSha, 'merged-sha');
+    assert.ok(r.evidence.some((item) => item === 'pollPr verdict=merged'));
+  }
+});
+
+test('pollPr: externally closed during review grace returns closed, not review_changes', async () => {
+  let collects = 0;
+  const collect = async (): Promise<PollPrReadiness> => {
+    collects++;
+    return collects === 1
+      ? readiness({ headSha: 'open-clean-sha' })
+      : readiness({
+          headSha: 'closed-sha',
+          readinessVerdict: 'closed',
+          nextAction: 'human_decision',
+          evidence: ['pr_closed_externally: PR #5 was closed without merging - manual review needed'],
+        });
+  };
+
+  const r = await pollPr(POLL_INPUT, pollDeps(collect, { reviewGracePolls: 1 }));
+
+  assert.equal(collects, 2, 'review grace observes the terminal closed snapshot');
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) {
+    assert.equal(r.verdict, 'closed');
+    assert.equal(r.headSha, 'closed-sha');
+    assert.ok(r.evidence.some((item) => item.includes('pr_closed_externally')));
+    assert.ok(r.evidence.some((item) => item === 'pollPr verdict=closed'));
+  }
+});
+
 test('pollPr: no registered checks with clean mergeability → clean with advisory on first poll', async () => {
   let calls = 0;
   const collect = async (): Promise<PollPrReadiness> => {
