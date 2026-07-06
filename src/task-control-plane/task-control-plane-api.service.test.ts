@@ -15,7 +15,7 @@ import type { PlaybooksService } from '../revisium/playbooks.service.js';
 import type { RolesService } from '../revisium/roles.service.js';
 import type { RunService } from '../revisium/run.service.js';
 import { CreateRunWorkflowError, previewCreateRunIds } from '../run/create-run.js';
-import { TaskControlPlaneApiService } from './task-control-plane-api.service.js';
+import { hasWorkflowProgress, TaskControlPlaneApiService } from './task-control-plane-api.service.js';
 import {
   CODEX_CONSENSUS_PROFILE,
   CODEX_CONSENSUS_PROFILE_VERSION,
@@ -24,6 +24,7 @@ import {
 import { hashProfile, materializeTemplate, MATERIALIZER_VERSION } from '../pipeline-core/materialize.js';
 import { POLICY_VERSION } from '../control-plane/default-playbook-policy.js';
 import { templateFromExecutionPolicy } from '../pipeline/data-driven-template.js';
+import { INTEGRATOR_PROGRESS_EVENT_TYPES } from '../pipeline/data-driven-task.workflow.js';
 
 /**
  * A minimal VALID data-driven template (one developer agent → success terminal). The cutover (plan
@@ -2538,6 +2539,65 @@ test('TaskControlPlaneApiService.resolveRunState reports running when workflow p
   assert.equal(state.state, 'running');
   assert.equal(state.runStatus, 'running');
   assert.equal(state.workflowStatus, 'PENDING');
+});
+
+test('hasWorkflowProgress recognizes data-driven integrator progress events', () => {
+  for (const type of INTEGRATOR_PROGRESS_EVENT_TYPES) {
+    assert.equal(hasWorkflowProgress([{ type } as never]), true, type);
+  }
+  assert.equal(hasWorkflowProgress([{ type: 'run_created' } as never]), false);
+});
+
+test('TaskControlPlaneApiService.resolveRunState treats foreign_pr_adopted as workflow progress', async () => {
+  const api = makeApi({
+    runService: {
+      async showRun() {
+        return {
+          run: {
+            runId: 'run-1',
+            title: 'Run',
+            status: 'ready',
+            priority: 0,
+            createdAt: '2026-06-13T00:00:00.000Z',
+            description: '',
+            scope: '',
+            repos: [],
+          },
+          tasks: [{ taskId: 'task-1', title: 'Task', status: 'ready', roleHint: 'developer' }],
+        };
+      },
+      async listRunEvents() {
+        return [
+          {
+            eventId: 'event-foreign-pr',
+            type: 'foreign_pr_adopted',
+            actor: 'orchestrator',
+            createdAt: '2026-06-28T07:36:41.803Z',
+            taskId: 'task-1',
+            stepId: 'integrator',
+            payload: { prNumber: 42 },
+          },
+        ];
+      },
+    },
+    inboxService: {
+      async listInbox() {
+        return [];
+      },
+    },
+    dbosService: {
+      async getWorkflowStatus() {
+        return null;
+      },
+    },
+  });
+
+  const state = await api.resolveRunState('run-1');
+
+  assert.equal(state.state, 'running');
+  assert.equal(state.runStatus, 'running');
+  assert.equal(state.workflowStatus, '');
+  assert.equal(state.latestEventType, 'foreign_pr_adopted');
 });
 
 test('TaskControlPlaneApiService.resolveRunState exposes the latest workflow event pulse', async () => {

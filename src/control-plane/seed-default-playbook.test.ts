@@ -219,6 +219,17 @@ test('default playbook: materialized codex-consensus fans out plan + code review
   });
 });
 
+test('default playbook: developer prompt is working-tree only and contains no publication vocabulary', () => {
+  const prompt = readFileSync(join(DEFAULT_PLAYBOOK_SOURCE, 'prompts', 'developer.md'), 'utf8');
+
+  assert.match(prompt, /task working tree/i, 'developer scope must name the task working tree');
+  assert.doesNotMatch(
+    prompt,
+    /\bPRs?\b|\bpull request\b|\bpush(?:es|ed|ing)?\b|\bship(?:s|ped|ping)?\b|\bcommits?\b|\bcommitting\b|\bgh\b|\bGitHub\b/i,
+    'developer prompt must not teach publication vocabulary',
+  );
+});
+
 test('default playbook: every role model level has a bootstrap model profile', () => {
   const profileRowIds = new Set(
     (bootstrapSeed.rows ?? [])

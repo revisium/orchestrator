@@ -158,6 +158,186 @@ test('buildContext: includes current step input', async () => {
   assert.ok(ctx.includes('"Add feature X"'), 'should include step input JSON');
 });
 
+test('buildContext: developer role omits publication metadata from hydrated inputs and current input', async () => {
+  const da = makeDA({ task: { title: 'CI feedback', scope: 'backend', repo_ref: '/repo' } });
+  const developerRole = makeRole('developer', {
+    systemPrompt: 'You produce verified file changes in the working tree.',
+  });
+  const step: Step = {
+    ...STEP,
+    role: 'developer',
+    input: {
+      inputs: {
+        feedback: {
+          prNumber: 17,
+          prUrl: 'https://github.com/o/r/pull/17',
+          headSha: 'abc123',
+          evidence: ['PR headSha=abc123', 'lint failed in src/api.ts'],
+        },
+        instruction: 'do not run gh pr create or git push; ship via host',
+      },
+      note: 'gh pr merge should never be in developer context',
+    },
+  };
+
+  const ctx = await buildContext(da, step, developerRole);
+
+  assert.match(ctx, /lint failed in src\/api\.ts/, 'actionable code feedback remains visible');
+  assert.doesNotMatch(ctx, /prNumber|prUrl|headSha|github\.com\/o\/r\/pull/i);
+  assert.doesNotMatch(ctx, /\bPR\b|pull request|gh pr|git push/i);
+});
+
+test('buildContext: developer role preserves shipping domain text while stripping publication commands', async () => {
+  const da = makeDA({ task: { title: 'Address validation', scope: 'backend', repo_ref: '/repo' } });
+  const developerRole = makeRole('developer', {
+    systemPrompt: 'You produce verified file changes in the working tree.',
+  });
+  const step: Step = {
+    ...STEP,
+    role: 'developer',
+    input: {
+      inputs: {
+        plan: [
+          'Fix shipping address validation for international customers.',
+          'Do not run gh pr create after validation.',
+          'Run the address parser unit tests.',
+        ].join('\n'),
+      },
+    },
+  };
+
+  const ctx = await buildContext(da, step, developerRole);
+
+  assert.match(ctx, /Fix shipping address validation for international customers\./);
+  assert.match(ctx, /Run the address parser unit tests\./);
+  assert.doesNotMatch(ctx, /gh pr create/i);
+});
+
+test('buildContext: developer role preserves natural PR review feedback while stripping publication lines', async () => {
+  const da = makeDA({ task: { title: 'Review feedback', scope: 'backend', repo_ref: '/repo' } });
+  const developerRole = makeRole('developer', {
+    systemPrompt: 'You produce verified file changes in the working tree.',
+  });
+  const step: Step = {
+    ...STEP,
+    role: 'developer',
+    input: {
+      inputs: {
+        review: [
+          'PR validation failed in src/api.ts; keep this actionable instruction.',
+          'API behavior regressed for the retry path.',
+          'PR headSha=abc123',
+          'Pull request URL: https://github.com/o/r/pull/17',
+        ].join('\n'),
+      },
+    },
+  };
+
+  const ctx = await buildContext(da, step, developerRole);
+
+  assert.match(ctx, /PR validation failed in src\/api\.ts; keep this actionable instruction\./);
+  assert.match(ctx, /API behavior regressed for the retry path\./);
+  assert.doesNotMatch(ctx, /headSha=abc123|github\.com\/o\/r\/pull\/17/i);
+});
+
+test('buildContext: developer role strips publication phrase variants', async () => {
+  const da = makeDA({ task: { title: 'Publication cleanup', scope: 'backend', repo_ref: '/repo' } });
+  const developerRole = makeRole('developer', {
+    systemPrompt: 'You produce verified file changes in the working tree.',
+  });
+  const step: Step = {
+    ...STEP,
+    role: 'developer',
+    input: {
+      inputs: {
+        review: [
+          'Create the pull request once tests pass.',
+          'PR branch is feat/task-17.',
+          'PR validation failed in src/api.ts; keep this actionable instruction.',
+        ].join('\n'),
+      },
+    },
+  };
+
+  const ctx = await buildContext(da, step, developerRole);
+
+  assert.match(ctx, /PR validation failed in src\/api\.ts; keep this actionable instruction\./);
+  assert.doesNotMatch(ctx, /Create the pull request|PR branch is feat\/task-17/i);
+});
+
+test('buildContext: developer role preserves business branch and pr keys while stripping PR metadata', async () => {
+  const da = makeDA({ task: { title: 'Domain feedback', scope: 'backend', repo_ref: '/repo' } });
+  const developerRole = makeRole('developer', {
+    systemPrompt: 'You produce verified file changes in the working tree.',
+  });
+  const step: Step = {
+    ...STEP,
+    role: 'developer',
+    input: {
+      inputs: {
+        domain: {
+          branch: 'retail',
+          pr: 'public relations',
+          nested: {
+            branch: 'main',
+            pr: { campaign: 'Spring launch' },
+          },
+        },
+        publication: {
+          branch: 'feat/task-17',
+          prNumber: 17,
+          prUrl: 'https://github.com/o/r/pull/17',
+          headSha: 'abc123',
+        },
+      },
+    },
+  };
+
+  const ctx = await buildContext(da, step, developerRole);
+
+  assert.match(ctx, /"branch": "retail"/);
+  assert.match(ctx, /"pr": "public relations"/);
+  assert.match(ctx, /"branch": "main"/);
+  assert.match(ctx, /"campaign": "Spring launch"/);
+  assert.doesNotMatch(ctx, /feat\/task-17|prNumber|prUrl|headSha|github\.com\/o\/r\/pull\/17/i);
+});
+
+test('buildContext: developer role strips nested pullRequest metadata and contextual common branch names', async () => {
+  const da = makeDA({ task: { title: 'Review feedback', scope: 'backend', repo_ref: '/repo' } });
+  const developerRole = makeRole('developer', {
+    systemPrompt: 'You produce verified file changes in the working tree.',
+  });
+  const step: Step = {
+    ...STEP,
+    role: 'developer',
+    input: {
+      inputs: {
+        review: {
+          finding: 'Fix the retry path in src/pipeline/data-driven-task.workflow.ts.',
+          provider: {
+            branch: 'main',
+            release: { branch: 'release/Issue_271-fix.1', prNumber: 287 },
+            hotfix: { branch: 'hotfix/URGENT_fix.2', prNumber: 287 },
+            pullRequest: {
+              number: 287,
+              url: 'https://github.com/revisium/orchestrator/pull/287',
+              base: 'main',
+              headRefName: 'codex/issue-271-developer-deny',
+              mergeStateStatus: 'DIRTY',
+            },
+          },
+        },
+      },
+    },
+  };
+
+  const ctx = await buildContext(da, step, developerRole);
+
+  assert.match(ctx, /Fix the retry path in src\/pipeline\/data-driven-task\.workflow\.ts\./);
+  assert.doesNotMatch(ctx, /pullRequest|github\.com\/revisium\/orchestrator\/pull\/287|headRefName|mergeStateStatus/i);
+  assert.doesNotMatch(ctx, /"branch": "main"|"base": "main"|codex\/issue-271-developer-deny|release\/Issue_271-fix\.1|hotfix\/URGENT_fix\.2/);
+});
+
 test('buildContext: includes run description, public params, and bounded planPath content', async () => {
   const repo = mkdtempSync(join(tmpdir(), 'revo-context-'));
   try {

@@ -97,11 +97,24 @@ export type IntegratorOutput = {
   headSha?: string;
   status?: 'pushed' | 'noop';
   message?: string;
+  foreignPr?: true;
+  prAuthor?: string;
+  integratorAccount?: string;
 };
 
+type ForeignPrProvenance = Pick<IntegratorOutput, 'foreignPr' | 'prAuthor' | 'integratorAccount'>;
 
-type PrListEntry = { number: number; url: string; baseRefName: string; headRefOid?: string; title?: string; body?: string };
-type PrSummary = { prUrl: string; prNumber: number; headSha?: string; title?: string; body?: string };
+
+type PrListEntry = {
+  number: number;
+  url: string;
+  baseRefName: string;
+  headRefOid?: string;
+  title?: string;
+  body?: string;
+  author?: string | { login?: string };
+};
+type PrSummary = { prUrl: string; prNumber: number; headSha?: string; title?: string; body?: string; author?: string };
 
 function issueBoundTitle(title: string, issueRef?: IssueRef, ownerRepo?: string, issueAction: IssueAction = issueRef ? 'close' : 'none'): string {
   if (!issueRef || issueAction === 'none') return title;
@@ -131,6 +144,14 @@ function parsePrList(raw: string): PrListEntry[] {
   } catch {
     throw new Error(`gh pr list returned non-JSON: ${raw.slice(0, 200)}`);
   }
+}
+
+function prAuthorLogin(author: PrListEntry['author']): string | undefined {
+  if (typeof author === 'string' && author.trim().length > 0) return author.trim();
+  if (author && typeof author === 'object' && typeof author.login === 'string' && author.login.trim().length > 0) {
+    return author.login.trim();
+  }
+  return undefined;
 }
 
 function matchingOpenPr(
@@ -164,6 +185,7 @@ function matchingOpenPr(
       ...(pr.headRefOid ? { headSha: pr.headRefOid } : {}),
       ...(pr.title !== undefined ? { title: pr.title } : {}),
       ...(pr.body !== undefined ? { body: pr.body } : {}),
+      ...(prAuthorLogin(pr.author) ? { author: prAuthorLogin(pr.author) } : {}),
     };
   }
 
@@ -282,7 +304,73 @@ function findExistingPrWithHead(
   base: string,
   execGh: ExecGhFn,
 ): PrSummary | null | IntegratorBlocked {
-  return matchingOpenPr(ownerRepo, branch, base, execGh, 'number,url,baseRefName,headRefOid,title,body');
+  return matchingOpenPr(ownerRepo, branch, base, execGh, 'number,url,baseRefName,headRefOid,title,body,author');
+}
+
+function foreignPrProvenance(author: string | undefined): ForeignPrProvenance {
+  const integratorAccount = resolveGhAccount();
+  if (!author || author.toLowerCase() === integratorAccount.toLowerCase()) return {};
+  return { foreignPr: true, prAuthor: author, integratorAccount };
+}
+
+type ProducedChangePrContext = {
+  ownerRepo: string;
+  branch: string;
+  title: string;
+  issueRef?: IssueRef;
+  issueAction?: IssueAction;
+  change: ProducedChangeArtifact;
+  execGh: ExecGhFn;
+};
+
+function repairProducedChangePr(
+  context: ProducedChangePrContext,
+  existing: PrSummary,
+  provenance: ForeignPrProvenance,
+): void {
+  if (provenance.foreignPr) return;
+  repairPr(
+    context.ownerRepo,
+    existing.prNumber,
+    context.issueRef,
+    context.issueAction,
+    existing.title,
+    existing.body,
+    issueBoundTitle(existing.title || context.title, context.issueRef, context.ownerRepo, context.issueAction),
+    prBody(existing.body, context.issueRef, context.ownerRepo, context.issueAction),
+    context.execGh,
+  );
+}
+
+function existingProducedChangeOutput(
+  context: ProducedChangePrContext,
+  existing: PrSummary,
+  provenance: ForeignPrProvenance,
+  status: 'noop' | 'pushed',
+): IntegratorOutput {
+  return {
+    prUrl: existing.prUrl,
+    branch: context.branch,
+    prNumber: existing.prNumber,
+    ...(context.issueRef ? { issueRef: context.issueRef } : {}),
+    headSha: context.change.headSha,
+    status,
+    ...(status === 'noop' ? { message: 'nothing to integrate — produced head already pushed and equals PR head' } : {}),
+    ...provenance,
+  };
+}
+
+function reuseExistingProducedChangePr(context: ProducedChangePrContext, existing: PrSummary): IntegratorOutput | null {
+  if (existing.headSha !== context.change.headSha) return null;
+  const provenance = foreignPrProvenance(existing.author);
+  repairProducedChangePr(context, existing, provenance);
+  return existingProducedChangeOutput(context, existing, provenance, 'noop');
+}
+
+function updateExistingProducedChangePr(context: ProducedChangePrContext, existing: PrSummary): IntegratorOutput {
+  const provenance = foreignPrProvenance(existing.author);
+  repairProducedChangePr(context, existing, provenance);
+  return existingProducedChangeOutput(context, existing, provenance, 'pushed');
 }
 
 
@@ -491,27 +579,10 @@ async function integrateProducedChange(
 
   const existing = findExistingPrWithHead(ownerRepo, branch, input.base, gh);
   if (existing && 'needsHuman' in existing) return existing;
-  if (existing?.headSha === change.headSha) {
-    repairPr(
-      ownerRepo,
-      existing.prNumber,
-      issueRef,
-      issueAction,
-      existing.title,
-      existing.body,
-      issueBoundTitle(existing.title || input.title, issueRef, ownerRepo, issueAction),
-      prBody(existing.body, issueRef, ownerRepo, issueAction),
-      gh,
-    );
-    return {
-      prUrl: existing.prUrl,
-      branch,
-      prNumber: existing.prNumber,
-      ...(issueRef ? { issueRef } : {}),
-      headSha: change.headSha,
-      status: 'noop',
-      message: 'nothing to integrate — produced head already pushed and equals PR head',
-    };
+  const prContext = { ownerRepo, branch, title: input.title, issueRef, issueAction, change, execGh: gh };
+  if (existing) {
+    const reused = reuseExistingProducedChangePr(prContext, existing);
+    if (reused) return reused;
   }
 
   if (!existing && countAhead(git, cwd, change.headSha, input.base) === 0) {
@@ -526,25 +597,7 @@ async function integrateProducedChange(
   git(['push', 'origin', `${change.headSha}:refs/heads/${branch}`], cwd);
 
   if (existing) {
-    repairPr(
-      ownerRepo,
-      existing.prNumber,
-      issueRef,
-      issueAction,
-      existing.title,
-      existing.body,
-      issueBoundTitle(existing.title || input.title, issueRef, ownerRepo, issueAction),
-      prBody(existing.body, issueRef, ownerRepo, issueAction),
-      gh,
-    );
-    return {
-      prUrl: existing.prUrl,
-      branch,
-      prNumber: existing.prNumber,
-      ...(issueRef ? { issueRef } : {}),
-      headSha: change.headSha,
-      status: 'pushed',
-    };
+    return updateExistingProducedChangePr(prContext, existing);
   }
 
   const created = createPr(ownerRepo, branch, input.base, input.title, issueRef, issueAction, gh);

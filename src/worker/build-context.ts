@@ -12,6 +12,49 @@ export const REVO_CONTEXT_MISSING = 'revo.ContextMissing' as const;
 
 const MAX_PUBLIC_PARAMS_CHARS = 8_000;
 const MAX_PLAN_CONTEXT_CHARS = 40_000;
+const DEVELOPER_ROLE_IDS = new Set(['developer', 'developer-codex']);
+const DEVELOPER_EXPLICIT_PUBLICATION_KEYS = new Set([
+  'basebranch',
+  'baserefname',
+  'foreignpr',
+  'headbranch',
+  'headrefname',
+  'headrefoid',
+  'headsha',
+  'mergeable',
+  'mergestatestatus',
+  'prauthor',
+  'prnumber',
+  'prurl',
+  'pullrequestnumber',
+  'pullrequesturl',
+]);
+const DEVELOPER_PULL_REQUEST_OBJECT_KEYS = new Set([
+  'author',
+  'authorlogin',
+  'base',
+  'baseref',
+  'baserefname',
+  'branch',
+  'head',
+  'headref',
+  'headrefname',
+  'headsha',
+  'isdraft',
+  'mergeable',
+  'mergestatestatus',
+  'number',
+  'state',
+  'url',
+]);
+const DEVELOPER_CONTEXTUAL_BRANCH_KEYS = new Set(['base', 'branch', 'head', 'ref', 'refname']);
+const GITHUB_PULL_URL_TEXT = /https?:\/\/(?:www\.)?github\.com\/[^\s/]+\/[^\s/]+\/pull\/\d+/i;
+const DEVELOPER_PUBLICATION_COMMAND_TEXT = /\bgh\s+pr(?:\s|$)|\bgit\s+push(?:\s|$)/i;
+const DEVELOPER_PUBLICATION_ACTION_BEFORE_PR_TEXT =
+  /\b(?:open|create|publish|submit|update|edit|merge|close|ready|draft)\b.{0,80}\b(?:PR|pull request)\b/i;
+const DEVELOPER_PUBLICATION_PR_BEFORE_METADATA_TEXT =
+  /\b(?:PR|pull request)\b.{0,80}\b(?:url|number|head|branch|merge|draft|ready)\b/i;
+const DEVELOPER_PR_METADATA_TEXT = /\bPR\b\s+(?:#\d+|number|url|head\s*sha|headSha|head|branch)\b/i;
 
 export type AgentRunContext = {
   description: string;
@@ -89,6 +132,137 @@ function redactJsonish(value: unknown): unknown {
 
 function jsonForContext(value: unknown, maxChars: number): string {
   return bounded(redactText(JSON.stringify(redactJsonish(value), null, 2)), maxChars);
+}
+
+function normalizedContextKey(key: string): string {
+  return key.replace(/[-_\s]/g, '').toLowerCase();
+}
+
+function isDeveloperRole(role: Role): boolean {
+  return DEVELOPER_ROLE_IDS.has(role.name) || (role.playbookRoleId !== undefined && DEVELOPER_ROLE_IDS.has(role.playbookRoleId));
+}
+
+function textLooksLikePrMetadata(value: string): boolean {
+  const trimmed = value.trim();
+  return GITHUB_PULL_URL_TEXT.test(trimmed)
+    || /^#?\d+\b/.test(trimmed)
+    || /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#\d+\b/.test(trimmed);
+}
+
+function textLooksLikeGitBranch(value: string): boolean {
+  const trimmed = value.trim();
+  return /^(?:refs\/heads\/|origin\/)/i.test(trimmed)
+    || /^(?:feat|fix|bugfix|chore|docs|test|refactor|codex|revo|issue)[/-]/i.test(trimmed)
+    || /^(?:main|master|develop|development|dev|trunk|release(?:[/-][A-Z0-9._-]+)?|hotfix[/-][A-Z0-9._-]+)$/i.test(trimmed);
+}
+
+function textLooksLikePrefixedGitBranch(value: string): boolean {
+  const trimmed = value.trim();
+  return /^(?:refs\/heads\/|origin\/)/i.test(trimmed)
+    || /^(?:feat|fix|bugfix|chore|docs|test|refactor|codex|revo|issue)[/-]/i.test(trimmed);
+}
+
+function isPublicationMetadataLine(line: string): boolean {
+  if (DEVELOPER_PR_METADATA_TEXT.test(line)) return true;
+  const separator = firstSeparatorIndex(line);
+  if (separator === -1) return false;
+  const key = unquote(line.slice(0, separator).trim());
+  const value = line.slice(separator + 1);
+  const normalizedKey = normalizedContextKey(key);
+  if (DEVELOPER_EXPLICIT_PUBLICATION_KEYS.has(normalizedKey)) return true;
+  if (normalizedKey === 'pr' || normalizedKey === 'pullrequest') return textLooksLikePrMetadata(value);
+  if (normalizedKey === 'branch') return textLooksLikeGitBranch(value);
+  return false;
+}
+
+function isPublicationTextLine(line: string): boolean {
+  return DEVELOPER_PUBLICATION_COMMAND_TEXT.test(line)
+    || GITHUB_PULL_URL_TEXT.test(line)
+    || DEVELOPER_PUBLICATION_ACTION_BEFORE_PR_TEXT.test(line)
+    || DEVELOPER_PUBLICATION_PR_BEFORE_METADATA_TEXT.test(line)
+    || isPublicationMetadataLine(line);
+}
+
+function sanitizeDeveloperString(value: string): string | undefined {
+  const lines = value.split('\n').filter((line) => !isPublicationTextLine(line));
+  const sanitized = lines.join('\n').trim();
+  return sanitized.length > 0 ? sanitized : undefined;
+}
+
+function recordHasPublicationMetadata(value: Record<string, unknown>): boolean {
+  return Object.entries(value).some(([key, item]) => {
+    const normalizedKey = normalizedContextKey(key);
+    if (DEVELOPER_EXPLICIT_PUBLICATION_KEYS.has(normalizedKey)) return true;
+    if (normalizedKey === 'pullrequest') return valueLooksLikePullRequestMetadata(item);
+    if (normalizedKey === 'pr' || normalizedKey === 'pullrequest') return valueLooksLikePrMetadata(item);
+    return false;
+  });
+}
+
+function valueLooksLikePrMetadata(value: unknown): boolean {
+  if (typeof value === 'number') return Number.isInteger(value) && value > 0;
+  if (typeof value === 'string') return textLooksLikePrMetadata(value);
+  return isRecord(value) && recordHasPublicationMetadata(value);
+}
+
+function valueLooksLikeStandaloneGitBranch(value: unknown): boolean {
+  return typeof value === 'string' && textLooksLikePrefixedGitBranch(value);
+}
+
+function valueLooksLikePublicationGitBranch(value: unknown): boolean {
+  return typeof value === 'string' && textLooksLikeGitBranch(value);
+}
+
+function valueLooksLikePullRequestMetadata(value: unknown): boolean {
+  if (!isRecord(value)) return valueLooksLikePrMetadata(value);
+  return Object.entries(value).some(([key, item]) => {
+    const normalizedKey = normalizedContextKey(key);
+    if (DEVELOPER_EXPLICIT_PUBLICATION_KEYS.has(normalizedKey)) return true;
+    if (!DEVELOPER_PULL_REQUEST_OBJECT_KEYS.has(normalizedKey)) return false;
+    if (normalizedKey === 'number') return typeof item === 'number' && Number.isInteger(item) && item > 0;
+    if (normalizedKey === 'url') return typeof item === 'string' && textLooksLikePrMetadata(item);
+    if (DEVELOPER_CONTEXTUAL_BRANCH_KEYS.has(normalizedKey)) return valueLooksLikePublicationGitBranch(item);
+    return item !== undefined && item !== null && item !== '';
+  });
+}
+
+function isDeveloperPublicationEntry(
+  key: string,
+  item: unknown,
+  parent: Record<string, unknown>,
+): boolean {
+  const normalizedKey = normalizedContextKey(key);
+  if (DEVELOPER_EXPLICIT_PUBLICATION_KEYS.has(normalizedKey)) return true;
+  if (normalizedKey === 'pullrequest') {
+    return valueLooksLikePullRequestMetadata(item) || valueLooksLikePrMetadata(item) || recordHasPublicationMetadata(parent);
+  }
+  if (normalizedKey === 'pr') return valueLooksLikePrMetadata(item);
+  if (DEVELOPER_CONTEXTUAL_BRANCH_KEYS.has(normalizedKey) && recordHasPublicationMetadata(parent)) {
+    return valueLooksLikePublicationGitBranch(item);
+  }
+  if (normalizedKey === 'branch') return valueLooksLikeStandaloneGitBranch(item);
+  return false;
+}
+
+function sanitizeDeveloperContext(value: unknown): unknown {
+  if (typeof value === 'string') return sanitizeDeveloperString(value);
+  if (Array.isArray(value)) {
+    return value
+      .map(sanitizeDeveloperContext)
+      .filter((item) => item !== undefined);
+  }
+  if (!isRecord(value)) return value;
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (isDeveloperPublicationEntry(key, item, value)) continue;
+    const sanitized = sanitizeDeveloperContext(item);
+    if (sanitized !== undefined) out[key] = sanitized;
+  }
+  return out;
+}
+
+function contextValueForRole(role: Role, value: unknown): unknown {
+  return isDeveloperRole(role) ? sanitizeDeveloperContext(value) : value;
 }
 
 function insideOrSame(parent: string, child: string): boolean {
@@ -173,7 +347,8 @@ export async function buildContext(
     )
     .map((a) => String(a.data.lesson));
 
-  const inputStr = step.input === null ? 'null' : JSON.stringify(step.input);
+  const inputForContext = contextValueForRole(role, step.input);
+  const inputStr = inputForContext === null ? 'null' : JSON.stringify(inputForContext ?? {});
 
   const parts: string[] = [
     `## Role: ${role.name}`,
@@ -197,7 +372,7 @@ export async function buildContext(
     }
   }
 
-  const si = step.input;
+  const si = inputForContext;
   const hydrated =
     si !== null && typeof si === 'object' && !Array.isArray(si)
       ? (si as Record<string, unknown>).inputs
