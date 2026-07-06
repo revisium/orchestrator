@@ -114,17 +114,16 @@ test('#272: unclassifiable poll state routes through classifyRecovery to recover
   });
 });
 
-test('#273: externally merged PR completes through cleanup without recovery or merge attempt', {
-  skip: '#273: pending externally merged PR target routing',
-}, async () => {
+test('#273: externally merged PR completes through cleanup without recovery or merge attempt', async () => {
   await runTargetScenario('#273: externally merged PR completes through cleanup without recovery or merge attempt', {
     executionProfile: STUB_AGENT,
     gh: 'merged-externally',
     gates: [['plan', 'approved']],
     expect: {
       terminal: 'completed',
-      path: [{ type: 'pr_polled', payload: { verdict: 'merged' } }, 'worktree_released', 'run_completed'],
-      noEvents: ['pipeline_blocked'],
+      events: ['run_completed'],
+      path: [{ type: 'pr_polled', payload: { verdict: 'merged' } }, 'worktree_released'],
+      noEvents: ['pipeline_blocked', 'merge_confirmed'],
       ghCalled: [
         ['pr', 'list', '--state', 'open'],
         ['pr', 'list', '--state', 'all'],
@@ -134,13 +133,14 @@ test('#273: externally merged PR completes through cleanup without recovery or m
   });
 });
 
-test('#273: externally closed unmerged PR reaches recoveryGate immediately with closed reason', {
-  skip: '#273: pending externally closed PR target routing',
-}, async () => {
+test('#273: externally closed unmerged PR reaches recoveryGate immediately with closed reason', async () => {
   await runTargetScenario('#273: externally closed unmerged PR reaches recoveryGate immediately with closed reason', {
     executionProfile: STUB_AGENT,
     gh: 'closed-externally',
-    gates: [['plan', 'approved'], ['merge', 'cancel']],
+    gates: [
+      ['plan', 'approved'],
+      { topic: 'merge', outcome: 'cancel', nodeId: 'recoveryGate', summaryIncludes: ['pr_closed_externally'] },
+    ],
     expect: {
       terminal: 'cancelled',
       path: [{ type: 'pr_polled', payload: { verdict: 'closed' } }],

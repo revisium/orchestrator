@@ -296,6 +296,18 @@ function checkApproveReverifyBeforeMerge(template: Template, sink: PolicySink): 
     verdict: 'clean',
     target: 'confirmMerge',
   });
+  expectRoute(template, sink, {
+    code: 'DEFAULT_POLICY_APPROVE_REVERIFY_MISSING',
+    nodeId: 'mergeApproveReverifyRouter',
+    verdict: 'merged',
+    target: 'cleanupWorktree',
+  });
+  expectRoute(template, sink, {
+    code: 'DEFAULT_POLICY_APPROVE_REVERIFY_MISSING',
+    nodeId: 'mergeApproveReverifyRouter',
+    verdict: 'closed',
+    target: 'recoveryGate',
+  });
 }
 
 function checkMergeConsumesFreshReadiness(template: Template, sink: PolicySink): void {
@@ -330,6 +342,8 @@ function checkMergeGateRecheckRouting(template: Template, sink: PolicySink): voi
   });
   expectRoutes(template, sink, 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING', 'mergeRecheckRouter', [
     ['clean', 'mergeGate'],
+    ['merged', 'cleanupWorktree'],
+    ['closed', 'recoveryGate'],
     ['review_changes', 'triage'],
     ['recheck', 'mergeReadiness'],
   ]);
@@ -742,6 +756,18 @@ function expectPollPrFeedbackHop(template: Template, sink: PolicySink, hop: Poll
     nodeId: hop.routerId,
     verdict: 'clean',
     target: hop.cleanTarget,
+  });
+  expectRoute(template, sink, {
+    code: 'DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING',
+    nodeId: hop.routerId,
+    verdict: 'merged',
+    target: 'cleanupWorktree',
+  });
+  expectRoute(template, sink, {
+    code: 'DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING',
+    nodeId: hop.routerId,
+    verdict: 'closed',
+    target: 'recoveryGate',
   });
   expectBoundedRoute(template, sink, {
     code: 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',

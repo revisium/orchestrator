@@ -172,6 +172,34 @@ test('default playbook policy: poll recheck routes must stay bounded by pollLoop
   assert.match(diagnostic.actual ?? '', /conjunctiveBound=false/);
 });
 
+test('default playbook policy: readiness routers handle terminal PR states explicitly', () => {
+  const diagnostics = diagnosticsFor(
+    mutateTemplate((template) => {
+      guardedBranchContaining(template, 'prRouter', 'merged').goto = 'confirmMerge';
+      guardedBranchContaining(template, 'prRouter', 'closed').goto = 'classifyRecovery';
+      guardedBranchContaining(template, 'mergeReadinessRouter', 'merged').goto = 'confirmMerge';
+      guardedBranchContaining(template, 'mergeReadinessRouter', 'closed').goto = 'classifyRecovery';
+    }),
+  ).filter((diagnostic) => diagnostic.code === 'DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING');
+
+  for (const nodeId of ['prRouter', 'mergeReadinessRouter'] as const) {
+    assert.ok(
+      diagnostics.some((diagnostic) =>
+        diagnostic.nodeId === nodeId &&
+        /merged -> cleanupWorktree/.test(diagnostic.expected ?? ''),
+      ),
+      `${nodeId} must route externally merged PRs to cleanupWorktree`,
+    );
+    assert.ok(
+      diagnostics.some((diagnostic) =>
+        diagnostic.nodeId === nodeId &&
+        /closed -> recoveryGate/.test(diagnostic.expected ?? ''),
+      ),
+      `${nodeId} must route externally closed PRs to recoveryGate`,
+    );
+  }
+});
+
 for (const nodeId of ['pollPr', 'mergeReadiness'] as const) {
   test(`default playbook policy: ${nodeId} must increment pollLoop`, () => {
     const diagnostic = assertDiagnostic(
@@ -316,6 +344,30 @@ test('default playbook policy: mergeApproveReverifyRouter clean must go to confi
   assert.match(diagnostic.expected ?? '', /clean -> confirmMerge/);
 });
 
+test('default playbook policy: mergeApproveReverifyRouter terminal PR states must bypass confirmMerge', () => {
+  const diagnostics = diagnosticsFor(
+    mutateTemplate((template) => {
+      guardedBranchContaining(template, 'mergeApproveReverifyRouter', 'merged').goto = 'confirmMerge';
+      guardedBranchContaining(template, 'mergeApproveReverifyRouter', 'closed').goto = 'classifyRecovery';
+    }),
+  ).filter((diagnostic) => diagnostic.code === 'DEFAULT_POLICY_APPROVE_REVERIFY_MISSING');
+
+  assert.ok(
+    diagnostics.some((diagnostic) =>
+      diagnostic.nodeId === 'mergeApproveReverifyRouter' &&
+      /merged -> cleanupWorktree/.test(diagnostic.expected ?? ''),
+    ),
+    'externally merged PRs must clean up without confirming merge again',
+  );
+  assert.ok(
+    diagnostics.some((diagnostic) =>
+      diagnostic.nodeId === 'mergeApproveReverifyRouter' &&
+      /closed -> recoveryGate/.test(diagnostic.expected ?? ''),
+    ),
+    'externally closed PRs must reach the human recovery gate directly',
+  );
+});
+
 test('default playbook policy: confirmMerge must consume fresh mergeApproveReverify evidence', () => {
   const diagnostic = assertDiagnostic(
     mutateTemplate((template) => {
@@ -345,6 +397,8 @@ test('default playbook policy: merge-gate reject must re-poll PR feedback', () =
 test('default playbook policy: merge recheck recovery routes are diagnostic when missing', () => {
   const diagnostics = diagnosticsFor(
     mutateTemplate((template) => {
+      guardedBranchContaining(template, 'mergeRecheckRouter', 'merged').goto = 'confirmMerge';
+      guardedBranchContaining(template, 'mergeRecheckRouter', 'closed').goto = 'classifyRecovery';
       guardedBranchContaining(template, 'mergeRecheckRouter', 'review_changes').goto = 'blockedEnd';
       guardedBranchContaining(template, 'mergeRecheckRouter', 'ci_changes').when = {
         op: 'verdict.eq',
@@ -375,6 +429,20 @@ test('default playbook policy: merge recheck recovery routes are diagnostic when
       /recheck -> mergeReadiness/.test(diagnostic.expected ?? ''),
     ),
     'recheck verdict must continue through readiness polling',
+  );
+  assert.ok(
+    diagnostics.some((diagnostic) =>
+      diagnostic.nodeId === 'mergeRecheckRouter' &&
+      /merged -> cleanupWorktree/.test(diagnostic.expected ?? ''),
+    ),
+    'merged recheck result must clean up without a merge attempt',
+  );
+  assert.ok(
+    diagnostics.some((diagnostic) =>
+      diagnostic.nodeId === 'mergeRecheckRouter' &&
+      /closed -> recoveryGate/.test(diagnostic.expected ?? ''),
+    ),
+    'closed recheck result must open the recovery gate directly',
   );
 });
 
