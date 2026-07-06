@@ -311,6 +311,66 @@ function foreignPrProvenance(author: string | undefined): Pick<IntegratorOutput,
   return { foreignPr: true, prAuthor: author, integratorAccount };
 }
 
+type ProducedChangePrContext = {
+  ownerRepo: string;
+  branch: string;
+  title: string;
+  issueRef?: IssueRef;
+  issueAction?: IssueAction;
+  change: ProducedChangeArtifact;
+  execGh: ExecGhFn;
+};
+
+function repairProducedChangePr(
+  context: ProducedChangePrContext,
+  existing: PrSummary,
+  provenance: Pick<IntegratorOutput, 'foreignPr' | 'prAuthor' | 'integratorAccount'>,
+): void {
+  if (provenance.foreignPr) return;
+  repairPr(
+    context.ownerRepo,
+    existing.prNumber,
+    context.issueRef,
+    context.issueAction,
+    existing.title,
+    existing.body,
+    issueBoundTitle(existing.title || context.title, context.issueRef, context.ownerRepo, context.issueAction),
+    prBody(existing.body, context.issueRef, context.ownerRepo, context.issueAction),
+    context.execGh,
+  );
+}
+
+function existingProducedChangeOutput(
+  context: ProducedChangePrContext,
+  existing: PrSummary,
+  provenance: Pick<IntegratorOutput, 'foreignPr' | 'prAuthor' | 'integratorAccount'>,
+  status: 'noop' | 'pushed',
+): IntegratorOutput {
+  return {
+    prUrl: existing.prUrl,
+    branch: context.branch,
+    prNumber: existing.prNumber,
+    ...(context.issueRef ? { issueRef: context.issueRef } : {}),
+    headSha: context.change.headSha,
+    status,
+    ...(status === 'noop' ? { message: 'nothing to integrate — produced head already pushed and equals PR head' } : {}),
+    ...provenance,
+  };
+}
+
+function reuseExistingProducedChangePr(context: ProducedChangePrContext, existing: PrSummary): IntegratorOutput | null {
+  if (existing.headSha !== context.change.headSha) return null;
+  const provenance = foreignPrProvenance(existing.author);
+  repairProducedChangePr(context, existing, provenance);
+  return existingProducedChangeOutput(context, existing, provenance, 'noop');
+}
+
+function updateExistingProducedChangePr(context: ProducedChangePrContext, existing: PrSummary): IntegratorOutput {
+  const provenance = foreignPrProvenance(existing.author);
+  repairProducedChangePr(context, existing, provenance);
+  return existingProducedChangeOutput(context, existing, provenance, 'pushed');
+}
+
 
 
 
@@ -517,31 +577,10 @@ async function integrateProducedChange(
 
   const existing = findExistingPrWithHead(ownerRepo, branch, input.base, gh);
   if (existing && 'needsHuman' in existing) return existing;
-  const existingProvenance = existing ? foreignPrProvenance(existing.author) : {};
-  if (existing?.headSha === change.headSha) {
-    if (!existingProvenance.foreignPr) {
-      repairPr(
-        ownerRepo,
-        existing.prNumber,
-        issueRef,
-        issueAction,
-        existing.title,
-        existing.body,
-        issueBoundTitle(existing.title || input.title, issueRef, ownerRepo, issueAction),
-        prBody(existing.body, issueRef, ownerRepo, issueAction),
-        gh,
-      );
-    }
-    return {
-      prUrl: existing.prUrl,
-      branch,
-      prNumber: existing.prNumber,
-      ...(issueRef ? { issueRef } : {}),
-      headSha: change.headSha,
-      status: 'noop',
-      message: 'nothing to integrate — produced head already pushed and equals PR head',
-      ...existingProvenance,
-    };
+  const prContext = { ownerRepo, branch, title: input.title, issueRef, issueAction, change, execGh: gh };
+  if (existing) {
+    const reused = reuseExistingProducedChangePr(prContext, existing);
+    if (reused) return reused;
   }
 
   if (!existing && countAhead(git, cwd, change.headSha, input.base) === 0) {
@@ -556,28 +595,7 @@ async function integrateProducedChange(
   git(['push', 'origin', `${change.headSha}:refs/heads/${branch}`], cwd);
 
   if (existing) {
-    if (!existingProvenance.foreignPr) {
-      repairPr(
-        ownerRepo,
-        existing.prNumber,
-        issueRef,
-        issueAction,
-        existing.title,
-        existing.body,
-        issueBoundTitle(existing.title || input.title, issueRef, ownerRepo, issueAction),
-        prBody(existing.body, issueRef, ownerRepo, issueAction),
-        gh,
-      );
-    }
-    return {
-      prUrl: existing.prUrl,
-      branch,
-      prNumber: existing.prNumber,
-      ...(issueRef ? { issueRef } : {}),
-      headSha: change.headSha,
-      status: 'pushed',
-      ...existingProvenance,
-    };
+    return updateExistingProducedChangePr(prContext, existing);
   }
 
   const created = createPr(ownerRepo, branch, input.base, input.title, issueRef, issueAction, gh);

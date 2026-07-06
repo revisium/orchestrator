@@ -2589,6 +2589,7 @@ test('TaskControlPlaneApiService.resolveRunState treats foreign_pr_adopted as wo
   assert.equal(state.state, 'running');
   assert.equal(state.runStatus, 'running');
   assert.equal(state.workflowStatus, '');
+  assert.equal(state.latestEventType, 'foreign_pr_adopted');
 });
 
 test('TaskControlPlaneApiService.resolveRunState exposes the latest workflow event pulse', async () => {

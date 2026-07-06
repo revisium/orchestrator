@@ -240,6 +240,31 @@ test('buildContext: developer role preserves natural PR review feedback while st
   assert.doesNotMatch(ctx, /headSha=abc123|github\.com\/o\/r\/pull\/17/i);
 });
 
+test('buildContext: developer role strips publication phrase variants', async () => {
+  const da = makeDA({ task: { title: 'Publication cleanup', scope: 'backend', repo_ref: '/repo' } });
+  const developerRole = makeRole('developer', {
+    systemPrompt: 'You produce verified file changes in the working tree.',
+  });
+  const step: Step = {
+    ...STEP,
+    role: 'developer',
+    input: {
+      inputs: {
+        review: [
+          'Create the pull request once tests pass.',
+          'PR branch is feat/task-17.',
+          'PR validation failed in src/api.ts; keep this actionable instruction.',
+        ].join('\n'),
+      },
+    },
+  };
+
+  const ctx = await buildContext(da, step, developerRole);
+
+  assert.match(ctx, /PR validation failed in src\/api\.ts; keep this actionable instruction\./);
+  assert.doesNotMatch(ctx, /Create the pull request|PR branch is feat\/task-17/i);
+});
+
 test('buildContext: developer role preserves business branch and pr keys while stripping PR metadata', async () => {
   const da = makeDA({ task: { title: 'Domain feedback', scope: 'backend', repo_ref: '/repo' } });
   const developerRole = makeRole('developer', {

@@ -30,8 +30,10 @@ const DEVELOPER_EXPLICIT_PUBLICATION_KEYS = new Set([
 ]);
 const GITHUB_PULL_URL_TEXT = /https?:\/\/(?:www\.)?github\.com\/[^\s/]+\/[^\s/]+\/pull\/\d+/i;
 const DEVELOPER_PUBLICATION_COMMAND_TEXT = /\bgh\s+pr(?:\s|$)|\bgit\s+push(?:\s|$)/i;
-const DEVELOPER_PUBLICATION_PHRASE_TEXT =
-  /\b(?:open|create|publish|submit|update|edit|merge|close|ready|draft)\b.{0,80}\b(?:PR|pull request)\b|\b(?:PR|pull request)\b.{0,80}\b(?:url|number|head|branch|merge|draft|ready)\b/i;
+const DEVELOPER_PUBLICATION_ACTION_BEFORE_PR_TEXT =
+  /\b(?:open|create|publish|submit|update|edit|merge|close|ready|draft)\b.{0,80}\b(?:PR|pull request)\b/i;
+const DEVELOPER_PUBLICATION_PR_BEFORE_METADATA_TEXT =
+  /\b(?:PR|pull request)\b.{0,80}\b(?:url|number|head|branch|merge|draft|ready)\b/i;
 const DEVELOPER_PR_METADATA_TEXT = /\bPR\b\s+(?:#\d+|number|url|head\s*sha|headSha|head|branch)\b/i;
 
 export type AgentRunContext = {
@@ -149,7 +151,8 @@ function isPublicationMetadataLine(line: string): boolean {
 function isPublicationTextLine(line: string): boolean {
   return DEVELOPER_PUBLICATION_COMMAND_TEXT.test(line)
     || GITHUB_PULL_URL_TEXT.test(line)
-    || DEVELOPER_PUBLICATION_PHRASE_TEXT.test(line)
+    || DEVELOPER_PUBLICATION_ACTION_BEFORE_PR_TEXT.test(line)
+    || DEVELOPER_PUBLICATION_PR_BEFORE_METADATA_TEXT.test(line)
     || isPublicationMetadataLine(line);
 }
 
