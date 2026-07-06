@@ -16,6 +16,7 @@ const DEVELOPER_ROLE_IDS = new Set(['developer', 'developer-codex']);
 const DEVELOPER_EXPLICIT_PUBLICATION_KEYS = new Set([
   'basebranch',
   'baserefname',
+  'foreignpr',
   'headbranch',
   'headrefname',
   'headrefoid',
@@ -28,6 +29,25 @@ const DEVELOPER_EXPLICIT_PUBLICATION_KEYS = new Set([
   'pullrequestnumber',
   'pullrequesturl',
 ]);
+const DEVELOPER_PULL_REQUEST_OBJECT_KEYS = new Set([
+  'author',
+  'authorlogin',
+  'base',
+  'baseref',
+  'baserefname',
+  'branch',
+  'head',
+  'headref',
+  'headrefname',
+  'headsha',
+  'isdraft',
+  'mergeable',
+  'mergestatestatus',
+  'number',
+  'state',
+  'url',
+]);
+const DEVELOPER_CONTEXTUAL_BRANCH_KEYS = new Set(['base', 'branch', 'head', 'ref', 'refname']);
 const GITHUB_PULL_URL_TEXT = /https?:\/\/(?:www\.)?github\.com\/[^\s/]+\/[^\s/]+\/pull\/\d+/i;
 const DEVELOPER_PUBLICATION_COMMAND_TEXT = /\bgh\s+pr(?:\s|$)|\bgit\s+push(?:\s|$)/i;
 const DEVELOPER_PUBLICATION_ACTION_BEFORE_PR_TEXT =
@@ -132,6 +152,13 @@ function textLooksLikePrMetadata(value: string): boolean {
 function textLooksLikeGitBranch(value: string): boolean {
   const trimmed = value.trim();
   return /^(?:refs\/heads\/|origin\/)/i.test(trimmed)
+    || /^(?:feat|fix|bugfix|chore|docs|test|refactor|codex|revo|issue)[/-]/i.test(trimmed)
+    || /^(?:main|master|develop|development|dev|trunk|release(?:[/-][A-Za-z0-9._-]+)?|hotfix[/-][A-Za-z0-9._-]+)$/i.test(trimmed);
+}
+
+function textLooksLikePrefixedGitBranch(value: string): boolean {
+  const trimmed = value.trim();
+  return /^(?:refs\/heads\/|origin\/)/i.test(trimmed)
     || /^(?:feat|fix|bugfix|chore|docs|test|refactor|codex|revo|issue)[/-]/i.test(trimmed);
 }
 
@@ -166,6 +193,7 @@ function recordHasPublicationMetadata(value: Record<string, unknown>): boolean {
   return Object.entries(value).some(([key, item]) => {
     const normalizedKey = normalizedContextKey(key);
     if (DEVELOPER_EXPLICIT_PUBLICATION_KEYS.has(normalizedKey)) return true;
+    if (normalizedKey === 'pullrequest') return valueLooksLikePullRequestMetadata(item);
     if (normalizedKey === 'pr' || normalizedKey === 'pullrequest') return valueLooksLikePrMetadata(item);
     return false;
   });
@@ -177,8 +205,25 @@ function valueLooksLikePrMetadata(value: unknown): boolean {
   return isRecord(value) && recordHasPublicationMetadata(value);
 }
 
-function valueLooksLikeGitBranch(value: unknown): boolean {
+function valueLooksLikeStandaloneGitBranch(value: unknown): boolean {
+  return typeof value === 'string' && textLooksLikePrefixedGitBranch(value);
+}
+
+function valueLooksLikePublicationGitBranch(value: unknown): boolean {
   return typeof value === 'string' && textLooksLikeGitBranch(value);
+}
+
+function valueLooksLikePullRequestMetadata(value: unknown): boolean {
+  if (!isRecord(value)) return valueLooksLikePrMetadata(value);
+  return Object.entries(value).some(([key, item]) => {
+    const normalizedKey = normalizedContextKey(key);
+    if (DEVELOPER_EXPLICIT_PUBLICATION_KEYS.has(normalizedKey)) return true;
+    if (!DEVELOPER_PULL_REQUEST_OBJECT_KEYS.has(normalizedKey)) return false;
+    if (normalizedKey === 'number') return typeof item === 'number' && Number.isInteger(item) && item > 0;
+    if (normalizedKey === 'url') return typeof item === 'string' && textLooksLikePrMetadata(item);
+    if (DEVELOPER_CONTEXTUAL_BRANCH_KEYS.has(normalizedKey)) return valueLooksLikePublicationGitBranch(item);
+    return item !== undefined && item !== null && item !== '';
+  });
 }
 
 function isDeveloperPublicationEntry(
@@ -188,9 +233,14 @@ function isDeveloperPublicationEntry(
 ): boolean {
   const normalizedKey = normalizedContextKey(key);
   if (DEVELOPER_EXPLICIT_PUBLICATION_KEYS.has(normalizedKey)) return true;
-  if (normalizedKey === 'pullrequest') return valueLooksLikePrMetadata(item) || recordHasPublicationMetadata(parent);
+  if (normalizedKey === 'pullrequest') {
+    return valueLooksLikePullRequestMetadata(item) || valueLooksLikePrMetadata(item) || recordHasPublicationMetadata(parent);
+  }
   if (normalizedKey === 'pr') return valueLooksLikePrMetadata(item);
-  if (normalizedKey === 'branch') return recordHasPublicationMetadata(parent) || valueLooksLikeGitBranch(item);
+  if (DEVELOPER_CONTEXTUAL_BRANCH_KEYS.has(normalizedKey) && recordHasPublicationMetadata(parent)) {
+    return valueLooksLikePublicationGitBranch(item);
+  }
+  if (normalizedKey === 'branch') return valueLooksLikeStandaloneGitBranch(item);
   return false;
 }
 

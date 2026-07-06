@@ -1776,6 +1776,8 @@ test('DD5b: markdown output with no top-level verdict is not scanned and fails a
   assert.equal(result.status, 'failed');
   assert.equal(rec.blocked.length, 0, 'missing verdict must not fall through to the default branch');
   assert.ok(rec.events.some((e) => e === 'step_failed:review'), 'invalid result emits step_failed');
+  const stepFailed = rec.eventRecords.find((event) => event.type === 'step_failed' && event.stepKey === 'review');
+  assert.match(JSON.stringify(stepFailed?.payload ?? {}), /revo\.ResultInvalid/);
   assert.match(rec.failed[0] ?? '', /revo\.ResultInvalid/);
 });
 
@@ -1900,6 +1902,7 @@ test('DD8: an integrator that THROWS fails the run (revo.ScriptFailed → failed
   const result = await run();
   assert.equal(result.status, 'failed', 'a throwing integrator fails the run');
   assert.equal(rec.failed.length, 1, 'failRun called for the failed terminal');
+  assert.match(rec.failed[0] ?? '', /revo\.ScriptFailed: git push rejected: non-fast-forward/);
   assert.equal(rec.blocked.length, 0);
 });
 

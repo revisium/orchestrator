@@ -15,7 +15,7 @@ import type { PlaybooksService } from '../revisium/playbooks.service.js';
 import type { RolesService } from '../revisium/roles.service.js';
 import type { RunService } from '../revisium/run.service.js';
 import { CreateRunWorkflowError, previewCreateRunIds } from '../run/create-run.js';
-import { TaskControlPlaneApiService } from './task-control-plane-api.service.js';
+import { hasWorkflowProgress, TaskControlPlaneApiService } from './task-control-plane-api.service.js';
 import {
   CODEX_CONSENSUS_PROFILE,
   CODEX_CONSENSUS_PROFILE_VERSION,
@@ -2538,6 +2538,11 @@ test('TaskControlPlaneApiService.resolveRunState reports running when workflow p
   assert.equal(state.state, 'running');
   assert.equal(state.runStatus, 'running');
   assert.equal(state.workflowStatus, 'PENDING');
+});
+
+test('hasWorkflowProgress recognizes foreign_pr_adopted as explicit integrator progress', () => {
+  assert.equal(hasWorkflowProgress([{ type: 'foreign_pr_adopted' } as never]), true);
+  assert.equal(hasWorkflowProgress([{ type: 'run_created' } as never]), false);
 });
 
 test('TaskControlPlaneApiService.resolveRunState treats foreign_pr_adopted as workflow progress', async () => {

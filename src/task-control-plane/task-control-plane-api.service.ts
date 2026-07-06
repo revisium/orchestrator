@@ -63,7 +63,12 @@ const execFileAsync = promisify(execFile);
 const GATE_TOPICS = new Set<string>(['plan', 'merge', 'question']);
 const WORKFLOW_SUCCESS_EVENT_TYPES = new Set(['step_succeeded', 'gate_signaled']);
 const WORKFLOW_FAILURE_EVENT_TYPES = new Set(['step_failed', 'attempt_failed']);
-const WORKFLOW_PROGRESS_EVENT_TYPES = new Set(['pipeline_blocked', 'pr_polled', 'integrate_succeeded', 'foreign_pr_adopted']);
+const INTEGRATOR_WORKFLOW_PROGRESS_EVENT_TYPES = ['integrate_succeeded', 'foreign_pr_adopted'] as const;
+export const WORKFLOW_PROGRESS_EVENT_TYPES = new Set<string>([
+  'pipeline_blocked',
+  'pr_polled',
+  ...INTEGRATOR_WORKFLOW_PROGRESS_EVENT_TYPES,
+]);
 const BUILTIN_RUNNERS = new Set(['claude-code', 'codex', 'script', 'stub-agent', 'revo-integrator', 'revo-merger', 'revo-deterministic']);
 
 export type RunnerModeInput = RunnerMode;
@@ -236,7 +241,7 @@ function normalizedRunStatus(status: string): string {
   return status === 'paused' ? 'blocked' : status;
 }
 
-function hasWorkflowProgress(events: EventSummary[]): boolean {
+export function hasWorkflowProgress(events: EventSummary[]): boolean {
   return events.some((event) => (
     event.type.startsWith('step_')
     || event.type.startsWith('attempt_')

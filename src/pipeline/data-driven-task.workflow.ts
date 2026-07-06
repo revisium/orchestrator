@@ -686,7 +686,7 @@ export function buildGateSummary(
 export type ScriptResult =
   | { outcome: 'ok'; pointer: unknown; verdict?: string }
   | { outcome: 'blocked' }
-  | { outcome: 'failed' };
+  | { outcome: 'failed'; reason?: string };
 
 type SystemScriptInvocation = {
   runId: string;
@@ -766,12 +766,13 @@ export function buildSystemScriptRegistry(deps: ScriptRegistryDeps): Map<string,
       try {
         result = useReal ? await desc.real(integratorInput) : desc.stub(integratorInput);
       } catch (err) {
+        const reason = err instanceof Error ? err.message : String(err);
         await appendEvent({
           runId, taskId: ctx.taskId, stepId: '', stepKey,
           type: 'step_failed',
-          payload: { scriptRef: decision.scriptRef, error: err instanceof Error ? err.message : String(err) },
+          payload: { scriptRef: decision.scriptRef, error: reason },
         });
-        return { outcome: 'failed' };
+        return { outcome: 'failed', reason };
       }
       if ('needsHuman' in (result as object)) {
         await appendEvent({
@@ -1045,7 +1046,11 @@ export function makeDataDrivenTask(
       }
       lastResult = eff.lastResult;
       if (eff.lastVerdict !== undefined) lastVerdict = eff.lastVerdict;
-      lastFailureReason = eff.failureReason ?? '';
+      if (eff.failureReason !== undefined) {
+        lastFailureReason = eff.failureReason;
+      } else if (eff.lastResult?.outcome !== 'failed') {
+        lastFailureReason = '';
+      }
     }
 
     throw new InterpretError(
@@ -1220,11 +1225,12 @@ export function makeDataDrivenTask(
         const stepKey = stepKeyFor(node.id, ordinal);
         const resolved = resolveConsumes(node, ctx.outputsByNode);
         if ('missing' in resolved) {
+          const reason = `${REVO_INPUT_MISSING}: required input ${resolved.missing} was not produced`;
           await appendEvent({
             runId, taskId, stepId: '', stepKey, type: 'step_failed',
-            payload: { nodeId: node.id, error: `${REVO_INPUT_MISSING}: required input ${resolved.missing} was not produced` },
+            payload: { nodeId: node.id, error: reason },
           });
-          return { lastResult: { outcome: 'failed', errorCode: REVO_INPUT_MISSING }, lastVerdict: 'failed', stepDelta: 1 };
+          return { lastResult: { outcome: 'failed', errorCode: REVO_INPUT_MISSING }, lastVerdict: 'failed', failureReason: reason, stepDelta: 1 };
         }
         const result = await invokeRole(runId, decision, node, ctx, resolved.inputs, stepKey);
         if ('blocked' in result) {
@@ -1255,7 +1261,7 @@ export function makeDataDrivenTask(
           await appendEvent({
             runId, taskId, stepId: '', stepKey, type: 'step_failed',
             idempotencyKey: result.attemptId,
-            payload: { nodeId: node.id, error: result.errorCode },
+            payload: { nodeId: node.id, error: result.errorCode, reason: result.reason },
           });
           return { lastResult: { outcome: 'failed', errorCode: result.errorCode }, lastVerdict: 'failed', failureReason: result.reason, stepDelta: result.attemptsMade };
         }
@@ -1272,18 +1278,20 @@ export function makeDataDrivenTask(
         const ordinal = nextOrdinal(ctx.effectOrdinalByNode, node.id);
         const resolved = resolveConsumes(node, ctx.outputsByNode);
         if ('missing' in resolved) {
+          const reason = `${REVO_INPUT_MISSING}: required input ${resolved.missing} was not produced`;
           await appendEvent({
             runId, taskId, stepId: '', stepKey: stepKeyFor(node.id, ordinal), type: 'step_failed',
-            payload: { nodeId: node.id, error: `${REVO_INPUT_MISSING}: required input ${resolved.missing} was not produced` },
+            payload: { nodeId: node.id, error: reason },
           });
-          return { lastResult: { outcome: 'failed', errorCode: REVO_INPUT_MISSING }, lastVerdict: 'failed', stepDelta: 1 };
+          return { lastResult: { outcome: 'failed', errorCode: REVO_INPUT_MISSING }, lastVerdict: 'failed', failureReason: reason, stepDelta: 1 };
         }
         const scriptResult = await invokeScript(runId, decision, { taskId, title, base, issueRef: ctx.issueRef, issueAction: ctx.issueAction }, bindingByRef, stepKeyFor(node.id, ordinal), resolved.inputs);
         if (scriptResult.outcome === 'blocked') {
           return { lastResult: { outcome: 'failed', errorCode: REVO_SCRIPT_BLOCKED }, lastVerdict: 'blocked', stepDelta: 1 };
         }
         if (scriptResult.outcome === 'failed') {
-          return { lastResult: { outcome: 'failed', errorCode: REVO_SCRIPT_FAILED }, lastVerdict: 'failed', stepDelta: 1 };
+          const reason = scriptResult.reason ? `${REVO_SCRIPT_FAILED}: ${scriptResult.reason}` : REVO_SCRIPT_FAILED;
+          return { lastResult: { outcome: 'failed', errorCode: REVO_SCRIPT_FAILED }, lastVerdict: 'failed', failureReason: reason, stepDelta: 1 };
         }
         await recordOutput(runId, node, ordinal, stepKeyFor(node.id, ordinal), scriptResult.pointer, ctx.outputsByNode);
         const sv = scriptResult.verdict;

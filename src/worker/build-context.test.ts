@@ -279,7 +279,7 @@ test('buildContext: developer role preserves business branch and pr keys while s
           branch: 'retail',
           pr: 'public relations',
           nested: {
-            branch: 'north',
+            branch: 'main',
             pr: { campaign: 'Spring launch' },
           },
         },
@@ -297,9 +297,43 @@ test('buildContext: developer role preserves business branch and pr keys while s
 
   assert.match(ctx, /"branch": "retail"/);
   assert.match(ctx, /"pr": "public relations"/);
-  assert.match(ctx, /"branch": "north"/);
+  assert.match(ctx, /"branch": "main"/);
   assert.match(ctx, /"campaign": "Spring launch"/);
   assert.doesNotMatch(ctx, /feat\/task-17|prNumber|prUrl|headSha|github\.com\/o\/r\/pull\/17/i);
+});
+
+test('buildContext: developer role strips nested pullRequest metadata and contextual common branch names', async () => {
+  const da = makeDA({ task: { title: 'Review feedback', scope: 'backend', repo_ref: '/repo' } });
+  const developerRole = makeRole('developer', {
+    systemPrompt: 'You produce verified file changes in the working tree.',
+  });
+  const step: Step = {
+    ...STEP,
+    role: 'developer',
+    input: {
+      inputs: {
+        review: {
+          finding: 'Fix the retry path in src/pipeline/data-driven-task.workflow.ts.',
+          provider: {
+            branch: 'main',
+            pullRequest: {
+              number: 287,
+              url: 'https://github.com/revisium/orchestrator/pull/287',
+              base: 'main',
+              headRefName: 'codex/issue-271-developer-deny',
+              mergeStateStatus: 'DIRTY',
+            },
+          },
+        },
+      },
+    },
+  };
+
+  const ctx = await buildContext(da, step, developerRole);
+
+  assert.match(ctx, /Fix the retry path in src\/pipeline\/data-driven-task\.workflow\.ts\./);
+  assert.doesNotMatch(ctx, /pullRequest|github\.com\/revisium\/orchestrator\/pull\/287|headRefName|mergeStateStatus/i);
+  assert.doesNotMatch(ctx, /"branch": "main"|"base": "main"|codex\/issue-271-developer-deny/);
 });
 
 test('buildContext: includes run description, public params, and bounded planPath content', async () => {
