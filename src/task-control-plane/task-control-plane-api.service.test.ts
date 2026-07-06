@@ -707,6 +707,36 @@ test('TaskControlPlaneApiService.resolveGate rejects invalid outcome and approve
   await assert.rejects(() => api.resolveGate({ inboxId: 'inbox-1', outcome: 'approve_anyway', resolvedBy: 'human' }), /requires a non-empty note/);
 });
 
+test('TaskControlPlaneApiService requires a human note for questionGate fix and wontfix outcomes', async () => {
+  const api = makeApi({
+    inboxService: {
+      async getInbox() {
+        return makeInboxItem({
+          options: ['fix', 'wontfix', 'cancel'],
+          context: { topic: 'question', summary: { nodeId: 'questionGate', outcomes: ['fix', 'wontfix', 'cancel'] } },
+        });
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => api.resolveGate({ inboxId: 'inbox-1', outcome: 'fix', resolvedBy: 'human' }),
+    /questionGate fix requires a non-empty note/,
+  );
+  await assert.rejects(
+    () => api.resolveGate({ inboxId: 'inbox-1', outcome: 'wontfix', note: '   ', resolvedBy: 'human' }),
+    /questionGate wontfix requires a non-empty note/,
+  );
+  await assert.rejects(
+    () => api.resolveInboxItem({ inboxId: 'inbox-1', answer: { outcome: 'fix' }, resolvedBy: 'human' }),
+    /questionGate fix requires a non-empty note/,
+  );
+  await assert.rejects(
+    () => api.resolveInboxItem({ inboxId: 'inbox-1', answer: { outcome: 'wontfix', note: '   ' }, resolvedBy: 'human' }),
+    /questionGate wontfix requires a non-empty note/,
+  );
+});
+
 const completeAdoptionAudit = {
   runId: 'run-1',
   step: 'developer',

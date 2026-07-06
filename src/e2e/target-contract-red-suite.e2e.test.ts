@@ -1,34 +1,65 @@
-import { test } from 'node:test';
+import { after, test } from 'node:test';
+import assert from 'node:assert/strict';
 import {
   createRunHarness,
   createTargetRepo,
+  e2eSkip,
   givenSeededDefaultPlaybook,
   pipelineScenario,
   routedGhEmulator,
   routedRunCaseAgent,
   type PipelineScenario,
   type RunCase,
+  type RunHarness,
 } from './kit/index.js';
 
 const STUB_AGENT = { runnerOverrides: { 'claude-code': 'stub-agent' } };
+let sharedHarness: RunHarness | undefined;
+const sharedRunCases = new Map<string, RunCase>();
 
-async function runTargetScenario(title: string, scenario: Omit<PipelineScenario, 'title' | 'playbook' | 'repo'>): Promise<void> {
-  const runCases = new Map<string, RunCase>();
+after(async () => {
+  if (sharedHarness) await sharedHarness.close();
+});
+
+async function targetHarness(): Promise<RunHarness> {
+  if (!sharedHarness) {
+    sharedHarness = await createRunHarness({
+      gh: (calls) => routedGhEmulator(sharedRunCases, calls),
+      agent: (sink) => routedRunCaseAgent(sharedRunCases, sink),
+    });
+    await givenSeededDefaultPlaybook(sharedHarness);
+  }
+  return sharedHarness;
+}
+
+async function runTargetScenario(title: string, scenario: Omit<PipelineScenario, 'title' | 'playbook' | 'repo'>): Promise<string[][]> {
   const target = createTargetRepo();
-  const h = await createRunHarness({
-    gh: (calls) => routedGhEmulator(runCases, calls),
-    agent: (sink) => routedRunCaseAgent(runCases, sink),
-    ...(scenario.cleanup?.releaseWorktreeFails
-      ? { releaseWorktree: async () => { throw new Error('forced cleanup release failure'); } }
-      : {}),
-  });
+  const runCases = scenario.cleanup?.releaseWorktreeFails ? new Map<string, RunCase>() : sharedRunCases;
+  const h = scenario.cleanup?.releaseWorktreeFails
+    ? await createRunHarness({
+        gh: (calls) => routedGhEmulator(runCases, calls),
+        agent: (sink) => routedRunCaseAgent(runCases, sink),
+        releaseWorktree: async () => { throw new Error('forced cleanup release failure'); },
+      })
+    : await targetHarness();
   try {
-    await givenSeededDefaultPlaybook(h);
+    if (scenario.cleanup?.releaseWorktreeFails) await givenSeededDefaultPlaybook(h);
     await pipelineScenario(h, runCases, { title, playbook: 'default', repo: target, ...scenario });
+    return [...h.ghCalls];
   } finally {
-    await h.close();
+    if (scenario.cleanup?.releaseWorktreeFails) await h.close();
     target.cleanup();
   }
+}
+
+function assertReviewReplyIncludes(calls: string[][], expected: string): void {
+  const bodies = calls
+    .filter((args) => args[0] === 'api' && args[1] === 'graphql' && args.some((arg) => arg.includes('addPullRequestReviewThreadReply')))
+    .map((args) => args.find((arg) => arg.startsWith('body='))?.slice('body='.length) ?? '');
+  assert.ok(
+    bodies.some((body) => body.includes(expected)),
+    `expected a review-thread reply body to include ${JSON.stringify(expected)}; got ${JSON.stringify(bodies)}`,
+  );
 }
 
 test('#272: no registered checks are advisory and still reach mergeGate', {
@@ -133,19 +164,46 @@ test('#275: GraphQL partial outage is never treated as clean readiness', {
   });
 });
 
-test('#276: questionGate changes_requested routes to review rework and resolves threads', {
-  skip: '#276: pending questionGate target routing',
+test('#276: questionGate fix routes to review rework and resolves threads with the human reason', {
+  skip: e2eSkip,
 }, async () => {
-  await runTargetScenario('#276: questionGate changes_requested routes to review rework and resolves threads', {
+  const note = 'human chose fix because the review catches a real defect';
+  const calls = await runTargetScenario('#276: questionGate fix routes to review rework and resolves threads with the human reason', {
     executionProfile: STUB_AGENT,
     gh: 'review-comment',
-    agent: { byRole: { triager: { kind: 'triage', decisions: ['question', 'wontfix'] } } },
-    gates: [['plan', 'approved'], ['question', 'changes_requested'], ['merge', 'approved']],
+    agent: { byRole: { triager: { kind: 'triage', decisions: ['question'] } } },
+    gates: [
+      ['plan', 'approved'],
+      { topic: 'question', outcome: 'fix', note },
+      ['merge', 'approved'],
+    ],
     expect: {
       terminal: 'completed',
       events: ['threads_responded', 'merge_confirmed'],
     },
   });
+  assertReviewReplyIncludes(calls, note);
+});
+
+test('#276: questionGate wontfix routes directly to respondThreads with the human reason', {
+  skip: e2eSkip,
+}, async () => {
+  const note = 'human chose wontfix because the requested change is out of scope';
+  const calls = await runTargetScenario('#276: questionGate wontfix routes directly to respondThreads with the human reason', {
+    executionProfile: STUB_AGENT,
+    gh: 'review-comment',
+    agent: { byRole: { triager: { kind: 'triage', decisions: ['question'] } } },
+    gates: [
+      ['plan', 'approved'],
+      { topic: 'question', outcome: 'wontfix', note },
+      ['merge', 'approved'],
+    ],
+    expect: {
+      terminal: 'completed',
+      events: ['threads_responded', 'merge_confirmed'],
+    },
+  });
+  assertReviewReplyIncludes(calls, note);
 });
 
 test('#277: cleanupWorktree failure after successful merge completes with cleanup_failed event', {

@@ -78,6 +78,15 @@ export async function approveUntilTerminal(
     const topic = (context as Record<string, unknown>)['topic'];
     assert.equal(typeof topic, 'string');
     approvedTopics.push(topic as string);
-    await api.resolveGate({ inboxId: inbox.id, outcome: 'approved', resolvedBy: 'e2e' });
+    const summary = (context as { summary?: { outcomes?: unknown } }).summary;
+    const outcomes = Array.isArray(summary?.outcomes)
+      ? summary.outcomes.filter((outcome): outcome is string => typeof outcome === 'string')
+      : [];
+    const outcome = outcomes.find((candidate) => candidate === 'approved')
+      ?? outcomes.find((candidate) => candidate === 'approve_anyway')
+      ?? outcomes.find((candidate) => candidate === 'cancel')
+      ?? outcomes.find((candidate) => candidate === 'abort')
+      ?? 'approved';
+    await api.resolveGate({ inboxId: inbox.id, outcome, resolvedBy: 'e2e' });
   }
 }

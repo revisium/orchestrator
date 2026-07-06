@@ -95,6 +95,7 @@ GraphQL mutations:
 
 - `resolve_gate` / `resolveGate` MUST validate that `outcome` is one of the pending inbox row options.
 - It MUST require a non-empty note for `approve_anyway`.
+- It MUST require a non-empty note for `questionGate` outcomes `fix` and `wontfix`.
 - `approve_gate` / `reject_gate` remain compatibility wrappers for simple two-way gates and MUST reject multi-outcome gates (plan, merge, stuck-review) rather than mapping approve to `approve_anyway` or reject to a recovery, recheck, cancel, or abort outcome.
 
 Verification environment blocks open a recovery gate with outcomes `rerun_with_permissions`, `continue_in_revo`,
@@ -250,11 +251,15 @@ mergeReadiness ci_changes -> developer rework -> integrator
 mergeReadiness review_changes -> analyst triage
 pollPr ci_changes -> developer rework -> integrator
 pollPr review_changes -> analyst triage
-triage question -> questionGate -> triage
+triage question -> questionGate
+questionGate fix -> question-scoped developer rework -> respondThreads -> pollPr
+questionGate wontfix -> respondThreads -> pollPr
+questionGate cancel -> cancelledEnd
 triage fix -> developer rework -> respondThreads -> integrator
 triage wontfix -> respondThreads -> pollPr
 mergeGate approved -> confirmMerge
 mergeGate recheck -> mergeRecheck -> mergeRecheckRouter
+mergeRecheckRouter clean -> mergeGate
 mergeGate address_review_threads -> triage
 mergeGate return_to_development -> triage
 mergeGate override_merge -> confirmMerge   (override audit required)
@@ -277,7 +282,11 @@ Contracts:
   `clean`.
 - Advisory (non-required) check failures MUST NOT burn `ciLoop` or route to rework when required checks and
   mergeability are clean.
-- `respondThreads` MUST reply to and resolve only the threads it triaged as `fix` or `wontfix`.
+- `respondThreads` MUST reply to and resolve only the threads triaged or gate-resolved as `fix` or `wontfix`, and
+  question-gate replies MUST include the required human note.
+- `questionGate fix` MUST pass the gate resolution, including the required human note, into the question-scoped
+  developer rework input before integration. Direct triage `fix` rework MUST NOT receive a stale prior
+  `questionGate` resolution.
 - Resolved or reopened threads are detected by the next PR poll.
 - Thread maps and triage decisions ride `run_outputs`; no separate durable PR-thread table exists in v1.
 - Unresolved review threads are an independent blocker: `pollPr` / `mergeReadiness` MUST emit `review_changes` when threads

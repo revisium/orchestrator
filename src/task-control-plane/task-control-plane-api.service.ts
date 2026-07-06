@@ -177,6 +177,29 @@ function gateOutcomes(item: InboxItem): string[] {
   return gateDeclaredOutcomes(item);
 }
 
+function gateSummaryNodeId(item: InboxItem): string | undefined {
+  const context = asRecord(item.context);
+  const summary = asRecord(context?.summary);
+  const nodeId = summary?.nodeId;
+  return typeof nodeId === 'string' ? nodeId : undefined;
+}
+
+function isQuestionGateReasonOutcome(item: InboxItem, outcome: string): boolean {
+  if (outcome !== 'fix' && outcome !== 'wontfix') return false;
+  if (gateSummaryNodeId(item) === 'questionGate') return true;
+  const outcomes = gateOutcomes(item);
+  return gateTopic(item) === 'question' && outcomes.includes('fix') && outcomes.includes('wontfix');
+}
+
+function assertRequiredGateNote(item: InboxItem, outcome: string, note: string | undefined): void {
+  if (outcome === 'approve_anyway' && !note) {
+    throw new ControlPlaneError('VALIDATION_FAILURE', 'approve_anyway requires a non-empty note');
+  }
+  if (isQuestionGateReasonOutcome(item, outcome) && !note) {
+    throw new ControlPlaneError('VALIDATION_FAILURE', `questionGate ${outcome} requires a non-empty note`);
+  }
+}
+
 async function git(cwd: string, args: string[]): Promise<GitResult> {
   try {
     const result = await execFileAsync('git', args, {
@@ -1279,9 +1302,7 @@ export class TaskControlPlaneApiService {
       );
     }
     const note = input.note?.trim();
-    if (outcome === 'approve_anyway' && !note) {
-      throw new ControlPlaneError('VALIDATION_FAILURE', 'approve_anyway requires a non-empty note');
-    }
+    assertRequiredGateNote(item, outcome, note);
     const adoptionAudit = outcome === 'adopt_patch_manually'
       ? validateManualAdoptionAudit(input.adoptionAudit, item)
       : undefined;
@@ -1386,9 +1407,7 @@ export class TaskControlPlaneApiService {
         }
         this.assertGateOutcome(item, outcome);
         const note = typeof answer?.note === 'string' ? answer.note.trim() : '';
-        if (outcome === 'approve_anyway' && !note) {
-          throw new ControlPlaneError('VALIDATION_FAILURE', 'approve_anyway requires a non-empty note');
-        }
+        assertRequiredGateNote(item, outcome, note);
         const adoptionAudit = outcome === 'adopt_patch_manually'
           ? validateManualAdoptionAudit(answer.adoptionAudit, item)
           : undefined;

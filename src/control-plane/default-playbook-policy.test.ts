@@ -345,20 +345,20 @@ test('default playbook policy: merge recheck recovery routes are diagnostic when
   );
 });
 
-test('default playbook policy: merge recheck clean/default abort path is diagnostic when missing', () => {
+test('default playbook policy: merge recheck clean must re-present mergeGate and default must recover', () => {
   const diagnostics = diagnosticsFor(
     mutateTemplate((template) => {
-      guardedBranchContaining(template, 'mergeRecheckRouter', 'clean').goto = 'mergeGate';
-      defaultBranch(template, 'mergeRecheckRouter').default = 'mergeGate';
+      guardedBranchContaining(template, 'mergeRecheckRouter', 'clean').goto = 'blockedEnd';
+      defaultBranch(template, 'mergeRecheckRouter').default = 'blockedEnd';
     }),
   ).filter((diagnostic) => diagnostic.code === 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING');
 
   assert.ok(
     diagnostics.some((diagnostic) =>
       diagnostic.nodeId === 'mergeRecheckRouter' &&
-      /clean -> blockedEnd/.test(diagnostic.expected ?? ''),
+      /clean -> mergeGate/.test(diagnostic.expected ?? ''),
     ),
-    'clean recheck result must remain an explicit abort',
+    'clean recheck result must re-present mergeGate',
   );
   assert.ok(
     diagnostics.some((diagnostic) =>
@@ -461,6 +461,31 @@ test('default playbook policy: missing developer-fix route after triage is diagn
 
   assert.equal(diagnostic.nodeId, 'triageRouter');
   assert.match(diagnostic.expected ?? '', /fix -> reviewRework/);
+});
+
+test('default playbook policy: questionGate fix must route to question-scoped rework', () => {
+  const diagnostic = assertDiagnostic(
+    mutateTemplate((template) => {
+      guardedBranchContaining(template, 'questionGate', 'fix').goto = 'reviewRework';
+    }),
+    'DEFAULT_POLICY_REVIEW_CHANGES_ROUTE_MISSING',
+  );
+
+  assert.equal(diagnostic.nodeId, 'questionGate');
+  assert.match(diagnostic.expected ?? '', /fix -> questionReviewRework/);
+});
+
+test('default playbook policy: question-scoped rework must consume gateResolution', () => {
+  const diagnostic = assertDiagnostic(
+    mutateTemplate((template) => {
+      const node = template.nodes['questionReviewRework'];
+      node['consumes'] = [{ node: 'triage', as: 'triage' }];
+    }),
+    'DEFAULT_POLICY_REVIEW_CHANGES_ROUTE_MISSING',
+  );
+
+  assert.equal(diagnostic.nodeId, 'questionReviewRework');
+  assert.match(diagnostic.expected ?? '', /questionGate as=gateResolution/);
 });
 
 test('default playbook policy: blocked terminal must remain first-class', () => {
@@ -621,19 +646,22 @@ test('default playbook policy: confirmMerge cannot bypass cleanupWorktree by rem
   assert.match(diagnostic.expected ?? '', /script:cleanupWorktree/);
 });
 
-test('default playbook policy: cancel/rework outcomes must have explicit guarded branches', () => {
+test('default playbook policy: every declared gate outcome must have an explicit guarded branch', () => {
   const diagnostic = assertDiagnostic(
     mutateTemplate((template) => {
-      const rg = template.nodes['recoveryGate'];
-      rg['branches'] = (rg['branches'] as unknown[]).filter(
-        (b) => !JSON.stringify(b).includes('"cancel"'),
-      );
+      const gate = template.nodes['questionGate'];
+      gate['outcomes'] = ['fix', 'wontfix', 'cancel'];
+      gate['branches'] = [
+        { when: { op: 'verdict.eq', value: 'fix' }, goto: 'questionReviewRework' },
+        { when: { op: 'verdict.eq', value: 'cancel' }, goto: 'cancelledEnd' },
+        { default: 'recoveryGate' },
+      ];
     }),
     'DEFAULT_POLICY_GATE_OUTCOMES_IMPLICIT',
   );
 
-  assert.equal(diagnostic.nodeId, 'recoveryGate');
-  assert.match(diagnostic.expected ?? '', /cancel/);
+  assert.equal(diagnostic.nodeId, 'questionGate');
+  assert.match(diagnostic.expected ?? '', /wontfix/);
 });
 
 test('default playbook policy: reconciled codex-consensus has zero policy violations', () => {

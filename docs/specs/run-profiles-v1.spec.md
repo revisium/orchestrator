@@ -123,11 +123,11 @@ Current-node mapping for the default bundled graph:
 | --- | --- |
 | `analyst` | `analyst` |
 | `planReview` | `planReviewer`; current `TopologyProfile` uses `baseName: "planReview"` when materializing fanout ids. |
-| `developer` | `developer`, plus recovery/rework producers such as `reworkDeveloper`, `reviewRework`, `ciRework`, and `stuckReworkDeveloper`. |
+| `developer` | `developer`, plus recovery/rework producers such as `reworkDeveloper`, `reviewRework`, `questionReviewRework`, `ciRework`, and `stuckReworkDeveloper`. |
 | `codeReview` | `codeReview` |
 | `triager` | `triage`, `triageRouter`, `classifyRecovery`, and `recoveryRouter` route triage/recovery decisions. |
 | `watcher` | `pollPr`, `mergeReadiness`, `mergeRecheck`, and `mergeApproveReverify` perform PR/readiness observation. |
-| `integrator` | `integrator`, `reviewIntegrator`, and `respondThreads` perform repository and review-thread integration. |
+| `integrator` | `integrator`, `reviewIntegrator`, `questionReviewIntegrator`, and `respondThreads` perform repository and review-thread integration. |
 | `merger` | `confirmMerge` and `cleanupWorktree` perform final merge and cleanup. |
 
 The pipeline MAY keep `roleRef` values such as `role:analyst` for playbook capability lookup, but those ids MUST NOT
