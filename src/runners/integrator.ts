@@ -845,31 +845,6 @@ export function mergeSignal(mergeStateStatus: string | undefined, mergeable: str
   return 'unknown';
 }
 
-const STANDARD_CHECK_RESULTS = new Set('ACTION_REQUIRED CANCELLED ERROR EXPECTED FAILURE IN_PROGRESS NEUTRAL PENDING QUEUED SKIPPED STALE STARTUP_FAILURE SUCCESS TIMED_OUT UNKNOWN'.split(' '));
-const STANDARD_MERGE_STATE_STATUSES = new Set('BEHIND BLOCKED CLEAN DIRTY DRAFT HAS_HOOKS UNKNOWN UNSTABLE'.split(' '));
-const STANDARD_MERGEABLE_STATES = new Set('CONFLICTING MERGEABLE UNKNOWN'.split(' '));
-
-function nonEmptyUpper(value: string | undefined): string { return (value ?? '').trim().toUpperCase(); }
-
-function unclassifiablePollState(readiness: PollPrReadiness): string[] {
-  const states = readiness.checks.list.flatMap((check) => {
-    const result = nonEmptyUpper(check.result);
-    return result !== '' && !STANDARD_CHECK_RESULTS.has(result) ? [`check result ${result}`] : [];
-  });
-  for (const [label, value, known] of [
-    ['mergeStateStatus', readiness.mergeStateStatus, STANDARD_MERGE_STATE_STATUSES],
-    ['mergeable', readiness.mergeable, STANDARD_MERGEABLE_STATES],
-  ] as const) {
-    const result = nonEmptyUpper(value);
-    if (result !== '' && !known.has(result)) states.push(`${label} ${result}`);
-  }
-  return states;
-}
-
-function unclassifiableReadinessBlock(readiness: PollPrReadiness, states: string[]): IntegratorBlocked { return { needsHuman: true, lesson: [...readiness.evidence, ...readinessEvidence(readiness), `pollPr unclassifiable readiness state: ${states.join(', ')}`, `PR headSha=${readiness.pr.headSha}`].join('; ') }; }
-
-
-
 export async function pollPr(
   input: IntegratorInput,
   deps: PollPrDeps,
@@ -917,6 +892,37 @@ export async function pollPr(
   }
 
   let settled: PollPrReadiness = readiness;
+
+  const standardCheckResults = new Set('ACTION_REQUIRED CANCELLED ERROR EXPECTED FAILURE IN_PROGRESS NEUTRAL PENDING QUEUED SKIPPED STALE STARTUP_FAILURE SUCCESS TIMED_OUT UNKNOWN'.split(' '));
+  const standardMergeStateStatuses = new Set('BEHIND BLOCKED CLEAN DIRTY DRAFT HAS_HOOKS UNKNOWN UNSTABLE'.split(' '));
+  const standardMergeableStates = new Set('CONFLICTING MERGEABLE UNKNOWN'.split(' '));
+  const addUnclassifiableState = (
+    states: string[],
+    label: string,
+    value: string | undefined,
+    known: ReadonlySet<string>,
+  ): void => {
+    const state = (value ?? '').trim().toUpperCase();
+    if (state !== '' && !known.has(state)) states.push(`${label} ${state}`);
+  };
+  const unclassifiablePollState = (snapshot: PollPrReadiness): string[] => {
+    const states: string[] = [];
+    for (const check of snapshot.checks.list) {
+      addUnclassifiableState(states, 'check result', check.result, standardCheckResults);
+    }
+    addUnclassifiableState(states, 'mergeStateStatus', snapshot.mergeStateStatus, standardMergeStateStatuses);
+    addUnclassifiableState(states, 'mergeable', snapshot.mergeable, standardMergeableStates);
+    return states;
+  };
+  const unclassifiableReadinessBlock = (snapshot: PollPrReadiness, states: string[]): IntegratorBlocked => ({
+    needsHuman: true,
+    lesson: [
+      ...snapshot.evidence,
+      ...readinessEvidence(snapshot),
+      `pollPr unclassifiable readiness state: ${states.join(', ')}`,
+      `PR headSha=${snapshot.pr.headSha}`,
+    ].join('; '),
+  });
 
   const unclassifiable = unclassifiablePollState(settled);
   if (unclassifiable.length > 0) {

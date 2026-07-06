@@ -2086,6 +2086,29 @@ test('pollPr: unclassifiable check or mergeability state blocks for recovery cla
   }
 });
 
+test('pollPr: unclassifiable state during review grace blocks for recovery classification', async () => {
+  let reads = 0;
+  const collect = async (): Promise<PollPrReadiness> => {
+    reads++;
+    return reads === 1
+      ? readiness({ headSha: 'green-head' })
+      : readiness({
+          headSha: 'green-head',
+          list: [{ name: 'Required checks', result: 'WAT' }],
+          evidence: ['unexpected state after readying PR'],
+        });
+  };
+
+  const r = await pollPr(POLL_INPUT, pollDeps(collect, { reviewGracePolls: 1 }));
+
+  assert.equal(reads, 2, 'review grace observes the second readiness snapshot');
+  assert.ok('needsHuman' in r, 'unclassifiable final readiness must not return clean');
+  if ('needsHuman' in r) {
+    assert.match(r.lesson, /unexpected state after readying PR/);
+    assert.match(r.lesson, /check result WAT/);
+  }
+});
+
 test('pollPr: readiness human decision is not classified as clean', async () => {
   const collect = async (): Promise<PollPrReadiness> => ({
     ...readiness({ evidence: ['Review decision is CHANGES_REQUESTED'] }),
