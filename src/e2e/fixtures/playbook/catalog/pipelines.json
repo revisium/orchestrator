@@ -639,7 +639,7 @@
                   "op": "verdict.eq",
                   "value": "clean"
                 },
-                "goto": "blockedEnd"
+                "goto": "mergeGate"
               },
               {
                 "when": {
@@ -975,28 +975,94 @@
             "kind": "humanGate",
             "reason": "review-question",
             "outcomes": [
-              "approved",
-              "changes_requested"
+              "fix",
+              "wontfix",
+              "cancel"
             ],
             "incrementCounters": [
               "questionLoop"
             ],
+            "produces": {
+              "name": "gateResolution"
+            },
             "branches": [
               {
                 "when": {
                   "op": "verdict.eq",
-                  "value": "approved"
+                  "value": "fix"
                 },
-                "goto": "triage"
+                "goto": "questionReviewRework"
               },
               {
-                "default": "blockedEnd"
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "wontfix"
+                },
+                "goto": "respondThreads"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "cancel"
+                },
+                "goto": "cancelledEnd"
+              },
+              {
+                "default": "recoveryGate"
               }
             ],
             "gatedArtifact": {
               "node": "triage",
               "as": "triage"
             }
+          },
+          "questionReviewRework": {
+            "id": "questionReviewRework",
+            "kind": "agent",
+            "roleRef": "role:developer",
+            "next": "questionReviewIntegrator",
+            "onFailure": "abort",
+            "resultSchema": "schema:change",
+            "incrementCounters": [
+              "reviewLoop"
+            ],
+            "produces": {
+              "name": "change"
+            },
+            "consumes": [
+              {
+                "node": "triage",
+                "as": "triage"
+              },
+              {
+                "node": "questionGate",
+                "as": "gateResolution"
+              }
+            ]
+          },
+          "questionReviewIntegrator": {
+            "id": "questionReviewIntegrator",
+            "kind": "script",
+            "scriptRef": "script:integrator",
+            "next": "respondThreads",
+            "onFailure": "route",
+            "resultSchema": "schema:integration",
+            "consumes": [
+              {
+                "node": "questionReviewRework",
+                "as": "reviewChange"
+              }
+            ],
+            "catch": [
+              {
+                "onError": "revo.ScriptBlocked",
+                "goto": "classifyRecovery"
+              },
+              {
+                "onError": "revo.ScriptFailed",
+                "goto": "classifyRecovery"
+              }
+            ]
           },
           "reviewRework": {
             "id": "reviewRework",
@@ -1053,6 +1119,12 @@
               {
                 "node": "triage",
                 "as": "triage"
+              },
+              {
+                "node": "questionGate",
+                "as": "gateResolution",
+                "optional": true,
+                "staleOk": true
               }
             ],
             "catch": [
@@ -1186,8 +1258,7 @@
             "reason": "merge-recovery",
             "outcomes": [
               "recheck",
-              "cancel",
-              "approved"
+              "cancel"
             ],
             "branches": [
               {
@@ -2372,6 +2443,13 @@
                 "goto": "mergedEnd"
               },
               {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "changes_requested"
+                },
+                "goto": "blockedEnd"
+              },
+              {
                 "default": "blockedEnd"
               }
             ]
@@ -2450,6 +2528,13 @@
                 "goto": "integrator"
               },
               {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "abort"
+                },
+                "goto": "blockedEnd"
+              },
+              {
                 "default": "blockedEnd"
               }
             ],
@@ -2501,6 +2586,13 @@
                   "value": "rework"
                 },
                 "goto": "codeFinalStuckGate"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "abort"
+                },
+                "goto": "blockedEnd"
               },
               {
                 "default": "blockedEnd"

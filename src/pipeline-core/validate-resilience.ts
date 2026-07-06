@@ -17,7 +17,7 @@ function ruleGateOutcomesExplicitlyRouted(template: Template, d: DiagSink): void
       if (node.branches.some((branch) => isGuardedBranch(branch) && conditionPositivelyMentionsVerdict(branch.when, outcome))) {
         continue;
       }
-      d.warn(
+      d.error(
         'GATE_OUTCOME_UNROUTED',
         `humanGate ${node.id} declares outcome "${outcome}" but no guarded branch explicitly routes it`,
         { nodeId: node.id, path: `outcomes.${outcome}` },

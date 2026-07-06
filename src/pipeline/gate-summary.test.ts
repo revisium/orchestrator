@@ -126,6 +126,51 @@ test('iteration:latest picks the most recent ordinal; a pinned number selects th
   assert.deepEqual(pinned.gatedArtifact?.payload, { plan: 'v1' });
 });
 
+test('a merge gate reopened by a clean mergeRecheck surfaces the fresh recheck artifact', () => {
+  const mergeRecheck = row('mergeRecheck', { verdict: 'clean', headSha: 'recheck-fresh' });
+  const summary = buildGateSummary(
+    gate({
+      nodeId: 'mergeGate',
+      reason: 'merge',
+      outcomes: ['approved', 'recheck', 'cancel'],
+      gatedArtifact: { node: 'mergeReadiness', as: 'prFeedback' },
+    }),
+    outputs(
+      row('mergeReadiness', { verdict: 'clean', headSha: 'readiness-old' }),
+      row('mergeGate', { outcome: 'recheck' }),
+      mergeRecheck,
+    ),
+    'clean',
+    mergeRecheck,
+  );
+
+  assert.equal(summary.gatedArtifact?.nodeId, 'mergeRecheck');
+  assert.deepEqual(summary.gatedArtifact?.payload, { verdict: 'clean', headSha: 'recheck-fresh' });
+});
+
+test('a recovered merge gate ignores stale mergeRecheck when mergeReadiness was immediate', () => {
+  const mergeReadiness = row('mergeReadiness', { verdict: 'clean', headSha: 'readiness-current' }, 2);
+  const summary = buildGateSummary(
+    gate({
+      nodeId: 'mergeGate',
+      reason: 'merge',
+      outcomes: ['approved', 'recheck', 'cancel'],
+      gatedArtifact: { node: 'mergeReadiness', as: 'prFeedback' },
+    }),
+    outputs(
+      row('mergeReadiness', { verdict: 'clean', headSha: 'readiness-old' }),
+      row('mergeGate', { outcome: 'recheck' }),
+      row('mergeRecheck', { verdict: 'review_changes', headSha: 'stale-recheck' }),
+      mergeReadiness,
+    ),
+    'clean',
+    mergeReadiness,
+  );
+
+  assert.equal(summary.gatedArtifact?.nodeId, 'mergeReadiness');
+  assert.deepEqual(summary.gatedArtifact?.payload, { verdict: 'clean', headSha: 'readiness-current' });
+});
+
 test('replay determinism: the enriched summary does not depend on call order — pure over outputsByNode', () => {
   const out = outputs(row('analyst', { plan: 'p' }), row('planReviewer', { verdict: 'approved' }));
   const d = gate({ gatedArtifact: { node: 'analyst', as: 'plan' }, verdictFrom: { node: 'planReviewer' } });

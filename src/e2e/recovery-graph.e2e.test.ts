@@ -71,7 +71,7 @@ recoveryScenario('RG-C: mergeGate override_merge -> mergeApproveReverify(stub:cl
 });
 
 test('RG-D: mergeGate recheck -> mergeRecheck(stub:clean) -> mergeGate cancel -> cancelled (#276)', {
-  skip: '#276: pending mergeGate recheck target behavior',
+  skip: e2eSkip,
 }, async () => {
   await pipelineScenario(h, runCases, {
     title: 'RG-D: mergeGate recheck -> mergeRecheck(stub:clean) -> mergeGate cancel -> cancelled (#276)',

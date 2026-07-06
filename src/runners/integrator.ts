@@ -85,6 +85,7 @@ export type IntegratorInput = {
   change?: ProducedChangeArtifact;
 
   triage?: unknown;
+  gateResolution?: unknown;
 
   mergeReadiness?: { headSha: string };
 };
@@ -1003,6 +1004,38 @@ export function asTriage(value: unknown): Triage {
   return { items };
 }
 
+function questionGateResolution(value: unknown): { decision: 'fix' | 'wontfix'; note?: string } | undefined {
+  if (value === null || typeof value !== 'object') return undefined;
+  const outcome = (value as { outcome?: unknown }).outcome;
+  if (outcome !== 'fix' && outcome !== 'wontfix') return undefined;
+  const rawNote = (value as { note?: unknown }).note;
+  const note = typeof rawNote === 'string' ? rawNote.trim() : '';
+  return { decision: outcome, ...(note ? { note } : {}) };
+}
+
+function replyTextForQuestionResolution(decision: 'fix' | 'wontfix', note: string | undefined): string {
+  if (decision === 'fix') return note ? `Addressed: ${note}` : 'Addressed.';
+  return note ? `Won't fix: ${note}` : "Won't fix.";
+}
+
+export function triageForRespondThreads(input: Pick<IntegratorInput, 'triage' | 'gateResolution'>): Triage {
+  const triage = asTriage(input.triage);
+  const resolution = questionGateResolution(input.gateResolution);
+  if (!resolution) return triage;
+  return {
+    ...triage,
+    items: triage.items.map((item) =>
+      item.decision === 'question'
+        ? {
+            ...item,
+            decision: resolution.decision,
+            replyText: replyTextForQuestionResolution(resolution.decision, resolution.note),
+          }
+        : item,
+    ),
+  };
+}
+
 
 
 
@@ -1127,7 +1160,7 @@ export class IntegratorService {
       console.warn(`[respond-threads] ${pinned.lesson}`);
       return Promise.resolve(pinned);
     }
-    return respondThreads(asTriage(input.triage), { execGh: pinned.execGh });
+    return respondThreads(triageForRespondThreads(input), { execGh: pinned.execGh });
   };
 
 

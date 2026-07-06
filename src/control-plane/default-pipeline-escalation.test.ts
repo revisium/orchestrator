@@ -60,9 +60,9 @@ const gotoForVerdict = (n: Node, value: string): string | undefined =>
     return when?.op === 'all' && (when.of ?? []).some((c) => c.op === 'verdict.eq' && c.value === value);
   })?.goto;
 
-test('#141: a merge-gate recheck is evidence-driven — re-polls fresh readiness and routes on the fresh verdict', () => {
+test('#276: a merge-gate recheck is evidence-driven and still-clean recheck re-presents the merge gate', () => {
   // The merge gate must keep a dedicated recheck branch before cancel so human recheck re-polls readiness and then
-  // routes on the FRESH verdict: clean→blockedEnd (explicit abort), review_changes→triage / ci_changes→ciRework
+  // routes on the FRESH verdict: clean→mergeGate, review_changes→triage / ci_changes→ciRework
   // (recoverable). Approve still proceeds to confirmMerge. Pure routing-data change (no Decision/MCP).
   const nodes = featureDevNodes();
   const mergeGate = nodes['mergeGate'];
@@ -80,8 +80,7 @@ test('#141: a merge-gate recheck is evidence-driven — re-polls fresh readiness
 
   const router = nodes[recheck.next as string];
   assert.equal(router?.kind, 'choice', 'the re-poll feeds a choice router that routes on the fresh verdict');
-  // Explicit abort is statically reachable: a clean re-poll terminates at blockedEnd; unknown verdicts hit recoveryGate.
-  assert.equal(gotoForVerdict(router, 'clean'), 'blockedEnd', 'clean re-poll → blockedEnd (explicit abort)');
+  assert.equal(gotoForVerdict(router, 'clean'), 'mergeGate', 'clean re-poll → mergeGate');
   assert.equal(routerDefault(router), 'recoveryGate', 'default → recoveryGate (hard recoverable)');
   // Recoverable verdicts rejoin the existing bounded loops instead of dead-ending.
   assert.equal(gotoForVerdict(router, 'review_changes'), 'triage', 'review_changes re-poll → triage (recoverable)');

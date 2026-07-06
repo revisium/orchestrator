@@ -16,6 +16,7 @@ type GateStep =
   | {
       topic: GateTopic;
       outcome: string;
+      note?: string;
       mergeOverrideAudit?: Record<string, unknown>;
     };
 
@@ -72,11 +73,12 @@ function playbookId(scenario: PipelineScenario): string {
   return scenario.playbook === 'default' ? DEFAULT_PLAYBOOK_ID : PLAYBOOK_ID;
 }
 
-function normalizeGate(step: GateStep): { topic: GateTopic; outcome: string; mergeOverrideAudit?: Record<string, unknown> } {
+function normalizeGate(step: GateStep): { topic: GateTopic; outcome: string; note?: string; mergeOverrideAudit?: Record<string, unknown> } {
   if ('topic' in step) {
     return {
       topic: step.topic,
       outcome: step.outcome,
+      ...(step.note ? { note: step.note } : {}),
       ...(step.mergeOverrideAudit ? { mergeOverrideAudit: step.mergeOverrideAudit } : {}),
     };
   }
@@ -176,6 +178,7 @@ export async function pipelineScenario(
       inboxId: gate.inboxId,
       outcome: gateStep.outcome,
       resolvedBy: 'e2e',
+      ...(gateStep.note ? { note: gateStep.note } : {}),
       ...(gateStep.mergeOverrideAudit ? { mergeOverrideAudit: gateStep.mergeOverrideAudit } : {}),
     });
   }
