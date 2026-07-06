@@ -316,6 +316,8 @@ test('buildContext: developer role strips nested pullRequest metadata and contex
           finding: 'Fix the retry path in src/pipeline/data-driven-task.workflow.ts.',
           provider: {
             branch: 'main',
+            release: { branch: 'release/Issue_271-fix.1', prNumber: 287 },
+            hotfix: { branch: 'hotfix/URGENT_fix.2', prNumber: 287 },
             pullRequest: {
               number: 287,
               url: 'https://github.com/revisium/orchestrator/pull/287',
@@ -333,7 +335,7 @@ test('buildContext: developer role strips nested pullRequest metadata and contex
 
   assert.match(ctx, /Fix the retry path in src\/pipeline\/data-driven-task\.workflow\.ts\./);
   assert.doesNotMatch(ctx, /pullRequest|github\.com\/revisium\/orchestrator\/pull\/287|headRefName|mergeStateStatus/i);
-  assert.doesNotMatch(ctx, /"branch": "main"|"base": "main"|codex\/issue-271-developer-deny/);
+  assert.doesNotMatch(ctx, /"branch": "main"|"base": "main"|codex\/issue-271-developer-deny|release\/Issue_271-fix\.1|hotfix\/URGENT_fix\.2/);
 });
 
 test('buildContext: includes run description, public params, and bounded planPath content', async () => {

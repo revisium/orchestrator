@@ -1879,6 +1879,28 @@ function integratorTemplate(): Template {
     .build();
 }
 
+function blockedScriptAfterFailureTemplate(): Template {
+  return template('blocked-script-after-failure')
+    .title('blocked script after explicit failure')
+    .entry('firstScript')
+    .domain('approved')
+    .add(
+      node.script('firstScript', 'script:integrator', 'unexpectedSuccess', {
+        resultSchema: 'schema:integration',
+        onFailure: 'route',
+        catch: [{ onError: 'revo.ScriptFailed', goto: 'blockedScript' }],
+      }),
+      node.script('blockedScript', 'script:integrator', 'unexpectedSuccess', {
+        resultSchema: 'schema:integration',
+        onFailure: 'route',
+        catch: [{ onError: 'revo.ScriptBlocked', goto: 'failedEnd' }],
+      }),
+      node.terminal('unexpectedSuccess', 'succeeded'),
+      node.terminal('failedEnd', 'failed'),
+    )
+    .build();
+}
+
 test('DD7: an integrator that needsHuman BLOCKS the run (revo.ScriptBlocked → blocked terminal + lesson)', async () => {
   const { run, rec } = buildAdapter({
     template: integratorTemplate(),
@@ -1904,6 +1926,25 @@ test('DD8: an integrator that THROWS fails the run (revo.ScriptFailed → failed
   assert.equal(rec.failed.length, 1, 'failRun called for the failed terminal');
   assert.match(rec.failed[0] ?? '', /revo\.ScriptFailed: git push rejected: non-fast-forward/);
   assert.equal(rec.blocked.length, 0);
+});
+
+test('blocked script failure does not reuse a previous explicit script failure reason', async () => {
+  let calls = 0;
+  const { run, rec } = buildAdapter({
+    template: blockedScriptAfterFailureTemplate(),
+    integrate: () => {
+      calls++;
+      if (calls === 1) throw new Error('first explicit script failure');
+      return { needsHuman: true, lesson: 'blocked without explicit failure reason' };
+    },
+  });
+
+  const result = await run();
+
+  assert.equal(result.status, 'failed');
+  assert.equal(calls, 2);
+  assert.equal(rec.failed[0], 'data-driven pipeline reached a failed terminal (lastVerdict=blocked)');
+  assert.doesNotMatch(rec.failed[0] ?? '', /first explicit script failure/);
 });
 
 test('verification environment needsHuman opens recovery gate and records non-adoption decision', async () => {

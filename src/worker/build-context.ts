@@ -153,7 +153,7 @@ function textLooksLikeGitBranch(value: string): boolean {
   const trimmed = value.trim();
   return /^(?:refs\/heads\/|origin\/)/i.test(trimmed)
     || /^(?:feat|fix|bugfix|chore|docs|test|refactor|codex|revo|issue)[/-]/i.test(trimmed)
-    || /^(?:main|master|develop|development|dev|trunk|release(?:[/-][A-Za-z0-9._-]+)?|hotfix[/-][A-Za-z0-9._-]+)$/i.test(trimmed);
+    || /^(?:main|master|develop|development|dev|trunk|release(?:[/-][A-Z0-9._-]+)?|hotfix[/-][A-Z0-9._-]+)$/i.test(trimmed);
 }
 
 function textLooksLikePrefixedGitBranch(value: string): boolean {

@@ -24,6 +24,7 @@ import {
 import { hashProfile, materializeTemplate, MATERIALIZER_VERSION } from '../pipeline-core/materialize.js';
 import { POLICY_VERSION } from '../control-plane/default-playbook-policy.js';
 import { templateFromExecutionPolicy } from '../pipeline/data-driven-template.js';
+import { INTEGRATOR_PROGRESS_EVENT_TYPES } from '../pipeline/data-driven-task.workflow.js';
 
 /**
  * A minimal VALID data-driven template (one developer agent → success terminal). The cutover (plan
@@ -2540,8 +2541,10 @@ test('TaskControlPlaneApiService.resolveRunState reports running when workflow p
   assert.equal(state.workflowStatus, 'PENDING');
 });
 
-test('hasWorkflowProgress recognizes foreign_pr_adopted as explicit integrator progress', () => {
-  assert.equal(hasWorkflowProgress([{ type: 'foreign_pr_adopted' } as never]), true);
+test('hasWorkflowProgress recognizes data-driven integrator progress events', () => {
+  for (const type of INTEGRATOR_PROGRESS_EVENT_TYPES) {
+    assert.equal(hasWorkflowProgress([{ type } as never]), true, type);
+  }
   assert.equal(hasWorkflowProgress([{ type: 'run_created' } as never]), false);
 });
 

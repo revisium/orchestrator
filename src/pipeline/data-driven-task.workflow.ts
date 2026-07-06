@@ -83,6 +83,7 @@ export type DataDrivenResult = {
 };
 
 export const RUN_PROGRESS_EVENT_KEY = 'run-progress';
+export const INTEGRATOR_PROGRESS_EVENT_TYPES = ['integrate_succeeded', 'foreign_pr_adopted'] as const;
 
 export type DataDrivenProgressCursor = {
   activeNodeIds: string[];
@@ -727,6 +728,12 @@ function integratorResultPointer(result: IntegratorOutput): Record<string, unkno
   };
 }
 
+type IntegratorProgressEventType = typeof INTEGRATOR_PROGRESS_EVENT_TYPES[number];
+
+function integratorProgressEventType(result: IntegratorOutput): IntegratorProgressEventType {
+  return result.foreignPr ? 'foreign_pr_adopted' : 'integrate_succeeded';
+}
+
 export function buildSystemScriptRegistry(deps: ScriptRegistryDeps): Map<string, SystemScriptHandler> {
   const { appendEvent, releaseWorktreeFn, integrateFn, runStub, confirmMergeFn, runConfirmStub, pollPrFn, runPollStub, respondThreadsFn, runRespondStub } = deps;
 
@@ -799,7 +806,7 @@ export function buildSystemScriptRegistry(deps: ScriptRegistryDeps): Map<string,
     stub: runStub,
     blockedReason: 'integrate',
     mapSuccess: (result: IntegratorOutput) => ({
-      eventType: result.foreignPr ? 'foreign_pr_adopted' : 'integrate_succeeded',
+      eventType: integratorProgressEventType(result),
       payload: integratorResultPointer(result),
       pointer: integratorResultPointer(result),
     }),
@@ -1045,12 +1052,8 @@ export function makeDataDrivenTask(
         await deps.setProgress?.(runId, progressCursor(state, eff.lastResult));
       }
       lastResult = eff.lastResult;
-      if (eff.lastVerdict !== undefined) lastVerdict = eff.lastVerdict;
-      if (eff.failureReason !== undefined) {
-        lastFailureReason = eff.failureReason;
-      } else if (eff.lastResult?.outcome !== 'failed') {
-        lastFailureReason = '';
-      }
+      lastVerdict = eff.lastVerdict ?? lastVerdict;
+      lastFailureReason = eff.failureReason ?? '';
     }
 
     throw new InterpretError(
