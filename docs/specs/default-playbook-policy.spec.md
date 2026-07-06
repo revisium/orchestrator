@@ -44,7 +44,7 @@ static verifier.
 | #142 | The graph preserves routes that can carry `review_changes` and `ci_changes` after `pollPr` classifies PR feedback. | CodeRabbit/provider classification, stale review-body suppression, provider-wait bucketing, and grace polling. |
 | #143 | The graph requires `pollPr -> mergeReadiness -> mergeGate`, routes fresh `review_changes`/`ci_changes` before the gate, and gives merge approval/confirmation the `mergeReadiness` artifact. | Isolated worktree execution, real PR polling, fresh `headSha`, branch push, and provider state. |
 | #144 | No graph policy is inferred from stale provider comments or install versioning; the default catalog can still be checked statically. | `catalogHash` reseed behavior and informational provider waits for stale CodeRabbit comments. |
-| #141 | `mergeGate` exposes `approved,recheck,address_review_threads,return_to_development,override_merge,cancel`; `recheck` routes through a fresh `mergeRecheck` `script:pollPr` node, then routes `review_changes` to `triage`, bounded `ci_changes + ciLoop < 3` to `ciRework`, and `clean`/default to `blockedEnd`; `address_review_threads` and `return_to_development` route to `triage`; `override_merge` routes to `mergeApproveReverify`; `cancel` routes to `cancelledEnd`; `triage` and `ciRework` receive optional stale-ok `mergeRecheck` evidence. | Actual GitHub/provider freshness, named-gate runtime execution, unresolved-thread detection, override audit persistence, and proof that live review/CI changes return to the correct recovery loop. |
+| #141/#276 | `mergeGate` exposes `approved,recheck,address_review_threads,return_to_development,override_merge,cancel`; `recheck` routes through a fresh `mergeRecheck` `script:pollPr` node, then routes `clean` back to `mergeGate`, `review_changes` to `triage`, bounded `ci_changes + ciLoop < 3` to `ciRework`, `recheck` to `mergeReadiness`, and default to `recoveryGate`; `address_review_threads` and `return_to_development` route to `triage`; `override_merge` routes to `mergeApproveReverify`; `cancel` routes to `cancelledEnd`; `triage` and `ciRework` receive optional stale-ok `mergeRecheck` evidence. | Actual GitHub/provider freshness, named-gate runtime execution, unresolved-thread detection, override audit persistence, and proof that live review/CI changes return to the correct recovery loop. |
 | #246 | Recovery/reverify shape: recoverable script catches route to `classifyRecovery`; cap-router defaults reach a humanGate; `mergeGate` approved/override_merge routes through post-approval re-poll (`mergeApproveReverify`) before `confirmMerge`; `confirmMerge` consumes fresh `mergeApproveReverify` readiness; `confirmMerge -> cleanupWorktree -> mergedEnd` (no bypass); `confirmMerge` failure catches route to `classifyRecovery`; cancel/rework outcomes on all humanGates have explicit guarded branches; `failedEnd` removed. | Recovery/rework cycle correctness, post-approval freshness, worktree cleanup. |
 
 ## Static Rules
@@ -58,17 +58,17 @@ The bundled `feature-development` policy verifier reports errors for these stati
 | PR readiness flows through `pollPr`, then a fresh `mergeReadiness` poll, then `mergeGate`; the gate surfaces the `mergeReadiness` artifact. | `DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING` |
 | `mergeGate` approved and override_merge MUST route to `mergeApproveReverify` (a fresh `script:pollPr` re-poll); `mergeApproveReverifyRouter` clean MUST route to `confirmMerge`. | `DEFAULT_POLICY_APPROVE_REVERIFY_MISSING` |
 | `confirmMerge` MUST consume `mergeApproveReverify` as `mergeReadiness` (not the pre-gate stale `mergeReadiness` node). | `DEFAULT_POLICY_MERGE_READINESS_FRESHNESS_MISSING` |
-| Merge-gate `recheck` routes to a fresh `mergeRecheck` `script:pollPr`, `cancel` routes to `cancelledEnd`, then the recheck router preserves recoverable `review_changes`/bounded `ci_changes` routes and explicit `clean`/default aborts. `mergeRecheckRouter` default MUST route to `recoveryGate`. | `DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING` |
-| `review_changes` routes to triage, triage can ask a question, choose `fix`, or choose `wontfix`, and `fix` flows through developer rework before thread responses. | `DEFAULT_POLICY_REVIEW_CHANGES_ROUTE_MISSING` |
+| Merge-gate `recheck` routes to a fresh `mergeRecheck` `script:pollPr`, `cancel` routes to `cancelledEnd`, then the recheck router sends `clean` back to `mergeGate`, preserves recoverable `review_changes`/bounded `ci_changes` routes, and routes default to `recoveryGate`. | `DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING` |
+| `review_changes` routes to triage, triage can ask a question, choose `fix`, or choose `wontfix`; direct triage `fix` flows through `reviewRework`, while `questionGate fix` flows through `questionReviewRework` with the gate resolution before thread responses. | `DEFAULT_POLICY_REVIEW_CHANGES_ROUTE_MISSING` |
 | `ci_changes` routes from both PR routers to `ciRework` while `ciLoop < 3`, and `ciRework` returns to `integrator`. | `DEFAULT_POLICY_CI_CHANGES_ROUTE_MISSING` |
 | `blockedEnd` remains a first-class `blocked` terminal. | `DEFAULT_POLICY_BLOCKED_TERMINAL_MISSING` |
 | `cancelledEnd` remains a first-class `cancelled` terminal. | `DEFAULT_POLICY_CANCELLED_TERMINAL_MISSING` |
 | Plan-review and code-review loop exhaustion route to reusable human gates with `rework` and `cancel`; code-stuck rework resets the normal code-review loop through scope parentage instead of using `codeFinalStuckGate`. | `DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING` |
-| Script catches on recoverable nodes (`pollPr`, `mergeReadiness`, `mergeRecheck`, `mergeApproveReverify`, `integrator`, `reviewIntegrator`, `respondThreads`) MUST NOT route to a terminal node. | `DEFAULT_POLICY_RECOVERABLE_CATCH_TERMINAL` |
+| Script catches on recoverable nodes (`pollPr`, `mergeReadiness`, `mergeRecheck`, `mergeApproveReverify`, `integrator`, `reviewIntegrator`, `questionReviewIntegrator`, `respondThreads`) MUST NOT route to a terminal node. | `DEFAULT_POLICY_RECOVERABLE_CATCH_TERMINAL` |
 | The default branch of every cap-bounded router (`prRouter`, `mergeReadinessRouter`, `mergeRecheckRouter`, `triageRouter`, `recoveryRouter`, `planReviewRouter`, `codeReviewRouter`) MUST resolve to a `humanGate` or `classifyRecovery`, never a terminal. | `DEFAULT_POLICY_CAP_EXHAUSTION_OFFRAMP_MISSING` |
 | `confirmMerge` script catches (`revo.ScriptBlocked`, `revo.ScriptFailed`) MUST NOT route to a terminal node; base-drift and head-guard failures are recoverable. | `DEFAULT_POLICY_CONFIRM_MERGE_FAILURE_TERMINAL` |
 | `confirmMerge.next` MUST be `cleanupWorktree`; `cleanupWorktree` MUST be a `script:cleanupWorktree` node with `.next = mergedEnd`. No `confirmMerge -> mergedEnd` bypass is permitted. | `DEFAULT_POLICY_POST_MERGE_CLEANUP_MISSING` |
-| Every `humanGate` that declares a `cancel` or `rework` outcome MUST have a guarded (non-default) branch whose condition explicitly mentions that verdict. `approved`, `recheck`, and other outcomes MAY fall to the `default` branch. | `DEFAULT_POLICY_GATE_OUTCOMES_IMPLICIT` |
+| Every declared `humanGate` outcome MUST have a guarded (non-default) branch whose condition explicitly mentions that verdict. Defaults catch only out-of-menu or invalid verdicts. | `DEFAULT_POLICY_GATE_OUTCOMES_IMPLICIT` |
 | The codex variant's actual violation set MUST be a subset of `CODEX_LEGACY_WAIVERS` (every fired code must be consciously documented). | `DEFAULT_POLICY_VARIANT_POLICY_GAP` |
 | The codex variant's actual violation set MUST exactly match `CODEX_LEGACY_WAIVERS` (drift in either direction signals an undocumented graph change). | `DEFAULT_POLICY_VARIANT_PARITY_DRIFT` |
 
@@ -105,9 +105,9 @@ reach `triage`; `override_merge` and `approved` both reach `mergeApproveReverify
 `cancel` reaches the `cancelledEnd` terminal.
 
 `mergeRecheck` MUST be a `script:pollPr` step that produces `schema:prFeedback` and routes to `mergeRecheckRouter`.
-The router MUST send a still-clean recheck, or an unclassified/default recheck, to `blockedEnd` as an explicit
-abort. The router MUST send recoverable fresh feedback back into the existing loops: `review_changes -> triage` and
-`ci_changes + ciLoop < 3 -> ciRework`. The router default MUST reach `recoveryGate`.
+The router MUST send a still-clean recheck back to `mergeGate`, preserving the human-driven recheck loop. The router
+MUST send recoverable fresh feedback back into the existing loops: `review_changes -> triage` and
+`ci_changes + ciLoop < 3 -> ciRework`; `recheck -> mergeReadiness`; and default -> `recoveryGate`.
 
 The verifier also requires both `triage` and `ciRework` to consume `mergeRecheck` as optional stale-ok
 `recheckFeedback`, so recheck-routed recovery steps can inspect the fresh recheck evidence. This remains a static graph
@@ -115,6 +115,10 @@ contract: the verifier does not prove that GitHub/provider state was fresh at ru
 
 ## Changelog
 
+- 2026-07-06: #276 — removed dead-end gate outcomes: `mergeRecheckRouter.clean` re-presents `mergeGate`,
+  `recoveryGate` exposes only `recheck,cancel`, `questionGate` exposes `fix,wontfix,cancel`, and
+  `GATE_OUTCOME_UNROUTED` is enforced as an error. `questionGate fix` now routes through
+  `questionReviewRework`, which receives the gate resolution before integration and thread responses.
 - 2026-07-02: #242 — migrated `feature-development-codex-consensus` from hand-authored catalog entry to
   materialized-profile alias (`base: feature-development`, `profileId: codex-consensus`); emptied
   `CODEX_LEGACY_WAIVERS`; both variants now validate with zero diagnostics.

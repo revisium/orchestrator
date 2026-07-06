@@ -82,6 +82,22 @@ test('e2e fixture: feature-development review rework already hands its produced 
       as: 'reviewChange',
     },
   ]);
+  assert.deepEqual(effectNode(fixtureFeature, 'questionReviewRework').consumes, [
+    {
+      node: 'triage',
+      as: 'triage',
+    },
+    {
+      node: 'questionGate',
+      as: 'gateResolution',
+    },
+  ]);
+  assert.deepEqual(effectNode(fixtureFeature, 'questionReviewIntegrator').consumes, [
+    {
+      node: 'questionReviewRework',
+      as: 'reviewChange',
+    },
+  ]);
 });
 
 test('e2e fixture (#246): feature-development has mergeApproveReverify + classifyRecovery + recoveryGate', () => {

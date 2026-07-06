@@ -10,7 +10,7 @@ import {
   givenFeatureRunAtMergeGate,
   createTargetRepo,
   waitState,
-  assertBlocked,
+  waitForGate,
   approveUntilTerminal,
   executedRoles,
 } from './kit/index.js';
@@ -67,26 +67,17 @@ test('B3: plan-gate reject blocks the run (data-routed terminal); developer neve
   }
 });
 
-test('B4: merge-gate recheck re-polls fresh readiness; a still-clean re-poll is an explicit abort → blocked (#141)', { skip: e2eSkip }, async () => {
-  // #141: a merge-gate `recheck` is EVIDENCE-DRIVEN — it routes to a dedicated `mergeRecheck` script
-  // (`script:pollPr`) that re-observes the PR; `mergeRecheckRouter` then routes on the FRESH verdict. The
-  // e2e gh emulator is deterministically clean here, so the re-poll returns `clean` → clean→blockedEnd:
-  // "nothing changed since the gate opened ⇒ the recheck was a genuine abort". (review_changes→triage /
-  // ci_changes→ciRework reroutes are covered at the workflow-unit level — DD-issue-141.)
-  // #246 EXPANDED the merge gate to four named outcomes (approved/recheck/override_merge/cancel), so the
-  // legacy `rejectGate` wrapper (allowed only on ≤2-outcome gates) no longer applies — a reviewer now
-  // picks the explicit `recheck` outcome, which is exactly the evidence-driven re-poll #141 introduced.
+test('B4: merge-gate recheck re-polls fresh readiness; a still-clean re-poll re-presents mergeGate (#276)', { skip: e2eSkip }, async () => {
   const target = createTargetRepo();
   try {
     const { runId, inboxId } = await givenFeatureRunAtMergeGate(h, target);
     const res = await h.api.resolveGate({ inboxId, outcome: 'recheck', resolvedBy: 'e2e' });
     assert.equal(res.topic, 'merge');
 
-    await waitState(h.api, runId); // workflow returns after the recheck routes to the blocked terminal
-    // A blocked terminal settles the run-row to `paused` (+ a `pipeline_blocked` event), NOT status==='blocked'
-    // — see integrator-failures D3b / data-driven D20. `assertBlocked` is the canonical check: it asserts the
-    // `pipeline_blocked` event exists and the run did not complete (mirrors D20's waitState→assertBlocked).
-    await assertBlocked(h.api, runId);
+    const refreshed = await waitForGate(h.api, runId, 'merge');
+    await h.api.resolveGate({ inboxId: refreshed.inboxId, outcome: 'cancel', resolvedBy: 'e2e' });
+    const terminal = await waitState(h.api, runId);
+    assert.equal(terminal.state, 'cancelled');
   } finally {
     target.cleanup();
   }

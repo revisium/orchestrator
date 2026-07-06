@@ -244,10 +244,25 @@ export function featureDevelopmentPrReview(): Template {
         on(verdictEq('wontfix'), 'respondThreads'),
         otherwise('recoveryGate'),
       ]),
-      node.humanGate('questionGate', 'review-question', ['approved', 'changes_requested'], [
-        on(verdictEq('approved'), 'triage'),
-        otherwise('blockedEnd'),
-      ], { incrementCounters: ['questionLoop'] }),
+      node.humanGate('questionGate', 'review-question', ['fix', 'wontfix', 'cancel'], [
+        on(verdictEq('fix'), 'questionReviewRework'),
+        on(verdictEq('wontfix'), 'respondThreads'),
+        on(verdictEq('cancel'), 'cancelledEnd'),
+        otherwise('recoveryGate'),
+      ], { incrementCounters: ['questionLoop'], produces: { name: 'gateResolution' } }),
+      node.agent('questionReviewRework', 'role:developer', 'questionReviewIntegrator', {
+        resultSchema: 'schema:change', incrementCounters: ['reviewLoop'], onFailure: 'abort',
+        produces: { name: 'change' },
+        consumes: [
+          { node: 'triage', as: 'triage' },
+          { node: 'questionGate', as: 'gateResolution' },
+        ],
+      }),
+      node.script('questionReviewIntegrator', 'script:integrator', 'respondThreads', {
+        resultSchema: 'schema:integration', onFailure: 'route',
+        consumes: [{ node: 'questionReviewRework', as: 'reviewChange' }],
+        catch: recoveryCatch(),
+      }),
       node.agent('reviewRework', 'role:developer', 'reviewIntegrator', {
         resultSchema: 'schema:change', incrementCounters: ['reviewLoop'], onFailure: 'abort',
         produces: { name: 'change' },
@@ -259,7 +274,10 @@ export function featureDevelopmentPrReview(): Template {
         catch: recoveryCatch(),
       }),
       node.script('respondThreads', 'script:respondThreads', 'pollPr', {
-        resultSchema: 'schema:respond', onFailure: 'route', consumes: [{ node: 'triage', as: 'triage' }],
+        resultSchema: 'schema:respond', onFailure: 'route', consumes: [
+          { node: 'triage', as: 'triage' },
+          { node: 'questionGate', as: 'gateResolution', optional: true, staleOk: true },
+        ],
         catch: recoveryCatch(),
       }),
       node.humanGate('mergeGate', 'merge-review', ['approved', 'recheck', 'override_merge', 'cancel'], [
@@ -271,7 +289,7 @@ export function featureDevelopmentPrReview(): Template {
       ], { gatedArtifact: { node: 'mergeReadiness', as: 'prFeedback' } }),
       readinessScript('mergeRecheck', 'mergeRecheckRouter'),
       node.choice('mergeRecheckRouter', [
-        on(verdictEq('clean'), 'blockedEnd'),
+        on(verdictEq('clean'), 'mergeGate'),
         on(verdictEq('review_changes'), 'triage'),
         on(allOf(verdictEq('ci_changes'), counterLt('ciLoop', 3)), 'ciRework'),
         on(verdictEq('recheck'), 'mergeReadiness'),
@@ -298,7 +316,7 @@ export function featureDevelopmentPrReview(): Template {
         on(allOf(verdictEq('fix'), counterLt('recoveryLoop', 3)), 'pollPr'),
         otherwise('recoveryGate'),
       ]),
-      node.humanGate('recoveryGate', 'merge-recovery', ['recheck', 'cancel', 'approved'], [
+      node.humanGate('recoveryGate', 'merge-recovery', ['recheck', 'cancel'], [
         on(verdictEq('recheck'), 'pollPr'),
         on(verdictEq('cancel'), 'cancelledEnd'),
         otherwise('blockedEnd'),

@@ -158,7 +158,7 @@ function checkCancelledTerminal(template: Template, sink: PolicySink): void {
 }
 
 function checkProducedChangeHandoff(template: Template, sink: PolicySink): void {
-  for (const nodeId of ['developer', 'reworkDeveloper', 'stuckReworkDeveloper', 'ciRework', 'reviewRework']) {
+  for (const nodeId of ['developer', 'reworkDeveloper', 'stuckReworkDeveloper', 'ciRework', 'reviewRework', 'questionReviewRework']) {
     expectChangeProducer(template, sink, nodeId);
   }
 
@@ -229,6 +229,12 @@ function checkProducedChangeHandoff(template: Template, sink: PolicySink): void 
     code: 'DEFAULT_POLICY_CHANGE_HANDOFF_MISSING',
     consumerId: 'reviewIntegrator',
     producerId: 'reviewRework',
+    as: 'reviewChange',
+  });
+  expectConsume(template, sink, {
+    code: 'DEFAULT_POLICY_CHANGE_HANDOFF_MISSING',
+    consumerId: 'questionReviewIntegrator',
+    producerId: 'questionReviewRework',
     as: 'reviewChange',
   });
 }
@@ -350,7 +356,7 @@ function checkMergeGateRecheckRouting(template: Template, sink: PolicySink): voi
     code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
     nodeId: 'mergeRecheckRouter',
     verdict: 'clean',
-    target: 'blockedEnd',
+    target: 'mergeGate',
   });
   expectRoute(template, sink, {
     code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
@@ -457,6 +463,34 @@ function checkReviewFeedbackLoop(template: Template, sink: PolicySink): void {
     verdict: 'question',
     target: 'questionGate',
   });
+  expectHumanGateOutcomes(template, sink, {
+    code: 'DEFAULT_POLICY_REVIEW_CHANGES_ROUTE_MISSING',
+    nodeId: 'questionGate',
+    outcomes: ['fix', 'wontfix', 'cancel'],
+  });
+  expectRoute(template, sink, {
+    code: 'DEFAULT_POLICY_REVIEW_CHANGES_ROUTE_MISSING',
+    nodeId: 'questionGate',
+    verdict: 'fix',
+    target: 'questionReviewRework',
+  });
+  expectRoute(template, sink, {
+    code: 'DEFAULT_POLICY_REVIEW_CHANGES_ROUTE_MISSING',
+    nodeId: 'questionGate',
+    verdict: 'wontfix',
+    target: 'respondThreads',
+  });
+  expectRoute(template, sink, {
+    code: 'DEFAULT_POLICY_REVIEW_CHANGES_ROUTE_MISSING',
+    nodeId: 'questionGate',
+    verdict: 'cancel',
+    target: 'cancelledEnd',
+  });
+  expectDefaultRoute(template, sink, {
+    code: 'DEFAULT_POLICY_REVIEW_CHANGES_ROUTE_MISSING',
+    nodeId: 'questionGate',
+    target: 'recoveryGate',
+  });
   expectRoute(template, sink, {
     code: 'DEFAULT_POLICY_REVIEW_CHANGES_ROUTE_MISSING',
     nodeId: 'triageRouter',
@@ -468,6 +502,30 @@ function checkReviewFeedbackLoop(template: Template, sink: PolicySink): void {
     nodeId: 'triageRouter',
     verdict: 'wontfix',
     target: 'respondThreads',
+  });
+  expectNodeNext(template, sink, {
+    code: 'DEFAULT_POLICY_REVIEW_CHANGES_ROUTE_MISSING',
+    nodeId: 'questionReviewRework',
+    target: 'questionReviewIntegrator',
+  });
+  expectConsume(template, sink, {
+    code: 'DEFAULT_POLICY_REVIEW_CHANGES_ROUTE_MISSING',
+    consumerId: 'questionReviewRework',
+    producerId: 'triage',
+    as: 'triage',
+  });
+  expectConsume(template, sink, {
+    code: 'DEFAULT_POLICY_REVIEW_CHANGES_ROUTE_MISSING',
+    consumerId: 'questionReviewRework',
+    producerId: 'questionGate',
+    as: 'gateResolution',
+  });
+  expectScript(template, sink, {
+    code: 'DEFAULT_POLICY_REVIEW_CHANGES_ROUTE_MISSING',
+    nodeId: 'questionReviewIntegrator',
+    scriptRef: 'script:integrator',
+    next: 'respondThreads',
+    resultSchema: 'schema:integration',
   });
   expectNodeNext(template, sink, {
     code: 'DEFAULT_POLICY_REVIEW_CHANGES_ROUTE_MISSING',
@@ -493,6 +551,14 @@ function checkReviewFeedbackLoop(template: Template, sink: PolicySink): void {
     consumerId: 'respondThreads',
     producerId: 'triage',
     as: 'triage',
+  });
+  expectConsume(template, sink, {
+    code: 'DEFAULT_POLICY_REVIEW_CHANGES_ROUTE_MISSING',
+    consumerId: 'respondThreads',
+    producerId: 'questionGate',
+    as: 'gateResolution',
+    optional: true,
+    staleOk: true,
   });
 }
 
@@ -586,6 +652,7 @@ function checkRecoverableCatches(template: Template, sink: PolicySink): void {
     'mergeApproveReverify',
     'integrator',
     'reviewIntegrator',
+    'questionReviewIntegrator',
     'respondThreads',
   ];
 
@@ -677,7 +744,6 @@ function checkGateOutcomesExplicit(template: Template, sink: PolicySink): void {
   for (const [nodeId, node] of Object.entries(template.nodes)) {
     if (node.kind !== 'humanGate') continue;
     for (const outcome of node.outcomes) {
-      if (outcome !== 'cancel' && outcome !== 'rework') continue;
       const branch = guardedBranchForVerdict(node, outcome);
       if (!branch) {
         sink.error(
@@ -789,7 +855,7 @@ function expectGateOutcomes(
 
   sink.error(
     rule.code,
-    `gate ${rule.nodeId} must map approve to ${rule.outcomes[0]} and reject to ${rule.outcomes.at(-1)}`,
+    `gate ${rule.nodeId} must declare explicit outcomes in order: ${rule.outcomes.join(',')}`,
     {
       nodeId: rule.nodeId,
       path: 'outcomes',

@@ -81,6 +81,13 @@ function bundledWarningSites(code: DiagnosticCode): string[] {
     .sort();
 }
 
+function bundledDiagnosticSites(code: DiagnosticCode): string[] {
+  return validateTemplate(bundledFeatureDevelopment())
+    .filter((diagnostic) => diagnostic.code === code)
+    .map((diagnostic) => diagnostic.path ? `${diagnostic.nodeId}:${diagnostic.path}` : (diagnostic.nodeId ?? ''))
+    .sort();
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Valid templates → no errors (the real pipelines + targeted fixtures).
 // ─────────────────────────────────────────────────────────────────────────────
@@ -359,7 +366,7 @@ test('rule 9: a domain label shadowing a core label → VERDICT_DOMAIN_SHADOWS_C
 });
 
 test('rule 9: a gate outcome outside domain → GATE_OUTCOME_NOT_SUBSET', () => {
-  assertDiagnostics(invalidGateOutcomeNotSubset(), ['GATE_OUTCOME_NOT_SUBSET']);
+  assertDiagnostics(invalidGateOutcomeNotSubset(), ['GATE_OUTCOME_NOT_SUBSET', 'GATE_OUTCOME_UNROUTED']);
 });
 
 test('rule 9: a join verdictReducer label outside domain → VERDICT_UNDECLARED', () => {
@@ -404,11 +411,32 @@ test('rule 9: a declared-but-unused domain label → VERDICT_DECLARED_UNUSED (wa
   assert.equal(unused.severity, 'warning');
 });
 
-test('warning: GATE_OUTCOME_UNROUTED fires on current bundled default template', () => {
-  assert.deepEqual(bundledWarningSites('GATE_OUTCOME_UNROUTED'), [
-    'questionGate:outcomes.changes_requested',
-    'recoveryGate:outcomes.approved',
-  ]);
+test('error: GATE_OUTCOME_UNROUTED is absent from the bundled default template', () => {
+  assert.deepEqual(bundledDiagnosticSites('GATE_OUTCOME_UNROUTED'), []);
+});
+
+test('error: GATE_OUTCOME_UNROUTED fires as an error for implicit declared gate outcomes', () => {
+  const t = template('implicit-outcome')
+    .entry('gate')
+    .domain('fix', 'wontfix', 'cancel')
+    .add(
+      node.humanGate('gate', 'review', ['fix', 'wontfix', 'cancel'], [
+        on(verdictEq('fix'), 'doneEnd'),
+        on(verdictEq('cancel'), 'cancelledEnd'),
+        otherwise('recoveryGate'),
+      ]),
+      node.terminal('doneEnd', 'succeeded'),
+      node.terminal('cancelledEnd', 'cancelled'),
+      node.terminal('recoveryGate', 'blocked'),
+    )
+    .build();
+
+  const diag = validateTemplate(t).find((candidate) =>
+    candidate.code === 'GATE_OUTCOME_UNROUTED' &&
+    candidate.nodeId === 'gate' &&
+    candidate.path === 'outcomes.wontfix'
+  );
+  assert.equal(diag?.severity, 'error');
 });
 
 test('warning: CYCLE_WITHOUT_COUNTER fires on current bundled default template', () => {
@@ -680,8 +708,8 @@ test('warning: SCRIPT_FAILURE_UNROUTED fires on current bundled default template
   assert.deepEqual(bundledWarningSites('SCRIPT_FAILURE_UNROUTED'), ['cleanupWorktree']);
 });
 
-test('warning: HUMAN_OFFRAMP_UNREACHABLE fires on current bundled default template', () => {
-  assert.deepEqual(bundledWarningSites('HUMAN_OFFRAMP_UNREACHABLE'), ['questionGate']);
+test('warning: HUMAN_OFFRAMP_UNREACHABLE is absent from the current bundled default template', () => {
+  assert.deepEqual(bundledWarningSites('HUMAN_OFFRAMP_UNREACHABLE'), []);
 });
 
 test('warning: AGENT_FAILURE_UNROUTED fires on current bundled default template', () => {
@@ -692,6 +720,7 @@ test('warning: AGENT_FAILURE_UNROUTED fires on current bundled default template'
     'codeReview',
     'developer',
     'planReviewer',
+    'questionReviewRework',
     'reviewRework',
     'reworkDeveloper',
     'stuckReworkDeveloper',

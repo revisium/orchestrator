@@ -5,7 +5,7 @@ import {
   pollPr,
   respondThreads,
   captureProducedChange,
-  asTriage,
+  triageForRespondThreads,
   stubIntegrate,
   type CaptureProducedChangeInput,
   type ConfirmMergeOutput,
@@ -58,7 +58,7 @@ export function createFakeIntegrator(runs: RunService, execGh: ExecGhFn): Integr
       reviewThreads: [],
     }),
     runRespondThreads: (input: IntegratorInput): Promise<RespondThreadsOutput | IntegratorBlocked> =>
-      respondThreads(asTriage(input.triage), deps),
+      respondThreads(triageForRespondThreads(input), deps),
     runRespondStub: (_input: IntegratorInput): RespondThreadsOutput => ({ replied: 0, resolved: 0 }),
   } as unknown as IntegratorService;
 }

@@ -196,49 +196,49 @@ test('D5: a base branch ahead of origin/master blocks at preflight', { skip: e2e
 
 // ── Integrate failures (block after the plan gate, before merge) ─────────────
 
-test('D11: nothing to integrate (no developer change) blocks at integrate', { skip: e2eSkip }, async () => {
+test('D11: nothing to integrate (no developer change) opens recovery and can cancel', { skip: e2eSkip }, async () => {
   const target = createTargetRepo();
   try {
     const run = await startFeature(target, { write: false });
-    await approveUntilTerminal(h.api, run.runId); // approve plan; run then blocks at integrate
-    await assertBlocked(h.api, run.runId);
+    const terminal = await approveUntilTerminal(h.api, run.runId); // approve plan; cancel recovery
+    assert.equal(terminal.state, 'cancelled');
   } finally {
     target.cleanup();
   }
 });
 
-test('D9: ambiguous open PRs block at integrate', { skip: e2eSkip }, async () => {
+test('D9: ambiguous open PRs open recovery and can cancel', { skip: e2eSkip }, async () => {
   const target = createTargetRepo();
   try {
     const run = await startFeature(target, { gh: 'ambiguous-prs' });
-    await approveUntilTerminal(h.api, run.runId);
-    await assertBlocked(h.api, run.runId);
+    const terminal = await approveUntilTerminal(h.api, run.runId);
+    assert.equal(terminal.state, 'cancelled');
   } finally {
     target.cleanup();
   }
 });
 
-test('D10: a non-JSON `pr view` after create blocks at integrate (never a stub PR)', { skip: e2eSkip }, async () => {
+test('D10: a non-JSON `pr view` after create opens recovery (never a stub PR)', { skip: e2eSkip }, async () => {
   const target = createTargetRepo();
   try {
     const run = await startFeature(target, { gh: 'pr-view-non-json' });
-    await approveUntilTerminal(h.api, run.runId);
-    await assertBlocked(h.api, run.runId);
+    const terminal = await approveUntilTerminal(h.api, run.runId);
+    assert.equal(terminal.state, 'cancelled');
   } finally {
     target.cleanup();
   }
 });
 
-test('D20: confirmMerge blocks when the PR is not auto-mergeable — run blocked, worktree KEPT (plan 0017)', { skip: e2eSkip }, async () => {
+test('D20: confirmMerge recovery when the PR is not auto-mergeable keeps the worktree (plan 0017)', { skip: e2eSkip }, async () => {
   const target = createTargetRepo();
   try {
     // gh reports the PR OPEN but mergeStateStatus≠CLEAN (red CI / conflicts) → confirmMerge refuses to
-    // auto-merge and blocks; both gates are approved on the way there.
+    // auto-merge and opens recovery; the recovery gate cancels deliberately.
     const run = await startFeature(target, { gh: 'merge-not-clean' });
-    await approveUntilTerminal(h.api, run.runId); // approve plan + merge; confirmMerge then blocks
-    await assertBlocked(h.api, run.runId);
+    const terminal = await approveUntilTerminal(h.api, run.runId); // approve plan + merge; cancel recovery
+    assert.equal(terminal.state, 'cancelled');
     await assertEventsPresent(h.api, run.runId, ['integrate_succeeded', 'pipeline_blocked']);
-    // The worktree is KEPT (NOT released) on a blocked terminal so the human can rework / merge manually.
+    // The worktree is KEPT (NOT released) on recovery cancellation so the human can rework / merge manually.
     assert.ok(
       existsSync(worktreePathFor(getConfig().dataDir, run.runId)),
       'worktree must survive a confirm-merge block for rework',
@@ -274,20 +274,18 @@ test('D6: a base branch missing on the remote blocks at preflight', { skip: e2eS
   }
 });
 
-test('D8: a non-github origin remote blocks at integrate (unparseable owner/repo)', { skip: e2eSkip }, async () => {
+test('D8: a non-github origin remote opens recovery at integrate (unparseable owner/repo)', { skip: e2eSkip }, async () => {
   const target = createTargetRepo({ nonGithubRemote: true });
   try {
     const run = await startFeature(target);
-    await approveUntilTerminal(h.api, run.runId); // preflight ok; integrate can't parse the remote
-    await assertBlocked(h.api, run.runId);
+    const terminal = await approveUntilTerminal(h.api, run.runId); // preflight ok; integrate can't parse the remote
+    assert.equal(terminal.state, 'cancelled');
   } finally {
     target.cleanup();
   }
 });
 
-test('D14: a gh error during integrate opens recoveryGate with fixture outcomes and cancel stops deliberately (#276)', {
-  skip: '#276: pending recoveryGate target outcomes',
-}, async () => {
+test('D14: a gh error during integrate opens recoveryGate with recheck/cancel outcomes and cancel stops deliberately (#276)', { skip: e2eSkip }, async () => {
   const target = createTargetRepo();
   try {
     const run = await startFeature(target, { gh: 'gh-error' });
@@ -298,7 +296,7 @@ test('D14: a gh error during integrate opens recoveryGate with fixture outcomes 
     const pending = await h.api.getPendingDecisions(run.runId);
     const recoveryItem = pending.find((item) => item.id === recovery.inboxId);
     const context = recoveryItem?.context as { summary?: { outcomes?: unknown } } | undefined;
-    assert.deepEqual(context?.summary?.outcomes, ['recheck', 'cancel', 'approved']);
+    assert.deepEqual(context?.summary?.outcomes, ['recheck', 'cancel']);
 
     await h.api.resolveGate({ inboxId: recovery.inboxId, outcome: 'cancel', resolvedBy: 'e2e' });
     const terminal = await waitState(h.api, run.runId);
@@ -352,8 +350,8 @@ test('D7: an unresolved pinned gh account fails loud (refuses ambient) → block
           "could not resolve a token for the pinned gh account 'revisium-io'; REFUSING to fall back to the ambient gh account",
       },
     });
-    await approveUntilTerminal(h.api, run.runId); // preflight ok; integrate refuses → block (never falls back)
-    await assertBlocked(h.api, run.runId);
+    const terminal = await approveUntilTerminal(h.api, run.runId); // preflight ok; integrate refuses → recovery cancel
+    assert.equal(terminal.state, 'cancelled');
     const events = await h.api.getRunEvents({ runId: run.runId, limit: 50 });
     const lesson = String(
       (events.find((e) => e.type === 'pipeline_blocked')?.payload as { lesson?: unknown } | undefined)?.lesson ?? '',
@@ -364,17 +362,14 @@ test('D7: an unresolved pinned gh account fails loud (refuses ambient) → block
   }
 });
 
-test('D13: a push rejection during integrate routes to recovery → blocked (#246)', { skip: e2eSkip }, async () => {
+test('D13: a push rejection during integrate routes to recovery → cancel (#276)', { skip: e2eSkip }, async () => {
   const target = createTargetRepo();
   try {
     const run = await startFeature(target, {
       integrate: { kind: 'throw', message: 'git push rejected: non-fast-forward (remote moved); integrate aborted' },
     });
     const terminal = await approveUntilTerminal(h.api, run.runId);
-    // #246: integrator ScriptFailed now routes to classifyRecovery → recoveryGate; approveUntilTerminal
-    // resolves the recovery gate with 'approved' (→ blockedEnd) instead of failRun.
-    assert.equal(terminal.state, 'blocked');
-    await assertBlocked(h.api, run.runId);
+    assert.equal(terminal.state, 'cancelled');
   } finally {
     target.cleanup();
   }
@@ -390,23 +385,20 @@ test('D15: a token in an integrator lesson is redacted before it is persisted/su
         lesson: `gh push failed: bad credentials using token ${rawToken} rejected by server`,
       },
     });
-    await approveUntilTerminal(h.api, run.runId); // integrate → needsHuman carrying a token → block
-    await assertBlocked(h.api, run.runId);
+    const terminal = await approveUntilTerminal(h.api, run.runId); // integrate → needsHuman carrying a token → recovery cancel
+    assert.equal(terminal.state, 'cancelled');
     await assertLessonRedacted(h.api, run.runId, rawToken);
   } finally {
     target.cleanup();
   }
 });
 
-test('D19: a token in a gh error reaches no persisted event; run routes to recovery (#246)', { skip: e2eSkip }, async () => {
+test('D19: a token in a gh error reaches no persisted event; run routes to recovery (#276)', { skip: e2eSkip }, async () => {
   const target = createTargetRepo();
   try {
     const run = await startFeature(target, { gh: 'gh-token-leak' });
     const terminal = await approveUntilTerminal(h.api, run.runId);
-    // #246: integrator ScriptFailed (gh threw with token) now routes to classifyRecovery → recoveryGate;
-    // approveUntilTerminal resolves recovery gate with 'approved' → blockedEnd → blocked.
-    assert.equal(terminal.state, 'blocked');
-    await assertBlocked(h.api, run.runId);
+    assert.equal(terminal.state, 'cancelled');
     await assertNoRawTokenInEvents(h.api, run.runId, 'gho_abcdEFGH1234567890LEAK');
   } finally {
     target.cleanup();
@@ -415,14 +407,14 @@ test('D19: a token in a gh error reaches no persisted event; run routes to recov
 
 // ── #240 — pollPr mergeability gate ─────────────────────────────────────────
 
-test('D35: merge conflict during pollPr → run blocked with mergeStateStatus=DIRTY in lesson', { skip: e2eSkip }, async () => {
+test('D35: merge conflict during pollPr → recovery cancel with mergeStateStatus=DIRTY in lesson', { skip: e2eSkip }, async () => {
   const target = createTargetRepo();
   try {
     // gh reports checks green, no review threads, but mergeStateStatus=DIRTY, mergeable=CONFLICTING.
     // Before #240, pollPr would false-clean and proceed to confirmMerge; after #240 it must block.
     const run = await startFeature(target, { gh: 'merge-conflict' });
-    await approveUntilTerminal(h.api, run.runId); // approve plan gate; pollPr then blocks
-    await assertBlocked(h.api, run.runId);
+    const terminal = await approveUntilTerminal(h.api, run.runId); // approve plan gate; pollPr opens recovery; cancel
+    assert.equal(terminal.state, 'cancelled');
     const events = await h.api.getRunEvents({ runId: run.runId, limit: 50 });
     const blockedEvent = events.find((e) => e.type === 'pipeline_blocked');
     assert.ok(blockedEvent, 'a pipeline_blocked event must fire for a merge-conflict run');
@@ -487,17 +479,25 @@ test('D32: review-comment → triage(wontfix) → reply+resolve (no re-push) →
   }
 });
 
-test('D33: review-comment → triage(question) → questionGate(approve) → triage(wontfix) → merge', { skip: e2eSkip }, async () => {
+test('D33: review-comment → triage(question) → questionGate(wontfix) → reply+resolve → merge', { skip: e2eSkip }, async () => {
   const target = createTargetRepo();
   try {
-    // The first triage marks the thread a `question` → the SEPARATE review-question gate fires; on
-    // approve the run re-triages (now `wontfix`) → reply+resolve → clean → merge. approveUntilTerminal
-    // approves the plan, the review-question, and the merge gates in order.
     const run = await startFeature(target, {
       gh: 'review-comment',
-      agent: { byRole: { triager: { kind: 'triage', decisions: ['question', 'wontfix'] } } },
+      agent: { byRole: { triager: { kind: 'triage', decisions: ['question'] } } },
     });
-    const terminal = await approveUntilTerminal(h.api, run.runId);
+    const plan = await waitForGate(h.api, run.runId, 'plan');
+    await h.api.resolveGate({ inboxId: plan.inboxId, outcome: 'approved', resolvedBy: 'e2e' });
+    const question = await waitForGate(h.api, run.runId, 'question');
+    await h.api.resolveGate({
+      inboxId: question.inboxId,
+      outcome: 'wontfix',
+      note: 'the requested rewrite is out of scope for this run',
+      resolvedBy: 'e2e',
+    });
+    const merge = await waitForGate(h.api, run.runId, 'merge');
+    await h.api.resolveGate({ inboxId: merge.inboxId, outcome: 'approved', resolvedBy: 'e2e' });
+    const terminal = await waitState(h.api, run.runId);
     assert.equal(terminal.state, 'completed', 'a question is answered at the gate, then the thread is resolved and merged');
     await assertEventsPresent(h.api, run.runId, ['pr_polled', 'threads_responded', 'merge_confirmed', 'run_completed']);
   } finally {
@@ -512,12 +512,12 @@ test('D33: review-comment → triage(question) → questionGate(approve) → tri
 // lesson → these assertions fail and catch the regression.
 
 test('D22: developer writes to the GIVEN worktree (Repo: from context); branch is ahead of base', { skip: e2eSkip }, async () => {
-  // Use `merge-not-clean` so confirmMerge blocks AFTER integrate — the worktree is KEPT for inspection.
+  // Use `merge-not-clean` so confirmMerge opens recovery AFTER integrate — the worktree is KEPT for inspection.
   const target = createTargetRepo();
   try {
     const run = await startFeature(target, { gh: 'merge-not-clean' });
-    await approveUntilTerminal(h.api, run.runId); // approve plan + merge gate; confirmMerge then blocks
-    await assertBlocked(h.api, run.runId);
+    const terminal = await approveUntilTerminal(h.api, run.runId); // approve plan + merge gate; cancel recovery
+    assert.equal(terminal.state, 'cancelled');
 
     const wtPath = worktreePathFor(getConfig().dataDir, run.runId);
 

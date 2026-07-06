@@ -15,6 +15,7 @@ import {
   pollPr,
   mergeSignal,
   respondThreads,
+  triageForRespondThreads,
   captureProducedChange,
   resolveExecutable,
   parseOwnerRepo,
@@ -2351,6 +2352,36 @@ test('respondThreads: fix + wontfix each reply then resolve; question is skipped
   const ids: string[] = mutations.flatMap((a) => a.filter((s) => /^id=T/.test(s)));
   assert.ok(ids.every((s) => ['id=T1', 'id=T2'].includes(s)), `only acted-on thread ids: ${ids.join(',')}`);
   assert.ok(!ids.some((s) => s === 'id=T3'), 'a question thread is never replied/resolved');
+});
+
+test('triageForRespondThreads: question gate resolution turns a question into a reasoned reply', () => {
+  const fixTriage = triageForRespondThreads({
+    triage: {
+      items: [{ threadId: 'T1', decision: 'question', replyText: 'old question text' }],
+    },
+    gateResolution: { outcome: 'fix', note: 'covered by the follow-up patch' },
+  });
+  const wontfixTriage = triageForRespondThreads({
+    triage: {
+      items: [{ threadId: 'T1', decision: 'question', replyText: 'old question text' }],
+    },
+    gateResolution: { outcome: 'wontfix', note: 'covered by the existing compatibility path' },
+  });
+
+  assert.deepEqual(fixTriage.items, [
+    {
+      threadId: 'T1',
+      decision: 'fix',
+      replyText: 'Addressed: covered by the follow-up patch',
+    },
+  ]);
+  assert.deepEqual(wontfixTriage.items, [
+    {
+      threadId: 'T1',
+      decision: 'wontfix',
+      replyText: "Won't fix: covered by the existing compatibility path",
+    },
+  ]);
 });
 
 test('respondThreads: a fix reply precedes its resolve (reply-then-resolve order)', async () => {
