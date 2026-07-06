@@ -156,6 +156,39 @@ test('default playbook policy: merge gate must surface mergeReadiness evidence',
   assert.equal(diagnostic.path, 'gatedArtifact');
 });
 
+test('default playbook policy: poll recheck routes must stay bounded by pollLoop', () => {
+  const diagnostic = assertDiagnostic(
+    mutateTemplate((template) => {
+      guardedBranchContaining(template, 'prRouter', 'recheck').when = {
+        op: 'verdict.eq',
+        value: 'recheck',
+      };
+    }),
+    'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
+  );
+
+  assert.equal(diagnostic.nodeId, 'prRouter');
+  assert.match(diagnostic.expected ?? '', /recheck \+ pollLoop<8 -> pollPr/);
+  assert.match(diagnostic.actual ?? '', /conjunctiveBound=false/);
+});
+
+for (const nodeId of ['pollPr', 'mergeReadiness'] as const) {
+  test(`default playbook policy: ${nodeId} must increment pollLoop`, () => {
+    const diagnostic = assertDiagnostic(
+      mutateTemplate((template) => {
+        const node = template.nodes[nodeId];
+        assert.ok(node, `${nodeId} exists`);
+        delete node.incrementCounters;
+      }),
+      'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
+    );
+
+    assert.equal(diagnostic.nodeId, nodeId);
+    assert.equal(diagnostic.path, 'incrementCounters');
+    assert.match(diagnostic.expected ?? '', /pollLoop/);
+  });
+}
+
 test('default playbook policy: missing review_changes route to triage is diagnostic', () => {
   const diagnostic = assertDiagnostic(
     mutateTemplate((template) => {

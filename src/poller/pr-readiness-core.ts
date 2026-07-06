@@ -54,7 +54,7 @@ export type CheckRunNode = {
 export type StatusContextNode = {
   __typename: 'StatusContext';
   context: string;
-  state: 'PENDING' | 'SUCCESS' | 'FAILURE' | 'ERROR';
+  state: 'EXPECTED' | 'PENDING' | 'SUCCESS' | 'FAILURE' | 'ERROR';
 };
 
 export type UnknownCheckNode = {
@@ -344,7 +344,7 @@ function resolveOpenPr(input: PrReadinessInput, baseBranch: string, execGh: Exec
 
 function isTerminal(item: UnknownCheckNode): boolean {
   if (item.__typename === 'CheckRun') return item.status === 'COMPLETED';
-  return item.state !== 'PENDING';
+  return item.state !== 'EXPECTED' && item.state !== 'PENDING';
 }
 
 function isPassed(item: UnknownCheckNode): boolean {
@@ -370,14 +370,18 @@ function isBot(user: { login: string; type?: string } | null | undefined): boole
   return user?.type === 'Bot';
 }
 
+const GITHUB_CHECK_ROLLUP_UNAVAILABLE = 'GitHub check rollup unavailable (re-polling for checks)';
+
 export function collectCiChecks(
   items: UnknownCheckNode[],
+  opts: { emptyIsPending?: boolean } = {},
 ): { pending: boolean; ci_passed: boolean; checks: Array<{ name: string; result: string }>; pendingNames: string[] } {
-  const pending = items.length === 0 || items.some((item) => !isTerminal(item));
+  const pending = (opts.emptyIsPending === true && items.length === 0) || items.some((item) => !isTerminal(item));
   const ci_passed = !pending && items.every((item) => isPassed(item));
   const pendingNames = items
     .filter((item) => !isTerminal(item))
     .map(checkName);
+  if (opts.emptyIsPending === true && items.length === 0) pendingNames.push(GITHUB_CHECK_ROLLUP_UNAVAILABLE);
   const checks = items.map((item) => ({ name: checkName(item), result: checkResult(item) }));
   return { pending, ci_passed, checks, pendingNames };
 }
@@ -743,7 +747,7 @@ function compactCheckLists(checks: Array<{ name: string; result: string }>) {
   const pass: string[] = [];
   const fail: string[] = [];
   for (const check of checks) {
-    if (['QUEUED', 'IN_PROGRESS', 'PENDING'].includes(check.result)) {
+    if (['EXPECTED', 'QUEUED', 'IN_PROGRESS', 'PENDING'].includes(check.result)) {
       pending.push(check.name);
       continue;
     }
@@ -1131,6 +1135,9 @@ function buildWaitingReadiness(input: {
   evidence: string[];
   isDraft?: boolean;
 }): PrReadinessResult {
+  const checkLists = input.checkLists.list.length === 0 && input.ci.pendingNames.length > 0
+    ? { ...input.checkLists, pending: input.ci.pendingNames }
+    : input.checkLists;
   const pendingCodeRabbit = input.ci.pendingNames.find((name) => name.toLowerCase().includes('coderabbit'));
   const pendingProviderState: ReturnType<typeof providerState> = pendingCodeRabbit
     ? {
@@ -1144,7 +1151,7 @@ function buildWaitingReadiness(input: {
     : {};
 
   const feedback = buildFeedback({
-    checks: input.checkLists,
+    checks: checkLists,
     providerState: pendingProviderState,
     sonar: emptySonar(input.sonarConfigured),
     reviewDecision: input.prView.reviewDecision ?? '',
@@ -1173,7 +1180,7 @@ function buildWaitingReadiness(input: {
   return {
     verdict: 'waiting',
     pr: prFromView(input.prNumber, input.prView),
-    checks: input.checkLists,
+    checks: checkLists,
     reviewDecision: input.prView.reviewDecision ?? '',
     reviewThreads: input.reviewThreads,
     providerState: pendingProviderState,
@@ -1231,7 +1238,7 @@ export async function collectPrReadiness(
 
   const { prNumber, prView } = resolved;
   const checks = prView.statusCheckRollup ?? [];
-  const ci = collectCiChecks(checks);
+  const ci = collectCiChecks(checks, { emptyIsPending: prView.statusCheckRollup === null });
   const checkLists = compactCheckLists(ci.checks);
   const { reviewThreads, staleThreadEvidence } = collectReviewThreads(input, prNumber, execGh);
   const sonarConfigured = Boolean(input.sonarProject);
@@ -1324,7 +1331,9 @@ export async function collectPrReadiness(
     nextAction,
     evidence: [
       `PR #${prNumber} state=${prView.state ?? 'unknown'} draft=${Boolean(prView.isDraft)}`,
-      `checks pass=${checkLists.pass.length} fail=${checkLists.fail.length} pending=${checkLists.pending.length}`,
+      checkLists.list.length === 0
+        ? 'checks: none registered'
+        : `checks pass=${checkLists.pass.length} fail=${checkLists.fail.length} pending=${checkLists.pending.length}`,
       ...(input.issueRef ? [`issueRef ${issueRefTitleTag(input.issueRef, input.repo)} expected in branch and title`] : []),
       ...(providers.codeRabbit?.reason === 'provider_limit' ? ['CodeRabbit provider/rate limit comment detected.'] : []),
       ...(verdict === 'ready' && hasInformationalProviderWait

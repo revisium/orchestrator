@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
 import { PLAYBOOK_SOURCE } from './env.js';
+import { readRuntime } from '../../config.js';
+import { bootstrapControlPlane } from '../../control-plane/bootstrap.js';
+import { ControlPlaneError } from '../../control-plane/errors.js';
 import type { RunHarness } from './harness.js';
 import type { TargetRepo } from './git-target-repo.js';
 import { waitForGate } from './drive.js';
@@ -17,6 +20,16 @@ const STUB_OVERRIDE = { runnerOverrides: { 'claude-code': 'stub-agent' } };
 
 /** Stub BOTH the agent and the (script) integrator — a self-contained run with no real git/gh. */
 const STUB_OVERRIDE_FULL = { runnerOverrides: { 'claude-code': 'stub-agent', 'revo-integrator': 'stub-agent' } };
+
+function isBootstrapMissing(error: unknown): boolean {
+  return error instanceof ControlPlaneError && error.code === 'BOOTSTRAP_NOT_APPLIED';
+}
+
+async function bootstrapCurrentRuntimeControlPlane(): Promise<void> {
+  const runtime = readRuntime();
+  if (!runtime) throw new Error('standalone runtime missing before bootstrap');
+  await bootstrapControlPlane(runtime.httpPort);
+}
 
 /**
  * Create + start a run on the SEEDED DEFAULT playbook's `feature-development` pipeline (slice 5). Both
@@ -89,17 +102,22 @@ export async function givenInstalledPlaybook(h: RunHarness): Promise<void> {
  * NOT install the e2e fixture: Group M tests the SHIPPED default, distinct from {@link PLAYBOOK_ID}.
  */
 export async function givenSeededDefaultPlaybook(h: RunHarness): Promise<void> {
-  const installed = await h.api.listPlaybooks();
-  if (installed.some((p) => p.id === DEFAULT_PLAYBOOK_ID)) return;
-  const { repoRoot } = await import('../../config.js');
-  const { join } = await import('node:path');
-  const source = join(repoRoot, 'control-plane', 'default-playbook');
+  const { seedDefaultPlaybook } = await import('../../control-plane/seed-default-playbook.js');
+  const seed = () => seedDefaultPlaybook({
+    listPlaybooks: () => h.api.listPlaybooks(),
+    install: (options) => h.api.installPlaybook(options),
+  });
+  let outcome: Awaited<ReturnType<typeof seed>>;
   try {
-    const install = await h.api.installPlaybook({ source, name: DEFAULT_PLAYBOOK_ID, commit: true });
-    assert.equal(install.playbookId, DEFAULT_PLAYBOOK_ID);
-    assert.ok(install.pipelines >= 2, 'default playbook install must load the seeded pipelines');
-  } catch (err) {
-    if (!/not a draft|already|nothing to commit|ROW_CONFLICT/i.test(String(err))) throw err;
+    outcome = await seed();
+  } catch (error) {
+    if (!isBootstrapMissing(error)) throw error;
+    await bootstrapCurrentRuntimeControlPlane();
+    outcome = await seed();
+  }
+  if (outcome.status === 'installed') {
+    assert.equal(outcome.result.playbookId, DEFAULT_PLAYBOOK_ID);
+    assert.ok(outcome.result.pipelines >= 2, 'default playbook install must load the seeded pipelines');
   }
 }
 

@@ -63,13 +63,14 @@ function assertReviewReplyIncludes(calls: string[][], expected: string): void {
   );
 }
 
-test('#272: no registered checks are advisory and still reach mergeGate', {
-  skip: '#272: pending zero-CI target behavior',
-}, async () => {
+test('#272: no registered checks are advisory and still reach mergeGate', async () => {
   await runTargetScenario('#272: no registered checks are advisory and still reach mergeGate', {
     executionProfile: STUB_AGENT,
     gh: 'no-checks-registered',
-    gates: [['plan', 'approved'], ['merge', 'cancel']],
+    gates: [
+      ['plan', 'approved'],
+      { topic: 'merge', outcome: 'cancel', nodeId: 'mergeGate', summaryIncludes: ['checks: none registered'] },
+    ],
     expect: {
       terminal: 'cancelled',
       path: [{ type: 'pr_polled', payload: { verdict: 'clean' } }],
@@ -79,16 +80,34 @@ test('#272: no registered checks are advisory and still reach mergeGate', {
   });
 });
 
-test('#272: never-settling checks route to recoveryGate instead of spinning to MAX_STEPS', {
-  skip: '#272: pending bounded recheck-loop target behavior',
-}, async () => {
+test('#272: never-settling checks route to recoveryGate instead of spinning to MAX_STEPS', async () => {
   await runTargetScenario('#272: never-settling checks route to recoveryGate instead of spinning to MAX_STEPS', {
     executionProfile: STUB_AGENT,
     gh: 'checks-never-settle',
-    gates: [['plan', 'approved'], ['merge', 'cancel']],
+    gates: [
+      ['plan', 'approved'],
+      { topic: 'merge', outcome: 'cancel', nodeId: 'recoveryGate' },
+    ],
     expect: {
       terminal: 'cancelled',
       path: [{ type: 'pr_polled', payload: { verdict: 'recheck' } }],
+      noEvents: ['merge_confirmed'],
+      ghNotCalled: [['pr', 'merge']],
+    },
+  });
+});
+
+test('#272: unclassifiable poll state routes through classifyRecovery to recoveryGate', async () => {
+  await runTargetScenario('#272: unclassifiable poll state routes through classifyRecovery to recoveryGate', {
+    executionProfile: STUB_AGENT,
+    gh: 'nonsense-poll-state',
+    gates: [
+      ['plan', 'approved'],
+      { topic: 'merge', outcome: 'cancel', nodeId: 'recoveryGate' },
+    ],
+    expect: {
+      terminal: 'cancelled',
+      agentNodeCalled: ['classifyRecovery'],
       noEvents: ['merge_confirmed'],
       ghNotCalled: [['pr', 'merge']],
     },

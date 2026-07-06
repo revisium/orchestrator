@@ -21,7 +21,7 @@ function checkRun(name: string, status: 'QUEUED' | 'IN_PROGRESS' | 'COMPLETED', 
   return { __typename: 'CheckRun', name, status, conclusion };
 }
 
-function statusCtx(context: string, state: 'PENDING' | 'SUCCESS' | 'FAILURE' | 'ERROR') {
+function statusCtx(context: string, state: 'EXPECTED' | 'PENDING' | 'SUCCESS' | 'FAILURE' | 'ERROR') {
   return { __typename: 'StatusContext', context, state };
 }
 
@@ -126,6 +126,24 @@ test('pending CI with QUEUED status: re-queues', async () => {
   const result = await run(BASE_INPUT, STEP, execGh);
 
   assert.equal(result.nextSteps[0]?.role, 'ci-poller');
+});
+
+test('EXPECTED status context: re-queues as pending, NOT failed terminal', async () => {
+  const expectedView = prViewResponse([statusCtx('Required checks', 'EXPECTED')]);
+  const execGh = makeFullResponses(expectedView);
+
+  const readiness = await collectPrReadiness({ repo: 'owner/repo', prNumber: 42 }, execGh);
+  assert.deepEqual(readiness.checks.pending, ['Required checks']);
+  assert.deepEqual(readiness.checks.list, [{ name: 'Required checks', result: 'EXPECTED' }]);
+
+  const result = await run(BASE_INPUT, STEP, execGh);
+
+  assert.equal(result.nextSteps.length, 1);
+  const ns = result.nextSteps[0];
+  assert.equal(ns.role, 'ci-poller', 'EXPECTED status contexts stay on the bounded recheck path');
+  assert.equal(ns.kind, 'poll');
+  assert.equal((ns.input as PollInput).poll_count, 1);
+  assert.equal(result.needsHuman, undefined);
 });
 
 test('pending CI: uses custom modelProfile from step', async () => {
@@ -548,22 +566,21 @@ test('bot vs human comment separation', async () => {
   assert.equal(inp.bot_comments.length, 1, 'only bot inline comment');
 });
 
-test('empty statusCheckRollup ([]): re-queues as pending, NOT terminal (BLOCKER 2)', async () => {
-  // A freshly created PR has a transiently empty rollup before checks register. It must NOT
-  // be declared "terminal & passed" (the old `[].every() === true` bug) — re-queue instead.
-  const view = prViewResponse([]);
+test('empty statusCheckRollup ([]): zero-CI clean readiness is advisory terminal', async () => {
+  const view = prViewResponse([], { mergeStateStatus: 'CLEAN', mergeable: 'MERGEABLE' });
   const execGh = makeFullResponses(view);
 
   const result = await run(BASE_INPUT, STEP, execGh);
 
   assert.equal(result.nextSteps.length, 1);
   const ns = result.nextSteps[0];
-  assert.equal(ns.role, 'ci-poller', 'empty rollup must re-queue, not go to the judge');
-  assert.equal(ns.kind, 'poll');
-  assert.equal((ns.input as PollInput).poll_count, 1);
+  assert.equal(ns.role, 'pr-watcher', 'zero-CI readiness goes to the judge with an advisory, not a settle wait');
+  assert.equal(ns.kind, 'judge');
+  assert.deepEqual((ns.input as { checks: unknown[] }).checks, []);
   assert.equal(result.needsHuman, undefined);
-  const out = result.output as { verdict: string };
-  assert.equal(out.verdict, 'pending');
+  const out = result.output as { verdict: string; ci_passed: boolean };
+  assert.equal(out.verdict, 'terminal');
+  assert.equal(out.ci_passed, true);
 });
 
 test('null statusCheckRollup: re-queues as pending, NOT terminal (BLOCKER 2)', async () => {
@@ -574,6 +591,10 @@ test('null statusCheckRollup: re-queues as pending, NOT terminal (BLOCKER 2)', a
     mergeable: 'MERGEABLE',
   };
   const execGh = makeFullResponses(nullView);
+
+  const readiness = await collectPrReadiness({ repo: 'owner/repo', prNumber: 42 }, execGh);
+  assert.deepEqual(readiness.checks.pending, ['GitHub check rollup unavailable (re-polling for checks)']);
+  assert.match(readiness.evidence.join('\n'), /GitHub check rollup unavailable/);
 
   const result = await run(BASE_INPUT, STEP, execGh);
 
