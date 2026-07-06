@@ -31,6 +31,7 @@ export type GhScenario =
   | 'empty-graphql-data'
   | 'no-checks-registered'
   | 'checks-never-settle'
+  | 'nonsense-poll-state'
   | 'force-advisory-thread';
 
 /** Branch from a `gh pr <view|merge|ready> <branch> …` argv (integrator/confirmMerge pass it as args[2]). */
@@ -287,6 +288,9 @@ function ghBehavior(scenario: GhScenario, args: string[], st: GhState): string {
       if (scenario === 'checks-never-settle') {
         mergeStateStatus = 'UNKNOWN';
         mergeable = 'UNKNOWN';
+      } else if (scenario === 'nonsense-poll-state') {
+        mergeStateStatus = 'ALIEN';
+        mergeable = 'BANANA';
       } else if (scenario === 'merge-unknown-then-clean') {
         // readyCount < 2: first pollPr node fires pr-ready (→1); grace views see readyCount=1 → UNKNOWN.
         // Second pollPr (after prRouter recheck self-loop) fires pr-ready (→2); grace views see
@@ -314,6 +318,8 @@ function ghBehavior(scenario: GhScenario, args: string[], st: GhState): string {
           ? []
           : scenario === 'checks-never-settle'
           ? [{ __typename: 'CheckRun', name: 'build', status: 'IN_PROGRESS', conclusion: null }]
+          : scenario === 'nonsense-poll-state'
+          ? [{ __typename: 'MysteryCheck', name: '???', state: 'WAT' }]
           : ciRed
           ? [{ __typename: 'CheckRun', name: 'build', status: 'COMPLETED', conclusion: 'FAILURE' }]
           : [{ __typename: 'CheckRun', name: 'build', status: 'COMPLETED', conclusion: 'SUCCESS' }],

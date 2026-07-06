@@ -439,14 +439,11 @@ test('error: GATE_OUTCOME_UNROUTED fires as an error for implicit declared gate 
   assert.equal(diag?.severity, 'error');
 });
 
-test('warning: CYCLE_WITHOUT_COUNTER fires on current bundled default template', () => {
-  assert.deepEqual(bundledWarningSites('CYCLE_WITHOUT_COUNTER'), [
-    'mergeReadinessRouter',
-    'prRouter',
-  ]);
+test('error: CYCLE_WITHOUT_COUNTER is absent from the bounded bundled default template', () => {
+  assert.deepEqual(bundledDiagnosticSites('CYCLE_WITHOUT_COUNTER'), []);
 });
 
-test('warning: CYCLE_WITHOUT_COUNTER ignores counter reads on unrelated exit branches', () => {
+test('error: CYCLE_WITHOUT_COUNTER ignores counter reads on unrelated exit branches', () => {
   const t = template('unrelated-counter-bound')
     .entry('poll')
     .domain('cancel', 'recheck')
@@ -472,10 +469,11 @@ test('warning: CYCLE_WITHOUT_COUNTER ignores counter reads on unrelated exit bra
     .build();
 
   const diags = validateTemplate(t);
-  assert.ok(diags.some((diag) => diag.code === 'CYCLE_WITHOUT_COUNTER' && diag.nodeId === 'router'));
+  const diag = diags.find((candidate) => candidate.code === 'CYCLE_WITHOUT_COUNTER' && candidate.nodeId === 'router');
+  assert.equal(diag?.severity, 'error');
 });
 
-test('warning: CYCLE_WITHOUT_COUNTER accepts a counter exit branch before the loop branch', () => {
+test('error: CYCLE_WITHOUT_COUNTER accepts a counter exit branch before the loop branch', () => {
   const t = template('preemptive-counter-bound')
     .entry('poll')
     .domain('cancel', 'recheck')
@@ -503,7 +501,7 @@ test('warning: CYCLE_WITHOUT_COUNTER accepts a counter exit branch before the lo
   assertNoDiagnostic(t, 'CYCLE_WITHOUT_COUNTER');
 });
 
-test('warning: CYCLE_WITHOUT_COUNTER ignores unrelated cycle branches before a counter exit', () => {
+test('error: CYCLE_WITHOUT_COUNTER ignores unrelated cycle branches before a counter exit', () => {
   const t = template('unrelated-cycle-branch-before-counter-bound')
     .entry('poll')
     .domain('cancel', 'other', 'recheck')
@@ -532,7 +530,7 @@ test('warning: CYCLE_WITHOUT_COUNTER ignores unrelated cycle branches before a c
   assertNoDiagnostic(t, 'CYCLE_WITHOUT_COUNTER');
 });
 
-test('warning: CYCLE_WITHOUT_COUNTER accepts a disjunctive counter exit branch before the loop branch', () => {
+test('error: CYCLE_WITHOUT_COUNTER accepts a disjunctive counter exit branch before the loop branch', () => {
   const t = template('disjunctive-counter-bound')
     .entry('poll')
     .domain('cancel', 'other', 'recheck')
@@ -560,7 +558,7 @@ test('warning: CYCLE_WITHOUT_COUNTER accepts a disjunctive counter exit branch b
   assertNoDiagnostic(t, 'CYCLE_WITHOUT_COUNTER');
 });
 
-test('warning: CYCLE_WITHOUT_COUNTER accepts a negated counter cap before the loop branch', () => {
+test('error: CYCLE_WITHOUT_COUNTER accepts a negated counter cap before the loop branch', () => {
   const t = template('negated-counter-bound')
     .entry('poll')
     .domain('cancel', 'recheck')
@@ -588,7 +586,7 @@ test('warning: CYCLE_WITHOUT_COUNTER accepts a negated counter cap before the lo
   assertNoDiagnostic(t, 'CYCLE_WITHOUT_COUNTER');
 });
 
-test('warning: CYCLE_WITHOUT_COUNTER warns for negated disjunctions impossible for recheck', () => {
+test('error: CYCLE_WITHOUT_COUNTER fires for negated disjunctions impossible for recheck', () => {
   const t = template('negated-impossible-disjunctive-counter-bound')
     .entry('poll')
     .domain('cancel', 'recheck')
@@ -617,7 +615,7 @@ test('warning: CYCLE_WITHOUT_COUNTER warns for negated disjunctions impossible f
   assert.ok(diags.some((diag) => diag.code === 'CYCLE_WITHOUT_COUNTER' && diag.nodeId === 'router'));
 });
 
-test('warning: CYCLE_WITHOUT_COUNTER warns for negated complementary counter disjunctions', () => {
+test('error: CYCLE_WITHOUT_COUNTER fires for negated complementary counter disjunctions', () => {
   const t = template('negated-complementary-counter-bound')
     .entry('poll')
     .domain('cancel', 'recheck')
@@ -646,7 +644,7 @@ test('warning: CYCLE_WITHOUT_COUNTER warns for negated complementary counter dis
   assert.ok(diags.some((diag) => diag.code === 'CYCLE_WITHOUT_COUNTER' && diag.nodeId === 'router'));
 });
 
-test('warning: CYCLE_WITHOUT_COUNTER warns for negated overlapping counter disjunctions', () => {
+test('error: CYCLE_WITHOUT_COUNTER fires for negated overlapping counter disjunctions', () => {
   const t = template('negated-overlapping-counter-bound')
     .entry('poll')
     .domain('cancel', 'recheck')
@@ -675,7 +673,7 @@ test('warning: CYCLE_WITHOUT_COUNTER warns for negated overlapping counter disju
   assert.ok(diags.some((diag) => diag.code === 'CYCLE_WITHOUT_COUNTER' && diag.nodeId === 'router'));
 });
 
-test('warning: CYCLE_WITHOUT_COUNTER warns for conjunctive counter branches gated by unrelated verdicts', () => {
+test('error: CYCLE_WITHOUT_COUNTER fires for conjunctive counter branches gated by unrelated verdicts', () => {
   const t = template('unrelated-verdict-counter-bound')
     .entry('poll')
     .domain('cancel', 'other', 'recheck')

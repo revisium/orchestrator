@@ -99,7 +99,7 @@ export async function run(
     };
   }
 
-  if (readiness.checks.pending.length > 0 || readiness.checks.list.length === 0) {
+  if (readiness.checks.pending.length > 0) {
     if (input.poll_count >= maxPolls) {
       const pendingNames = readiness.checks.pending;
       const lesson =

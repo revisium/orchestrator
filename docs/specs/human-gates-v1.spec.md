@@ -244,9 +244,12 @@ The review-feedback loop is a pipeline tail pattern:
 ```text
 integrator -> pollPr
 pollPr clean -> mergeReadiness
-pollPr recheck -> pollPr
+pollPr recheck + pollLoop < 8 -> pollPr
+pollPr recheck + pollLoop >= 8 -> recoveryGate
+pollPr unclassifiable/script blocked -> classifyRecovery -> recoveryGate
 mergeReadiness clean -> mergeGate
-mergeReadiness recheck -> mergeReadiness
+mergeReadiness recheck + pollLoop < 8 -> mergeReadiness
+mergeReadiness recheck + pollLoop >= 8 -> recoveryGate
 mergeReadiness ci_changes -> developer rework -> integrator
 mergeReadiness review_changes -> analyst triage
 pollPr ci_changes -> developer rework -> integrator
@@ -257,12 +260,12 @@ questionGate wontfix -> respondThreads -> pollPr
 questionGate cancel -> cancelledEnd
 triage fix -> developer rework -> respondThreads -> integrator
 triage wontfix -> respondThreads -> pollPr
-mergeGate approved -> confirmMerge
+mergeGate approved -> mergeApproveReverify -> confirmMerge
 mergeGate recheck -> mergeRecheck -> mergeRecheckRouter
 mergeRecheckRouter clean -> mergeGate
 mergeGate address_review_threads -> triage
 mergeGate return_to_development -> triage
-mergeGate override_merge -> confirmMerge   (override audit required)
+mergeGate override_merge -> mergeApproveReverify -> confirmMerge   (override audit required)
 mergeGate cancel -> cancelledEnd
 ```
 
@@ -272,14 +275,22 @@ Contracts:
 - Review comments route to analyst triage first.
 - Ambiguous comments route to a question gate.
 - Pending provider/check readiness stays internal as a `recheck` PR feedback verdict; it MUST NOT surface as clean or
-  terminally block while it can still be re-polled.
+  terminally block while it can still be re-polled. `pollPr` and `mergeReadiness` MUST bound this internal loop with
+  `pollLoop < 8`; cap exhaustion MUST route to a human recovery gate rather than engine `MAX_STEPS`.
 - `pollPr` / `mergeReadiness` emit `clean` only when all three independent blockers are clear: required CI checks pass,
   mergeability is clean (`mergeable=MERGEABLE` and `mergeStateStatus ∈ {CLEAN, UNSTABLE, HAS_HOOKS}`), and no unresolved
   non-outdated review threads exist.
+- Repositories with no registered checks are valid zero-CI repositories. On the first PR poll, when no checks are
+  registered, the PR is not draft, mergeability is clean, and no unresolved non-outdated review threads exist,
+  `pollPr` / `mergeReadiness` MUST emit `clean`; the surfaced gate artifact MUST include the advisory
+  `checks: none registered`.
 - A definite-negative merge state (`DIRTY`, `BLOCKED`, `BEHIND`, or `mergeable=CONFLICTING`) routes to `blockedEnd`
   (reason: `poll-pr`) with the raw fields in the lesson pending the #246/#247 classifier.
-- An async/unknown mergeability (`UNKNOWN`, empty, unrecognized) routes to `recheck` and MUST NOT be reported as
+- A recognized async/unknown mergeability (`UNKNOWN` or empty) routes to bounded `recheck` and MUST NOT be reported as
   `clean`.
+- Non-standard or unclassifiable provider state (for example an unknown check conclusion or mergeability enum) MUST
+  route through `classifyRecovery` to `recoveryGate`; it MUST NOT silently self-loop and MUST NOT be converted into a
+  terminal failure.
 - Advisory (non-required) check failures MUST NOT burn `ciLoop` or route to rework when required checks and
   mergeability are clean.
 - `respondThreads` MUST reply to and resolve only the threads triaged or gate-resolved as `fix` or `wontfix`, and
@@ -302,6 +313,9 @@ Contracts:
 
 ## Changelog
 
+- 2026-07-06: Bounded `pollPr`/`mergeReadiness` `recheck` self-loops with `pollLoop < 8`, documented zero-CI
+  first-poll readiness with `checks: none registered`, and routed unclassifiable poll state through recovery
+  classification (issue #272).
 - 2026-07-02: Normative-language / canon-discipline pass on human-gates-v1 (RFC-2119 keywords, ALL-CAPS discipline reserved for keywords/acronyms/enum literals, atomic normative statements); no contract change.
 - 2026-07-02: Made `pollPr`/`mergeReadiness` readiness-honest: `clean` now requires required checks passing,
   mergeability clean, AND no unresolved non-outdated threads. `UNKNOWN`/async mergeability → `recheck`; definite-negative

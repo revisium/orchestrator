@@ -46,6 +46,7 @@ static verifier.
 | #144 | No graph policy is inferred from stale provider comments or install versioning; the default catalog can still be checked statically. | `catalogHash` reseed behavior and informational provider waits for stale CodeRabbit comments. |
 | #141/#276 | `mergeGate` exposes `approved,recheck,address_review_threads,return_to_development,override_merge,cancel`; `recheck` routes through a fresh `mergeRecheck` `script:pollPr` node, then routes `clean` back to `mergeGate`, `review_changes` to `triage`, bounded `ci_changes + ciLoop < 3` to `ciRework`, `recheck` to `mergeReadiness`, and default to `recoveryGate`; `address_review_threads` and `return_to_development` route to `triage`; `override_merge` routes to `mergeApproveReverify`; `cancel` routes to `cancelledEnd`; `triage` and `ciRework` receive optional stale-ok `mergeRecheck` evidence. | Actual GitHub/provider freshness, named-gate runtime execution, unresolved-thread detection, override audit persistence, and proof that live review/CI changes return to the correct recovery loop. |
 | #246 | Recovery/reverify shape: recoverable script catches route to `classifyRecovery`; cap-router defaults reach a humanGate; `mergeGate` approved/override_merge routes through post-approval re-poll (`mergeApproveReverify`) before `confirmMerge`; `confirmMerge` consumes fresh `mergeApproveReverify` readiness; `confirmMerge -> cleanupWorktree -> mergedEnd` (no bypass); `confirmMerge` failure catches route to `classifyRecovery`; cancel/rework outcomes on all humanGates have explicit guarded branches; `failedEnd` removed. | Recovery/rework cycle correctness, post-approval freshness, worktree cleanup. |
+| #272 | `pollPr` and `mergeReadiness` increment a shared `pollLoop` scope; their `recheck` self-loop branches are guarded by `pollLoop < 8`; cap exhaustion routes through the router default off-ramp instead of relying on engine `MAX_STEPS`. | Zero-CI first-poll readiness, unclassifiable provider state classification, and never-settling PRs reaching a human gate. |
 
 ## Static Rules
 
@@ -56,6 +57,7 @@ The bundled `feature-development` policy verifier reports errors for these stati
 | The verifier is applied only to supported `feature-development` variants. | `DEFAULT_POLICY_WRONG_PIPELINE` |
 | Developer/rework/CI/review-fix change producers expose `schema:change` outputs and downstream reviewer/integrator steps consume them. | `DEFAULT_POLICY_CHANGE_HANDOFF_MISSING` |
 | PR readiness flows through `pollPr`, then a fresh `mergeReadiness` poll, then `mergeGate`; the gate surfaces the `mergeReadiness` artifact. | `DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING` |
+| `pollPr` and `mergeReadiness` recheck branches MUST be bounded by `pollLoop < 8`, and `pollLoop` MUST be declared with `cap=8`. | `DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING` |
 | `mergeGate` approved and override_merge MUST route to `mergeApproveReverify` (a fresh `script:pollPr` re-poll); `mergeApproveReverifyRouter` clean MUST route to `confirmMerge`. | `DEFAULT_POLICY_APPROVE_REVERIFY_MISSING` |
 | `confirmMerge` MUST consume `mergeApproveReverify` as `mergeReadiness` (not the pre-gate stale `mergeReadiness` node). | `DEFAULT_POLICY_MERGE_READINESS_FRESHNESS_MISSING` |
 | Merge-gate `recheck` routes to a fresh `mergeRecheck` `script:pollPr`, `cancel` routes to `cancelledEnd`, then the recheck router sends `clean` back to `mergeGate`, preserves recoverable `review_changes`/bounded `ci_changes` routes, and routes default to `recoveryGate`. | `DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING` |
@@ -119,6 +121,8 @@ contract: the verifier does not prove that GitHub/provider state was fresh at ru
   `recoveryGate` exposes only `recheck,cancel`, `questionGate` exposes `fix,wontfix,cancel`, and
   `GATE_OUTCOME_UNROUTED` is enforced as an error. `questionGate fix` now routes through
   `questionReviewRework`, which receives the gate resolution before integration and thread responses.
+- 2026-07-06: #272 — bounded `pollPr`/`mergeReadiness` readiness recheck self-loops with `pollLoop < 8`,
+  documented cap exhaustion as a recovery off-ramp, and made counterless resilience cycles errors.
 - 2026-07-02: #242 — migrated `feature-development-codex-consensus` from hand-authored catalog entry to
   materialized-profile alias (`base: feature-development`, `profileId: codex-consensus`); emptied
   `CODEX_LEGACY_WAIVERS`; both variants now validate with zero diagnostics.

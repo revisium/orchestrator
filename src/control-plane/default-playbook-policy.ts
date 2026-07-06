@@ -37,10 +37,19 @@ export type DefaultPlaybookPolicyDiagnostic = {
 
 type EffectNode = Extract<Node, { kind: 'agent' | 'script' }>;
 type RoutingNode = Extract<Node, { kind: 'choice' | 'humanGate' }>;
+type PollPrFeedbackHop = {
+  scriptId: string;
+  routerId: string;
+  cleanTarget: string;
+  recheckTarget: string;
+};
+type RouteExpectation = readonly [verdict: string, target: string];
 
 export const POLICY_VERSION = '1';
 
 const SUPPORTED_PIPELINE_IDS = ['feature-development', 'feature-development-codex-consensus'] as const;
+const POLL_LOOP_SCOPE = 'pollLoop';
+const POLL_LOOP_CAP = 8;
 
 // #242 reconciled: codex variant now matches canonical shape exactly (fanout/join delta only).
 // Empty by design — validateVariantParity on the materialized codex graph must return [].
@@ -240,34 +249,24 @@ function checkProducedChangeHandoff(template: Template, sink: PolicySink): void 
 }
 
 function checkPrFreshnessWiring(template: Template, sink: PolicySink): void {
-  expectScript(template, sink, {
-    code: 'DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING',
-    nodeId: 'pollPr',
-    scriptRef: 'script:pollPr',
-    next: 'prRouter',
-    resultSchema: 'schema:prFeedback',
-    produces: 'prFeedback',
+  expectScopeConfig(template, sink, {
+    scopeId: POLL_LOOP_SCOPE,
+    cap: POLL_LOOP_CAP,
+    parent: null,
   });
-  expectRoute(template, sink, {
-    code: 'DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING',
-    nodeId: 'prRouter',
-    verdict: 'clean',
-    target: 'mergeReadiness',
-  });
-  expectScript(template, sink, {
-    code: 'DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING',
-    nodeId: 'mergeReadiness',
-    scriptRef: 'script:pollPr',
-    next: 'mergeReadinessRouter',
-    resultSchema: 'schema:prFeedback',
-    produces: 'prFeedback',
-  });
-  expectRoute(template, sink, {
-    code: 'DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING',
-    nodeId: 'mergeReadinessRouter',
-    verdict: 'clean',
-    target: 'mergeGate',
-  });
+
+  for (const hop of [
+    { scriptId: 'pollPr', routerId: 'prRouter', cleanTarget: 'mergeReadiness', recheckTarget: 'pollPr' },
+    {
+      scriptId: 'mergeReadiness',
+      routerId: 'mergeReadinessRouter',
+      cleanTarget: 'mergeGate',
+      recheckTarget: 'mergeReadiness',
+    },
+  ] as const) {
+    expectPollPrFeedbackHop(template, sink, hop);
+  }
+
   expectGateArtifact(template, sink, {
     code: 'DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING',
     nodeId: 'mergeGate',
@@ -314,36 +313,13 @@ function checkMergeGateRecheckRouting(template: Template, sink: PolicySink): voi
     nodeId: 'mergeGate',
     outcomes: ['approved', 'recheck', 'address_review_threads', 'return_to_development', 'override_merge', 'cancel'],
   });
-  expectRoute(template, sink, {
-    code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
-    nodeId: 'mergeGate',
-    verdict: 'recheck',
-    target: 'mergeRecheck',
-  });
-  expectRoute(template, sink, {
-    code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
-    nodeId: 'mergeGate',
-    verdict: 'address_review_threads',
-    target: 'triage',
-  });
-  expectRoute(template, sink, {
-    code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
-    nodeId: 'mergeGate',
-    verdict: 'return_to_development',
-    target: 'triage',
-  });
-  expectRoute(template, sink, {
-    code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
-    nodeId: 'mergeGate',
-    verdict: 'override_merge',
-    target: 'mergeApproveReverify',
-  });
-  expectRoute(template, sink, {
-    code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
-    nodeId: 'mergeGate',
-    verdict: 'cancel',
-    target: 'cancelledEnd',
-  });
+  expectRoutes(template, sink, 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING', 'mergeGate', [
+    ['recheck', 'mergeRecheck'],
+    ['address_review_threads', 'triage'],
+    ['return_to_development', 'triage'],
+    ['override_merge', 'mergeApproveReverify'],
+    ['cancel', 'cancelledEnd'],
+  ]);
   expectScript(template, sink, {
     code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
     nodeId: 'mergeRecheck',
@@ -352,18 +328,11 @@ function checkMergeGateRecheckRouting(template: Template, sink: PolicySink): voi
     resultSchema: 'schema:prFeedback',
     produces: 'prFeedback',
   });
-  expectRoute(template, sink, {
-    code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
-    nodeId: 'mergeRecheckRouter',
-    verdict: 'clean',
-    target: 'mergeGate',
-  });
-  expectRoute(template, sink, {
-    code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
-    nodeId: 'mergeRecheckRouter',
-    verdict: 'review_changes',
-    target: 'triage',
-  });
+  expectRoutes(template, sink, 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING', 'mergeRecheckRouter', [
+    ['clean', 'mergeGate'],
+    ['review_changes', 'triage'],
+    ['recheck', 'mergeReadiness'],
+  ]);
   expectBoundedRoute(template, sink, {
     code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
     nodeId: 'mergeRecheckRouter',
@@ -371,12 +340,6 @@ function checkMergeGateRecheckRouting(template: Template, sink: PolicySink): voi
     target: 'ciRework',
     scope: 'ciLoop',
     value: 3,
-  });
-  expectRoute(template, sink, {
-    code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
-    nodeId: 'mergeRecheckRouter',
-    verdict: 'recheck',
-    target: 'mergeReadiness',
   });
   expectDefaultRoute(template, sink, {
     code: 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
@@ -760,6 +723,48 @@ function checkGateOutcomesExplicit(template: Template, sink: PolicySink): void {
   }
 }
 
+function expectPollPrFeedbackHop(template: Template, sink: PolicySink, hop: PollPrFeedbackHop): void {
+  expectScript(template, sink, {
+    code: 'DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING',
+    nodeId: hop.scriptId,
+    scriptRef: 'script:pollPr',
+    next: hop.routerId,
+    resultSchema: 'schema:prFeedback',
+    produces: 'prFeedback',
+  });
+  expectIncrementCounters(template, sink, {
+    code: 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
+    nodeId: hop.scriptId,
+    scopes: [POLL_LOOP_SCOPE],
+  });
+  expectRoute(template, sink, {
+    code: 'DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING',
+    nodeId: hop.routerId,
+    verdict: 'clean',
+    target: hop.cleanTarget,
+  });
+  expectBoundedRoute(template, sink, {
+    code: 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
+    nodeId: hop.routerId,
+    verdict: 'recheck',
+    target: hop.recheckTarget,
+    scope: POLL_LOOP_SCOPE,
+    value: POLL_LOOP_CAP,
+  });
+}
+
+function expectRoutes(
+  template: Template,
+  sink: PolicySink,
+  code: DefaultPlaybookPolicyDiagnosticCode,
+  nodeId: string,
+  routes: readonly RouteExpectation[],
+): void {
+  for (const [verdict, target] of routes) {
+    expectRoute(template, sink, { code, nodeId, verdict, target });
+  }
+}
+
 function expectChangeProducer(template: Template, sink: PolicySink, nodeId: string): void {
   const node = effectNode(template, nodeId);
   if (node?.resultSchema === 'schema:change' && node.produces?.name === 'change') return;
@@ -832,6 +837,29 @@ function expectScript(
     nodeId: rule.nodeId,
     expected: `script ${rule.scriptRef} next=${rule.next} resultSchema=${rule.resultSchema}`,
     actual: describeNode(node),
+  });
+}
+
+function expectIncrementCounters(
+  template: Template,
+  sink: PolicySink,
+  rule: {
+    code: DefaultPlaybookPolicyDiagnosticCode;
+    nodeId: string;
+    scopes: string[];
+  },
+): void {
+  const node = effectNode(template, rule.nodeId);
+  const actual = node?.incrementCounters ?? [];
+  if (node && actual.length === rule.scopes.length && actual.every((scope, index) => scope === rule.scopes[index])) {
+    return;
+  }
+
+  sink.error(rule.code, `node ${rule.nodeId} must increment ${rule.scopes.join(',')}`, {
+    nodeId: rule.nodeId,
+    path: 'incrementCounters',
+    expected: `incrementCounters=${rule.scopes.join(',')}`,
+    actual: node ? `incrementCounters=${actual.join(',')}` : describeNode(template.nodes[rule.nodeId]),
   });
 }
 

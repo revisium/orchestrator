@@ -2020,6 +2020,95 @@ test('pollPr: all green, no threads → clean', async () => {
   if (!('needsHuman' in r)) assert.equal(r.verdict, 'clean');
 });
 
+test('pollPr: no registered checks with clean mergeability → clean with advisory on first poll', async () => {
+  let calls = 0;
+  const collect = async (): Promise<PollPrReadiness> => {
+    calls++;
+    return readiness({
+      list: [],
+      evidence: ['checks: none registered'],
+      mergeStateStatus: 'CLEAN',
+      mergeable: 'MERGEABLE',
+    });
+  };
+
+  const r = await pollPr(POLL_INPUT, pollDeps(collect, { reviewGracePolls: 0, maxPolls: 3 }));
+
+  assert.equal(calls, 1, 'zero-CI readiness is detected on the first poll');
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) {
+    assert.equal(r.verdict, 'clean');
+    assert.ok(r.evidence.some((item) => item.includes('checks: none registered')));
+  }
+});
+
+test('pollPr: DRAFT merge state is classifiable so draft PR can be marked ready', async () => {
+  const ghCalls: string[][] = [];
+  let reads = 0;
+  const collect = async (): Promise<PollPrReadiness> => {
+    reads++;
+    return readiness({
+      evidence: [`read ${reads}`],
+      mergeStateStatus: reads === 1 ? 'DRAFT' : 'CLEAN',
+      mergeable: 'MERGEABLE',
+    });
+  };
+  const execGh: ExecGhFn = (args) => {
+    ghCalls.push(args);
+    return '';
+  };
+
+  const r = await pollPr(POLL_INPUT, pollDeps(collect, { execGh, reviewGracePolls: 1 }));
+
+  assert.equal(reads, 2, 'pollPr must keep going after seeing GitHub DRAFT merge state');
+  assert.ok(ghCalls.some((args) => args[0] === 'pr' && args[1] === 'ready'), 'draft PR is marked ready');
+  assert.ok(!('needsHuman' in r), 'DRAFT must not be treated as unclassifiable');
+  if (!('needsHuman' in r)) assert.equal(r.verdict, 'clean');
+});
+
+test('pollPr: unclassifiable check or mergeability state blocks for recovery classification', async () => {
+  const collect = async (): Promise<PollPrReadiness> =>
+    readiness({
+      fail: ['???'],
+      list: [{ name: '???', result: 'WAT' }],
+      mergeStateStatus: 'ALIEN',
+      mergeable: 'BANANA',
+    });
+
+  const r = await pollPr(POLL_INPUT, pollDeps(collect));
+
+  assert.ok('needsHuman' in r, 'unclassifiable poll state must enter the script-blocked recovery path');
+  if ('needsHuman' in r) {
+    assert.match(r.lesson, /unclassifiable readiness state/);
+    assert.match(r.lesson, /WAT/);
+    assert.match(r.lesson, /ALIEN/);
+    assert.match(r.lesson, /BANANA/);
+  }
+});
+
+test('pollPr: unclassifiable state during review grace blocks for recovery classification', async () => {
+  let reads = 0;
+  const collect = async (): Promise<PollPrReadiness> => {
+    reads++;
+    return reads === 1
+      ? readiness({ headSha: 'green-head' })
+      : readiness({
+          headSha: 'green-head',
+          list: [{ name: 'Required checks', result: 'WAT' }],
+          evidence: ['unexpected state after readying PR'],
+        });
+  };
+
+  const r = await pollPr(POLL_INPUT, pollDeps(collect, { reviewGracePolls: 1 }));
+
+  assert.equal(reads, 2, 'review grace observes the second readiness snapshot');
+  assert.ok('needsHuman' in r, 'unclassifiable final readiness must not return clean');
+  if ('needsHuman' in r) {
+    assert.match(r.lesson, /unexpected state after readying PR/);
+    assert.match(r.lesson, /check result WAT/);
+  }
+});
+
 test('pollPr: readiness human decision is not classified as clean', async () => {
   const collect = async (): Promise<PollPrReadiness> => ({
     ...readiness({ evidence: ['Review decision is CHANGES_REQUESTED'] }),
@@ -2145,6 +2234,28 @@ test('pollPr: a provider check pending during review grace returns recheck inste
   assert.equal(r.verdict, 'recheck');
   assert.equal(r.headSha, 'green-head');
   assert.ok(r.evidence.some((item) => item.includes('pending checks: CodeRabbit')));
+});
+
+test('pollPr: EXPECTED status during review grace returns recheck instead of human block', async () => {
+  let calls = 0;
+  const collect = async (): Promise<PollPrReadiness> => {
+    calls++;
+    return calls === 1
+      ? readiness({ headSha: 'green-head' })
+      : readiness({
+          headSha: 'green-head',
+          pending: ['Required checks'],
+          list: [{ name: 'Required checks', result: 'EXPECTED' }],
+          evidence: ['pending checks: Required checks'],
+        });
+  };
+
+  const r = await pollPr(POLL_INPUT, pollDeps(collect, { reviewGracePolls: 1 }));
+
+  assert.ok(!('needsHuman' in r), 'EXPECTED status remains a recoverable readiness state');
+  assert.equal(r.verdict, 'recheck');
+  assert.equal(r.headSha, 'green-head');
+  assert.ok(r.evidence.some((item) => item.includes('pending checks: Required checks')));
 });
 
 test('pollPr: a required CI failure appearing during review grace routes to ci_changes', async () => {

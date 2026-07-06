@@ -845,8 +845,6 @@ export function mergeSignal(mergeStateStatus: string | undefined, mergeable: str
   return 'unknown';
 }
 
-
-
 export async function pollPr(
   input: IntegratorInput,
   deps: PollPrDeps,
@@ -870,7 +868,7 @@ export async function pollPr(
   for (let i = 0; i < maxPolls; i++) {
     readiness = await collect(ownerRepo, branch, input.base, gh, input.issueRef, input.issueAction);
     lastReadiness = readiness;
-    if (readiness.checks.pending.length === 0 && readiness.checks.list.length > 0) break;
+    if (readiness.checks.pending.length === 0) break;
     readiness = undefined;
     if (i < maxPolls - 1) await sleep(intervalMs);
   }
@@ -895,6 +893,42 @@ export async function pollPr(
 
   let settled: PollPrReadiness = readiness;
 
+  const standardCheckResults = new Set('ACTION_REQUIRED CANCELLED ERROR EXPECTED FAILURE IN_PROGRESS NEUTRAL PENDING QUEUED SKIPPED STALE STARTUP_FAILURE SUCCESS TIMED_OUT UNKNOWN'.split(' '));
+  const standardMergeStateStatuses = new Set('BEHIND BLOCKED CLEAN DIRTY DRAFT HAS_HOOKS UNKNOWN UNSTABLE'.split(' '));
+  const standardMergeableStates = new Set('CONFLICTING MERGEABLE UNKNOWN'.split(' '));
+  const addUnclassifiableState = (
+    states: string[],
+    label: string,
+    value: string | undefined,
+    known: ReadonlySet<string>,
+  ): void => {
+    const state = (value ?? '').trim().toUpperCase();
+    if (state !== '' && !known.has(state)) states.push(`${label} ${state}`);
+  };
+  const unclassifiablePollState = (snapshot: PollPrReadiness): string[] => {
+    const states: string[] = [];
+    for (const check of snapshot.checks.list) {
+      addUnclassifiableState(states, 'check result', check.result, standardCheckResults);
+    }
+    addUnclassifiableState(states, 'mergeStateStatus', snapshot.mergeStateStatus, standardMergeStateStatuses);
+    addUnclassifiableState(states, 'mergeable', snapshot.mergeable, standardMergeableStates);
+    return states;
+  };
+  const unclassifiableReadinessBlock = (snapshot: PollPrReadiness, states: string[]): IntegratorBlocked => ({
+    needsHuman: true,
+    lesson: [
+      ...snapshot.evidence,
+      ...readinessEvidence(snapshot),
+      `pollPr unclassifiable readiness state: ${states.join(', ')}`,
+      `PR headSha=${snapshot.pr.headSha}`,
+    ].join('; '),
+  });
+
+  const unclassifiable = unclassifiablePollState(settled);
+  if (unclassifiable.length > 0) {
+    return unclassifiableReadinessBlock(settled, unclassifiable);
+  }
+
   const initialCiFailures = ciFailuresFrom(settled);
 
   if (initialCiFailures.length === 0) {
@@ -909,11 +943,17 @@ export async function pollPr(
     }
   }
 
-  if (settled.checks.pending.length > 0 || settled.checks.list.length === 0) {
-    const detail = settled.checks.pending.length > 0
-      ? `pending checks: ${settled.checks.pending.join(', ')}`
-      : 'no checks registered';
-    return unsettledReadinessFeedback(input, settled, `pollPr found unsettled readiness after readying ${branch}: ${detail}`);
+  const finalUnclassifiable = unclassifiablePollState(settled);
+  if (finalUnclassifiable.length > 0) {
+    return unclassifiableReadinessBlock(settled, finalUnclassifiable);
+  }
+
+  if (settled.checks.pending.length > 0) {
+    return unsettledReadinessFeedback(
+      input,
+      settled,
+      `pollPr found unsettled readiness after readying ${branch}: pending checks: ${settled.checks.pending.join(', ')}`,
+    );
   }
 
   const reviewThreads: PrReviewThread[] = settled.reviewThreads.items.map((t) => ({
