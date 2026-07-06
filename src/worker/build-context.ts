@@ -12,6 +12,22 @@ export const REVO_CONTEXT_MISSING = 'revo.ContextMissing' as const;
 
 const MAX_PUBLIC_PARAMS_CHARS = 8_000;
 const MAX_PLAN_CONTEXT_CHARS = 40_000;
+const DEVELOPER_ROLE_IDS = new Set(['developer', 'developer-codex']);
+const DEVELOPER_PUBLICATION_KEYS = new Set([
+  'branch',
+  'basebranch',
+  'headbranch',
+  'headsha',
+  'mergeable',
+  'mergestatestatus',
+  'pr',
+  'prnumber',
+  'prurl',
+  'pullrequest',
+  'pullrequestnumber',
+  'pullrequesturl',
+]);
+const DEVELOPER_PUBLICATION_TEXT = /\bgh\s+pr\b|\bgit\s+push\b|\bPR\b|\bpull request\b/i;
 
 export type AgentRunContext = {
   description: string;
@@ -89,6 +105,41 @@ function redactJsonish(value: unknown): unknown {
 
 function jsonForContext(value: unknown, maxChars: number): string {
   return bounded(redactText(JSON.stringify(redactJsonish(value), null, 2)), maxChars);
+}
+
+function normalizedContextKey(key: string): string {
+  return key.replace(/[-_\s]/g, '').toLowerCase();
+}
+
+function isDeveloperRole(role: Role): boolean {
+  return DEVELOPER_ROLE_IDS.has(role.name) || (role.playbookRoleId !== undefined && DEVELOPER_ROLE_IDS.has(role.playbookRoleId));
+}
+
+function sanitizeDeveloperString(value: string): string | undefined {
+  const lines = value.split('\n').filter((line) => !DEVELOPER_PUBLICATION_TEXT.test(line));
+  const sanitized = lines.join('\n').trim();
+  return sanitized.length > 0 ? sanitized : undefined;
+}
+
+function sanitizeDeveloperContext(value: unknown): unknown {
+  if (typeof value === 'string') return sanitizeDeveloperString(value);
+  if (Array.isArray(value)) {
+    return value
+      .map(sanitizeDeveloperContext)
+      .filter((item) => item !== undefined);
+  }
+  if (!isRecord(value)) return value;
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (DEVELOPER_PUBLICATION_KEYS.has(normalizedContextKey(key))) continue;
+    const sanitized = sanitizeDeveloperContext(item);
+    if (sanitized !== undefined) out[key] = sanitized;
+  }
+  return out;
+}
+
+function contextValueForRole(role: Role, value: unknown): unknown {
+  return isDeveloperRole(role) ? sanitizeDeveloperContext(value) : value;
 }
 
 function insideOrSame(parent: string, child: string): boolean {
@@ -173,7 +224,8 @@ export async function buildContext(
     )
     .map((a) => String(a.data.lesson));
 
-  const inputStr = step.input === null ? 'null' : JSON.stringify(step.input);
+  const inputForContext = contextValueForRole(role, step.input);
+  const inputStr = inputForContext === null ? 'null' : JSON.stringify(inputForContext ?? {});
 
   const parts: string[] = [
     `## Role: ${role.name}`,
@@ -197,7 +249,7 @@ export async function buildContext(
     }
   }
 
-  const si = step.input;
+  const si = inputForContext;
   const hydrated =
     si !== null && typeof si === 'object' && !Array.isArray(si)
       ? (si as Record<string, unknown>).inputs

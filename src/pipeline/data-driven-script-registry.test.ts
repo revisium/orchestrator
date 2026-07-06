@@ -156,6 +156,38 @@ test('registry: script:integrator uses real fn when binding resolves to revo-int
   assert.equal(pointer.branch, 'feat/x');
 });
 
+test('registry: script:integrator emits foreign_pr_adopted for foreign noop adoption', async () => {
+  const events: AppendEventInput[] = [];
+  const deps = buildDeps(events, {
+    integrateFn: async (): Promise<IntegratorOutput> => ({
+      prUrl: 'https://r/pr/17',
+      branch: 'feat/x',
+      prNumber: 17,
+      headSha: 'sha1',
+      status: 'noop',
+      foreignPr: true,
+      prAuthor: 'developer-host',
+      integratorAccount: 'revisium-io',
+    } as IntegratorOutput),
+  });
+  const registry = buildSystemScriptRegistry(deps);
+  const handler = registry.get('script:integrator')!;
+  const bindings = makeBindings({ ref: 'script:integrator', binding: realBinding() });
+
+  const result = await handler({ runId: RUN_ID, decision: makeDecision('script:integrator'), ctx: CTX, bindingByRef: bindings, stepKey: 'integrator', inputs: {} });
+
+  assert.equal(result.outcome, 'ok');
+  assert.equal(events.length, 1);
+  assert.equal(events[0].type, 'foreign_pr_adopted');
+  assert.equal(events[0].stepKey, 'integrator');
+  const payload = events[0].payload as Record<string, unknown>;
+  assert.equal(payload.prNumber, 17);
+  assert.equal(payload.headSha, 'sha1');
+  assert.equal(payload.status, 'noop');
+  assert.equal(payload.prAuthor, 'developer-host');
+  assert.equal(payload.integratorAccount, 'revisium-io');
+});
+
 test('registry: script:integrator uses stub fn when binding resolves to claude-code', async () => {
   const events: AppendEventInput[] = [];
   let stubCalled = false;

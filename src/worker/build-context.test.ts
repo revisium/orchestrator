@@ -158,6 +158,61 @@ test('buildContext: includes current step input', async () => {
   assert.ok(ctx.includes('"Add feature X"'), 'should include step input JSON');
 });
 
+test('buildContext: developer role omits publication metadata from hydrated inputs and current input', async () => {
+  const da = makeDA({ task: { title: 'CI feedback', scope: 'backend', repo_ref: '/repo' } });
+  const developerRole = makeRole('developer', {
+    systemPrompt: 'You produce verified file changes in the working tree.',
+  });
+  const step: Step = {
+    ...STEP,
+    role: 'developer',
+    input: {
+      inputs: {
+        feedback: {
+          prNumber: 17,
+          prUrl: 'https://github.com/o/r/pull/17',
+          headSha: 'abc123',
+          evidence: ['PR headSha=abc123', 'lint failed in src/api.ts'],
+        },
+        instruction: 'do not run gh pr create or git push; ship via host',
+      },
+      note: 'gh pr merge should never be in developer context',
+    },
+  };
+
+  const ctx = await buildContext(da, step, developerRole);
+
+  assert.match(ctx, /lint failed in src\/api\.ts/, 'actionable code feedback remains visible');
+  assert.doesNotMatch(ctx, /prNumber|prUrl|headSha|github\.com\/o\/r\/pull/i);
+  assert.doesNotMatch(ctx, /\bPR\b|pull request|gh pr|git push/i);
+});
+
+test('buildContext: developer role preserves shipping domain text while stripping publication commands', async () => {
+  const da = makeDA({ task: { title: 'Address validation', scope: 'backend', repo_ref: '/repo' } });
+  const developerRole = makeRole('developer', {
+    systemPrompt: 'You produce verified file changes in the working tree.',
+  });
+  const step: Step = {
+    ...STEP,
+    role: 'developer',
+    input: {
+      inputs: {
+        plan: [
+          'Fix shipping address validation for international customers.',
+          'Do not run gh pr create after validation.',
+          'Run the address parser unit tests.',
+        ].join('\n'),
+      },
+    },
+  };
+
+  const ctx = await buildContext(da, step, developerRole);
+
+  assert.match(ctx, /Fix shipping address validation for international customers\./);
+  assert.match(ctx, /Run the address parser unit tests\./);
+  assert.doesNotMatch(ctx, /gh pr create/i);
+});
+
 test('buildContext: includes run description, public params, and bounded planPath content', async () => {
   const repo = mkdtempSync(join(tmpdir(), 'revo-context-'));
   try {

@@ -26,6 +26,7 @@ import {
 } from './runner-common.js';
 import { isWorktreeDir } from '../control-plane/resolve-cwd.js';
 import type { RunnerActivityTracker } from '../observability/activity-signal.js';
+import type { Role } from '../control-plane/definitions.js';
 
 
 export type ClaudeCodeRunnerDeps = {
@@ -38,6 +39,14 @@ export type ClaudeCodeRunnerDeps = {
 };
 
 const DEFAULT_COMMAND = 'claude';
+const NON_INTEGRATOR_DENIED_BASH_TOOLS = [
+  'Bash(gh pr create:*)',
+  'Bash(gh pr edit:*)',
+  'Bash(gh pr merge:*)',
+  'Bash(gh pr ready:*)',
+  'Bash(gh pr close:*)',
+  'Bash(git push:*)',
+] as const;
 
 function hasPermissionDenials(value: unknown): boolean {
   if (Array.isArray(value)) return value.length > 0;
@@ -140,15 +149,20 @@ function recordClaudeOperationBlocks(evt: Record<string, unknown>, activity: Run
 
 function buildArgs(
   modelId: string,
-  allowedTools: string[],
+  role: Role,
   permissionMode: string,
   params: unknown,
   acceptedVerdicts: readonly string[] | undefined,
 ): string[] {
   const args = ['-p', '--model', modelId, '--output-format', 'stream-json', '--verbose', '--permission-mode', permissionMode];
   args.push('--json-schema', agentResultSchema(acceptedVerdicts));
+  const { allowedTools } = role;
   if (allowedTools.length > 0) {
     args.push('--allowedTools', allowedTools.join(','));
+  }
+  const deniedTools = deniedToolsForRole(role);
+  if (deniedTools.length > 0) {
+    args.push('--disallowedTools', deniedTools.join(','));
   }
   const maxTurns = readParamNum(params, 'maxTurns', 'max_turns');
   if (maxTurns !== undefined) {
@@ -157,14 +171,21 @@ function buildArgs(
   return args;
 }
 
+function isIntegratorRole(role: Pick<Role, 'name' | 'playbookRoleId'>): boolean {
+  return role.name === 'integrator' || role.playbookRoleId === 'integrator';
+}
+
+function deniedToolsForRole(role: Role): string[] {
+  return isIntegratorRole(role) ? [] : [...NON_INTEGRATOR_DENIED_BASH_TOOLS];
+}
+
 function buildPrompt(
   context: string,
   attemptId: string,
   acceptedVerdicts: readonly string[] | undefined,
   worktreePath?: string,
 ): string {
-  const idempotencyLine =
-    `Attempt-Id: ${attemptId} — idempotency key. Reference it on any external effect you create.`;
+  const idempotencyLine = `Attempt-Id: ${attemptId} - idempotency key for this role attempt.`;
   const parts = [context];
   if (worktreePath) {
     parts.push(
@@ -196,7 +217,7 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
     try {
       const cwd = await deps.resolveCwd(step);
       const liveWorktree = isWorktreeDir(cwd);
-      const args = buildArgs(profile.modelId, role.allowedTools, permissionMode, profile.params, acceptedVerdicts);
+      const args = buildArgs(profile.modelId, role, permissionMode, profile.params, acceptedVerdicts);
       processArtifact = deps.artifactStore?.startProcess({
         runId: step.runId,
         attemptId,
@@ -300,4 +321,3 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
     }
   };
 }
-

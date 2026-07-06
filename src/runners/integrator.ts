@@ -97,11 +97,22 @@ export type IntegratorOutput = {
   headSha?: string;
   status?: 'pushed' | 'noop';
   message?: string;
+  foreignPr?: true;
+  prAuthor?: string;
+  integratorAccount?: string;
 };
 
 
-type PrListEntry = { number: number; url: string; baseRefName: string; headRefOid?: string; title?: string; body?: string };
-type PrSummary = { prUrl: string; prNumber: number; headSha?: string; title?: string; body?: string };
+type PrListEntry = {
+  number: number;
+  url: string;
+  baseRefName: string;
+  headRefOid?: string;
+  title?: string;
+  body?: string;
+  author?: string | { login?: string };
+};
+type PrSummary = { prUrl: string; prNumber: number; headSha?: string; title?: string; body?: string; author?: string };
 
 function issueBoundTitle(title: string, issueRef?: IssueRef, ownerRepo?: string, issueAction: IssueAction = issueRef ? 'close' : 'none'): string {
   if (!issueRef || issueAction === 'none') return title;
@@ -131,6 +142,14 @@ function parsePrList(raw: string): PrListEntry[] {
   } catch {
     throw new Error(`gh pr list returned non-JSON: ${raw.slice(0, 200)}`);
   }
+}
+
+function prAuthorLogin(author: PrListEntry['author']): string | undefined {
+  if (typeof author === 'string' && author.trim().length > 0) return author.trim();
+  if (author && typeof author === 'object' && typeof author.login === 'string' && author.login.trim().length > 0) {
+    return author.login.trim();
+  }
+  return undefined;
 }
 
 function matchingOpenPr(
@@ -164,6 +183,7 @@ function matchingOpenPr(
       ...(pr.headRefOid ? { headSha: pr.headRefOid } : {}),
       ...(pr.title !== undefined ? { title: pr.title } : {}),
       ...(pr.body !== undefined ? { body: pr.body } : {}),
+      ...(prAuthorLogin(pr.author) ? { author: prAuthorLogin(pr.author) } : {}),
     };
   }
 
@@ -282,7 +302,13 @@ function findExistingPrWithHead(
   base: string,
   execGh: ExecGhFn,
 ): PrSummary | null | IntegratorBlocked {
-  return matchingOpenPr(ownerRepo, branch, base, execGh, 'number,url,baseRefName,headRefOid,title,body');
+  return matchingOpenPr(ownerRepo, branch, base, execGh, 'number,url,baseRefName,headRefOid,title,body,author');
+}
+
+function foreignPrProvenance(author: string | undefined): Pick<IntegratorOutput, 'foreignPr' | 'prAuthor' | 'integratorAccount'> {
+  const integratorAccount = resolveGhAccount();
+  if (!author || author.toLowerCase() === integratorAccount.toLowerCase()) return {};
+  return { foreignPr: true, prAuthor: author, integratorAccount };
 }
 
 
@@ -511,6 +537,7 @@ async function integrateProducedChange(
       headSha: change.headSha,
       status: 'noop',
       message: 'nothing to integrate — produced head already pushed and equals PR head',
+      ...foreignPrProvenance(existing.author),
     };
   }
 

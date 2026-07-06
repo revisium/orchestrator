@@ -876,6 +876,59 @@ test('issue-140: produced head equal to the PR head returns a no-op nothing-to-i
   assert.equal(pushCalled, false, 'already-pushed produced head must not push again');
 });
 
+test('issue-271: produced head equal to a foreign PR exposes author provenance on noop adoption', async () => {
+  let pushCalled = false;
+  const jsonFields: string[] = [];
+  const input: IntegratorInput = {
+    ...BASE_INPUT,
+    change: {
+      branch: 'feat/produced',
+      headSha: 'already-pushed-sha',
+      worktreePath: '/produced-worktree',
+    },
+  };
+  const deps: IntegratorDeps = {
+    execGit: (args, cwd) => {
+      assert.equal(cwd, '/produced-worktree');
+      if (args[0] === 'remote' && args[2] === 'origin') return 'git@github.com:o/r.git\n';
+      if (args[0] === 'fetch') return '';
+      if (args[0] === 'push') {
+        pushCalled = true;
+        return '';
+      }
+      throw new Error(`unexpected git: ${args.join(' ')}`);
+    },
+    execGh: (args) => {
+      if (args[0] === 'pr' && args[1] === 'list') {
+        jsonFields.push(args[args.indexOf('--json') + 1] ?? '');
+        return JSON.stringify([
+          {
+            number: 42,
+            url: 'https://github.com/o/r/pull/42',
+            baseRefName: 'master',
+            headRefOid: 'already-pushed-sha',
+            author: { login: 'developer-host' },
+          },
+        ]);
+      }
+      throw new Error(`unexpected gh: ${args.join(' ')}`);
+    },
+    resolveTaskCwd: async () => { throw new Error('shared checkout must not be inspected for a produced artifact'); },
+    resolveRunCwd: async () => { throw new Error('artifact worktree path should avoid resolver fallback'); },
+  };
+
+  const result = await integrate(input, deps);
+
+  assert.ok(!('needsHuman' in result));
+  assert.equal(result.status, 'noop');
+  assert.equal(result.prNumber, 42);
+  assert.equal(result.foreignPr, true);
+  assert.equal(result.prAuthor, 'developer-host');
+  assert.equal(result.integratorAccount, 'revisium-io');
+  assert.ok(jsonFields.some((fields) => fields.split(',').includes('author')), 'PR list query must request author');
+  assert.equal(pushCalled, false, 'already-pushed produced head must not push again');
+});
+
 test('issue-140: produced change still creates a new PR when no existing PR is present', async () => {
   let pushCalled = false;
   let createCalled = false;

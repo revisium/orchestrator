@@ -358,6 +358,35 @@ test('claude-code runner: maps role.allowedTools to the allowed-tools flag', asy
   assert.equal(req?.args[idx + 1], 'Edit,Write', 'tools joined and never widened beyond the list');
 });
 
+test('claude-code runner: non-integrator roles deny GitHub PR mutation and git push through Bash', async () => {
+  const captured: ExecRequest[] = [];
+  const stdout = structuredTransport();
+  await run(fakeExecutor(ok(stdout), captured), { name: 'developer', allowedTools: ['Read', 'Bash'] });
+
+  const req = captured[0];
+  const idx = req?.args.indexOf('--disallowedTools') ?? -1;
+  assert.ok(idx >= 0, 'non-integrator Claude roles must pass a deny list');
+  const denied = req?.args[idx + 1] ?? '';
+  for (const pattern of [
+    'Bash(gh pr create:*)',
+    'Bash(gh pr edit:*)',
+    'Bash(gh pr merge:*)',
+    'Bash(gh pr ready:*)',
+    'Bash(gh pr close:*)',
+    'Bash(git push:*)',
+  ]) {
+    assert.ok(denied.split(',').includes(pattern), `deny list must include ${pattern}`);
+  }
+});
+
+test('claude-code runner: integrator role does not receive developer publication denies', async () => {
+  const captured: ExecRequest[] = [];
+  const stdout = structuredTransport();
+  await run(fakeExecutor(ok(stdout), captured), { name: 'integrator', playbookRoleId: 'integrator', allowedTools: ['Read', 'Bash'] });
+
+  assert.ok(!captured[0]?.args.includes('--disallowedTools'), 'integrator keeps ownership of publication commands');
+});
+
 // ─── 0008 #5: per-role timeout / permission_mode + model params ───────────────
 
 test('claude-code runner (0008 #5): uses role.permissionMode (not the hardcoded default)', async () => {
@@ -485,6 +514,16 @@ test('claude-code runner: constrains output via --json-schema + a structured-res
   assert.ok(args.includes('--json-schema'), 'args must pass --json-schema (structured output)');
   const input = captured[0]?.input ?? '';
   assert.ok(/verdict/.test(input), 'prompt must instruct the structured result (verdict field)');
+});
+
+test('claude-code runner: attempt preamble does not invite agent roles to create external effects', async () => {
+  const captured: ExecRequest[] = [];
+  const stdout = structuredTransport();
+  await run(fakeExecutor(ok(stdout), captured), { name: 'developer' });
+
+  const input = captured[0]?.input ?? '';
+  assert.ok(input.includes(ATTEMPT_ID), 'prompt still carries the attempt id');
+  assert.doesNotMatch(input, /external effect/i, 'preamble must not license external effects');
 });
 
 test('claude-code runner: advertises ONLY the template accepted verdicts, never a wider global menu', async () => {
