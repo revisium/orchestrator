@@ -1101,7 +1101,70 @@ test('FIX4: CLOSED pr_number + no other open PR → needsHuman (closed), no thro
   assert.equal(result.needsHuman, true);
   assert.equal(result.nextSteps.length, 0);
   assert.equal((result.output as { verdict: string }).verdict, 'closed');
+  assert.match(result.lesson ?? '', /pr_closed_externally/);
   assert.deepEqual(result.costs, []);
+});
+
+test('#273: branch lookup falls back to all-state PR and reports externally merged', async () => {
+  const calls: string[][] = [];
+  const execGh: ExecGhFn = (args) => {
+    calls.push(args);
+    const key = args.join(' ');
+    if (key.includes('pr list') && key.includes('--state open')) return JSON.stringify([]);
+    if (key.includes('pr list') && key.includes('--state all')) {
+      return JSON.stringify([{ number: 77, baseRefName: 'master', state: 'MERGED' }]);
+    }
+    if (key.includes('statusCheckRollup')) {
+      return JSON.stringify(prViewResponse([], {
+        number: 77,
+        state: 'MERGED',
+        headRefOid: 'merged-sha',
+        headRefName: 'feat/my-feature',
+        baseRefName: 'master',
+      }));
+    }
+    throw new Error(`Unexpected gh call: ${key}`);
+  };
+
+  const readiness = await collectPrReadiness({ repo: 'owner/repo', headBranch: 'feat/my-feature' }, execGh);
+
+  assert.equal(readiness.verdict, 'merged');
+  assert.equal(readiness.pr.number, 77);
+  assert.equal(readiness.pr.headSha, 'merged-sha');
+  assert.ok(calls.some((args) => args.includes('--state') && args.includes('open')));
+  assert.ok(calls.some((args) => args.includes('--state') && args.includes('all')));
+});
+
+test('#273: branch lookup falls back to all-state PR and reports externally closed reason', async () => {
+  const calls: string[][] = [];
+  const execGh: ExecGhFn = (args) => {
+    calls.push(args);
+    const key = args.join(' ');
+    if (key.includes('pr list') && key.includes('--state open')) return JSON.stringify([]);
+    if (key.includes('pr list') && key.includes('--state all')) {
+      return JSON.stringify([{ number: 78, baseRefName: 'master', state: 'CLOSED' }]);
+    }
+    if (key.includes('statusCheckRollup')) {
+      return JSON.stringify(prViewResponse([], {
+        number: 78,
+        state: 'CLOSED',
+        headRefOid: 'closed-sha',
+        headRefName: 'feat/my-feature',
+        baseRefName: 'master',
+      }));
+    }
+    throw new Error(`Unexpected gh call: ${key}`);
+  };
+
+  const readiness = await collectPrReadiness({ repo: 'owner/repo', headBranch: 'feat/my-feature' }, execGh);
+
+  assert.equal(readiness.verdict, 'closed');
+  assert.equal(readiness.nextAction, 'human_decision');
+  assert.equal(readiness.pr.number, 78);
+  assert.equal(readiness.pr.headSha, 'closed-sha');
+  assert.ok(readiness.evidence.some((item) => item.includes('pr_closed_externally')));
+  assert.ok(calls.some((args) => args.includes('--state') && args.includes('open')));
+  assert.ok(calls.some((args) => args.includes('--state') && args.includes('all')));
 });
 
 test('FIX4: branch-resolved PR then view shows CLOSED (TOCTOU) → controlled needsHuman, no throw, no loop', async () => {

@@ -718,7 +718,7 @@ export type PrFeedback = {
   evidence: string[];
   issueRef?: IssueRef;
 
-  verdict: 'review_changes' | 'ci_changes' | 'recheck' | 'clean';
+  verdict: 'review_changes' | 'ci_changes' | 'recheck' | 'clean' | 'merged' | 'closed';
   ciFailures: CiFailure[];
   reviewThreads: PrReviewThread[];
   mergeStateStatus?: string;
@@ -893,6 +893,21 @@ export async function pollPr(
 
   let settled: PollPrReadiness = readiness;
 
+  const makeTerminalFeedback = (verdict: Extract<PrFeedback['verdict'], 'merged' | 'closed'>): PrFeedback => ({
+    prNumber: settled.pr.number ?? null,
+    headSha: settled.pr.headSha,
+    evidence: [...settled.evidence, ...readinessEvidence(settled), `PR headSha=${settled.pr.headSha}`, `pollPr verdict=${verdict}`],
+    ...(input.issueRef ? { issueRef: input.issueRef } : {}),
+    verdict,
+    ciFailures: ciFailuresFrom(settled),
+    reviewThreads: [],
+    ...(settled.mergeStateStatus !== undefined ? { mergeStateStatus: settled.mergeStateStatus } : {}),
+    ...(settled.mergeable !== undefined ? { mergeable: settled.mergeable } : {}),
+  });
+
+  if (settled.readinessVerdict === 'merged') return makeTerminalFeedback('merged');
+  if (settled.readinessVerdict === 'closed') return makeTerminalFeedback('closed');
+
   const standardCheckResults = new Set('ACTION_REQUIRED CANCELLED ERROR EXPECTED FAILURE IN_PROGRESS NEUTRAL PENDING QUEUED SKIPPED STALE STARTUP_FAILURE SUCCESS TIMED_OUT UNKNOWN'.split(' '));
   const standardMergeStateStatuses = new Set('BEHIND BLOCKED CLEAN DIRTY DRAFT HAS_HOOKS UNKNOWN UNSTABLE'.split(' '));
   const standardMergeableStates = new Set('CONFLICTING MERGEABLE UNKNOWN'.split(' '));
@@ -942,6 +957,9 @@ export async function pollPr(
       settled = await collect(ownerRepo, branch, input.base, gh, input.issueRef, input.issueAction);
     }
   }
+
+  if (settled.readinessVerdict === 'merged') return makeTerminalFeedback('merged');
+  if (settled.readinessVerdict === 'closed') return makeTerminalFeedback('closed');
 
   const finalUnclassifiable = unclassifiablePollState(settled);
   if (finalUnclassifiable.length > 0) {
