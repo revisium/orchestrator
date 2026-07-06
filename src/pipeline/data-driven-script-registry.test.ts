@@ -186,6 +186,8 @@ test('registry: script:integrator emits foreign_pr_adopted for foreign noop adop
   assert.equal(payload.status, 'noop');
   assert.equal(payload.prAuthor, 'developer-host');
   assert.equal(payload.integratorAccount, 'revisium-io');
+  const pointer = (result as { outcome: 'ok'; pointer: unknown }).pointer as Record<string, unknown>;
+  assert.deepEqual(pointer, payload);
 });
 
 test('registry: script:integrator uses stub fn when binding resolves to claude-code', async () => {

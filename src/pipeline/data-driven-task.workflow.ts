@@ -773,6 +773,20 @@ export function buildSystemScriptRegistry(deps: ScriptRegistryDeps): Map<string,
     };
   }
 
+  function integratorResultPointer(result: IntegratorOutput): Record<string, unknown> {
+    return {
+      prUrl: result.prUrl,
+      branch: result.branch,
+      prNumber: result.prNumber,
+      headSha: result.headSha,
+      status: result.status,
+      ...(result.issueRef ? { issueRef: result.issueRef } : {}),
+      ...(result.foreignPr ? { foreignPr: true } : {}),
+      ...(result.prAuthor ? { prAuthor: result.prAuthor } : {}),
+      ...(result.integratorAccount ? { integratorAccount: result.integratorAccount } : {}),
+    };
+  }
+
   const cleanupWorktree: SystemScriptHandler = async ({ runId, decision, ctx, stepKey }) => {
     try { await releaseWorktreeFn(runId, ctx.taskId); } catch { /* best-effort */ }
     await appendEvent({ runId, taskId: ctx.taskId, stepId: '', stepKey, type: 'worktree_released', payload: { nodeId: decision.nodeId } });
@@ -785,28 +799,8 @@ export function buildSystemScriptRegistry(deps: ScriptRegistryDeps): Map<string,
     blockedReason: 'integrate',
     mapSuccess: (result: IntegratorOutput) => ({
       eventType: result.foreignPr ? 'foreign_pr_adopted' : 'integrate_succeeded',
-      payload: {
-        prUrl: result.prUrl,
-        branch: result.branch,
-        prNumber: result.prNumber,
-        headSha: result.headSha,
-        status: result.status,
-        ...(result.issueRef ? { issueRef: result.issueRef } : {}),
-        ...(result.foreignPr ? { foreignPr: true } : {}),
-        ...(result.prAuthor ? { prAuthor: result.prAuthor } : {}),
-        ...(result.integratorAccount ? { integratorAccount: result.integratorAccount } : {}),
-      },
-      pointer: {
-        prUrl: result.prUrl,
-        branch: result.branch,
-        prNumber: result.prNumber,
-        headSha: result.headSha,
-        status: result.status,
-        ...(result.issueRef ? { issueRef: result.issueRef } : {}),
-        ...(result.foreignPr ? { foreignPr: true } : {}),
-        ...(result.prAuthor ? { prAuthor: result.prAuthor } : {}),
-        ...(result.integratorAccount ? { integratorAccount: result.integratorAccount } : {}),
-      },
+      payload: integratorResultPointer(result),
+      pointer: integratorResultPointer(result),
     }),
   });
 
