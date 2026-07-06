@@ -102,6 +102,8 @@ export type IntegratorOutput = {
   integratorAccount?: string;
 };
 
+type ForeignPrProvenance = Pick<IntegratorOutput, 'foreignPr' | 'prAuthor' | 'integratorAccount'>;
+
 
 type PrListEntry = {
   number: number;
@@ -305,7 +307,7 @@ function findExistingPrWithHead(
   return matchingOpenPr(ownerRepo, branch, base, execGh, 'number,url,baseRefName,headRefOid,title,body,author');
 }
 
-function foreignPrProvenance(author: string | undefined): Pick<IntegratorOutput, 'foreignPr' | 'prAuthor' | 'integratorAccount'> {
+function foreignPrProvenance(author: string | undefined): ForeignPrProvenance {
   const integratorAccount = resolveGhAccount();
   if (!author || author.toLowerCase() === integratorAccount.toLowerCase()) return {};
   return { foreignPr: true, prAuthor: author, integratorAccount };
@@ -324,7 +326,7 @@ type ProducedChangePrContext = {
 function repairProducedChangePr(
   context: ProducedChangePrContext,
   existing: PrSummary,
-  provenance: Pick<IntegratorOutput, 'foreignPr' | 'prAuthor' | 'integratorAccount'>,
+  provenance: ForeignPrProvenance,
 ): void {
   if (provenance.foreignPr) return;
   repairPr(
@@ -343,7 +345,7 @@ function repairProducedChangePr(
 function existingProducedChangeOutput(
   context: ProducedChangePrContext,
   existing: PrSummary,
-  provenance: Pick<IntegratorOutput, 'foreignPr' | 'prAuthor' | 'integratorAccount'>,
+  provenance: ForeignPrProvenance,
   status: 'noop' | 'pushed',
 ): IntegratorOutput {
   return {
