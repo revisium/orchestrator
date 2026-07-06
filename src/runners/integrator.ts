@@ -517,18 +517,21 @@ async function integrateProducedChange(
 
   const existing = findExistingPrWithHead(ownerRepo, branch, input.base, gh);
   if (existing && 'needsHuman' in existing) return existing;
+  const existingProvenance = existing ? foreignPrProvenance(existing.author) : {};
   if (existing?.headSha === change.headSha) {
-    repairPr(
-      ownerRepo,
-      existing.prNumber,
-      issueRef,
-      issueAction,
-      existing.title,
-      existing.body,
-      issueBoundTitle(existing.title || input.title, issueRef, ownerRepo, issueAction),
-      prBody(existing.body, issueRef, ownerRepo, issueAction),
-      gh,
-    );
+    if (!existingProvenance.foreignPr) {
+      repairPr(
+        ownerRepo,
+        existing.prNumber,
+        issueRef,
+        issueAction,
+        existing.title,
+        existing.body,
+        issueBoundTitle(existing.title || input.title, issueRef, ownerRepo, issueAction),
+        prBody(existing.body, issueRef, ownerRepo, issueAction),
+        gh,
+      );
+    }
     return {
       prUrl: existing.prUrl,
       branch,
@@ -537,7 +540,7 @@ async function integrateProducedChange(
       headSha: change.headSha,
       status: 'noop',
       message: 'nothing to integrate — produced head already pushed and equals PR head',
-      ...foreignPrProvenance(existing.author),
+      ...existingProvenance,
     };
   }
 
@@ -553,17 +556,19 @@ async function integrateProducedChange(
   git(['push', 'origin', `${change.headSha}:refs/heads/${branch}`], cwd);
 
   if (existing) {
-    repairPr(
-      ownerRepo,
-      existing.prNumber,
-      issueRef,
-      issueAction,
-      existing.title,
-      existing.body,
-      issueBoundTitle(existing.title || input.title, issueRef, ownerRepo, issueAction),
-      prBody(existing.body, issueRef, ownerRepo, issueAction),
-      gh,
-    );
+    if (!existingProvenance.foreignPr) {
+      repairPr(
+        ownerRepo,
+        existing.prNumber,
+        issueRef,
+        issueAction,
+        existing.title,
+        existing.body,
+        issueBoundTitle(existing.title || input.title, issueRef, ownerRepo, issueAction),
+        prBody(existing.body, issueRef, ownerRepo, issueAction),
+        gh,
+      );
+    }
     return {
       prUrl: existing.prUrl,
       branch,
@@ -571,6 +576,7 @@ async function integrateProducedChange(
       ...(issueRef ? { issueRef } : {}),
       headSha: change.headSha,
       status: 'pushed',
+      ...existingProvenance,
     };
   }
 

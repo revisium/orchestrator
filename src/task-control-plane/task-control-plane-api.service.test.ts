@@ -2540,6 +2540,57 @@ test('TaskControlPlaneApiService.resolveRunState reports running when workflow p
   assert.equal(state.workflowStatus, 'PENDING');
 });
 
+test('TaskControlPlaneApiService.resolveRunState treats foreign_pr_adopted as workflow progress', async () => {
+  const api = makeApi({
+    runService: {
+      async showRun() {
+        return {
+          run: {
+            runId: 'run-1',
+            title: 'Run',
+            status: 'ready',
+            priority: 0,
+            createdAt: '2026-06-13T00:00:00.000Z',
+            description: '',
+            scope: '',
+            repos: [],
+          },
+          tasks: [{ taskId: 'task-1', title: 'Task', status: 'ready', roleHint: 'developer' }],
+        };
+      },
+      async listRunEvents() {
+        return [
+          {
+            eventId: 'event-foreign-pr',
+            type: 'foreign_pr_adopted',
+            actor: 'orchestrator',
+            createdAt: '2026-06-28T07:36:41.803Z',
+            taskId: 'task-1',
+            stepId: 'integrator',
+            payload: { prNumber: 42 },
+          },
+        ];
+      },
+    },
+    inboxService: {
+      async listInbox() {
+        return [];
+      },
+    },
+    dbosService: {
+      async getWorkflowStatus() {
+        return null;
+      },
+    },
+  });
+
+  const state = await api.resolveRunState('run-1');
+
+  assert.equal(state.state, 'running');
+  assert.equal(state.runStatus, 'running');
+  assert.equal(state.workflowStatus, '');
+});
+
 test('TaskControlPlaneApiService.resolveRunState exposes the latest workflow event pulse', async () => {
   const api = makeApi({
     runService: {

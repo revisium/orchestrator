@@ -201,7 +201,7 @@ test('seed: developer prompt is working-tree only and contains no publication vo
     /\bPRs?\b|\bpull request\b|\bpush(?:es|ed|ing)?\b|\bship(?:s|ped|ping)?\b|\bcommit(?:s|ted|ting)?\b|\bgh\b|\bGitHub\b/i,
     'developer seed prompt must not teach publication vocabulary',
   );
-  assert.match(promptText, /\bworking tree\b/i, 'developer seed prompt must constrain scope to working-tree changes');
+  assert.match(promptText, /task working tree/i, 'developer seed prompt must constrain scope to task-working-tree changes');
 });
 
 test('seed (0008 #5): loadPipelinePolicy resolves the routing_policy "pipeline" row', async () => {

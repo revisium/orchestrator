@@ -713,6 +713,20 @@ type ScriptRegistryDeps = Pick<
   | 'runRespondStub'
 >;
 
+function integratorResultPointer(result: IntegratorOutput): Record<string, unknown> {
+  return {
+    prUrl: result.prUrl,
+    branch: result.branch,
+    prNumber: result.prNumber,
+    headSha: result.headSha,
+    status: result.status,
+    ...(result.issueRef ? { issueRef: result.issueRef } : {}),
+    ...(result.foreignPr ? { foreignPr: true } : {}),
+    ...(result.prAuthor ? { prAuthor: result.prAuthor } : {}),
+    ...(result.integratorAccount ? { integratorAccount: result.integratorAccount } : {}),
+  };
+}
+
 export function buildSystemScriptRegistry(deps: ScriptRegistryDeps): Map<string, SystemScriptHandler> {
   const { appendEvent, releaseWorktreeFn, integrateFn, runStub, confirmMergeFn, runConfirmStub, pollPrFn, runPollStub, respondThreadsFn, runRespondStub } = deps;
 
@@ -770,20 +784,6 @@ export function buildSystemScriptRegistry(deps: ScriptRegistryDeps): Map<string,
       const { eventType, payload, pointer, verdict } = desc.mapSuccess(result as TSuccess);
       await appendEvent({ runId, taskId: ctx.taskId, stepId: '', stepKey, type: eventType, payload });
       return { outcome: 'ok', pointer, ...(verdict !== undefined ? { verdict } : {}) };
-    };
-  }
-
-  function integratorResultPointer(result: IntegratorOutput): Record<string, unknown> {
-    return {
-      prUrl: result.prUrl,
-      branch: result.branch,
-      prNumber: result.prNumber,
-      headSha: result.headSha,
-      status: result.status,
-      ...(result.issueRef ? { issueRef: result.issueRef } : {}),
-      ...(result.foreignPr ? { foreignPr: true } : {}),
-      ...(result.prAuthor ? { prAuthor: result.prAuthor } : {}),
-      ...(result.integratorAccount ? { integratorAccount: result.integratorAccount } : {}),
     };
   }
 

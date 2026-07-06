@@ -13,21 +13,26 @@ export const REVO_CONTEXT_MISSING = 'revo.ContextMissing' as const;
 const MAX_PUBLIC_PARAMS_CHARS = 8_000;
 const MAX_PLAN_CONTEXT_CHARS = 40_000;
 const DEVELOPER_ROLE_IDS = new Set(['developer', 'developer-codex']);
-const DEVELOPER_PUBLICATION_KEYS = new Set([
-  'branch',
+const DEVELOPER_EXPLICIT_PUBLICATION_KEYS = new Set([
   'basebranch',
+  'baserefname',
   'headbranch',
+  'headrefname',
+  'headrefoid',
   'headsha',
   'mergeable',
   'mergestatestatus',
-  'pr',
+  'prauthor',
   'prnumber',
   'prurl',
-  'pullrequest',
   'pullrequestnumber',
   'pullrequesturl',
 ]);
-const DEVELOPER_PUBLICATION_TEXT = /\bgh\s+pr\b|\bgit\s+push\b|\bPR\b|\bpull request\b/i;
+const GITHUB_PULL_URL_TEXT = /https?:\/\/(?:www\.)?github\.com\/[^\s/]+\/[^\s/]+\/pull\/\d+/i;
+const DEVELOPER_PUBLICATION_COMMAND_TEXT = /\bgh\s+pr(?:\s|$)|\bgit\s+push(?:\s|$)/i;
+const DEVELOPER_PUBLICATION_PHRASE_TEXT =
+  /\b(?:open|create|publish|submit|update|edit|merge|close|ready|draft)\b.{0,80}\b(?:PR|pull request)\b|\b(?:PR|pull request)\b.{0,80}\b(?:url|number|head|branch|merge|draft|ready)\b/i;
+const DEVELOPER_PR_METADATA_TEXT = /\bPR\b\s+(?:#\d+|number|url|head\s*sha|headSha|head|branch)\b/i;
 
 export type AgentRunContext = {
   description: string;
@@ -115,10 +120,75 @@ function isDeveloperRole(role: Role): boolean {
   return DEVELOPER_ROLE_IDS.has(role.name) || (role.playbookRoleId !== undefined && DEVELOPER_ROLE_IDS.has(role.playbookRoleId));
 }
 
+function textLooksLikePrMetadata(value: string): boolean {
+  const trimmed = value.trim();
+  return GITHUB_PULL_URL_TEXT.test(trimmed)
+    || /^#?\d+\b/.test(trimmed)
+    || /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+#\d+\b/.test(trimmed);
+}
+
+function textLooksLikeGitBranch(value: string): boolean {
+  const trimmed = value.trim();
+  return /^(?:refs\/heads\/|origin\/)/i.test(trimmed)
+    || /^(?:feat|fix|bugfix|chore|docs|test|refactor|codex|revo|issue)[/-]/i.test(trimmed);
+}
+
+function isPublicationMetadataLine(line: string): boolean {
+  if (DEVELOPER_PR_METADATA_TEXT.test(line)) return true;
+  const separator = firstSeparatorIndex(line);
+  if (separator === -1) return false;
+  const key = unquote(line.slice(0, separator).trim());
+  const value = line.slice(separator + 1);
+  const normalizedKey = normalizedContextKey(key);
+  if (DEVELOPER_EXPLICIT_PUBLICATION_KEYS.has(normalizedKey)) return true;
+  if (normalizedKey === 'pr' || normalizedKey === 'pullrequest') return textLooksLikePrMetadata(value);
+  if (normalizedKey === 'branch') return textLooksLikeGitBranch(value);
+  return false;
+}
+
+function isPublicationTextLine(line: string): boolean {
+  return DEVELOPER_PUBLICATION_COMMAND_TEXT.test(line)
+    || GITHUB_PULL_URL_TEXT.test(line)
+    || DEVELOPER_PUBLICATION_PHRASE_TEXT.test(line)
+    || isPublicationMetadataLine(line);
+}
+
 function sanitizeDeveloperString(value: string): string | undefined {
-  const lines = value.split('\n').filter((line) => !DEVELOPER_PUBLICATION_TEXT.test(line));
+  const lines = value.split('\n').filter((line) => !isPublicationTextLine(line));
   const sanitized = lines.join('\n').trim();
   return sanitized.length > 0 ? sanitized : undefined;
+}
+
+function recordHasPublicationMetadata(value: Record<string, unknown>): boolean {
+  return Object.entries(value).some(([key, item]) => {
+    const normalizedKey = normalizedContextKey(key);
+    if (DEVELOPER_EXPLICIT_PUBLICATION_KEYS.has(normalizedKey)) return true;
+    if (normalizedKey === 'pr' || normalizedKey === 'pullrequest') return valueLooksLikePrMetadata(item);
+    return false;
+  });
+}
+
+function valueLooksLikePrMetadata(value: unknown): boolean {
+  if (typeof value === 'number') return Number.isInteger(value) && value > 0;
+  if (typeof value === 'string') return textLooksLikePrMetadata(value);
+  return isRecord(value) && recordHasPublicationMetadata(value);
+}
+
+function valueLooksLikeGitBranch(value: unknown): boolean {
+  return typeof value === 'string' && textLooksLikeGitBranch(value);
+}
+
+function isDeveloperPublicationEntry(
+  key: string,
+  item: unknown,
+  parent: Record<string, unknown>,
+): boolean {
+  const normalizedKey = normalizedContextKey(key);
+  if (DEVELOPER_EXPLICIT_PUBLICATION_KEYS.has(normalizedKey)) return true;
+  if (normalizedKey === 'pullrequest') return valueLooksLikePrMetadata(item) || recordHasPublicationMetadata(parent);
+  if (normalizedKey === 'pr') return valueLooksLikePrMetadata(item);
+  if (normalizedKey === 'branch') return recordHasPublicationMetadata(parent) || valueLooksLikeGitBranch(item);
+  return false;
 }
 
 function sanitizeDeveloperContext(value: unknown): unknown {
@@ -131,7 +201,7 @@ function sanitizeDeveloperContext(value: unknown): unknown {
   if (!isRecord(value)) return value;
   const out: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value)) {
-    if (DEVELOPER_PUBLICATION_KEYS.has(normalizedContextKey(key))) continue;
+    if (isDeveloperPublicationEntry(key, item, value)) continue;
     const sanitized = sanitizeDeveloperContext(item);
     if (sanitized !== undefined) out[key] = sanitized;
   }

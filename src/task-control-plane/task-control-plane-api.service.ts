@@ -243,6 +243,7 @@ function hasWorkflowProgress(events: EventSummary[]): boolean {
     || event.type === 'pipeline_blocked'
     || event.type === 'pr_polled'
     || event.type === 'integrate_succeeded'
+    || event.type === 'foreign_pr_adopted'
   ));
 }
 

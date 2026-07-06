@@ -154,6 +154,7 @@ test('registry: script:integrator uses real fn when binding resolves to revo-int
   const pointer = (result as { outcome: 'ok'; pointer: unknown }).pointer as Record<string, unknown>;
   assert.equal(pointer.prUrl, 'https://r/pr/1');
   assert.equal(pointer.branch, 'feat/x');
+  assert.notEqual(pointer, payload, 'pointer and payload must be separate object instances');
 });
 
 test('registry: script:integrator emits foreign_pr_adopted for foreign noop adoption', async () => {
@@ -188,6 +189,7 @@ test('registry: script:integrator emits foreign_pr_adopted for foreign noop adop
   assert.equal(payload.integratorAccount, 'revisium-io');
   const pointer = (result as { outcome: 'ok'; pointer: unknown }).pointer as Record<string, unknown>;
   assert.deepEqual(pointer, payload);
+  assert.notEqual(pointer, payload, 'pointer and payload must be separate object instances');
 });
 
 test('registry: script:integrator uses stub fn when binding resolves to claude-code', async () => {

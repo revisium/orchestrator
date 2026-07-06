@@ -213,6 +213,70 @@ test('buildContext: developer role preserves shipping domain text while strippin
   assert.doesNotMatch(ctx, /gh pr create/i);
 });
 
+test('buildContext: developer role preserves natural PR review feedback while stripping publication lines', async () => {
+  const da = makeDA({ task: { title: 'Review feedback', scope: 'backend', repo_ref: '/repo' } });
+  const developerRole = makeRole('developer', {
+    systemPrompt: 'You produce verified file changes in the working tree.',
+  });
+  const step: Step = {
+    ...STEP,
+    role: 'developer',
+    input: {
+      inputs: {
+        review: [
+          'PR validation failed in src/api.ts; keep this actionable instruction.',
+          'API behavior regressed for the retry path.',
+          'PR headSha=abc123',
+          'Pull request URL: https://github.com/o/r/pull/17',
+        ].join('\n'),
+      },
+    },
+  };
+
+  const ctx = await buildContext(da, step, developerRole);
+
+  assert.match(ctx, /PR validation failed in src\/api\.ts; keep this actionable instruction\./);
+  assert.match(ctx, /API behavior regressed for the retry path\./);
+  assert.doesNotMatch(ctx, /headSha=abc123|github\.com\/o\/r\/pull\/17/i);
+});
+
+test('buildContext: developer role preserves business branch and pr keys while stripping PR metadata', async () => {
+  const da = makeDA({ task: { title: 'Domain feedback', scope: 'backend', repo_ref: '/repo' } });
+  const developerRole = makeRole('developer', {
+    systemPrompt: 'You produce verified file changes in the working tree.',
+  });
+  const step: Step = {
+    ...STEP,
+    role: 'developer',
+    input: {
+      inputs: {
+        domain: {
+          branch: 'retail',
+          pr: 'public relations',
+          nested: {
+            branch: 'north',
+            pr: { campaign: 'Spring launch' },
+          },
+        },
+        publication: {
+          branch: 'feat/task-17',
+          prNumber: 17,
+          prUrl: 'https://github.com/o/r/pull/17',
+          headSha: 'abc123',
+        },
+      },
+    },
+  };
+
+  const ctx = await buildContext(da, step, developerRole);
+
+  assert.match(ctx, /"branch": "retail"/);
+  assert.match(ctx, /"pr": "public relations"/);
+  assert.match(ctx, /"branch": "north"/);
+  assert.match(ctx, /"campaign": "Spring launch"/);
+  assert.doesNotMatch(ctx, /feat\/task-17|prNumber|prUrl|headSha|github\.com\/o\/r\/pull\/17/i);
+});
+
 test('buildContext: includes run description, public params, and bounded planPath content', async () => {
   const repo = mkdtempSync(join(tmpdir(), 'revo-context-'));
   try {

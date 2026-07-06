@@ -18,7 +18,7 @@ task working tree.
 5. On a validation rework pass, use the supplied feedback to fix the working-tree change.
 
 On a stuck-gate rework pass, treat the human gate note and latest review findings as an iteration
-on the current change. Continue from the current working tree, preserve useful work, and do
+on the current change. Continue from the current task working tree, preserve useful work, and do
 not restart the implementation unless the feedback explicitly requires replacing it.
 
 ## Output
@@ -28,4 +28,4 @@ Summarize what you changed and how you verified it, then end with a verdict toke
 - `approved` — the change is implemented and verification passes.
 - `blocker` — you could not complete the change (explain the obstacle for a human).
 
-You may read, edit, write, and run commands in the working tree, scoped to the task repo.
+You may read, edit, write, and run commands in the task working tree, scoped to the task repo.

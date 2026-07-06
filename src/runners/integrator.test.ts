@@ -49,6 +49,17 @@ function makeResolveRunCwd(cwd = FAKE_CWD): (runId: string, taskId: string) => P
   return async () => cwd;
 }
 
+async function withRevoGhAccount<T>(account: string, run: () => Promise<T>): Promise<T> {
+  const previous = process.env['REVO_GH_ACCOUNT'];
+  process.env['REVO_GH_ACCOUNT'] = account;
+  try {
+    return await run();
+  } finally {
+    if (previous === undefined) delete process.env['REVO_GH_ACCOUNT'];
+    else process.env['REVO_GH_ACCOUNT'] = previous;
+  }
+}
+
 const BASE_INPUT: IntegratorInput = {
   runId: 'run-001',
   taskId: 'task-001',
@@ -877,56 +888,199 @@ test('issue-140: produced head equal to the PR head returns a no-op nothing-to-i
 });
 
 test('issue-271: produced head equal to a foreign PR exposes author provenance on noop adoption', async () => {
-  let pushCalled = false;
-  const jsonFields: string[] = [];
-  const input: IntegratorInput = {
-    ...BASE_INPUT,
-    change: {
-      branch: 'feat/produced',
-      headSha: 'already-pushed-sha',
-      worktreePath: '/produced-worktree',
-    },
-  };
-  const deps: IntegratorDeps = {
-    execGit: (args, cwd) => {
-      assert.equal(cwd, '/produced-worktree');
-      if (args[0] === 'remote' && args[2] === 'origin') return 'git@github.com:o/r.git\n';
-      if (args[0] === 'fetch') return '';
-      if (args[0] === 'push') {
-        pushCalled = true;
-        return '';
-      }
-      throw new Error(`unexpected git: ${args.join(' ')}`);
-    },
-    execGh: (args) => {
-      if (args[0] === 'pr' && args[1] === 'list') {
-        jsonFields.push(args[args.indexOf('--json') + 1] ?? '');
-        return JSON.stringify([
-          {
-            number: 42,
-            url: 'https://github.com/o/r/pull/42',
-            baseRefName: 'master',
-            headRefOid: 'already-pushed-sha',
-            author: { login: 'developer-host' },
-          },
-        ]);
-      }
-      throw new Error(`unexpected gh: ${args.join(' ')}`);
-    },
-    resolveTaskCwd: async () => { throw new Error('shared checkout must not be inspected for a produced artifact'); },
-    resolveRunCwd: async () => { throw new Error('artifact worktree path should avoid resolver fallback'); },
-  };
+  await withRevoGhAccount('revisium-io', async () => {
+    let pushCalled = false;
+    const edits: string[][] = [];
+    const jsonFields: string[] = [];
+    const issueRef = {
+      repo: 'o/r',
+      number: 147,
+      url: 'https://github.com/o/r/issues/147',
+    };
+    const input: IntegratorInput = {
+      ...BASE_INPUT,
+      issueRef,
+      change: {
+        branch: 'feat/produced',
+        headSha: 'already-pushed-sha',
+        worktreePath: '/produced-worktree',
+      },
+    };
+    const deps: IntegratorDeps = {
+      execGit: (args, cwd) => {
+        assert.equal(cwd, '/produced-worktree');
+        if (args[0] === 'remote' && args[2] === 'origin') return 'git@github.com:o/r.git\n';
+        if (args[0] === 'fetch') return '';
+        if (args[0] === 'push') {
+          pushCalled = true;
+          return '';
+        }
+        throw new Error(`unexpected git: ${args.join(' ')}`);
+      },
+      execGh: (args) => {
+        if (args[0] === 'pr' && args[1] === 'list') {
+          jsonFields.push(args[args.indexOf('--json') + 1] ?? '');
+          return JSON.stringify([
+            {
+              number: 42,
+              url: 'https://github.com/o/r/pull/42',
+              baseRefName: 'master',
+              headRefOid: 'already-pushed-sha',
+              title: 'Add feature X',
+              body: '',
+              author: { login: 'developer-host' },
+            },
+          ]);
+        }
+        if (args[0] === 'pr' && args[1] === 'edit') {
+          edits.push(args);
+          return '';
+        }
+        throw new Error(`unexpected gh: ${args.join(' ')}`);
+      },
+      resolveTaskCwd: async () => { throw new Error('shared checkout must not be inspected for a produced artifact'); },
+      resolveRunCwd: async () => { throw new Error('artifact worktree path should avoid resolver fallback'); },
+    };
 
-  const result = await integrate(input, deps);
+    const result = await integrate(input, deps);
 
-  assert.ok(!('needsHuman' in result));
-  assert.equal(result.status, 'noop');
-  assert.equal(result.prNumber, 42);
-  assert.equal(result.foreignPr, true);
-  assert.equal(result.prAuthor, 'developer-host');
-  assert.equal(result.integratorAccount, 'revisium-io');
-  assert.ok(jsonFields.some((fields) => fields.split(',').includes('author')), 'PR list query must request author');
-  assert.equal(pushCalled, false, 'already-pushed produced head must not push again');
+    assert.ok(!('needsHuman' in result));
+    assert.equal(result.status, 'noop');
+    assert.equal(result.prNumber, 42);
+    assert.equal(result.foreignPr, true);
+    assert.equal(result.prAuthor, 'developer-host');
+    assert.equal(result.integratorAccount, 'revisium-io');
+    assert.ok(jsonFields.some((fields) => fields.split(',').includes('author')), 'PR list query must request author');
+    assert.equal(pushCalled, false, 'already-pushed produced head must not push again');
+    assert.deepEqual(edits, [], 'foreign noop adoption must not edit PR metadata');
+  });
+});
+
+test('issue-271: produced change push to a foreign existing PR exposes author provenance', async () => {
+  await withRevoGhAccount('revisium-io', async () => {
+    let pushedRef = '';
+    const edits: string[][] = [];
+    const issueRef = {
+      repo: 'o/r',
+      number: 147,
+      url: 'https://github.com/o/r/issues/147',
+    };
+    const input: IntegratorInput = {
+      ...BASE_INPUT,
+      issueRef,
+      change: {
+        branch: 'feat/produced',
+        headSha: 'new-produced-sha',
+        worktreePath: '/produced-worktree',
+      },
+    };
+    const deps: IntegratorDeps = {
+      execGit: (args, cwd) => {
+        assert.equal(cwd, '/produced-worktree');
+        if (args[0] === 'remote' && args[2] === 'origin') return 'git@github.com:o/r.git\n';
+        if (args[0] === 'fetch') return '';
+        if (args[0] === 'push') {
+          pushedRef = args[2] ?? '';
+          return '';
+        }
+        throw new Error(`unexpected git: ${args.join(' ')}`);
+      },
+      execGh: (args) => {
+        if (args[0] === 'pr' && args[1] === 'list') {
+          return JSON.stringify([
+            {
+              number: 42,
+              url: 'https://github.com/o/r/pull/42',
+              baseRefName: 'master',
+              headRefOid: 'old-sha',
+              title: 'Add feature X',
+              body: '',
+              author: { login: 'developer-host' },
+            },
+          ]);
+        }
+        if (args[0] === 'pr' && args[1] === 'edit') {
+          edits.push(args);
+          return '';
+        }
+        throw new Error(`unexpected gh: ${args.join(' ')}`);
+      },
+      resolveTaskCwd: async () => { throw new Error('shared checkout must not be inspected for a produced artifact'); },
+      resolveRunCwd: async () => { throw new Error('artifact worktree path should avoid resolver fallback'); },
+    };
+
+    const result = await integrate(input, deps);
+
+    assert.ok(!('needsHuman' in result));
+    assert.equal(result.status, 'pushed');
+    assert.equal(result.prNumber, 42);
+    assert.equal(result.headSha, 'new-produced-sha');
+    assert.equal(result.foreignPr, true);
+    assert.equal(result.prAuthor, 'developer-host');
+    assert.equal(result.integratorAccount, 'revisium-io');
+    assert.equal(pushedRef, 'new-produced-sha:refs/heads/feat/produced');
+    assert.deepEqual(edits, [], 'foreign existing-PR push must not edit PR metadata');
+  });
+});
+
+test('issue-271: produced change push to a same-account existing PR still repairs metadata', async () => {
+  await withRevoGhAccount('revisium-io', async () => {
+    const edits: string[][] = [];
+    const issueRef = {
+      repo: 'o/r',
+      number: 147,
+      url: 'https://github.com/o/r/issues/147',
+    };
+    const input: IntegratorInput = {
+      ...BASE_INPUT,
+      issueRef,
+      change: {
+        branch: 'feat/produced',
+        headSha: 'new-produced-sha',
+        worktreePath: '/produced-worktree',
+      },
+    };
+    const deps: IntegratorDeps = {
+      execGit: (args, cwd) => {
+        assert.equal(cwd, '/produced-worktree');
+        if (args[0] === 'remote' && args[2] === 'origin') return 'git@github.com:o/r.git\n';
+        if (args[0] === 'fetch') return '';
+        if (args[0] === 'push') return '';
+        throw new Error(`unexpected git: ${args.join(' ')}`);
+      },
+      execGh: (args) => {
+        if (args[0] === 'pr' && args[1] === 'list') {
+          return JSON.stringify([
+            {
+              number: 42,
+              url: 'https://github.com/o/r/pull/42',
+              baseRefName: 'master',
+              headRefOid: 'old-sha',
+              title: 'Add feature X',
+              body: '',
+              author: { login: 'revisium-io' },
+            },
+          ]);
+        }
+        if (args[0] === 'pr' && args[1] === 'edit') {
+          edits.push(args);
+          return '';
+        }
+        throw new Error(`unexpected gh: ${args.join(' ')}`);
+      },
+      resolveTaskCwd: async () => { throw new Error('shared checkout must not be inspected for a produced artifact'); },
+      resolveRunCwd: async () => { throw new Error('artifact worktree path should avoid resolver fallback'); },
+    };
+
+    const result = await integrate(input, deps);
+
+    assert.ok(!('needsHuman' in result));
+    assert.equal(result.status, 'pushed');
+    assert.equal(result.foreignPr, undefined);
+    assert.deepEqual(edits, [
+      ['pr', 'edit', '42', '--repo', 'o/r', '--title', '#147 Add feature X', '--body', 'Closes #147'],
+    ]);
+  });
 });
 
 test('issue-140: produced change still creates a new PR when no existing PR is present', async () => {
