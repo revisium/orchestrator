@@ -1,18 +1,18 @@
-import type { OrderByDto, RowWhereInputDto } from '@revisium/client';
 import { ControlPlaneError } from './errors.js';
 import { deserializeData, serializeData, serializePatches, type PatchOperation } from './json-fields.js';
 import {
   type ControlPlaneTransport,
   type TransportRow,
-} from './client-transport.js';
+} from './transport.js';
 import { notifyControlPlaneChange } from './change-notifications.js';
+import type { RowOrderBy, RowWhereInput } from './query-types.js';
 import { isRuntimeTable, type RuntimeTable } from './tables.js';
 
 export type ListRowsOptions = {
   first?: number;
   after?: string;
-  where?: RowWhereInputDto;
-  orderBy?: OrderByDto[];
+  where?: RowWhereInput;
+  orderBy?: RowOrderBy[];
 };
 
 export type ControlPlaneRow<TData extends object = Record<string, unknown>> = {
@@ -73,7 +73,7 @@ export function createControlPlaneDataAccessForTransport(
       const result = await transport.listRows(table, listOptions);
       return (result.edges ?? []).map((edge) => {
         if (!edge.node) {
-          throw new ControlPlaneError('HTTP_ERROR', `Malformed list response for ${table}`, { details: result });
+          throw new ControlPlaneError('TRANSPORT_ERROR', `Malformed list response for ${table}`, { details: result });
         }
         return mapRow(table, edge.node, edge.cursor);
       });
@@ -139,4 +139,4 @@ export function createControlPlaneDataAccessForTransport(
 }
 
 export type { PatchOperation } from './json-fields.js';
-export type { ControlPlaneTransport, TransportRow, TransportList } from './client-transport.js';
+export type { ControlPlaneTransport, TransportRow, TransportList } from './transport.js';

@@ -10,7 +10,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import os from 'node:os';
-import { resolveDefaultGraphqlPort, resolveProfileConfig, resolveProfileName } from './config.js';
+import { DEFAULT_CONFIG, resolveDefaultGraphqlPort, resolveProfileConfig, resolveProfileName } from './config.js';
 
 const TMP = mkdtempSync(join(os.tmpdir(), 'revo-config-contract-'));
 process.env['REVO_DATA_DIR'] = TMP;
@@ -33,24 +33,26 @@ test('profiles: resolveProfileName defaults to `default`, accepts `dev`, rejects
 });
 
 test('profiles: dev shifts the band off the committed defaults (+400 ports, -dev data dir)', () => {
-  const raw = { dataDir: '~/.revisium-orchestrator', preferredPort: 19222, preferredPgPort: 15440 };
-  assert.deepEqual(resolveProfileConfig(raw, { REVO_PROFILE: 'dev' }), {
+  assert.deepEqual(resolveProfileConfig(DEFAULT_CONFIG, { REVO_PROFILE: 'dev' }), {
     profile: 'dev',
-    dataDir: '~/.revisium-orchestrator-dev',
+    dataDir: '~/.revo-dev',
     preferredPort: 19622,
     preferredPgPort: 15840,
   });
-  assert.deepEqual(resolveProfileConfig(raw, {}), {
+  assert.deepEqual(resolveProfileConfig(DEFAULT_CONFIG, {}), {
     profile: 'default',
-    dataDir: '~/.revisium-orchestrator',
+    dataDir: '~/.revo',
     preferredPort: 19222,
     preferredPgPort: 15440,
   });
 });
 
 test('profiles: explicit REVO_* env overrides the profile band per knob', () => {
-  const raw = { dataDir: '~/.revisium-orchestrator', preferredPort: 19222, preferredPgPort: 15440 };
-  const resolved = resolveProfileConfig(raw, { REVO_PROFILE: 'dev', REVO_PORT: '40000', REVO_DATA_DIR: '/tmp/custom' });
+  const resolved = resolveProfileConfig(DEFAULT_CONFIG, {
+    REVO_PROFILE: 'dev',
+    REVO_PORT: '40000',
+    REVO_DATA_DIR: '/tmp/custom',
+  });
   assert.equal(resolved.preferredPort, 40000); // explicit REVO_PORT wins over the dev band 19622
   assert.equal(resolved.dataDir, '/tmp/custom'); // explicit REVO_DATA_DIR wins over the -dev suffix
   assert.equal(resolved.preferredPgPort, 15840); // unset → dev band still applies

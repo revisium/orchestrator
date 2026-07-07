@@ -12,7 +12,7 @@ import {
   createEngineTransport,
   ensureControlPlaneProject,
 } from './engine-transport.js';
-import type { ControlPlaneTransport } from './client-transport.js';
+import type { ControlPlaneTransport } from './transport.js';
 
 type BootstrapRow = { tableId: string; rowId: string; data: Record<string, unknown> };
 type BootstrapTable = { id: string; schema: Record<string, unknown> };

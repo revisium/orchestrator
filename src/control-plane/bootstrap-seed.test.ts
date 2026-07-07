@@ -18,8 +18,8 @@ import { readFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadRole, loadModelProfile, loadPipelinePolicy } from './definitions.js';
-import type { ControlPlaneTransport } from './client-transport.js';
-import type { TransportRow } from './client-transport.js';
+import type { ControlPlaneTransport } from './transport.js';
+import type { TransportRow } from './transport.js';
 
 // ---------------------------------------------------------------------------
 // Load the real seed file the same way bootstrap.ts does:

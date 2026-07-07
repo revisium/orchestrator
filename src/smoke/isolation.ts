@@ -1,13 +1,6 @@
-import { readFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
-import { basename, dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-type RawConfig = {
-  preferredPort: number;
-  preferredPgPort: number;
-  dataDir: string;
-};
+import { basename, join, resolve } from 'node:path';
+import { DEFAULT_CONFIG, GRAPHQL_PORT_OFFSET } from '../config.js';
 
 export type SmokeIsolationOptions = {
   scriptName: string;
@@ -23,19 +16,10 @@ export type SmokeIsolation = {
   graphqlPort?: number;
 };
 
-const sourceDir = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(sourceDir, '..', '..');
-const configPath = join(repoRoot, 'revisium.config.json');
-const DEFAULT_GRAPHQL_PORT_OFFSET = 1;
-
 function expandHome(path: string): string {
   if (path === '~') return homedir();
   if (path.startsWith('~/')) return join(homedir(), path.slice(2));
   return path;
-}
-
-function loadRawConfig(): RawConfig {
-  return JSON.parse(readFileSync(configPath, 'utf8')) as RawConfig;
 }
 
 function parseRequiredPort(name: string, disallowed: Map<number, string>): number {
@@ -81,13 +65,12 @@ function parseRequiredDbosDb(): string {
 }
 
 export function resolveSmokeIsolation(options: SmokeIsolationOptions): SmokeIsolation {
-  const rawConfig = loadRawConfig();
   const rawDataDir = process.env.REVO_DATA_DIR;
   if (!rawDataDir) throw new Error('REVO_DATA_DIR is required for state-touching smoke scripts');
 
-  const dataDir = assertTempDataDir(rawDataDir, rawConfig.dataDir);
-  const httpPort = parseRequiredPort('REVO_PORT', new Map([[rawConfig.preferredPort, 'default production HTTP port']]));
-  const pgPort = parseRequiredPort('REVO_PG_PORT', new Map([[rawConfig.preferredPgPort, 'default production PostgreSQL port']]));
+  const dataDir = assertTempDataDir(rawDataDir, DEFAULT_CONFIG.dataDir);
+  const httpPort = parseRequiredPort('REVO_PORT', new Map([[DEFAULT_CONFIG.preferredPort, 'default production HTTP port']]));
+  const pgPort = parseRequiredPort('REVO_PG_PORT', new Map([[DEFAULT_CONFIG.preferredPgPort, 'default production PostgreSQL port']]));
   const dbosDb = parseRequiredDbosDb();
 
   let graphqlPort: number | undefined;
@@ -95,8 +78,8 @@ export function resolveSmokeIsolation(options: SmokeIsolationOptions): SmokeIsol
     graphqlPort = parseRequiredPort(
       'REVO_GRAPHQL_PORT',
       new Map([
-        [rawConfig.preferredPort + DEFAULT_GRAPHQL_PORT_OFFSET, 'default-derived production GraphQL port'],
-        [httpPort + DEFAULT_GRAPHQL_PORT_OFFSET, 'implicit derived GraphQL port'],
+        [DEFAULT_CONFIG.preferredPort + GRAPHQL_PORT_OFFSET, 'default-derived production GraphQL port'],
+        [httpPort + GRAPHQL_PORT_OFFSET, 'implicit derived GraphQL port'],
       ]),
     );
   }

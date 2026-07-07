@@ -7,7 +7,7 @@ import {
   type ListRowsOptions,
   type PatchOperation,
 } from './data-access.js';
-import type { ControlPlaneTransport, TransportList, TransportRow } from './client-transport.js';
+import type { ControlPlaneTransport, TransportList, TransportRow } from './transport.js';
 
 type CapturedCall = {
   method: 'listRows' | 'getRow' | 'createRow' | 'updateRow' | 'patchRow';

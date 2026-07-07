@@ -125,7 +125,7 @@ test('appendRunEvent: non-ROW_CONFLICT errors are rethrown', async () => {
     listRows: async () => [],
     getRow: async () => null,
     createRow: async () => {
-      throw new ControlPlaneError('HTTP_ERROR', 'network error');
+      throw new ControlPlaneError('TRANSPORT_ERROR', 'transport error');
     },
     updateRow: async (_t, rowId, data) => ({ rowId, data }),
     patchRow: async (_t, rowId, _patches) => ({ rowId, data: {} }),
@@ -142,7 +142,7 @@ test('appendRunEvent: non-ROW_CONFLICT errors are rethrown', async () => {
       }),
     (err: unknown) => {
       assert.ok(err instanceof ControlPlaneError);
-      assert.equal(err.code, 'HTTP_ERROR');
+      assert.equal(err.code, 'TRANSPORT_ERROR');
       return true;
     },
   );

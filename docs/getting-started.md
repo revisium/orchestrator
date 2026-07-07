@@ -20,11 +20,11 @@ pnpm run revo -- doctor --profile dev
 
 The `dev` profile uses:
 
-- Revisium HTTP: `19622`
+- Revo base port: `19622`
 - embedded Postgres: `15840`
 - GraphQL: `19623`
 - DBOS database: `dbos_dev`
-- data directory: `~/.revisium-orchestrator-dev`
+- data directory: `~/.revo-dev`
 
 ## Connect MCP
 

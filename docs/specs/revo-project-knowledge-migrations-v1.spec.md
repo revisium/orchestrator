@@ -4,7 +4,7 @@
 - **Version:** v1
 - **Owners:** Revo project service, RevisiumStore, embedded engine integration, release migrations
 - **Source files:** future `src/projects/**`, future `src/revisium-store/**`, future `src/revisium-migrations/**`,
-  future `prisma/schema.prisma`, `revisium-engine/**`
+  `prisma/schema.prisma`, `@revisium/engine`
 - **Related ADRs:** [ADR-0008](../adr/0008-revo-projects-and-versioned-knowledge.md),
   [ADR-0007](../adr/0007-revo-storage-foundation.md)
 
@@ -28,12 +28,12 @@ The key words MUST, MUST NOT, SHOULD, SHOULD NOT, MAY are to be interpreted as R
 
 ## Current Contract
 
-Current orchestrator installs a `control-plane` project into Revisium standalone and uses Revisium rows for playbooks,
-roles, pipelines, runtime projections, inbox rows, and events. The project name comes from
+Current orchestrator initializes a reserved `control-plane` project through the embedded Revisium engine and uses engine
+rows for playbooks, roles, pipelines, runtime projections, inbox rows, and events. The project name comes from
 `control-plane/bootstrap.config.json`.
 
-There is no first-class `RevoProject` Prisma model in orchestrator today. Orchestrator does not yet configure a
-`revisium-migrations` development workflow for Revo templates.
+Orchestrator has a first-class `RevoProject` Prisma model for the reserved system project and future user projects.
+Orchestrator does not yet configure a `revisium-migrations` development workflow for Revo ADR/KB templates.
 
 ## Target Contract
 

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { loadRole, loadModelProfile, loadPipelinePolicy } from './definitions.js';
 import { ControlPlaneError } from './errors.js';
-import type { ControlPlaneTransport } from './client-transport.js';
+import type { ControlPlaneTransport } from './transport.js';
 
 function makeTransport(rows: Record<string, Record<string, unknown>>): ControlPlaneTransport {
   return {
@@ -239,10 +239,13 @@ test('loadPipelinePolicy: transport error (non-404) rethrows', async () => {
     mode: 'head' as const,
     async assertReady() {},
     async listRows() { return { edges: [] }; },
-    async getRow() { throw new ControlPlaneError('HTTP_ERROR', 'boom'); },
+    async getRow() { throw new ControlPlaneError('TRANSPORT_ERROR', 'boom'); },
     async createRow() { throw new Error('ro'); },
     async updateRow() { throw new Error('ro'); },
     async patchRow() { throw new Error('ro'); },
   };
-  await assert.rejects(() => loadPipelinePolicy(transport), (e: unknown) => e instanceof ControlPlaneError && e.code === 'HTTP_ERROR');
+  await assert.rejects(
+    () => loadPipelinePolicy(transport),
+    (e: unknown) => e instanceof ControlPlaneError && e.code === 'TRANSPORT_ERROR',
+  );
 });

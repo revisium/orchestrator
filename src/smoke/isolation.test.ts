@@ -55,7 +55,7 @@ test('smoke isolation rejects empty/default environment before state access', ()
 
 test('smoke isolation rejects production defaults', () => {
   withEnv({
-    REVO_DATA_DIR: '~/.revisium-orchestrator',
+    REVO_DATA_DIR: '~/.revo',
     REVO_PORT: '19222',
     REVO_PG_PORT: '15440',
     REVO_DBOS_DB: 'dbos',
@@ -90,7 +90,7 @@ test('smoke isolation accepts temp data dir, non-default ports, and isolated DBO
       assert.equal(isolation.httpPort, 29422);
       assert.equal(isolation.pgPort, 25640);
       assert.equal(isolation.dbosDb, 'dbos_smoke_isolation');
-      assert.notEqual(isolation.dataDir, '~/.revisium-orchestrator');
+      assert.notEqual(isolation.dataDir, '~/.revo');
       assert.notEqual(isolation.httpPort, 19222);
       assert.notEqual(isolation.pgPort, 15440);
     });

@@ -2170,7 +2170,7 @@ test('runner_failed verification environment block opens recovery gate before tr
     template: singleDeveloperTemplate('verification-recovery-runner-failed-env'),
     results: {
       developer: runnerFailedResult(
-        'pnpm verify failed: EPERM open /Users/anton/.revisium-orchestrator/run-artifacts/runtime.json; EPERM listen 127.0.0.1',
+        'pnpm verify failed: EPERM open /Users/anton/.revo/host.json; EPERM listen 127.0.0.1',
         { artifactRef: 'attempt:attempt-1' },
       ),
     },

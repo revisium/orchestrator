@@ -1,5 +1,5 @@
 import { ControlPlaneError } from './errors.js';
-import type { ControlPlaneTransport } from './client-transport.js';
+import type { ControlPlaneTransport } from './transport.js';
 
 export type Role = {
   name: string;
