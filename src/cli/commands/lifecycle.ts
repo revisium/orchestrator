@@ -26,7 +26,7 @@ import {
 } from './rogue-reaper.js';
 import { classifyQueuePollerRogues } from '../../host/queue-poller-census.js';
 import { dbosExecutorId } from '../../host/dbos-identity.js';
-import { resolveDbosDbName } from '../../engine/ensure-postgres.js';
+import { resolveDbosDbName } from '../../storage/revo-database.js';
 import { ensureHost, expectedGraphqlPort, isGraphqlHealthy } from '../../host/ensure-host.js';
 import { runHostDaemon } from '../../host/daemon.js';
 import {

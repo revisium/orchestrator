@@ -48,9 +48,6 @@ git history for old task text.
 - Keep ADRs concise; move exact schemas, APIs, validation rules, and examples to specs.
 - Do not describe GraphQL graph-shape migration as landed until the full v1 contract is implemented and
   legacy flat/run-scoped roots are removed from `src/api/graphql-api/schema.graphql`.
-- Do not edit source code for a docs cleanup unless a generated docs link truly requires it; stop and report
-  first.
-- `revo-plans` is read-only source material for this cleanup.
 - Follow the comment policy in [VERIFICATION.md](./VERIFICATION.md) when editing `src/**/*.ts`. Run
   `pnpm verify` before every merge; the `local/no-dead-pointers` eslint rule (part of `lint:ci`) is part of that gate.
 

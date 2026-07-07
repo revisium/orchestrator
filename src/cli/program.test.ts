@@ -25,11 +25,11 @@ test('buildProgram: registers mcp command', () => {
   assert.ok(program.commands.some((cmd) => cmd.name() === 'mcp'), 'mcp command must be registered');
 });
 
-test('buildProgram: does not expose the legacy Revisium standalone command group', () => {
+test('buildProgram: exposes only the current top-level command surface', () => {
   const program = buildProgram();
-  assert.ok(
-    !program.commands.some((cmd) => cmd.name() === 'revisium'),
-    'legacy `revo revisium ...` commands must not be registered',
+  assert.deepEqual(
+    program.commands.map((cmd) => cmd.name()).sort(),
+    ['__daemon', 'doctor', 'logs', 'mcp', 'restart', 'start', 'status', 'stop'],
   );
 });
 

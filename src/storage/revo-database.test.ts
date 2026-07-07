@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveDbosDbName } from '../engine/ensure-postgres.js';
 import {
   assertDistinctDatabaseNames,
   assertSqlIdentifier,
+  resolveDbosDbName,
   resolveRevoDbName,
 } from './revo-database.js';
 

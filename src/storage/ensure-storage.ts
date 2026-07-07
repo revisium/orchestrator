@@ -5,7 +5,6 @@ import { join } from 'node:path';
 import EmbeddedPostgres from 'embedded-postgres';
 import pg from 'pg';
 import { findFreePort, getConfig, repoRoot } from '../config.js';
-import { resolveDbosDbName } from '../engine/ensure-postgres.js';
 import {
   dbosDatabaseUrl,
   postgresDatabaseUrl,
@@ -13,6 +12,7 @@ import {
   REVO_PG_PASSWORD,
   REVO_PG_USER,
   assertDistinctDatabaseNames,
+  resolveDbosDbName,
   resolveRevoDbName,
   revoProductDatabaseUrl,
 } from './revo-database.js';
