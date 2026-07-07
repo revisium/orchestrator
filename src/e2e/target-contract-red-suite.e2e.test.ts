@@ -154,13 +154,15 @@ test('#273: externally closed unmerged PR reaches recoveryGate immediately with 
   });
 });
 
-test('#274: head moved after merge approval re-presents mergeGate with fresh artifact', {
-  skip: '#274: pending merge approval headSha pinning',
-}, async () => {
+test('#274: head moved after merge approval re-presents mergeGate with fresh artifact', async () => {
   await runTargetScenario('#274: head moved after merge approval re-presents mergeGate with fresh artifact', {
     executionProfile: STUB_AGENT,
     gh: 'head-moved-after-approve',
-    gates: [['plan', 'approved'], ['merge', 'approved'], ['merge', 'cancel']],
+    gates: [
+      ['plan', 'approved'],
+      { topic: 'merge', outcome: 'approved', nodeId: 'mergeGate', artifactHeadSha: 'deadbeefcafe' },
+      { topic: 'merge', outcome: 'cancel', nodeId: 'mergeGate', artifactHeadSha: 'feedfacecafe' },
+    ],
     expect: {
       terminal: 'cancelled',
       noEvents: ['merge_confirmed'],

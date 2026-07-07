@@ -148,6 +148,27 @@ test('a merge gate reopened by a clean mergeRecheck surfaces the fresh recheck a
   assert.deepEqual(summary.gatedArtifact?.payload, { verdict: 'clean', headSha: 'recheck-fresh' });
 });
 
+test('a merge gate reopened after approval head movement surfaces the reverify artifact', () => {
+  const mergeApproveReverify = row('mergeApproveReverify', { verdict: 'recheck', headSha: 'feedfacecafe' });
+  const summary = buildGateSummary(
+    gate({
+      nodeId: 'mergeGate',
+      reason: 'merge',
+      outcomes: ['approved', 'recheck', 'cancel'],
+      gatedArtifact: { node: 'mergeReadiness', as: 'prFeedback' },
+    }),
+    outputs(
+      row('mergeReadiness', { verdict: 'clean', headSha: 'deadbeefcafe' }),
+      mergeApproveReverify,
+    ),
+    'recheck',
+    mergeApproveReverify,
+  );
+
+  assert.equal(summary.gatedArtifact?.nodeId, 'mergeApproveReverify');
+  assert.deepEqual(summary.gatedArtifact?.payload, { verdict: 'recheck', headSha: 'feedfacecafe' });
+});
+
 test('a recovered merge gate ignores stale mergeRecheck when mergeReadiness was immediate', () => {
   const mergeReadiness = row('mergeReadiness', { verdict: 'clean', headSha: 'readiness-current' }, 2);
   const summary = buildGateSummary(

@@ -368,6 +368,12 @@ function mergeReadinessFromInputs(inputs: Record<string, unknown>): IntegratorIn
   return { headSha };
 }
 
+function headShaFromPayload(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined;
+  const headSha = value.headSha;
+  return typeof headSha === 'string' && headSha.trim().length > 0 ? headSha.trim() : undefined;
+}
+
 function attachProducedChange(output: unknown, change: ProducedChangeArtifact): unknown {
   if (isRecord(output)) return { ...output, change };
   return { summary: output, change };
@@ -661,14 +667,15 @@ function gateArtifactView(row: RunOutputRow, as?: string): GateArtifactView {
   };
 }
 
-function freshMergeRecheckArtifact(
+function freshMergeGateArtifact(
   decision: Extract<Decision, { type: 'awaitGate' }>,
   lastVerdict: string,
   lastProducedOutput?: RunOutputRow,
 ): RunOutputRow | undefined {
-  if (decision.nodeId !== 'mergeGate' || lastVerdict !== 'clean') return undefined;
-  if (lastProducedOutput?.nodeId !== 'mergeRecheck') return undefined;
-  return lastProducedOutput;
+  if (decision.nodeId !== 'mergeGate') return undefined;
+  if (lastProducedOutput?.nodeId === 'mergeRecheck' && lastVerdict === 'clean') return lastProducedOutput;
+  if (lastProducedOutput?.nodeId === 'mergeApproveReverify' && lastVerdict === 'recheck') return lastProducedOutput;
+  return undefined;
 }
 
 
@@ -682,13 +689,56 @@ export function buildGateSummary(
   lastProducedOutput?: RunOutputRow,
 ): GateSummary {
   const summary: GateSummary = { nodeId: decision.nodeId, outcomes: decision.outcomes };
-  const artRow = freshMergeRecheckArtifact(decision, lastVerdict, lastProducedOutput)
+  const artRow = freshMergeGateArtifact(decision, lastVerdict, lastProducedOutput)
     ?? resolveGateRow(decision.gatedArtifact, outputsByNode);
   if (artRow) summary.gatedArtifact = gateArtifactView(artRow, decision.gatedArtifact?.as);
   const verdictRow = resolveGateRow(decision.verdictFrom, outputsByNode);
   if (verdictRow) summary.reviewerVerdict = gateArtifactView(verdictRow);
   else if (!decision.verdictFrom && lastVerdict) summary.reviewerVerdict = { verdict: lastVerdict };
   return summary;
+}
+
+function approvedMergeGateHeadSha(
+  decision: Extract<Decision, { type: 'awaitGate' }>,
+  verdict: string | undefined,
+  summary: GateSummary,
+): string | null | undefined {
+  if (decision.nodeId !== 'mergeGate') return undefined;
+  if (verdict === 'approved' || verdict === 'override_merge') {
+    return headShaFromPayload(summary.gatedArtifact?.payload) ?? null;
+  }
+  return null;
+}
+
+function approvedHeadMove(
+  decision: Extract<Decision, { type: 'invokeScript' }>,
+  approvedHeadSha: string | undefined,
+  pointer: unknown,
+  verdict: string | undefined,
+): { approvedHeadSha: string; reverifyHeadSha: string } | undefined {
+  if (decision.nodeId !== 'mergeApproveReverify' || verdict !== 'clean' || approvedHeadSha === undefined) return undefined;
+  const reverifyHeadSha = headShaFromPayload(pointer);
+  if (reverifyHeadSha === undefined || reverifyHeadSha === approvedHeadSha) return undefined;
+  return { approvedHeadSha, reverifyHeadSha };
+}
+
+function reapprovalRequiredFeedback(pointer: unknown, approvedHeadSha: string, reverifyHeadSha: string): unknown {
+  if (!isRecord(pointer)) return pointer;
+  const evidence = Array.isArray(pointer.evidence)
+    ? pointer.evidence.filter((item): item is string => typeof item === 'string')
+    : [];
+  return {
+    ...pointer,
+    verdict: 'recheck',
+    evidence: [
+      ...evidence,
+      `approved mergeGate headSha=${approvedHeadSha}; reverify headSha=${reverifyHeadSha}; reapproval required`,
+    ],
+  };
+}
+
+function reopenNodeState(state: RunState, nodeId: string): RunState {
+  return { ...state, activeNodeIds: new Set([nodeId]), status: 'running' };
 }
 
 
@@ -1031,6 +1081,7 @@ export function makeDataDrivenTask(
     let lastVerdict = '';
     let lastProducedOutput: RunOutputRow | undefined;
     let lastFailureReason = '';
+    let approvedMergeGateHeadShaValue: string | undefined;
     let stepCount = 0;
     const effectOrdinalByNode = new Map<string, number>();
     const outputsByNode = new Map<string, RunOutputRow[]>();
@@ -1050,6 +1101,7 @@ export function makeDataDrivenTask(
         live,
         lastVerdict,
         lastProducedOutput,
+        approvedMergeGateHeadSha: approvedMergeGateHeadShaValue,
       });
       stepCount += eff.stepDelta;
       if (eff.terminal) {
@@ -1070,6 +1122,9 @@ export function makeDataDrivenTask(
       lastVerdict = eff.lastVerdict ?? lastVerdict;
       lastProducedOutput = eff.producedOutput ?? lastProducedOutput;
       lastFailureReason = eff.failureReason ?? '';
+      if (eff.approvedMergeGateHeadSha !== undefined) {
+        approvedMergeGateHeadShaValue = eff.approvedMergeGateHeadSha ?? undefined;
+      }
     }
 
     throw new InterpretError(
@@ -1092,6 +1147,7 @@ export function makeDataDrivenTask(
     lastVerdict?: string;
     producedOutput?: RunOutputRow;
     failureReason?: string;
+    approvedMergeGateHeadSha?: string | null;
     stepDelta: number;
     terminal?: { status: 'blocked'; reason: string; lesson: string; retry?: RunnerRetryBlockPayload };
     stateOverride?: RunState;
@@ -1113,6 +1169,7 @@ export function makeDataDrivenTask(
     runnerRetryPolicy: RunnerTransientRetryPolicy;
     lastVerdict: string;
     lastProducedOutput?: RunOutputRow;
+    approvedMergeGateHeadSha?: string;
   };
   type ForkDecision = Extract<Decision, { type: 'fork' }>;
   type BranchExecutionResult = {
@@ -1318,27 +1375,38 @@ export function makeDataDrivenTask(
           const reason = scriptResult.reason ? `${REVO_SCRIPT_FAILED}: ${scriptResult.reason}` : REVO_SCRIPT_FAILED;
           return { lastResult: { outcome: 'failed', errorCode: REVO_SCRIPT_FAILED }, lastVerdict: 'failed', failureReason: reason, stepDelta: 1 };
         }
-        const producedOutput = await recordOutput(runId, node, ordinal, stepKeyFor(node.id, ordinal), scriptResult.pointer, ctx.outputsByNode);
-        const sv = scriptResult.verdict;
+        let pointer = scriptResult.pointer;
+        let sv = scriptResult.verdict;
+        let stateOverride: RunState | undefined;
+        const headMove = approvedHeadMove(decision, ctx.approvedMergeGateHeadSha, pointer, sv);
+        if (headMove) {
+          pointer = reapprovalRequiredFeedback(pointer, headMove.approvedHeadSha, headMove.reverifyHeadSha);
+          sv = 'recheck';
+          stateOverride = reopenNodeState(ctx.state, 'mergeGate');
+        }
+        const producedOutput = await recordOutput(runId, node, ordinal, stepKeyFor(node.id, ordinal), pointer, ctx.outputsByNode);
         return {
-          lastResult: { outcome: 'succeeded', ...(sv ? { verdict: sv } : {}) },
+          lastResult: stateOverride ? undefined : { outcome: 'succeeded', ...(sv ? { verdict: sv } : {}) },
           ...(sv ? { lastVerdict: sv } : {}),
           ...(producedOutput ? { producedOutput } : {}),
+          ...(stateOverride ? { stateOverride } : {}),
           stepDelta: 1,
         };
       }
       case 'awaitGate': {
         const topic = gateTopicFor(decision.reason);
         const ordinal = nextOrdinal(ctx.effectOrdinalByNode, decision.nodeId);
+        const summary = buildGateSummary(decision, ctx.outputsByNode, ctx.lastVerdict, ctx.lastProducedOutput);
         const human = await awaitHuman(
           runId,
           topic,
           stepKeyFor(decision.nodeId, ordinal),
           `${decision.reason} approval`,
-          buildGateSummary(decision, ctx.outputsByNode, ctx.lastVerdict, ctx.lastProducedOutput),
+          summary,
           decision.outcomes,
         );
         const verdict = gateVerdict(human, decision.outcomes);
+        const approvedHeadSha = approvedMergeGateHeadSha(decision, verdict, summary);
         const producedOutput = await recordOutput(
           runId,
           resolveNode(template, decision.nodeId),
@@ -1351,6 +1419,7 @@ export function makeDataDrivenTask(
           lastResult: verdict ? { verdict } : {},
           ...(verdict ? { lastVerdict: verdict } : {}),
           ...(producedOutput ? { producedOutput } : {}),
+          ...(approvedHeadSha !== undefined ? { approvedMergeGateHeadSha: approvedHeadSha } : {}),
           stepDelta: 0,
         };
       }
