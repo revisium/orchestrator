@@ -24,9 +24,9 @@ Read [docs/architecture-overview.md](./docs/architecture-overview.md) and the sp
 ## Local facts
 
 - Node: `>=24.11.1 <25`.
-- Stack: TypeScript, NestJS 11, DBOS, local Revisium standalone, GraphQL Yoga, local stdio MCP.
-- Default profile ports: Revisium HTTP `19222`, embedded Postgres `15440`, GraphQL `19223`.
-- Dev profile ports: Revisium HTTP `19622`, embedded Postgres `15840`, GraphQL `19623`.
+- Stack: TypeScript, NestJS 11, DBOS, embedded Revisium engine, embedded Postgres, GraphQL Yoga, local stdio MCP.
+- Default profile ports: Revo base `19222`, embedded Postgres `15440`, GraphQL `19223`.
+- Dev profile ports: Revo base `19622`, embedded Postgres `15840`, GraphQL `19623`.
 - The resolved runtime state lives under the selected Revo data directory. Do not hardcode resolved ports in code.
 - Source-of-truth schema reference: [docs/control-plane-schema.md](./docs/control-plane-schema.md).
 

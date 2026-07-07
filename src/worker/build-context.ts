@@ -1,6 +1,5 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import type { JsonFilterDto } from '@revisium/client';
 import type { ControlPlaneDataAccess } from '../control-plane/data-access.js';
 import type { Step } from '../control-plane/steps.js';
 import { toStr } from '../control-plane/steps.js';
@@ -337,7 +336,7 @@ export async function buildContext(
 
   const stepAttempts = await da.listRows('attempts', {
     first: 100,
-    where: { data: { path: 'step_id', equals: step.id as unknown as JsonFilterDto['equals'] } },
+    where: { data: { path: 'step_id', equals: step.id } },
   });
   const priorLessons = stepAttempts
     .filter(

@@ -9,7 +9,8 @@ Revo has four layers:
 
 1. **Product contracts:** playbooks, roles, pipeline templates, GraphQL/MCP operations, and human gates.
 2. **Runtime engine:** pure state-machine interpretation plus a durable workflow adapter.
-3. **State boundary:** Revisium stores meaning and runtime projections; DBOS stores authoritative progress.
+3. **State boundary:** Revo Prisma and the embedded Revisium engine store product/control-plane state; DBOS stores
+   authoritative progress.
 4. **Execution boundary:** short-lived agents and scripts run in target repos and return recorded results.
 
 Use the spec for the contract, then inspect the source owner before editing.
@@ -25,21 +26,20 @@ Use the spec for the contract, then inspect the source owner before editing.
 | MCP front door | `src/mcp/**` | Local agent tool surface; do not expose raw Revisium CRUD |
 | Pipeline core | `src/pipeline-core/**` | Pure state-machine interpreter and validators; no I/O, clocks, runners, or DBOS imports |
 | Durable adapter | `src/pipeline/**`, `src/engine/**` | DBOS workflow adapter, human waits, run progression, replay-safe side effects |
-| Control-plane data | `control-plane/bootstrap.config.json`, `src/control-plane/**`, `src/revisium/**` | Revisium schema, data access, versioned meaning, runtime projections |
+| Control-plane data | `control-plane/bootstrap.config.json`, `src/control-plane/**`, `src/revisium/**` | Embedded engine schema, data access, versioned meaning, runtime projections |
 | Playbook import | `control-plane/default-playbook/**`, `src/playbook/**` | Built-in playbook plus catalog import/install logic |
 | Runner boundary | `src/runners/**`, `src/worker/**` | Agent/script execution, worktrees, context build, artifact logs, result envelopes |
 | Observability and PR feedback | `src/observability/**`, `src/poller/**`, `src/features/pr/**` | Attempt streams, logs, PR readiness, review feedback triage |
-| E2E harness | `src/e2e/**`, `scripts/e2e-setup.ts` | Real DBOS/Revisium scenarios and MCP/GraphQL smoke behavior |
+| E2E harness | `src/e2e/**`, `scripts/e2e-setup.ts` | Real DBOS/embedded engine scenarios and MCP/GraphQL smoke behavior |
 
 ## Change Rules
 
-- Keep transport adapters thin. GraphQL and MCP call feature services; they do not read DBOS tables or raw Revisium
-  rows.
+- Keep transport adapters thin. GraphQL and MCP call feature services; they do not read DBOS tables or raw engine rows.
 - Keep `pipeline-core` pure. Validation and interpretation must stay deterministic and testable without the host.
 - Keep runtime rows draft-only. Creating runs, resolving gates, recording attempts, appending events, and recording
-  costs must not create committed Revisium revisions.
+  costs must not create committed engine revisions.
 - Keep external effects idempotent by run, node, and attempt identity where DBOS replay can repeat a call.
-- Keep code and diffs in git. Revisium payloads store summaries, evidence, and artifact refs, not full repository
+- Keep code and diffs in git. Revo payloads store summaries, evidence, and artifact refs, not full repository
   snapshots.
 - Keep docs and contracts in the same PR as behavior changes. Specs get exact contract changes; guides get workflow
   changes; ADRs get durable decision changes.

@@ -1,4 +1,3 @@
-import { ControlPlaneError } from './errors.js';
 import type { ListRowsOptions } from './data-access.js';
 import type { PatchOperation } from './json-fields.js';
 
@@ -37,19 +36,6 @@ type RecoverableScopeResolver<T> = {
   invalidate(): void;
 };
 
-export function withRequestTimeout(
-  baseFetch: typeof fetch,
-  timeoutMs: number,
-): typeof fetch {
-  return (input, init) => {
-    const timeout = AbortSignal.timeout(timeoutMs);
-    const signal = init?.signal
-      ? AbortSignal.any([init.signal, timeout])
-      : timeout;
-    return baseFetch(input, { ...init, signal });
-  };
-}
-
 export function makeRecoverableScopeResolver<T>(
   loadScope: () => Promise<T>,
 ): RecoverableScopeResolver<T> {
@@ -66,26 +52,4 @@ export function makeRecoverableScopeResolver<T>(
       cachedScope = undefined;
     },
   };
-}
-
-export function extractMutationRow(result: {
-  data?: {
-    row?: {
-      id: string;
-      data: Record<string, unknown>;
-      readonly?: boolean;
-      createdAt?: string;
-      updatedAt?: string;
-    };
-  };
-}): {
-  id: string;
-  data: Record<string, unknown>;
-  readonly?: boolean;
-  createdAt?: string;
-  updatedAt?: string;
-} {
-  const row = result.data?.row;
-  if (!row) throw new ControlPlaneError('HTTP_ERROR', 'Malformed response');
-  return row;
 }

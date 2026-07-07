@@ -15,12 +15,13 @@ import {
   type RevisionMode,
   type TransportList,
   type TransportRow,
-} from './client-transport.js';
+} from './transport.js';
 import type { ListRowsOptions, PatchOperation } from './data-access.js';
 import type {
   VersionedMeaningRevision,
   VersionedMeaningScope,
 } from './versioned-meaning.js';
+import { ROW_ORDER_BY_FIELDS, type RowOrderByField } from './query-types.js';
 
 const SYSTEM_TABLES = [
   'revisium_schema_table',
@@ -35,6 +36,10 @@ type EngineTablesPage = {
   edges?: Array<{ cursor?: string; node?: { id: string } }>;
   pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
 };
+
+function isRowOrderByField(field: string): field is RowOrderByField {
+  return (ROW_ORDER_BY_FIELDS as readonly string[]).includes(field);
+}
 
 function nowId(prefix: string): string {
   return `${prefix}-${randomUUID()}`;
@@ -73,8 +78,7 @@ function mapOrderBy(
     const direction = (entry as { direction?: unknown }).direction;
     if (typeof field !== 'string') return [];
     if (direction !== 'asc' && direction !== 'desc') return [];
-    if (!['id', 'createdAt', 'updatedAt', 'publishedAt'].includes(field))
-      return [];
+    if (!isRowOrderByField(field)) return [];
     return [{ [field]: direction }];
   });
 }
@@ -118,7 +122,7 @@ function mapEngineError(error: unknown, context: string): ControlPlaneError {
     );
   }
   return new ControlPlaneError(
-    'HTTP_ERROR',
+    'TRANSPORT_ERROR',
     `Engine error ${status ?? 'unknown'}: ${context}: ${message}`,
     {
       status,

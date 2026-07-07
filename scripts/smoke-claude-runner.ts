@@ -8,8 +8,7 @@
 //   - Cost: one real `standard`-profile call (a single trivial round-trip). Non-zero, small.
 //
 // Run (only when validating, not in CI):
-//   ./bin/revo.js revisium start
-//   ./bin/revo.js bootstrap --commit
+//   ./bin/revo.js start
 //   pnpm run smoke:claude-runner
 //
 // What it proves:

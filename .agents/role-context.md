@@ -36,7 +36,7 @@ account to push/PR with. The prompts read `{{GH_ACCOUNT}}` from there.
 
 Coordinates, ports, and the versioned/runtime table split are documented in
 `AGENTS.md` and `docs/control-plane-schema.md` — do not duplicate them here.
-The resolved port lives in the local `runtime.json`; never hardcode it.
+The host runtime snapshot lives in the selected data directory's `host.json`; never hardcode resolved ports.
 
 ## Notes
 

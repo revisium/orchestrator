@@ -25,6 +25,14 @@ test('buildProgram: registers mcp command', () => {
   assert.ok(program.commands.some((cmd) => cmd.name() === 'mcp'), 'mcp command must be registered');
 });
 
+test('buildProgram: does not expose the legacy Revisium standalone command group', () => {
+  const program = buildProgram();
+  assert.ok(
+    !program.commands.some((cmd) => cmd.name() === 'revisium'),
+    'legacy `revo revisium ...` commands must not be registered',
+  );
+});
+
 for (const flag of ['--version', '-v']) {
   test(`buildProgram: ${flag} prints the package.json version and exits via commander`, () => {
     const program = buildProgram().exitOverride();

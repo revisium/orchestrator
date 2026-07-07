@@ -620,8 +620,8 @@ export class TaskControlPlaneApiService {
   async doctor() {
     const status = await this.getStatus();
     const issues: string[] = [];
-    if (!status.daemon.running) issues.push('Local Revisium daemon is not running.');
-    if (status.daemon.running && !status.daemon.healthy) issues.push('Local Revisium daemon is running but unhealthy.');
+    if (!status.daemon.running) issues.push('Revo host daemon is not running.');
+    if (status.daemon.running && !status.daemon.healthy) issues.push('Revo host daemon is running but unhealthy.');
     try {
       await this.roles.loadPipelinePolicy();
     } catch (error) {

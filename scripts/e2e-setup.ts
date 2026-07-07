@@ -29,7 +29,7 @@ import {
 import { getConfig, isAlive } from '../src/config.js';
 import { ensureHost } from '../src/host/ensure-host.js';
 import { readHostRuntime, removeHostRuntime } from '../src/host/host-runtime.js';
-import { killTree, waitForExit } from '../src/cli/commands/revisium-helpers.js';
+import { killTree, waitForExit } from '../src/cli/commands/process-helpers.js';
 import { RevisiumModule } from '../src/revisium/revisium.module.js';
 import { PlaybooksService } from '../src/revisium/playbooks.service.js';
 import { RevoPrismaService } from '../src/storage/revo-prisma.service.js';

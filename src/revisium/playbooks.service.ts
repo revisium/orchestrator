@@ -111,7 +111,7 @@ export class PlaybooksService {
 
   async install(options: PlaybookInstallOptions): Promise<PlaybookInstallResult> {
     if (!this.engine || !this.prisma) {
-      throw new ControlPlaneError('DAEMON_NOT_RUNNING', 'Engine-backed control-plane is not available');
+      throw new ControlPlaneError('CONTROL_PLANE_NOT_AVAILABLE', 'Engine-backed control-plane is not available');
     }
     const installer = new PlaybookInstaller({
       access: createVersionedMeaningAccess({

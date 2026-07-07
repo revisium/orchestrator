@@ -18,10 +18,10 @@ import {
 } from './kit/index.js';
 import { validateTemplate } from '../pipeline-core/index.js';
 
-// Group M — the BUILT-IN DEFAULT playbook SEEDED by `revo bootstrap` (slice 5, plan 0015).
+// Group M — the BUILT-IN DEFAULT playbook seeded by host bootstrap (slice 5, plan 0015).
 //
 // Distinct from Groups A–L, which install the e2e FIXTURE playbook (`revisium-agent-playbook`). This
-// group proves the SHIPPED DEFAULT: a fresh `revo bootstrap` seeds `revisium-default` (committed under
+// group proves the SHIPPED DEFAULT: a fresh host bootstrap seeds `revisium-default` (committed under
 // control-plane/default-playbook/) so the control-plane has working `feature-development`,
 // `feature-development-codex-consensus`, and `local-change` pipelines out-of-the-box — no external
 // agent-playbook repo, no fixture override.

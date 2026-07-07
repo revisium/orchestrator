@@ -1,10 +1,10 @@
 export type ControlPlaneErrorCode =
-  | 'DAEMON_NOT_RUNNING'
+  | 'CONTROL_PLANE_NOT_AVAILABLE'
   | 'BOOTSTRAP_NOT_APPLIED'
   | 'ROW_CONFLICT'
   | 'ROW_NOT_FOUND'
   | 'VALIDATION_FAILURE'
-  | 'HTTP_ERROR';
+  | 'TRANSPORT_ERROR';
 
 export class ControlPlaneError extends Error {
   readonly code: ControlPlaneErrorCode;

@@ -3,8 +3,9 @@
 - **Status:** Draft
 - **Version:** v1
 - **Owners:** Revo host lifecycle, storage bootstrap, DBOS adapter, Prisma runtime
-- **Source files:** `src/config.ts`, `src/engine/ensure-postgres.ts`, `src/host/host.lifecycle.ts`,
-  `src/engine/dbos.service.ts`, future `prisma/schema.prisma`, future storage bootstrap service
+- **Source files:** `src/config.ts`, `src/storage/ensure-storage.ts`, `src/storage/revo-database.ts`,
+  `src/engine/ensure-postgres.ts`, `src/host/host.lifecycle.ts`, `src/engine/dbos.service.ts`,
+  `prisma/schema.prisma`
 - **Related ADRs:** [ADR-0007](../adr/0007-revo-storage-foundation.md)
 
 ## Scope
@@ -32,13 +33,12 @@ The key words MUST, MUST NOT, SHOULD, SHOULD NOT, MAY are to be interpreted as R
 
 ## Current Contract
 
-Current orchestrator has no first-party Prisma schema. It depends on `@revisium/standalone`, which owns the embedded
-PostgreSQL cluster. The host calls `ensureRevisium()`, discovers the proven PostgreSQL port from runtime state, calls
-`ensurePostgres(pgPort)` to create a DBOS database, builds `dbosSystemDatabaseUrl(pgPort)`, and then calls
-`DBOS.launch()`.
+Orchestrator owns a first-party Prisma schema and starts embedded PostgreSQL directly through the Revo storage
+bootstrap. The host provisions the Revo product database and DBOS system database, runs Prisma Migrate against the Revo
+product database, initializes the embedded Revisium engine in-process, and then calls `DBOS.launch()`.
 
-The target contract removes this standalone dependency. The current section documents the behavior being replaced, not
-a compatibility requirement.
+The previous standalone-based contract was replaced. Revo must not start `@revisium/standalone`, read standalone runtime
+JSON, or depend on a standalone HTTP health endpoint during normal startup.
 
 Profiles currently define DBOS database names:
 
@@ -193,7 +193,7 @@ for old standalone draft rows is required.
 Default profile:
 
 ```text
-dataDir: ~/.revisium-orchestrator
+dataDir: ~/.revo
 postgres database: postgres
 revo product database: revo
 dbos system database: dbos
@@ -202,7 +202,7 @@ dbos system database: dbos
 Dev profile:
 
 ```text
-dataDir: ~/.revisium-orchestrator-dev
+dataDir: ~/.revo-dev
 postgres database: postgres
 revo product database: revo_dev
 dbos system database: dbos_dev

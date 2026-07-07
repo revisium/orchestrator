@@ -6,9 +6,7 @@
  *  - RolesService, RunService, InboxService, PlaybooksService resolve and are defined.
  *  - REVISIUM_TRANSPORT_DRAFT and REVISIUM_TRANSPORT_HEAD tokens resolve with correct mode.
  *  - Module construction makes NO network call (context creation succeeds without a live daemon).
- *  - Invariant #4 guard (§5.8): (a) no src/cli/* imports @revisium/client;
- *    (b) meaning-layer importer set is the documented baseline + no new outside-layer importers;
- *    (c) build-context.ts is the named legacy exception.
+ *  - Invariant #4 guard (§5.8): no source file or package manifest depends on @revisium/client.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -19,6 +17,7 @@ import { tmpdir } from 'node:os';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SRC_DIR = join(__dirname, '..'); // agent-orchestrator/src/
+const REPO_ROOT = join(SRC_DIR, '..');
 
 function configureIsolatedStorageEnv(label: string): void {
   const suffix = `${process.pid}`;
@@ -74,11 +73,7 @@ test('RevisiumModule creates an application context and provides all services wi
 
 // ─── Invariant #4 guard (§5.8) ───────────────────────────────
 
-/**
- * Collect all *.ts files under rootDir, excluding *.test.ts files.
- * Uses readFileSync — no shell involved, no silent errors.
- */
-function collectTsFiles(rootDir: string): string[] {
+function collectFiles(rootDir: string, include: (entry: string) => boolean): string[] {
   const results: string[] = [];
   function walk(dir: string): void {
     for (const entry of readdirSync(dir)) {
@@ -86,13 +81,21 @@ function collectTsFiles(rootDir: string): string[] {
       const st = statSync(full);
       if (st.isDirectory()) {
         walk(full);
-      } else if (entry.endsWith('.ts') && !entry.endsWith('.test.ts')) {
+      } else if (include(entry)) {
         results.push(full);
       }
     }
   }
   walk(rootDir);
   return results;
+}
+
+/**
+ * Collect all *.ts files under rootDir, excluding *.test.ts files.
+ * Uses readFileSync — no shell involved, no silent errors.
+ */
+function collectTsFiles(rootDir: string): string[] {
+  return collectFiles(rootDir, (entry) => entry.endsWith('.ts') && !entry.endsWith('.test.ts'));
 }
 
 /**
@@ -125,88 +128,54 @@ function findImporters(rootDir: string, pkg: string): string[] {
   });
 }
 
-/** Resolve to the repo src directory path. */
-function srcPath(...parts: string[]): string {
-  return join(SRC_DIR, ...parts);
-}
-
-/**
- * Documented baseline: the EXACT set of non-test .ts files under src/ that are
- * allowed to import @revisium/client type-only DTOs.
- *
- * If a future file is correctly added to the control-plane/run layer this test will
- * need updating — that is intentional: changes to the baseline require explicit review.
- */
-const BASELINE_IMPORTERS = new Set([
-  srcPath('control-plane', 'data-access.ts'),
-  srcPath('control-plane', 'schema-migration.ts'),
-  srcPath('run', 'inspect-run.ts'),
-  srcPath('worker', 'build-context.ts'),
-]);
-
-test('Invariant #4 (a): no src/cli/ file imports @revisium/client (CLI speaks verbs only)', () => {
-  const cliDir = srcPath('cli');
-  const matches = findImporters(cliDir, '@revisium/client');
-  assert.deepEqual(
-    matches,
-    [],
-    `src/cli/ must not import @revisium/client. Found violations:\n${matches.join('\n')}`,
-  );
-});
-
-test('Invariant #4 (b): full-tree @revisium/client importer set equals the documented baseline', () => {
+test('Invariant #4: no source file imports @revisium/client generated SDK', () => {
   const allImporters = findImporters(SRC_DIR, '@revisium/client');
-
-  // Self-check: the matcher must find at least one known importer.
-  // If findImporters silently no-ops (e.g. regex broken), this assertion will catch it.
-  assert.ok(
-    allImporters.includes(srcPath('control-plane', 'data-access.ts')),
-    'Self-check failed: data-access.ts must be in the detected importer set; ' +
-    'this means the import matcher is broken or the file was renamed',
-  );
-
-  // The importer set must be non-empty (guards against a silent no-op matcher).
-  assert.ok(allImporters.length > 0, 'Importer set must be non-empty (matcher self-check)');
-
-  // Sort both for stable comparison.
-  const actual = [...allImporters].sort();
-  const expected = [...BASELINE_IMPORTERS].sort();
-
   assert.deepEqual(
-    actual,
-    expected,
-    `@revisium/client importer set differs from baseline.\n` +
-    `New importers (not in baseline):\n` +
-    `  ${actual.filter((f) => !BASELINE_IMPORTERS.has(f)).join('\n  ') || '(none)'}\n` +
-    `Missing importers (in baseline but not found):\n` +
-    `  ${expected.filter((f) => !allImporters.includes(f)).join('\n  ') || '(none)'}`,
-  );
-});
-
-test('Invariant #4 (c): @revisium/client imports remain type-only', () => {
-  const buildContextPath = srcPath('worker', 'build-context.ts');
-  const src = readFileSync(buildContextPath, 'utf8');
-  assert.ok(
-    src.includes("import type { JsonFilterDto } from '@revisium/client'"),
-    'build-context.ts should only import @revisium/client as a type-only DTO source',
-  );
-});
-
-test('Invariant #4 (b2): new service/module files do NOT import @revisium/client directly', () => {
-  // RevisiumModule and service files must speak DataAccess/verbs, not @revisium/client.
-  const revisiumDir = srcPath('revisium');
-  const inboxVerbFile = srcPath('control-plane', 'inbox.ts');
-
-  const revisiumImporters = findImporters(revisiumDir, '@revisium/client');
-  assert.deepEqual(
-    revisiumImporters,
+    allImporters,
     [],
-    `src/revisium/ must not import @revisium/client directly:\n${revisiumImporters.join('\n')}`,
+    `src/ must not import @revisium/client. Found violations:\n${allImporters.join('\n')}`,
   );
+});
 
-  const inboxVerbSrc = readFileSync(inboxVerbFile, 'utf8');
-  assert.ok(
-    !inboxVerbSrc.includes('@revisium/client'),
-    'src/control-plane/inbox.ts must not import @revisium/client',
+test('Invariant #4: package manifest does not depend on @revisium/client generated SDK', () => {
+  const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')) as {
+    dependencies?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+  };
+  assert.equal(
+    manifest.dependencies?.['@revisium/client'],
+    undefined,
+    '@revisium/client must not be a runtime dependency',
+  );
+  assert.equal(
+    manifest.devDependencies?.['@revisium/client'],
+    undefined,
+    '@revisium/client must not be a dev dependency',
+  );
+});
+
+test('Invariant #4: agent guidance does not expose legacy standalone commands', () => {
+  const forbidden = [
+    /revo\s+revisium\b/i,
+    /revo\s+bootstrap\b/i,
+    /@revisium\/standalone\b/i,
+    /runtime\.json\b/i,
+    /Revisium HTTP/i,
+    /standalone HTTP/i,
+  ];
+  const files = collectFiles(join(REPO_ROOT, '.agents'), (entry) => entry.endsWith('.md'));
+  const violations: string[] = [];
+  for (const file of files) {
+    const lines = readFileSync(file, 'utf8').split(/\r?\n/);
+    lines.forEach((line, index) => {
+      if (forbidden.some((pattern) => pattern.test(line))) {
+        violations.push(`${file}:${index + 1}: ${line}`);
+      }
+    });
+  }
+  assert.deepEqual(
+    violations,
+    [],
+    `Tracked .agents guidance must not expose legacy standalone commands:\n${violations.join('\n')}`,
   );
 });
