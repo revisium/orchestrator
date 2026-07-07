@@ -38,6 +38,15 @@ import { PLAYBOOK_SOURCE } from '../src/e2e/kit/env.js';
 
 const PLAYBOOK_ID = 'revisium-agent-playbook'; // matches scenarios.ts PLAYBOOK_ID
 const CLI_ENTRY = fileURLToPath(new URL('../src/cli/index.ts', import.meta.url));
+const HOST_READY_TIMEOUT_MS = 240_000;
+
+function hostLogTail(maxLines = 200): string {
+  try {
+    return readFileSync(getConfig().hostLogFile, 'utf8').split(/\r?\n/).slice(-maxLines).join('\n').trim();
+  } catch {
+    return '';
+  }
+}
 
 function readPostmasterPid(): number | null {
   try {
@@ -68,7 +77,13 @@ async function resetHome(): Promise<void> {
 
   rmSync(getConfig().dataDir, { recursive: true, force: true });
   mkdirSync(getConfig().dataDir, { recursive: true });
-  await ensureHost({ entry: CLI_ENTRY });
+  try {
+    await ensureHost({ entry: CLI_ENTRY, timeoutMs: HOST_READY_TIMEOUT_MS });
+  } catch (err) {
+    const logTail = hostLogTail();
+    if (logTail) console.error(`[e2e setup] host.log tail after startup failure:\n${logTail}`);
+    throw err;
+  }
 }
 
 async function createControlPlaneContext(): Promise<INestApplicationContext> {
