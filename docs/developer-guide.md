@@ -20,7 +20,7 @@ Use the spec for the contract, then inspect the source owner before editing.
 | Area | Owner files | Notes |
 | --- | --- | --- |
 | CLI lifecycle | `src/cli/**`, `src/host/**` | `revo start`, `stop`, `status`, `restart`, `doctor`, `logs`, and `mcp` bridge |
-| Host composition | `src/app.module.ts`, `src/host/**`, `src/http/**` | NestJS daemon, GraphQL host, MCP HTTP bridge, daemon runtime files |
+| Host composition | `src/http/graphql-host.module.ts`, `src/host/**`, `src/http/**` | NestJS daemon, GraphQL host, MCP HTTP bridge, daemon runtime files |
 | Feature API services | `src/features/**`, `src/task-control-plane/**` | Product-level services used by GraphQL and MCP |
 | GraphQL front door | `src/api/graphql-api/**`, `src/http/graphql-host.ts` | Resolver and SDL contract; keep drift tests green |
 | MCP front door | `src/mcp/**` | Local agent tool surface; do not expose raw Revisium CRUD |

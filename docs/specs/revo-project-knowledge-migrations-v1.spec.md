@@ -303,7 +303,7 @@ Required tests:
 
 ## Compatibility
 
-No legacy local data needs to be migrated for v1.
+Existing pre-v1 local data is outside this contract and is not migrated.
 
 Template migrations must be forward-only. A rollback is a new forward migration that restores previous behavior.
 

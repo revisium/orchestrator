@@ -1,5 +1,4 @@
 import { getConfig, PROFILES, resolveProfileName } from '../config.js';
-import { resolveDbosDbName } from '../engine/ensure-postgres.js';
 
 export const REVO_PG_USER = 'revisium';
 export const REVO_PG_PASSWORD = 'password';
@@ -25,6 +24,13 @@ export function resolveRevoDbName(): string {
   return assertSqlIdentifier(
     process.env['REVO_DB'] ?? PROFILES[resolveProfileName()].revoDb,
     'REVO_DB',
+  );
+}
+
+export function resolveDbosDbName(): string {
+  return assertSqlIdentifier(
+    process.env['REVO_DBOS_DB'] ?? PROFILES[resolveProfileName()].dbosDb,
+    'REVO_DBOS_DB',
   );
 }
 

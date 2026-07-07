@@ -264,7 +264,7 @@ Required tests:
 
 ## Compatibility
 
-No legacy local data compatibility is required for v1.
+Existing pre-v1 local data is outside this contract and is not migrated.
 
 If `@revisium/engine` changes its required schema, Revo must update the generated/imported fragment and create a
 normal Revo Prisma migration. Revo must not let engine schema drift silently.

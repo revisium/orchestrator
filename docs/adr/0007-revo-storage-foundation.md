@@ -13,8 +13,8 @@
 
 ## Context
 
-Before storage v2, Revo used Revisium standalone as the local storage daemon. The NestJS host started or reused that
-daemon, discovered its embedded PostgreSQL port, created the DBOS system database, and then launched DBOS.
+Storage v2 moves Revo away from an external local storage daemon. The earlier NestJS host bootstrap started or reused
+that daemon, discovered its embedded PostgreSQL port, created the DBOS system database, and then launched DBOS.
 
 That design was enough to bootstrap the product, but it now puts the wrong data in the wrong store:
 
@@ -22,7 +22,7 @@ That design was enough to bootstrap the product, but it now puts the wrong data 
   status semantics;
 - DBOS already owns durable workflow progress and replay, so runtime status reconciliation across multiple stores has
   produced real consistency bugs;
-- Revisium standalone adds a second daemon boundary and a localhost HTTP hop even though the extracted
+- an external storage service adds a second daemon boundary and a localhost HTTP hop even though the extracted
   `@revisium/engine` package can be embedded in the host;
 - Revo needs first-class product/runtime data such as projects, repositories, runs, attempts, inbox items, events,
   outputs, artifacts, and cost ledgers.
@@ -32,8 +32,8 @@ review changed that: the engine does not own a project registry, and Revo needs 
 Revo-owned product/runtime tables and the engine-required physical tables. DBOS remains separate because its schema is
 owned and migrated by the DBOS SDK.
 
-This ADR ignores legacy local data. Revo is still an internal alpha, so there is no compatibility requirement to read
-or migrate existing user data directories.
+This ADR does not support pre-v2 local data. Revo is still an internal alpha, so there is no compatibility requirement
+to read or migrate existing user data directories.
 
 ## Decision
 
@@ -48,8 +48,8 @@ The embedded PostgreSQL cluster is Revo-owned. The host is responsible for start
 proven port, creating required databases, running Revo migrations through Prisma Migrate, configuring
 `@revisium/engine`, configuring DBOS, and failing startup if any plane is inconsistent.
 
-`@revisium/standalone` is removed from the Revo storage path. Revo must not call `ensureRevisium()`, discover storage
-through standalone runtime JSON, or rely on the standalone HTTP health endpoint during normal startup.
+The Revo storage path is in-process. Revo must not discover storage through external runtime files or rely on a local
+storage-service health endpoint during normal startup.
 
 ### Revo product database
 
@@ -67,8 +67,8 @@ migration mechanism, including `TableMigration` and engine system tables.
 
 ### Engine embedding
 
-Embed `@revisium/engine` in the Revo host process instead of calling Revisium standalone over HTTP for product
-runtime paths. The engine remains a versioning library: branches, revisions, tables, rows, JSON Schema, diffs, file
+Embed `@revisium/engine` in the Revo host process instead of calling a separate local storage service over HTTP for
+product runtime paths. The engine remains a versioning library: branches, revisions, tables, rows, JSON Schema, diffs, file
 usage, and table migrations.
 
 Revo owns product/runtime rows through Prisma. Versioned table/schema changes are delegated to the embedded engine
@@ -97,7 +97,7 @@ access DBOS through the sealed `DbosService` boundary, not raw DBOS SQL tables.
 The local PoC on 2026-07-06 verified this placement: a single embedded PostgreSQL cluster can host a product database
 and a DBOS database; DBOS creates its tables under the `dbos` schema inside the DBOS database; the product database
 does not receive DBOS tables. The initial storage-v2 implementation then proved the fresh Revo-owned cluster path
-without Revisium standalone.
+without an external storage daemon.
 
 ### Bootstrap summary
 
@@ -129,7 +129,7 @@ attachment lifecycle.
 
 ## Alternatives
 
-- **Keep Revisium standalone and draft-stored runtime rows.** Rejected. It preserves stale reads, non-transactional
+- **Keep the external storage daemon and draft-stored runtime rows.** Rejected. It preserves stale reads, non-transactional
   gate resolution, daemon lifecycle complexity, and unbounded draft growth.
 - **Use separate `engine`, `revo_runtime`, and `dbos` databases.** Rejected after follow-up design review. The engine
   has requirements on physical tables, but Revo needs a single Prisma-managed product/runtime database that can
@@ -159,7 +159,7 @@ attachment lifecycle.
   not own DBOS DDL.
 - Local reset becomes simple during alpha: stop Revo, delete the data directory, start again.
 - The orchestrator must depend on the embedded PostgreSQL provider directly or through a Revo-owned wrapper, not
-  transitively through `@revisium/standalone`.
+  transitively through another storage daemon package.
 
 ## Validation
 
@@ -167,7 +167,7 @@ Implementing PRs must add tests and smokes for:
 
 - profile-specific database name resolution for Revo DB and DBOS DB;
 - bootstrap creates missing Revo and DBOS databases idempotently;
-- fresh-cluster bootstrap works without Revisium standalone;
+- fresh-cluster bootstrap works without an external storage daemon;
 - DBOS launch creates or upgrades only the DBOS database and leaves the Revo product database free of DBOS tables;
 - Revo Prisma migrations create expected product/runtime and engine-required tables;
 - engine API can create a revision/table/row using `Branch.projectId = RevoProject.id`;
@@ -175,7 +175,7 @@ Implementing PRs must add tests and smokes for:
 - engine schema fragment drift fails CI;
 - product code cannot import raw DBOS SQL access outside the DBOS adapter boundary;
 - startup fails before serving when a required database or migration plane fails;
-- reset/dev flows can recreate a clean data directory without legacy assumptions.
+- reset/dev flows can recreate a clean data directory without pre-v2 data assumptions.
 
 ## Notes for implementation
 

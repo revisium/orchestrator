@@ -6,7 +6,7 @@ import localRules from './eslint-local-rules/index.js';
 
 export default [
   {
-    ignores: ['dist/**', 'coverage/**', 'node_modules/**'],
+    ignores: ['dist/**', 'coverage/**', 'node_modules/**', 'src/__generated__/**'],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,

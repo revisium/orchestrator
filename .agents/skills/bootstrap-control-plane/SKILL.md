@@ -9,8 +9,7 @@ Verify the control-plane tables from `control-plane/bootstrap.config.json` throu
 
 ## Rules
 
-- Bootstrap is owned by Revo startup. Use only the top-level Revo lifecycle commands; legacy storage commands are
-  unsupported.
+- Bootstrap is owned by Revo startup. Use only the top-level Revo lifecycle commands.
 - `bootstrapEngineControlPlane` runs before the host starts serving. A startup failure means the control plane is not
   ready.
 - Do not hand-edit engine tables. Edit `control-plane/bootstrap.config.json`, then verify through startup/tests/smoke.
