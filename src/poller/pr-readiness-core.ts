@@ -1013,6 +1013,13 @@ function buildFeedback(input: {
         author: review.user?.login ?? '',
         evidence: review.state,
       })),
+    ...(input.reviewThreads.truncated
+      ? [{
+          source: 'review_threads_truncated',
+          summary: 'Review thread data is incomplete; fetch all review thread pages before declaring the PR ready.',
+          evidence: 'GitHub reviewThreads pageInfo.hasNextPage=true',
+        }]
+      : []),
     ...input.reviewThreads.items.map((thread) => ({
       source: 'review_thread',
       summary: thread.body,

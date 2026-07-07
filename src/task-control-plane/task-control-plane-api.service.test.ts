@@ -878,6 +878,22 @@ test('TaskControlPlaneApiService.resolveGate requires complete audit for overrid
       outcome: 'override_merge',
       note: 'operator accepts advisory risk',
       resolvedBy: 'human',
+      mergeOverrideAudit: {
+        actor: completeMergeOverrideAudit.actor,
+        reason: completeMergeOverrideAudit.reason,
+        risk: completeMergeOverrideAudit.risk,
+        verificationResponsibility: completeMergeOverrideAudit.verificationResponsibility,
+        headSha: completeMergeOverrideAudit.headSha,
+      },
+    }),
+    /threadIds must be an array/,
+  );
+  await assert.rejects(
+    () => api.resolveGate({
+      inboxId: 'inbox-1',
+      outcome: 'override_merge',
+      note: 'operator accepts advisory risk',
+      resolvedBy: 'human',
       mergeOverrideAudit: { ...completeMergeOverrideAudit, threadIds: ['ok', ''] },
     }),
     /threadIds must contain non-empty strings/,

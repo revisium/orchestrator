@@ -57,7 +57,7 @@ const manualAdoptionAuditSchema = z.object({
 });
 
 const mergeOverrideAuditSchema = z.object({
-  threadIds: z.array(z.string().trim().min(1)).min(1),
+  threadIds: z.array(z.string().trim().min(1)),
   actor: z.string().trim().min(1),
   reason: z.string().trim().min(1),
   risk: z.string().trim().min(1),

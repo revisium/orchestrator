@@ -1881,6 +1881,26 @@ test('#279: collectPrReadiness marks paginated review thread data incomplete', a
   assert.equal(readiness.reviewThreads.truncated, true, 'override path must hard-refuse incomplete thread pages');
 });
 
+test('#279: incomplete review thread pages block readiness even when the first page has no unresolved threads', async () => {
+  const terminalView = prViewResponse([checkRun('CI', 'COMPLETED', 'SUCCESS')], { number: 42, state: 'OPEN' });
+  const execGh = makeFullResponses(
+    terminalView,
+    [],
+    [],
+    [],
+    null,
+    reviewThreadsResponse([], { hasNextPage: true }),
+  );
+
+  const readiness = await collectPrReadiness({ repo: 'owner/repo', prNumber: 42, includeReviewThreads: true }, execGh);
+
+  assert.equal(readiness.reviewThreads.items.length, 0);
+  assert.equal(readiness.reviewThreads.truncated, true);
+  assert.equal(readiness.verdict, 'needs_work');
+  assert.equal(readiness.nextAction, 'developer_fix');
+  assert.ok(readiness.feedback.developerFixes.some((fix) => fix.source === 'review_threads_truncated'));
+});
+
 test('#233: resolved and outdated threads are filtered out; only unresolved non-outdated count', async () => {
   const terminalView = prViewResponse([checkRun('CI', 'COMPLETED', 'SUCCESS')], { number: 42, state: 'OPEN' });
   const nodes = [
