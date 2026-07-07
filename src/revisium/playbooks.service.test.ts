@@ -125,7 +125,7 @@ test('PlaybooksService.install invalidates the cached HEAD scope after a commit'
   stubInstaller({ committed: true });
   const head = fakeInvalidatableHead();
 
-  const result = await new PlaybooksService(head).install({ source: '/tmp/pb', commit: true });
+  const result = await new PlaybooksService(head, {} as never, {} as never).install({ source: '/tmp/pb', commit: true });
 
   assert.equal(result.committed, true);
   assert.equal(head.invalidations, 1, 'committed install must drop the boot revision so reads see new rows');
@@ -136,7 +136,7 @@ test('PlaybooksService.install does not invalidate when nothing was committed', 
   stubInstaller({ committed: false, dryRun: true });
   const head = fakeInvalidatableHead();
 
-  await new PlaybooksService(head).install({ source: '/tmp/pb', dryRun: true });
+  await new PlaybooksService(head, {} as never, {} as never).install({ source: '/tmp/pb', dryRun: true });
 
   assert.equal(head.invalidations, 0, 'dry-run/non-commit must not churn the cached scope');
 });

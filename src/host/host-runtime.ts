@@ -16,6 +16,7 @@ export type HostRuntimeState = {
   graphqlPort: number;
 
   mcpPort: number;
+  pgPort?: number;
   startedAt: string;
   profile: string;
 

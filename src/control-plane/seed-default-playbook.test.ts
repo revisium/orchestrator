@@ -29,7 +29,6 @@ import { validateTemplate } from '../pipeline-core/index.js';
 import { materializeTemplate } from '../pipeline-core/materialize.js';
 import {
   seedDefaultPlaybook,
-  createDaemonInstaller,
   bundledCatalogHash,
   DEFAULT_PLAYBOOK_ID,
   DEFAULT_PLAYBOOK_SOURCE,
@@ -514,24 +513,4 @@ test('seedDefaultPlaybook: falls back to version compare when catalogHash is abs
   const outcome = await seedDefaultPlaybook(installer, DEFAULT_PLAYBOOK_SOURCE);
   assert.equal(outcome.status, 'installed', 'legacy row with old version should re-seed via version compare');
   assert.equal(installs, 1);
-});
-
-// ---------------------------------------------------------------------------
-// 5. createDaemonInstaller wires the live-daemon adapter (presence reader + real installer).
-// ---------------------------------------------------------------------------
-test('createDaemonInstaller: forwards listPlaybooks and exposes an install function', async () => {
-  const present = [{ id: DEFAULT_PLAYBOOK_ID }];
-  const installer = createDaemonInstaller(async () => present);
-  assert.equal(typeof installer.install, 'function', 'install is backed by the real PlaybookInstaller');
-  assert.deepEqual(await installer.listPlaybooks(), present, 'listPlaybooks delegates to the injected reader');
-});
-
-test('createDaemonInstaller: seed skips install when the reader reports an up-to-date default present', async () => {
-  // Drives seedDefaultPlaybook through the daemon adapter's listPlaybooks without touching a daemon:
-  // an up-to-date version short-circuits before install() (which WOULD need the live draft scope).
-  const installer = createDaemonInstaller(async () => [
-    { id: DEFAULT_PLAYBOOK_ID, version: BUNDLED_DEFAULT_VERSION },
-  ]);
-  const outcome = await seedDefaultPlaybook(installer, DEFAULT_PLAYBOOK_SOURCE);
-  assert.equal(outcome.status, 'already-installed');
 });

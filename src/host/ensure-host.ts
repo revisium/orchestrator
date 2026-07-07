@@ -74,9 +74,9 @@ export function daemonSpawnArgv(entry: string = process.argv[1]): [string, strin
   return [process.execPath, [entry, ...daemonArgs]];
 }
 
-function spawnDaemon(): void {
+function spawnDaemon(entry?: string): void {
   const out = openSync(getConfig().hostLogFile, 'a');
-  const [cmd, args] = daemonSpawnArgv();
+  const [cmd, args] = daemonSpawnArgv(entry);
   const env = { ...process.env, ...dbosEnvPin(getConfig().profile, process.env) };
   const child = spawn(cmd, args, { detached: true, stdio: ['ignore', out, out], env });
   closeSync(out);
@@ -84,7 +84,7 @@ function spawnDaemon(): void {
   child.unref();
 }
 
-export type EnsureHostOptions = { timeoutMs?: number; recheckMs?: number };
+export type EnsureHostOptions = { timeoutMs?: number; recheckMs?: number; entry?: string };
 
 
 export async function ensureHost(options: EnsureHostOptions = {}): Promise<EnsureHostResult> {
@@ -111,7 +111,7 @@ export async function ensureHost(options: EnsureHostOptions = {}): Promise<Ensur
   }
 
   if (existing) removeHostRuntime();
-  spawnDaemon();
+  spawnDaemon(options.entry);
   const ready = await waitForReady(timeoutMs);
   if (!ready) {
     throw new Error(

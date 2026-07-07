@@ -10,6 +10,7 @@ export const DEFAULT_GRAPHQL_HOST = '127.0.0.1';
 export type GraphqlHostOptions = {
   host?: string;
   port?: number;
+  beforeListen?: (app: INestApplication) => Promise<void>;
 };
 
 export type StartedGraphqlHost = {
@@ -21,6 +22,11 @@ export type StartedGraphqlHost = {
 
 export type GraphqlHostDeps = {
   isPortFree: typeof isPortFree;
+};
+
+export type ResolvedGraphqlHostOptions = {
+  host: string;
+  port: number;
 };
 
 const defaultDeps: GraphqlHostDeps = {
@@ -40,7 +46,7 @@ function parsePort(raw: string | undefined): number {
   return port;
 }
 
-export function resolveGraphqlHostOptions(options: GraphqlHostOptions = {}): Required<GraphqlHostOptions> {
+export function resolveGraphqlHostOptions(options: GraphqlHostOptions = {}): ResolvedGraphqlHostOptions {
   const host = options.host ?? process.env.REVO_GRAPHQL_HOST ?? DEFAULT_GRAPHQL_HOST;
   if (host !== DEFAULT_GRAPHQL_HOST) {
     throw new TypeError(`GraphQL host must bind ${DEFAULT_GRAPHQL_HOST} in v1; received ${host}`);
@@ -57,6 +63,7 @@ export async function startGraphqlHost(
   deps: GraphqlHostDeps = defaultDeps,
 ): Promise<StartedGraphqlHost> {
   const resolved = resolveGraphqlHostOptions(options);
+  const beforeListen = options.beforeListen ?? (async () => {});
   if (resolved.host !== DEFAULT_GRAPHQL_HOST) {
     throw new Error(`GraphQL host must bind ${DEFAULT_GRAPHQL_HOST} in v1; received ${resolved.host}`);
   }
@@ -67,14 +74,21 @@ export async function startGraphqlHost(
   }
 
   const app = await NestFactory.create(GraphqlHostModule, { logger: ['error', 'warn'] });
-  app.useGlobalPipes(new ValidationPipe({ transform: true }));
-  await app.listen(resolved.port, resolved.host);
-  const ws = addWsServer(app);
-  const close = app.close.bind(app);
-  app.close = async () => {
-    await ws.dispose();
-    await close();
-  };
+  try {
+    app.useGlobalPipes(new ValidationPipe({ transform: true }));
+    await app.init();
+    await beforeListen(app);
+    await app.listen(resolved.port, resolved.host);
+    const ws = addWsServer(app);
+    const close = app.close.bind(app);
+    app.close = async () => {
+      await ws.dispose();
+      await close();
+    };
+  } catch (err) {
+    await app.close().catch(() => undefined);
+    throw err;
+  }
 
   return {
     app,

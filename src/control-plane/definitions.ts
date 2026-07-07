@@ -1,5 +1,5 @@
 import { ControlPlaneError } from './errors.js';
-import { createClientTransport, type ControlPlaneTransport } from './client-transport.js';
+import type { ControlPlaneTransport } from './client-transport.js';
 
 export type Role = {
   name: string;
@@ -107,8 +107,8 @@ function isRowNotFound(err: unknown): boolean {
   return status === 404;
 }
 
-export async function loadRole(name: string, transport?: ControlPlaneTransport): Promise<Role> {
-  const t = transport ?? createClientTransport('head');
+export async function loadRole(name: string, transport: ControlPlaneTransport): Promise<Role> {
+  const t = transport;
   const row = await t.getRow('roles', name);
   const d = row.data ?? {};
   return {
@@ -136,10 +136,10 @@ export async function loadRole(name: string, transport?: ControlPlaneTransport):
 
 
 export async function loadPipelinePolicy(
-  transport?: ControlPlaneTransport,
+  transport: ControlPlaneTransport,
   rowId = 'pipeline',
 ): Promise<PipelinePolicy> {
-  const t = transport ?? createClientTransport('head');
+  const t = transport;
 
   let row: { data?: Record<string, unknown> };
   try {
@@ -160,8 +160,8 @@ export async function loadPipelinePolicy(
   };
 }
 
-export async function loadModelProfile(level: string, transport?: ControlPlaneTransport): Promise<ModelProfile> {
-  const t = transport ?? createClientTransport('head');
+export async function loadModelProfile(level: string, transport: ControlPlaneTransport): Promise<ModelProfile> {
+  const t = transport;
   const row = await t.getRow('model_profiles', level);
   const d = row.data ?? {};
   return {

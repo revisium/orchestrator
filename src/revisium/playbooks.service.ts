@@ -1,9 +1,12 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
+import { EngineApiService } from '@revisium/engine';
+import { createEngineVersionedMeaningScope } from '../control-plane/engine-transport.js';
 import type { ControlPlaneTransport } from '../control-plane/data-access.js';
 import { ControlPlaneError } from '../control-plane/errors.js';
 import { createVersionedMeaningAccess } from '../control-plane/versioned-meaning.js';
 import { PlaybookInstaller, type PlaybookInstallOptions, type PlaybookInstallResult } from '../playbook/playbook-installer.js';
 import { normalizeRouteGates } from '../pipeline/route-contract.js';
+import { RevoPrismaService } from '../storage/revo-prisma.service.js';
 import { REVISIUM_TRANSPORT_HEAD } from './tokens.js';
 
 const DEFAULT_PLAYBOOK_ID = 'revisium-default';
@@ -98,11 +101,23 @@ function pipelineFromRow(row: { id: string; data?: Record<string, unknown> }): P
 export class PlaybooksService {
   constructor(
     @Inject(REVISIUM_TRANSPORT_HEAD) private readonly head: ControlPlaneTransport,
+    @Optional()
+    @Inject(EngineApiService)
+    private readonly engine?: EngineApiService,
+    @Optional()
+    @Inject(RevoPrismaService)
+    private readonly prisma?: RevoPrismaService,
   ) {}
 
   async install(options: PlaybookInstallOptions): Promise<PlaybookInstallResult> {
+    if (!this.engine || !this.prisma) {
+      throw new ControlPlaneError('DAEMON_NOT_RUNNING', 'Engine-backed control-plane is not available');
+    }
     const installer = new PlaybookInstaller({
-      access: createVersionedMeaningAccess({ dryRun: options.dryRun }),
+      access: createVersionedMeaningAccess({
+        dryRun: options.dryRun,
+        scopeFactory: async () => createEngineVersionedMeaningScope(this.engine!, this.prisma!),
+      }),
     });
     const result = await installer.install(options);
     if (result.committed && canInvalidate(this.head)) this.head.invalidate();

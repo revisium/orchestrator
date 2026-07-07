@@ -2,7 +2,6 @@ import type { OrderByDto, RowWhereInputDto } from '@revisium/client';
 import { ControlPlaneError } from './errors.js';
 import { deserializeData, serializeData, serializePatches, type PatchOperation } from './json-fields.js';
 import {
-  createClientTransport,
   type ControlPlaneTransport,
   type TransportRow,
 } from './client-transport.js';
@@ -137,11 +136,6 @@ export function createControlPlaneDataAccessForTransport(
       }
     },
   };
-}
-
-export function createControlPlaneDataAccess(options?: { revision?: 'draft' | 'head' }): ControlPlaneDataAccess {
-  const mode = options?.revision ?? 'draft';
-  return createControlPlaneDataAccessForTransport(createClientTransport(mode));
 }
 
 export type { PatchOperation } from './json-fields.js';

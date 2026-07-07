@@ -93,13 +93,13 @@ jobs:
 
       # NOT --ignore-scripts: pnpm-workspace.yaml `allowBuilds` permits @embedded-postgres/linux-x64,
       # whose postinstall hydrates the bundled PostgreSQL binary (relative symlinks → cache-safe).
-      # No external Postgres service is needed: the Revisium standalone owns an embedded Postgres,
-      # and host bootstrap waits for it (ensureRevisium → waitHealthy, ensurePostgres creates `dbos`).
+      # No external Postgres service is needed: Revo owns an embedded Postgres and applies storage
+      # bootstrap/migrations during host startup.
       - name: Install dependencies
         if: steps.node-modules-cache.outputs.cache-hit != 'true'
         run: corepack enable && pnpm install --frozen-lockfile
 
-      # `test:e2e` is self-contained: scripts/e2e-setup.ts cold-starts an ISOLATED test daemon
+      # `test:e2e` is self-contained: scripts/e2e-setup.ts cold-starts an ISOLATED test host
       # (REVO_DATA_DIR/REVO_PORT/REVO_PG_PORT → its own embedded Postgres + DBOS db, set in the npm
       # script), bootstraps the control-plane, and installs the playbook — then the test files run.
       # No separate start/bootstrap steps, and no collision with a developer's dogfooding daemon.

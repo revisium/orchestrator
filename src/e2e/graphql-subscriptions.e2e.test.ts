@@ -1,15 +1,15 @@
 import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createClient } from 'graphql-ws';
-import { findFreePort } from '../config.js';
-import { startGraphqlHost, type StartedGraphqlHost } from '../http/graphql-host.js';
+import { isAlive } from '../config.js';
+import { readHostRuntime } from '../host/host-runtime.js';
 import { RUN_REAL_E2E, e2eSkip } from './kit/index.js';
 
-let host: StartedGraphqlHost | null = null;
+let hostUrl: string | null = null;
 
 async function graphql<T>(query: string, variables?: Record<string, unknown>): Promise<T> {
-  assert.ok(host, 'GraphQL host must be started');
-  const response = await fetch(host.url, {
+  assert.ok(hostUrl, 'GraphQL host must be started');
+  const response = await fetch(hostUrl, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ query, variables }),
@@ -30,8 +30,8 @@ async function graphql<T>(query: string, variables?: Record<string, unknown>): P
  * (hence the buffer, not a one-shot predicate).
  */
 function subscribeCollect<T>(query: string, variables?: Record<string, unknown>) {
-  assert.ok(host, 'GraphQL host must be started');
-  const client = createClient({ url: host.url.replace('http://', 'ws://') });
+  assert.ok(hostUrl, 'GraphQL host must be started');
+  const client = createClient({ url: hostUrl.replace('http://', 'ws://') });
   const buffer: T[] = [];
   let failure: unknown;
   let notify: (() => void) | undefined;
@@ -73,12 +73,13 @@ function subscribeCollect<T>(query: string, variables?: Record<string, unknown>)
 
 before(async () => {
   if (!RUN_REAL_E2E) return;
-  host = await startGraphqlHost({ port: await findFreePort(19600) });
+  const runtime = readHostRuntime();
+  assert.ok(runtime && isAlive(runtime.pid), 'e2e host daemon must be running before GraphQL tests');
+  hostUrl = `http://127.0.0.1:${runtime.graphqlPort}/graphql`;
 });
 
 after(async () => {
-  await host?.app.close();
-  host = null;
+  hostUrl = null;
 });
 
 test('GraphQL real host: read path → createRun mutation → subscription payload', { skip: e2eSkip }, async () => {

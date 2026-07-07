@@ -21,9 +21,6 @@ export type TierObservation = {
 
 export type DoctorObservation = {
   host: TierObservation;
-  standalone: TierObservation;
-
-
 
   unexpectedPortOwners?: Array<{ label: string; port: number; pid: number }>;
 
@@ -75,7 +72,7 @@ export function buildDoctorReport(o: DoctorObservation): DoctorReport {
     );
   }
 
-  if (!o.host.present && !o.standalone.present) {
+  if (!o.host.present) {
     if (issues.length === 0) return { ok: false, issues: ['Stack is not running. Run `revo start`.'] };
     return { ok: false, issues };
   }
@@ -87,20 +84,6 @@ export function buildDoctorReport(o: DoctorObservation): DoctorReport {
   } else if (o.host.alive && !o.host.healthy) {
     issues.push(
       `Host daemon (pid ${o.host.pid}) is running but its GraphQL front door on port ${o.host.port} is not responding.`,
-    );
-  } else if (!o.host.present && o.standalone.alive) {
-    issues.push('Host daemon is not running while the standalone daemon is — the stack is partial. Run `revo start`.');
-  }
-
-  if (o.standalone.present && !o.standalone.alive) {
-    issues.push(`Stale runtime.json: recorded standalone pid ${o.standalone.pid} is not alive.`);
-  } else if (o.standalone.alive && !o.standalone.healthy) {
-    issues.push(
-      `Standalone Revisium (pid ${o.standalone.pid}) is running but unhealthy on port ${o.standalone.port}.`,
-    );
-  } else if (!o.standalone.present && o.host.alive) {
-    issues.push(
-      'Standalone Revisium is not running while the host daemon is — the stack is partial. Run `revo restart`.',
     );
   }
 
