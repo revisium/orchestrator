@@ -3,7 +3,7 @@
  *
  * Proves the BUILT-IN DEFAULT playbook (control-plane/default-playbook/) is shippable WITHOUT a live
  * daemon and that the seed install is idempotent. Distinct from the e2e fixture playbook — this is the
- * artifact `revo bootstrap` installs out-of-the-box.
+ * artifact host bootstrap installs out-of-the-box.
  *
  * Assertions:
  *   1. The default playbook installs via the REAL PlaybookInstaller (fake access) as `revisium-default`

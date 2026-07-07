@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { listInstalledPlaybooksFromTransport } from './bootstrap.js';
-import type { ControlPlaneTransport } from './client-transport.js';
+import type { ControlPlaneTransport } from './transport.js';
 
 test('listInstalledPlaybooksFromTransport: maps the head playbooks-table rows to id + version + catalogHash', async () => {
   const transport = {

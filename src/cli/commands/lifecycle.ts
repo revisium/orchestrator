@@ -14,7 +14,7 @@ import {
   getConfig,
   isAlive,
 } from '../config.js';
-import { killTree, tailLines, waitForExit } from './revisium-helpers.js';
+import { killTree, tailLines, waitForExit } from './process-helpers.js';
 import { buildDoctorReport } from './doctor-report.js';
 import { isPidWithin, listProcesses, parentPid, processStartTime } from './process-tree.js';
 import {

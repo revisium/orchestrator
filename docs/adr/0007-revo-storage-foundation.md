@@ -13,8 +13,8 @@
 
 ## Context
 
-Revo currently uses Revisium standalone as the local storage daemon. The NestJS host starts or reuses that daemon,
-discovers its embedded PostgreSQL port, creates the DBOS system database, and then launches DBOS.
+Before storage v2, Revo used Revisium standalone as the local storage daemon. The NestJS host started or reused that
+daemon, discovered its embedded PostgreSQL port, created the DBOS system database, and then launched DBOS.
 
 That design was enough to bootstrap the product, but it now puts the wrong data in the wrong store:
 
@@ -96,8 +96,8 @@ access DBOS through the sealed `DbosService` boundary, not raw DBOS SQL tables.
 
 The local PoC on 2026-07-06 verified this placement: a single embedded PostgreSQL cluster can host a product database
 and a DBOS database; DBOS creates its tables under the `dbos` schema inside the DBOS database; the product database
-does not receive DBOS tables. That PoC reused an existing dev cluster; the first implementation slice must still
-prove the fresh Revo-owned cluster path without Revisium standalone.
+does not receive DBOS tables. The initial storage-v2 implementation then proved the fresh Revo-owned cluster path
+without Revisium standalone.
 
 ### Bootstrap summary
 
@@ -147,9 +147,9 @@ attachment lifecycle.
 
 ## Consequences
 
-- `ensurePostgres` should become an `ensureDatabases` or `StorageBootstrapService` concept that starts Revo-owned
-  embedded PostgreSQL, provisions both Revo and DBOS databases, and runs Prisma Migrate for the Revo DB.
-- Orchestrator gains its own Prisma schema, migrations, and generated client.
+- The storage bootstrap starts Revo-owned embedded PostgreSQL, provisions both Revo and DBOS databases, and runs Prisma
+  Migrate for the Revo DB.
+- Orchestrator has its own Prisma schema, migrations, and generated client.
 - The current control-plane data-access layer must be reimplemented over Revo Prisma for runtime tables while keeping
   transport adapters thin.
 - The embedded engine package version and engine schema fragment become pinned build inputs.

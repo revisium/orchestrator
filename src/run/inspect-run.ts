@@ -1,5 +1,5 @@
-import type { RowWhereInputDto } from '@revisium/client';
 import type { ControlPlaneDataAccess, ControlPlaneRow } from '../control-plane/index.js';
+import type { RowWhereInput } from '../control-plane/query-types.js';
 import { issueActionFromParams, issueRefFromParams, type IssueAction, type IssueRef } from './issue-ref.js';
 
 export type RunSummary = {
@@ -158,8 +158,8 @@ function toAttemptSummary(row: ControlPlaneRow): AttemptSummary {
   };
 }
 
-function runIdWhere(runId: string): RowWhereInputDto {
-  return { data: { path: 'run_id', equals: runId as unknown as Record<string, unknown> } };
+function runIdWhere(runId: string): RowWhereInput {
+  return { data: { path: 'run_id', equals: runId } };
 }
 
 export async function listRuns(

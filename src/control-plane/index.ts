@@ -9,6 +9,7 @@ export {
   type TransportRow,
   type TransportList,
 } from './data-access.js';
+export type { RowOrderBy, RowOrderByField, RowWhereInput } from './query-types.js';
 export { runtimeTables, type RuntimeTable } from './tables.js';
 export {
   fnv1a64Hex,

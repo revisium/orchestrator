@@ -8,7 +8,7 @@ import { waitForGate } from './drive.js';
 export const PLAYBOOK_ID = 'revisium-agent-playbook';
 
 /**
- * Playbook id of the BUILT-IN DEFAULT playbook (slice 5) that `revo bootstrap` seeds out-of-the-box.
+ * Playbook id of the BUILT-IN DEFAULT playbook (slice 5) that host bootstrap seeds out-of-the-box.
  * Distinct from {@link PLAYBOOK_ID} (the e2e fixture) — Group M targets THIS to prove the shipped default.
  */
 export const DEFAULT_PLAYBOOK_ID = 'revisium-default';
@@ -28,7 +28,7 @@ export async function startDefaultFeatureRun(h: RunHarness, repo: string = proce
   const created = await h.api.createRun({
     repo,
     title: 'E2E seeded default feature-development run',
-    description: 'Group M — the bootstrap-SEEDED default pipeline on real DBOS/Revisium.',
+    description: 'Group M — the bootstrap-seeded default pipeline on real DBOS/embedded engine.',
     scope: 'seeded-default e2e',
     playbookId: DEFAULT_PLAYBOOK_ID,
     pipelineId: 'feature-development',
@@ -44,7 +44,7 @@ export async function startDefaultLocalChangeRun(h: RunHarness, repo: string = p
   const created = await h.api.createRun({
     repo,
     title: 'E2E seeded default local-change run',
-    description: 'Group M — the bootstrap-SEEDED local-change pipeline on real DBOS/Revisium.',
+    description: 'Group M — the bootstrap-seeded local-change pipeline on real DBOS/embedded engine.',
     scope: 'seeded-default e2e',
     playbookId: DEFAULT_PLAYBOOK_ID,
     pipelineId: 'local-change',
@@ -83,7 +83,7 @@ export async function givenInstalledPlaybook(h: RunHarness): Promise<void> {
 }
 
 /**
- * Ensure the BUILT-IN DEFAULT playbook (slice 5) is installed. `revo bootstrap` seeds it
+ * Ensure the BUILT-IN DEFAULT playbook (slice 5) is installed. Host bootstrap seeds it
  * out-of-the-box (so a fresh e2e control-plane already has it), but a REUSED test home that predates
  * this slice may not — so this self-heals by installing from the committed source if absent. It does
  * NOT install the e2e fixture: Group M tests the SHIPPED default, distinct from {@link PLAYBOOK_ID}.

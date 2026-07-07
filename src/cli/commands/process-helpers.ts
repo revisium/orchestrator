@@ -1,5 +1,3 @@
-
-
 import { existsSync, readFileSync } from 'node:fs';
 import { isAlive } from '../config.js';
 

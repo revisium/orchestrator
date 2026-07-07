@@ -102,7 +102,7 @@ Default local ports:
 
 | Service | Port |
 | --- | --- |
-| Revisium standalone HTTP | `19222` |
+| Revo base port | `19222` |
 | embedded Postgres | `15440` |
 | Revo GraphQL | `19223` |
 
@@ -141,8 +141,8 @@ pnpm run revo -- stop --profile dev
 
 | Knob | `default` | `dev` |
 | --- | --- | --- |
-| data dir | `~/.revisium-orchestrator` | `~/.revisium-orchestrator-dev` |
-| standalone HTTP / Postgres | `19222` / `15440` | `19622` / `15840` |
+| data dir | `~/.revo` | `~/.revo-dev` |
+| Revo base / Postgres | `19222` / `15440` | `19622` / `15840` |
 | Revo GraphQL | `19223` | `19623` |
 | DBOS database | `dbos` | `dbos_dev` |
 

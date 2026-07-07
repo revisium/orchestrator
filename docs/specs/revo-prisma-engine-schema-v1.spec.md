@@ -3,8 +3,8 @@
 - **Status:** Draft
 - **Version:** v1
 - **Owners:** Revo runtime, Prisma runtime, embedded Revisium engine integration
-- **Source files:** future `prisma/schema.prisma`, future `src/storage/**`, future `src/revisium-store/**`,
-  `revisium-engine/prisma/schema.prisma`, `revisium-core/prisma/schema.prisma`
+- **Source files:** `prisma/schema.prisma`, `src/storage/**`, `src/revisium/**`,
+  `node_modules/@revisium/engine/prisma/schema.prisma`, `revisium-core/prisma/schema.prisma`
 - **Related ADRs:** [ADR-0007](../adr/0007-revo-storage-foundation.md),
   [ADR-0008](../adr/0008-revo-projects-and-versioned-knowledge.md)
 
@@ -26,8 +26,9 @@ It does not define every final field on every runtime table.
 
 ## Current Contract
 
-Current orchestrator has no first-party `prisma/schema.prisma`. Runtime rows are currently accessed through Revisium
-data-access services, and DBOS is configured separately through `systemDatabaseUrl`.
+Current orchestrator has a first-party `prisma/schema.prisma` with Revo product rows needed for storage-v2 bootstrap
+and engine-required physical tables. Runtime rows are currently accessed through embedded engine-backed data-access
+services, and DBOS is configured separately through `systemDatabaseUrl`.
 
 `@revisium/engine` has its own Prisma schema with these core models:
 

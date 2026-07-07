@@ -61,7 +61,7 @@ export function createVersionedMeaningAccess(
   function scope(): Promise<VersionedMeaningScope> {
     if (!scopeFactory) {
       throw new ControlPlaneError(
-        'DAEMON_NOT_RUNNING',
+        'CONTROL_PLANE_NOT_AVAILABLE',
         'Engine-backed versioned-meaning scope is not available',
       );
     }

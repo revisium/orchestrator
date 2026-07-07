@@ -1,23 +1,28 @@
 import { createServer } from 'node:net';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 
-type ConfigFile = {
+export type DefaultConfig = {
   host: string;
   preferredPort: number;
   preferredPgPort: number;
-  autoDiscover: boolean;
   dataDir: string;
   org: string;
   project: string;
   branch: string;
 };
 
-
-
-
+export const DEFAULT_CONFIG = {
+  host: 'localhost',
+  preferredPort: 19222,
+  preferredPgPort: 15440,
+  dataDir: '~/.revo',
+  org: 'admin',
+  project: 'control-plane',
+  branch: 'master',
+} as const satisfies DefaultConfig;
 
 export const PROFILES = {
   default: { suffix: '', portOffset: 0, dbosDb: 'dbos', revoDb: 'revo' },
@@ -26,7 +31,7 @@ export const PROFILES = {
 
 export type ProfileName = keyof typeof PROFILES;
 
-export type RevoConfig = ConfigFile & {
+export type RevoConfig = DefaultConfig & {
   dataDir: string;
   profile: ProfileName;
   hostLogFile: string;
@@ -43,13 +48,7 @@ function expandHome(path: string): string {
   return path;
 }
 
-function loadConfig(): ConfigFile {
-  const configPath = join(repoRoot, 'revisium.config.json');
-  return JSON.parse(readFileSync(configPath, 'utf8')) as ConfigFile;
-}
-
 let cachedConfig: RevoConfig | null = null;
-
 
 function numEnv(name: string, env: NodeJS.ProcessEnv = process.env): number | undefined {
   const raw = env[name];
@@ -76,18 +75,12 @@ export type ProfileConfig = {
   preferredPgPort: number;
 };
 
-
-
-
-
 export function profileDataDir(profile: ProfileName): string {
-  return expandHome(`${loadConfig().dataDir}${PROFILES[profile].suffix}`);
+  return expandHome(`${DEFAULT_CONFIG.dataDir}${PROFILES[profile].suffix}`);
 }
 
-
-
 export function resolveProfileConfig(
-  raw: Pick<ConfigFile, 'dataDir' | 'preferredPort' | 'preferredPgPort'>,
+  raw: Pick<DefaultConfig, 'dataDir' | 'preferredPort' | 'preferredPgPort'>,
   env: NodeJS.ProcessEnv = process.env,
 ): ProfileConfig {
   const profile = resolveProfileName(env);
@@ -100,15 +93,10 @@ export function resolveProfileConfig(
   };
 }
 
-
-
-
-
-
 export function getConfig(): RevoConfig {
   if (cachedConfig) return cachedConfig;
 
-  const rawConfig = loadConfig();
+  const rawConfig = DEFAULT_CONFIG;
   const { profile, dataDir: profileDataDir, preferredPort, preferredPgPort } = resolveProfileConfig(rawConfig);
   const dataDir = expandHome(profileDataDir);
   mkdirSync(dataDir, { recursive: true });

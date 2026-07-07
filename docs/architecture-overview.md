@@ -3,7 +3,7 @@
 Read this before changing runtime behavior. It records the invariants that keep Revo understandable and
 recoverable.
 
-Storage note: this page describes the current high-level runtime model. The storage-v2 target for embedded
+Storage note: this page describes the current high-level runtime model. The storage-v2 contract for embedded
 PostgreSQL, Revo Prisma, DBOS placement, and embedded Revisium engine tables is defined by
 [ADR-0007](./adr/0007-revo-storage-foundation.md), [ADR-0008](./adr/0008-revo-projects-and-versioned-knowledge.md),
 and their linked specs.
@@ -11,9 +11,10 @@ and their linked specs.
 ## One paragraph
 
 Revo is a local NestJS host that runs software-development tasks through short-lived agents. DBOS owns durable
-progress: workflow state, retries, waits, and resume. Revisium owns meaning: playbooks, roles, pipeline
-templates, inbox rows, events, costs, and projections. MCP is the agent front door, GraphQL is the UI/script front
-door, and the CLI manages the daemon lifecycle.
+progress: workflow state, retries, waits, and resume. Revo owns product storage through Prisma and uses the embedded
+Revisium engine for versioned control-plane meaning: playbooks, roles, pipeline templates, inbox rows, events, costs,
+and projections. MCP is the agent front door, GraphQL is the UI/script front door, and the CLI manages the daemon
+lifecycle.
 
 ```mermaid
 flowchart LR
@@ -60,28 +61,28 @@ Different playbooks can define different flows without changing the engine.
         |
 [ NestJS host daemon ]  product services, MCP, GraphQL, runners
         |
-[ DBOS ]                durable progress and replay
+[ Revo storage ]        Revo Prisma product DB + embedded Revisium engine tables
         |
-[ Revisium ]            meaning, projections, inbox, events, costs
+[ DBOS ]                durable progress and replay
         |
 [ Execution ]           short-lived Claude/Codex/script/integrator processes in target repos
 ```
 
 The runtime stack is an implementation of the model above: front doors accept commands, the host resolves meaning,
-the engine persists progress, Revisium stores product state, and runners perform external work.
+Revo storage persists product/control-plane state, DBOS persists workflow progress, and runners perform external work.
 
 ## Invariants
 
-1. **Progress and meaning are split.** DBOS owns live workflow progress. Revisium owns product meaning and
+1. **Progress and meaning are split.** DBOS owns live workflow progress. Revo storage owns product meaning and
    runtime projections. Do not use local files or process memory as durable state.
 2. **The engine boundary is thin.** DBOS-specific behavior stays in the engine adapter and host lifecycle. Roles,
-   runners, and Revisium data access should not depend on DBOS internals.
+   runners, and embedded engine data access should not depend on DBOS internals.
 3. **Pipelines are data.** The pipeline shape is a versioned graph template interpreted by `pipeline-core` and
    executed by the DBOS adapter.
 4. **Agents are short-lived.** A runner starts for one step and exits. Continuing work means starting a new
    process with current state, not reviving a session.
-5. **Store knowledge is sealed.** Revisium table structure stays inside data-access services. DBOS tables are not
-   queried directly by product code.
+5. **Store knowledge is sealed.** Embedded engine table structure stays inside data-access services. DBOS tables are
+   not queried directly by product code.
 6. **Human decisions are state changes.** Approvals and answers resolve inbox rows and signal the parked workflow;
    they do not command agents directly.
 
