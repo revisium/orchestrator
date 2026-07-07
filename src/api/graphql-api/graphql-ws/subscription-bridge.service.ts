@@ -14,12 +14,9 @@ import {
   controlPlaneNotificationDatabaseUrl,
   type ControlPlaneChange,
 } from '../../../control-plane/change-notifications.js';
-import {
-  createControlPlaneDataAccessForTransport,
-  type ControlPlaneDataAccess,
-  type ControlPlaneTransport,
-} from '../../../control-plane/data-access.js';
-import { REVISIUM_TRANSPORT_DRAFT } from '../../../revisium/tokens.js';
+import type { ControlPlaneDataAccess } from '../../../control-plane/data-access.js';
+import { createPrismaRuntimeDataAccess } from '../../../run/prisma-runtime-data-access.js';
+import { RevoPrismaService } from '../../../storage/revo-prisma.service.js';
 import {
   APP_PUB_SUB,
   INBOX_ITEM_ADDED_TOPIC,
@@ -43,14 +40,14 @@ export class ControlPlaneSubscriptionBridge
 {
   private readonly logger = new Logger(ControlPlaneSubscriptionBridge.name);
   private client: pg.Client | null = null;
-  private draftDataAccess?: ControlPlaneDataAccess;
+  private runtimeDataAccess?: ControlPlaneDataAccess;
 
   constructor(
     @Inject(APP_PUB_SUB) private readonly pubSub: PubSub,
     @Inject(RunsApiService) private readonly runsApi: RunsApiService,
     @Optional()
-    @Inject(REVISIUM_TRANSPORT_DRAFT)
-    private readonly draftTransport?: ControlPlaneTransport,
+    @Inject(RevoPrismaService)
+    private readonly prisma?: RevoPrismaService,
   ) {}
 
   async onModuleInit() {
@@ -135,11 +132,9 @@ export class ControlPlaneSubscriptionBridge
   }
 
   private dataAccess(): ControlPlaneDataAccess | undefined {
-    if (!this.draftTransport) return undefined;
-    this.draftDataAccess ??= createControlPlaneDataAccessForTransport(
-      this.draftTransport,
-    );
-    return this.draftDataAccess;
+    if (!this.prisma) return undefined;
+    this.runtimeDataAccess ??= createPrismaRuntimeDataAccess(this.prisma);
+    return this.runtimeDataAccess;
   }
 
   private async withRehydratedRow(

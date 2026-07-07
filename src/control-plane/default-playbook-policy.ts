@@ -18,8 +18,6 @@ export const DEFAULT_PLAYBOOK_POLICY_DIAGNOSTIC_CODES = [
   'DEFAULT_POLICY_CONFIRM_MERGE_FAILURE_TERMINAL',
   'DEFAULT_POLICY_POST_MERGE_CLEANUP_MISSING',
   'DEFAULT_POLICY_GATE_OUTCOMES_IMPLICIT',
-  'DEFAULT_POLICY_VARIANT_POLICY_GAP',
-  'DEFAULT_POLICY_VARIANT_PARITY_DRIFT',
 ] as const;
 
 export type DefaultPlaybookPolicyDiagnosticCode =
@@ -48,13 +46,9 @@ type RouteExpectation = readonly [verdict: string, target: string];
 
 export const POLICY_VERSION = '1';
 
-const SUPPORTED_PIPELINE_IDS = ['feature-development', 'feature-development-codex-consensus'] as const;
+const SUPPORTED_PIPELINE_IDS = ['feature-development'] as const;
 const POLL_LOOP_SCOPE = 'pollLoop';
 const POLL_LOOP_CAP = 8;
-
-// #242 reconciled: codex variant now matches canonical shape exactly (fanout/join delta only).
-// Empty by design — validateVariantParity on the materialized codex graph must return [].
-const CODEX_LEGACY_WAIVERS: readonly DefaultPlaybookPolicyDiagnosticCode[] = [] as const;
 
 class PolicySink {
   readonly diagnostics: DefaultPlaybookPolicyDiagnostic[] = [];
@@ -105,35 +99,6 @@ export function validateDefaultPlaybookPolicy(
   checkConfirmMergeFailureRecoverable(template, sink);
   checkPostMergeCleanup(template, sink);
   checkGateOutcomesExplicit(template, sink);
-
-  return sink.diagnostics;
-}
-
-export function validateVariantParity(template: Template): DefaultPlaybookPolicyDiagnostic[] {
-  const sink = new PolicySink(template.pipelineId);
-
-  const actualCodes = new Set(validateDefaultPlaybookPolicy(template).map((d) => d.code));
-  const waivedCodes = new Set<DefaultPlaybookPolicyDiagnosticCode>(CODEX_LEGACY_WAIVERS);
-
-  for (const code of actualCodes) {
-    if (!waivedCodes.has(code)) {
-      sink.error(
-        'DEFAULT_POLICY_VARIANT_POLICY_GAP',
-        `codex variant fires ${code} but it is not listed in CODEX_LEGACY_WAIVERS`,
-        { expected: 'code listed in CODEX_LEGACY_WAIVERS', actual: code },
-      );
-    }
-  }
-
-  const actualSorted = [...actualCodes].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).join(',');
-  const waivedSorted = [...waivedCodes].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)).join(',');
-  if (actualSorted !== waivedSorted) {
-    sink.error(
-      'DEFAULT_POLICY_VARIANT_PARITY_DRIFT',
-      'codex variant violation set differs from CODEX_LEGACY_WAIVERS',
-      { expected: waivedSorted, actual: actualSorted },
-    );
-  }
 
   return sink.diagnostics;
 }

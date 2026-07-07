@@ -33,7 +33,7 @@ export type RecordTerminalParams = {
 };
 
 function runIdWhere(runId: string): ListRowsOptions['where'] {
-  return { data: { path: 'run_id', equals: runId as unknown as Record<string, unknown> } };
+  return { data: { path: 'run_id', equals: runId } };
 }
 
 async function runBounded<T>(

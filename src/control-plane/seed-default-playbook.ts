@@ -41,22 +41,6 @@ export type DefaultPlaybookInstaller = {
 
 
 
-function compareSemver(a: string, b: string): number {
-  const parse = (v: string) => v.split('.').map((part) => Number.parseInt(part, 10) || 0);
-  const left = parse(a);
-  const right = parse(b);
-  const length = Math.max(left.length, right.length);
-  for (let i = 0; i < length; i += 1) {
-    const diff = (left[i] ?? 0) - (right[i] ?? 0);
-    if (diff !== 0) return diff;
-  }
-  return 0;
-}
-
-
-
-
-
 function isBenignInstallRace(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
   return /revision is not a draft|nothing to commit|ROW_CONFLICT/i.test(message);
@@ -109,20 +93,7 @@ export async function seedDefaultPlaybook(
       }
       log(`Default playbook ${DEFAULT_PLAYBOOK_ID} content changed (hash mismatch) — re-seeding.`);
     } else {
-      const bundledVersion = resolvePlaybookSource(source).version;
-      const installedVersion = existing.version ?? '';
-      const comparison = compareSemver(bundledVersion, installedVersion || '0.0.0');
-      if (comparison <= 0) {
-        log(
-          `Default playbook ${DEFAULT_PLAYBOOK_ID} up to date ` +
-            `(installed ${installedVersion || '(none)'} >= bundled ${bundledVersion}) — skipping seed.`,
-        );
-        return { status: 'already-installed' };
-      }
-      log(
-        `Default playbook ${DEFAULT_PLAYBOOK_ID} bundle is newer ` +
-          `(installed ${installedVersion || '(none)'} -> bundled ${bundledVersion}) — re-seeding.`,
-      );
+      log(`Default playbook ${DEFAULT_PLAYBOOK_ID} has no catalog hash — re-seeding.`);
     }
   }
   try {
@@ -147,7 +118,7 @@ export async function seedDefaultPlaybookBestEffort(
       const { result } = outcome;
       log(
         `Seeded default playbook ${result.playbookId} ` +
-          `(${result.roles} roles, ${result.pipelines} pipelines).`,
+          `(${result.roles} roles, ${result.pipelines} pipelines, ${result.runProfiles} run profiles).`,
       );
     } else if (outcome.status === 'already-installed') {
       log('Default playbook already installed — skipping seed.');

@@ -1,30 +1,31 @@
-# Revisium data-access contract
+# Revo data-access contract
 
-The Revisium data-access layer is the only code that should know control-plane table shapes. Transport adapters
-such as MCP and GraphQL call product services; product services call this layer.
+Product services hide storage details from transport adapters. MCP and GraphQL call product services; product services
+call Revisium meaning access for versioned control-plane rows and Prisma-backed services for runtime rows.
 
 ## Boundary
 
 - Versioned meaning reads use committed `head`.
-- Runtime writes use draft and are never committed.
+- Runtime writes use Prisma transactions and are never committed as Revisium revisions.
 - DBOS progress is accessed through the engine adapter, not through Revisium tables.
-- Consumers receive domain objects, not raw Revisium row payloads.
+- Consumers receive domain objects, not raw Revisium or Prisma payloads.
 
 ## Meaning reads
 
 - `loadRole` and role listing read committed role definitions.
 - `loadPipeline` and pipeline listing read committed pipeline definitions.
 - `loadPlaybook` and playbook listing read committed playbook metadata.
+- `listRunProfiles` and `resolveRunProfile` read committed run profile definitions.
 - `loadModelProfile` reads committed model profile mapping.
 - Routing policy reads committed policy rows.
 
 ## Runtime writes and reads
 
-- Runs and tasks are runtime projections in draft.
-- Events are append-only draft rows.
-- Inbox items are draft rows that represent human decisions.
-- Attempts and costs are runtime provenance/accounting.
-- Run outputs are runtime draft data used for step-to-step dataflow.
+- Runs and tasks are Prisma runtime rows.
+- Events are append-only Prisma rows.
+- Inbox items are Prisma rows that represent human decisions.
+- Attempts and costs are Prisma runtime provenance/accounting.
+- Run outputs are Prisma runtime data used for step-to-step dataflow.
 
 ## Revision rules
 
@@ -38,6 +39,7 @@ such as MCP and GraphQL call product services; product services call this layer.
 MCP and GraphQL must remain thin:
 
 - no raw Revisium table access;
+- no raw Prisma model access from transports;
 - no DBOS table access;
 - no duplicate lifecycle logic;
 - stable error mapping at the service/transport boundary.

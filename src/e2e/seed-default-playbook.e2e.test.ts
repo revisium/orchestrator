@@ -22,8 +22,8 @@ import { validateTemplate } from '../pipeline-core/index.js';
 //
 // Distinct from Groups A–L, which install the e2e FIXTURE playbook (`revisium-agent-playbook`). This
 // group proves the SHIPPED DEFAULT: a fresh host bootstrap seeds `revisium-default` (committed under
-// control-plane/default-playbook/) so the control-plane has working `feature-development`,
-// `feature-development-codex-consensus`, and `local-change` pipelines out-of-the-box — no external
+// control-plane/default-playbook/) so the control-plane has working `feature-development` and
+// `local-change` pipelines plus feature-development run profiles out-of-the-box — no external
 // agent-playbook repo, no fixture override.
 //
 // The bootstrap in scripts/e2e-setup.ts already seeds the default; givenSeededDefaultPlaybook only
@@ -51,7 +51,7 @@ test('M0: the bootstrap-seeded default playbook + pipelines are present and vali
 
   // Seeded pipelines exist under the default playbook and carry a data-driven template that
   // passes the AUTHORITATIVE validator (pipeline-core.validateTemplate) with zero errors.
-  for (const pipelineId of ['feature-development', 'feature-development-codex-consensus', 'local-change']) {
+  for (const pipelineId of ['feature-development', 'local-change']) {
     const route = (await h.api.simulateRoute({
       title: 'route',
       pipeline: pipelineId,
@@ -62,22 +62,19 @@ test('M0: the bootstrap-seeded default playbook + pipelines are present and vali
       executionPolicy: { template_json?: { specVersion?: string; nodes?: Record<string, unknown> } };
     };
     assert.equal(route.pipelineId, pipelineId);
-    if (pipelineId === 'feature-development-codex-consensus') {
-      assert.deepEqual(route.roles, [
-        'orchestrator',
-        'analyst',
-        'reviewer',
-        'triager',
-        'developer',
-        'integrator',
-        'watcher',
-      ]);
-    }
     const template = route.executionPolicy.template_json;
     assert.ok(template?.specVersion === '1.0' && template.nodes, `${pipelineId} carries a state-machine template`);
     const errors = validateTemplate(template as never).filter((d) => d.severity === 'error');
     assert.deepEqual(errors, [], `seeded ${pipelineId} template must validate with no errors`);
   }
+
+  const profiles = await h.api.listProfiles({ playbookId: DEFAULT_PLAYBOOK_ID, pipelineId: 'feature-development' });
+  assert.deepEqual(profiles.map((profile) => profile.profileId).sort(), [
+    'claude-primary-codex-review-consensus',
+    'claude-standard',
+    'codex-primary-claude-review-consensus',
+    'codex-standard',
+  ]);
 });
 
 test('M0b: the seeded default is distinct from the e2e fixture playbook', { skip: e2eSkip }, async () => {
@@ -119,8 +116,9 @@ test('M1b: a seeded Codex consensus run executes both plan and code reviewer bra
     description: 'Group M — Codex-bound default feature pipeline with plan + code consensus.',
     scope: 'seeded-default codex consensus e2e',
     playbookId: DEFAULT_PLAYBOOK_ID,
-    pipelineId: 'feature-development-codex-consensus',
-    executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent', 'revo-integrator': 'stub-agent' } },
+    pipelineId: 'feature-development',
+    profileId: 'codex-primary-claude-review-consensus',
+    executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent', codex: 'stub-agent', 'revo-integrator': 'stub-agent' } },
     start: true,
   });
   if (!('workflow' in run)) throw new Error('start:true must return workflow metadata');

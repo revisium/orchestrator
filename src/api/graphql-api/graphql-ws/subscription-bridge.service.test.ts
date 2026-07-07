@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { ControlPlaneChange } from '../../../control-plane/change-notifications.js';
-import type { ControlPlaneTransport } from '../../../control-plane/data-access.js';
+import type { ControlPlaneDataAccess } from '../../../control-plane/data-access.js';
+import { createInMemoryRuntimeDataAccess } from '../../../testing/runtime-data-access.js';
 import {
   INBOX_ITEM_ADDED_TOPIC,
   INBOX_ITEM_RESOLVED_TOPIC,
@@ -188,68 +189,43 @@ test('ControlPlaneSubscriptionBridge rehydrates omitted rows before publishing r
     },
   };
   const base = { createdAt: '2026-06-20T10:00:00.000Z' };
-  const rows = new Map([
-    [
-      'events/event_omitted',
-      {
+  const runtime = createInMemoryRuntimeDataAccess({
+    events: {
+      event_omitted: {
         id: 'event_omitted',
-        data: {
-          run_id: 'run_2',
-          type: 'run_created',
-          actor: 'test',
-          created_at: base.createdAt,
-          task_id: 'task_2',
-          step_id: '',
-          payload: JSON.stringify({ ok: true }),
-        },
+        run_id: 'run_2',
+        type: 'run_created',
+        actor: 'test',
+        created_at: base.createdAt,
+        task_id: 'task_2',
+        step_id: '',
+        payload: { ok: true },
       },
-    ],
-    [
-      'inbox/inbox_omitted',
-      {
+    },
+    inbox: {
+      inbox_omitted: {
         id: 'inbox_omitted',
-        data: {
-          run_id: 'run_2',
-          kind: 'approval',
-          title: 'Approve',
-          status: 'resolved',
-          created_at: base.createdAt,
-          resolved_at: base.createdAt,
-          context: JSON.stringify({ runId: 'run_2' }),
-          answer: JSON.stringify({ approved: true }),
-        },
+        run_id: 'run_2',
+        kind: 'approval',
+        title: 'Approve',
+        status: 'resolved',
+        created_at: base.createdAt,
+        resolved_at: base.createdAt,
+        context: { runId: 'run_2' },
+        answer: { approved: true },
+        options: [],
       },
-    ],
-  ]);
-  const draftTransport: ControlPlaneTransport = {
-    mode: 'draft',
-    async assertReady() {},
-    async listRows() {
-      return { edges: [] };
     },
-    async getRow(table, rowId) {
-      const row = rows.get(`${table}/${rowId}`);
-      if (!row)
-        throw Object.assign(new Error('not found'), { statusCode: 404 });
-      return row;
-    },
-    async createRow() {
-      throw new Error('unexpected createRow');
-    },
-    async updateRow() {
-      throw new Error('unexpected updateRow');
-    },
-    async patchRow() {
-      throw new Error('unexpected patchRow');
-    },
-  };
+  });
   const bridge = new ControlPlaneSubscriptionBridge(
     pubSub as never,
     runsApi as never,
-    draftTransport,
+    {} as never,
   ) as unknown as {
     handleNotification(payload: string): Promise<void>;
+    runtimeDataAccess?: ControlPlaneDataAccess;
   };
+  bridge.runtimeDataAccess = runtime.access;
 
   await bridge.handleNotification(
     JSON.stringify({

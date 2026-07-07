@@ -87,7 +87,7 @@ function makeCodeReviewToggle(): TopologyProfile['toggles'][number] {
 
 function makeConsensusProfile(): TopologyProfile {
   return {
-    profileId: 'codex-consensus',
+    profileId: 'review-consensus',
     pipelineId: 'synthetic',
     toggles: [makePlanReviewerToggle(), makeCodeReviewToggle()],
   };
@@ -177,7 +177,7 @@ test('materialize: unknown toggle key → MATERIALIZE_UNKNOWN_PROFILE_KEY', () =
 // ─── unknown profile ──────────────────────────────────────────────────────────
 
 test('materialize: profile pipelineId mismatch → MATERIALIZE_UNKNOWN_PROFILE', () => {
-  const profile: TopologyProfile = { profileId: 'codex-consensus', pipelineId: 'other-pipeline', toggles: [] };
+  const profile: TopologyProfile = { profileId: 'review-consensus', pipelineId: 'other-pipeline', toggles: [] };
   const { diagnostics } = materializeTemplate(makeBase(), profile, { allowlist: ALLOWLIST });
   const codes = diagnostics.map((d) => d.code);
   assert.ok(codes.includes('MATERIALIZE_UNKNOWN_PROFILE'), `expected MATERIALIZE_UNKNOWN_PROFILE; got: ${codes.join(', ')}`);

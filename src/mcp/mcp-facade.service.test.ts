@@ -285,6 +285,42 @@ test('McpFacadeService pipeline tools can include execution policy details when 
   assert.equal(await facade.getPipeline({ pipelineId: 'pb-feature-development', includeDetails: true }), pipeline);
 });
 
+test('McpFacadeService.listProfiles passes includeDeprecated to storage-backed API', async () => {
+  const calls: unknown[] = [];
+  const profile = {
+    profileId: 'old-profile',
+    playbookId: 'pb',
+    pipelineId: 'feature-development',
+    version: '1',
+    displayName: 'Old profile',
+    summary: 'Deprecated profile',
+    profileHash: 'hash',
+    status: 'deprecated',
+    profile: { bindings: { slots: {} } },
+  };
+  const api = {
+    async listProfiles(input: unknown) {
+      calls.push(input);
+      return [profile];
+    },
+  } as unknown as TaskControlPlaneApiService;
+  const facade = new McpFacadeService(api);
+
+  const result = await facade.listProfiles({ pipelineId: 'feature-development', includeDeprecated: true });
+
+  assert.deepEqual(calls, [{ pipelineId: 'feature-development', includeDeprecated: true }]);
+  assert.deepEqual(result, [{
+    profileId: 'old-profile',
+    playbookId: 'pb',
+    pipelineId: 'feature-development',
+    version: '1',
+    displayName: 'Old profile',
+    summary: 'Deprecated profile',
+    profileHash: 'hash',
+    status: 'deprecated',
+  }]);
+});
+
 test('McpFacadeService.simulateRoute returns a compact default response without the full route graph', async () => {
   const route = {
     playbookId: 'pb',

@@ -9,6 +9,13 @@
  * 🟢 You can import this file directly.
  */
 export type * from './models/RevoProject.js'
+export type * from './models/TaskRun.js'
+export type * from './models/RunTask.js'
+export type * from './models/RunEvent.js'
+export type * from './models/RunAttempt.js'
+export type * from './models/InboxItem.js'
+export type * from './models/RunOutput.js'
+export type * from './models/CostLedgerEntry.js'
 export type * from './models/Branch.js'
 export type * from './models/Revision.js'
 export type * from './models/Table.js'

@@ -1,5 +1,5 @@
 import { Injectable, Inject } from '@nestjs/common';
-import type { ControlPlaneTransport } from '../control-plane/data-access.js';
+import type { ControlPlaneTransport } from '../control-plane/transport.js';
 import { loadRole, loadModelProfile, loadPipelinePolicy, toOptPosInt, type Role, type ModelProfile, type PipelinePolicy } from '../control-plane/definitions.js';
 import { REVISIUM_TRANSPORT_HEAD } from './tokens.js';
 

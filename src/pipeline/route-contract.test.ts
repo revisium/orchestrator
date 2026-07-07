@@ -4,6 +4,7 @@ import {
   normalizeExecutionProfile,
   resolveBindingForRole,
   resolveLaunchOverrides,
+  resolveRunnerForRole,
   RUNNER_PERMISSION_MODES,
   type ExecutionProfile,
   type RouteRoleBinding,
@@ -133,6 +134,30 @@ test('resolveBindingForRole: roleId match wins over runnerId match', () => {
   assert.equal(result.resolvedModelLevel, 'deep');
 });
 
+test('resolveBindingForRole: later roleId match wins over earlier profile defaults', () => {
+  const profile = makeProfile({
+    bindingOverrides: [
+      { match: { roleId: 'analyst' }, modelLevel: 'deep' },
+      { match: { roleId: 'analyst' }, modelLevel: 'standard' },
+    ],
+  });
+  const role = { modelLevel: 'cheap' };
+  const result = resolveBindingForRole(role, 'analyst', 'claude-code', profile);
+  assert.equal(result.resolvedModelLevel, 'standard');
+});
+
+test('resolveRunnerForRole: role binding runnerId overrides playbook runner and still honors runnerOverrides', () => {
+  const profile = makeProfile({
+    runnerOverrides: { codex: 'stub-agent' },
+    bindingOverrides: [{ match: { roleId: 'developer' }, runnerId: 'codex' }],
+  });
+
+  const result = resolveRunnerForRole('claude-code', 'developer', profile);
+
+  assert.equal(result.runnerId, 'stub-agent');
+  assert.equal(result.source, 'execution-profile');
+});
+
 test('resolveBindingForRole: partial override - only overridden axes get execution-profile source', () => {
   const profile = makeProfile({
     bindingOverrides: [{ match: { roleId: 'analyst' }, timeoutMs: 90000 }],
@@ -210,6 +235,31 @@ test('resolveLaunchOverrides: nodeId match wins over binding per-role values', (
   assert.ok(result !== undefined);
   assert.equal(result?.modelLevel, 'cheap');
   assert.equal(result?.timeoutMs, 30000);
+});
+
+test('resolveLaunchOverrides: later nodeId override wins over stored profile defaults', () => {
+  const profile = makeProfile({
+    bindingOverrides: [
+      { match: { nodeId: 'n1' }, runnerId: 'codex', modelLevel: 'codex-standard' },
+      { match: { nodeId: 'n1' }, runnerId: 'claude-code', modelLevel: 'deep' },
+    ],
+  });
+  const result = resolveLaunchOverrides(makeBinding(), 'n1', profile);
+
+  assert.equal(result?.runnerId, 'claude-code');
+  assert.equal(result?.modelLevel, 'deep');
+});
+
+test('resolveLaunchOverrides: nodeId runner override still honors runnerOverrides', () => {
+  const profile = makeProfile({
+    runnerOverrides: { codex: 'stub-agent' },
+    bindingOverrides: [{ match: { nodeId: 'codeReviewPrimary' }, runnerId: 'codex', modelLevel: 'codex-deep' }],
+  });
+
+  const result = resolveLaunchOverrides(makeBinding(), 'codeReviewPrimary', profile);
+
+  assert.equal(result?.runnerId, 'stub-agent');
+  assert.equal(result?.modelLevel, 'codex-deep');
 });
 
 test('RUNNER_PERMISSION_MODES: claude-code has expected modes', () => {

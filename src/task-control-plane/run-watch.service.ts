@@ -84,7 +84,7 @@ export type WatchRunChangesInput = {
 
 export type RunStateSource = {
   resolveRunState(runId: string): Promise<RunState>;
-  listRuns(filter?: { status?: string; limit?: number }): Promise<Array<{ runId: string; status: string }>>;
+  listRuns(filter?: { status?: string; statuses?: string[]; limit?: number }): Promise<Array<{ runId: string; status: string }>>;
   getAgentActivity?(runId: string): Promise<AgentRunActivity | null>;
 };
 
@@ -111,7 +111,7 @@ const WATCH_TRANSITION_STATES: ReadonlySet<RunState['state']> = new Set([
   'blocked',
   'retrying',
 ]);
-const TERMINAL_RUN_STATUS: ReadonlySet<string> = new Set(['completed', 'failed', 'cancelled']);
+const NON_TERMINAL_RUN_STATUSES = ['ready', 'running', 'paused'];
 const REQUIRES_ATTENTION: ReadonlySet<RunAttentionNextAction> = new Set(['start_run', 'ask_human', 'inspect_digest', 'inspect_log']);
 
 const MAX_CURSOR_ENTRIES = 200;
@@ -355,11 +355,8 @@ export class RunWatchService {
       }
       return [...new Set(provided)];
     }
-    const runs = await this.api.listRuns({});
-    return runs
-      .filter((run) => !TERMINAL_RUN_STATUS.has(run.status))
-      .map((run) => run.runId)
-      .slice(0, MAX_RUN_IDS);
+    const runs = await this.api.listRuns({ statuses: NON_TERMINAL_RUN_STATUSES, limit: MAX_RUN_IDS });
+    return runs.map((run) => run.runId);
   }
 
   private sweep(runIds: string[]): Promise<RunState[]> {

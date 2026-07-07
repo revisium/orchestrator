@@ -5,7 +5,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import type { ControlPlaneTransport, TransportRow } from '../control-plane/data-access.js';
+import type { ControlPlaneTransport, TransportRow } from '../control-plane/transport.js';
 import { ControlPlaneError } from '../control-plane/errors.js';
 import { REVISIUM_TRANSPORT_HEAD } from './tokens.js';
 import { RolesService } from './roles.service.js';

@@ -5,7 +5,8 @@
   "package": "@revisium/orchestrator-default-playbook",
   "catalogs": {
     "roles": "catalog/roles.json",
-    "pipelines": "catalog/pipelines.json"
+    "pipelines": "catalog/pipelines.json",
+    "runProfiles": "catalog/run-profiles.json"
   },
   "supported_runtimes": [
     "revo"

@@ -11,6 +11,7 @@ export type BindingOverride = {
 };
 
 export type LaunchOverrides = {
+  runnerId?: string;
   modelLevel?: string;
   timeoutMs?: number;
   permissionMode?: string;
@@ -58,10 +59,23 @@ export type RouteDecision = {
   profileId?: string;
   profileVersion?: string;
   profileHash?: string;
+  profileSnapshot?: unknown;
   materializedTemplateHash?: string;
+  materializedTemplate?: unknown;
   materializerVersion?: string;
   policyVersion?: string;
 };
+
+function findLastBindingOverride(
+  overrides: BindingOverride[],
+  predicate: (override: BindingOverride) => boolean,
+): BindingOverride | undefined {
+  for (let index = overrides.length - 1; index >= 0; index -= 1) {
+    const override = overrides[index]!;
+    if (predicate(override)) return override;
+  }
+  return undefined;
+}
 
 export const RUNNER_PERMISSION_MODES: Record<string, string[]> = {
   'claude-code': ['default', 'acceptEdits', 'plan', 'bypassPermissions'],
@@ -177,6 +191,24 @@ export function resolveRunnerForProfile(
   return { runnerId, source: 'playbook' };
 }
 
+export function resolveRunnerForRole(
+  runnerId: string,
+  roleId: string,
+  executionProfile: ExecutionProfile,
+): { runnerId: string; source: RouteRoleBinding['runnerSource'] } {
+  const overrides = executionProfile.bindingOverrides ?? [];
+  const roleLevel = findLastBindingOverride(overrides, (override) =>
+    override.match.roleId === roleId && !override.match.nodeId && override.runnerId !== undefined,
+  );
+  if (roleLevel?.runnerId) {
+    return {
+      runnerId: executionProfile.runnerOverrides[roleLevel.runnerId] ?? roleLevel.runnerId,
+      source: 'execution-profile',
+    };
+  }
+  return resolveRunnerForProfile(runnerId, executionProfile);
+}
+
 type RoleForBinding = {
   modelLevel: string;
   timeoutMs?: number;
@@ -196,8 +228,8 @@ function overridesForRole(roleId: string, resolvedRunnerId: string, overrides: B
   roleLevel: BindingOverride | undefined;
   runnerLevel: BindingOverride | undefined;
 } {
-  const roleLevel = overrides.find((o) => o.match.roleId === roleId && !o.match.nodeId);
-  const runnerLevel = overrides.find((o) => o.match.runnerId === resolvedRunnerId && !o.match.nodeId && !o.match.roleId);
+  const roleLevel = findLastBindingOverride(overrides, (o) => o.match.roleId === roleId && !o.match.nodeId);
+  const runnerLevel = findLastBindingOverride(overrides, (o) => o.match.runnerId === resolvedRunnerId && !o.match.nodeId && !o.match.roleId);
   return { roleLevel, runnerLevel };
 }
 
@@ -238,9 +270,9 @@ export function resolveLaunchOverrides(
   executionProfile: ExecutionProfile,
 ): LaunchOverrides | undefined {
   const overrides = executionProfile.bindingOverrides ?? [];
-  const nodeMatches = overrides.filter((o) => o.match.nodeId === nodeId);
+  const nodeOverride = findLastBindingOverride(overrides, (o) => o.match.nodeId === nodeId);
 
-  if (nodeMatches.length === 0) {
+  if (!nodeOverride) {
     const hasAny =
       binding.resolvedModelLevel !== undefined ||
       binding.resolvedTimeoutMs !== undefined ||
@@ -253,8 +285,11 @@ export function resolveLaunchOverrides(
     return Object.keys(lo).length > 0 ? lo : undefined;
   }
 
-  const nodeOverride = nodeMatches[0]!;
   const lo: LaunchOverrides = {};
+
+  if (nodeOverride.runnerId) {
+    lo.runnerId = executionProfile.runnerOverrides[nodeOverride.runnerId] ?? nodeOverride.runnerId;
+  }
 
   const modelLevel = nodeOverride.modelLevel ?? (binding.modelSource === 'execution-profile' ? binding.resolvedModelLevel : undefined);
   if (modelLevel) lo.modelLevel = modelLevel;

@@ -45,6 +45,41 @@ export { Prisma }
  */
 export type RevoProject = Prisma.RevoProjectModel
 /**
+ * Model TaskRun
+ * 
+ */
+export type TaskRun = Prisma.TaskRunModel
+/**
+ * Model RunTask
+ * 
+ */
+export type RunTask = Prisma.RunTaskModel
+/**
+ * Model RunEvent
+ * 
+ */
+export type RunEvent = Prisma.RunEventModel
+/**
+ * Model RunAttempt
+ * 
+ */
+export type RunAttempt = Prisma.RunAttemptModel
+/**
+ * Model InboxItem
+ * 
+ */
+export type InboxItem = Prisma.InboxItemModel
+/**
+ * Model RunOutput
+ * 
+ */
+export type RunOutput = Prisma.RunOutputModel
+/**
+ * Model CostLedgerEntry
+ * 
+ */
+export type CostLedgerEntry = Prisma.CostLedgerEntryModel
+/**
  * Model Branch
  * 
  */

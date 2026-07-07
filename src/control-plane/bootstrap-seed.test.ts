@@ -20,6 +20,7 @@ import { fileURLToPath } from 'node:url';
 import { loadRole, loadModelProfile, loadPipelinePolicy } from './definitions.js';
 import type { ControlPlaneTransport } from './transport.js';
 import type { TransportRow } from './transport.js';
+import { controlPlaneMeaningTables, runtimeTables } from './tables.js';
 
 // ---------------------------------------------------------------------------
 // Load the real seed file the same way bootstrap.ts does:
@@ -154,9 +155,6 @@ test('seed: referential integrity — each required role model_level has a match
 });
 
 // ---------------------------------------------------------------------------
-// 0008 #5: params-as-data — roles carry timeout_ms/permission_mode; routing_policy
-// holds the pipeline limits; attempts schema carries the observability fields.
-// ---------------------------------------------------------------------------
 test('seed (0008 #5): roles schema declares timeout_ms + permission_mode', () => {
   const props = tableProps('roles');
   assert.ok('timeout_ms' in props, 'roles.timeout_ms must be declared');
@@ -167,20 +165,20 @@ test('seed (0009): playbook import schema is declared as versioned meaning', () 
   const playbooks = tableProps('playbooks');
   const pipelines = tableProps('pipelines');
   const roles = tableProps('roles');
+  const runProfiles = tableProps('run_profiles');
 
-  for (const field of ['source', 'version', 'schema_version', 'catalog_hash']) {
+  for (const field of ['source', 'version', 'schema_version', 'catalog_hash', 'run_profiles_catalog_path']) {
     assert.ok(field in playbooks, `playbooks.${field} must be declared`);
   }
-  for (const field of ['playbook_id', 'pipeline_id', 'execution_policy_json']) {
+  for (const field of ['playbook_id', 'pipeline_id', 'execution_policy_json', 'status', 'retired_at']) {
     assert.ok(field in pipelines, `pipelines.${field} must be declared`);
   }
-  for (const field of ['playbook_id', 'playbook_role_id', 'source_path', 'source_hash', 'surface', 'rights']) {
+  for (const field of ['playbook_id', 'playbook_role_id', 'source_path', 'source_hash', 'surface', 'rights', 'status', 'retired_at']) {
     assert.ok(field in roles, `roles.${field} must be declared`);
   }
   assert.ok('runner_id' in roles, 'roles.runner_id must be declared');
-  const taskRuns = tableProps('task_runs');
-  for (const field of ['playbook_id', 'pipeline_id', 'params', 'route_decision', 'execution_profile']) {
-    assert.ok(field in taskRuns, `task_runs.${field} must be declared`);
+  for (const field of ['playbook_id', 'pipeline_id', 'profile_id', 'profile_json', 'profile_hash', 'status', 'retired_at']) {
+    assert.ok(field in runProfiles, `run_profiles.${field} must be declared`);
   }
 });
 
@@ -218,19 +216,13 @@ test('seed (0008 #5): loadPipelinePolicy falls back to defaults when the row is 
   assert.equal(policy.maxAttempts, 3);
 });
 
-test('seed (0008 #4): attempts schema declares the observability fields', () => {
-  const props = tableProps('attempts');
-  for (const field of [
-    'iteration',
-    'verdict',
-    'cost_amount',
-    'duration_ms',
-    'output_summary',
-    'artifact_ref',
-    'stdout_tail',
-    'stderr_tail',
-  ]) {
-    assert.ok(field in props, `attempts.${field} must be declared for observability`);
+test('seed: bootstrap declares control-plane meaning tables only', () => {
+  const tableIds = new Set(seedTables.map((table) => table.id));
+  for (const tableId of controlPlaneMeaningTables) {
+    assert.ok(tableIds.has(tableId), `${tableId} must be declared`);
+  }
+  for (const tableId of runtimeTables) {
+    assert.ok(!tableIds.has(tableId), `${tableId} must not be declared in Revisium bootstrap`);
   }
 });
 

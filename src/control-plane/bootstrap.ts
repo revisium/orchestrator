@@ -13,6 +13,7 @@ import {
   ensureControlPlaneProject,
 } from './engine-transport.js';
 import type { ControlPlaneTransport } from './transport.js';
+import { validateBootstrapJsonFields } from './bootstrap-json-validator.js';
 
 type BootstrapRow = { tableId: string; rowId: string; data: Record<string, unknown> };
 type BootstrapTable = { id: string; schema: Record<string, unknown> };
@@ -41,6 +42,7 @@ export async function bootstrapEngineControlPlane(
 ): Promise<void> {
   const { project, branch } = getConfig();
   const config = JSON.parse(readFileSync(bootstrapConfigPath(), 'utf8')) as BootstrapConfig;
+  validateBootstrapJsonFields(config.rows ?? []);
 
   await ensureControlPlaneProject(prisma);
   let changes = await applyEngineBootstrapTables(engine, prisma, config.tables ?? []);

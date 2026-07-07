@@ -5,6 +5,7 @@ import { INBOX_ITEM_ADDED_TOPIC, RUN_UPDATED_TOPIC } from '../api/graphql-api/gr
 import {
   RunWatchService,
   WATCH_TOPICS,
+  MAX_RUN_IDS,
   MAX_WATCH_CURSOR_CHARS,
   MAX_SERVER_HOLD_MS,
   DEFAULT_SERVER_HOLD_MS,
@@ -157,11 +158,16 @@ function fakeApi(opts: {
   states?: Record<string, RunState | RunState[]>;
   runs?: Array<{ runId: string; status: string }>;
   activity?: AgentRunActivity | null | (() => Promise<AgentRunActivity | null>);
-}): RunStateSource & { calls: string[] } {
+}): RunStateSource & {
+  calls: string[];
+  listRunArgs: Array<Parameters<RunStateSource['listRuns']>[0]>;
+} {
   const calls: string[] = [];
+  const listRunArgs: Array<Parameters<RunStateSource['listRuns']>[0]> = [];
   const idx: Record<string, number> = {};
   return {
     calls,
+    listRunArgs,
     async resolveRunState(runId: string): Promise<RunState> {
       calls.push(runId);
       const value = opts.states?.[runId];
@@ -173,8 +179,12 @@ function fakeApi(opts: {
       if (value) return value;
       throw new ControlPlaneError('ROW_NOT_FOUND', `run not found: ${runId}`);
     },
-    async listRuns() {
-      return opts.runs ?? [];
+    async listRuns(filter) {
+      listRunArgs.push(filter);
+      let runs = opts.runs ?? [];
+      const statuses = filter?.status ? [filter.status] : (filter?.statuses ?? []);
+      if (statuses.length > 0) runs = runs.filter((run) => statuses.includes(run.status));
+      return runs.slice(0, filter?.limit ?? runs.length);
     },
     async getAgentActivity() {
       if (typeof opts.activity === 'function') return opts.activity();
@@ -215,6 +225,29 @@ test('clampServerHold: default, clamp to max, reject negative/NaN', () => {
 
 test('WATCH_TOPICS composes exactly the inbox-added + run-updated topics', () => {
   assert.deepEqual([...WATCH_TOPICS], [INBOX_ITEM_ADDED_TOPIC, RUN_UPDATED_TOPIC]);
+});
+
+test('resolveRunIds without explicit ids asks storage for non-terminal runs with a limit', async () => {
+  const api = fakeApi({
+    runs: [
+      { runId: 'ready-run', status: 'ready' },
+      { runId: 'running-run', status: 'running' },
+      { runId: 'paused-run', status: 'paused' },
+      { runId: 'completed-run', status: 'completed' },
+      { runId: 'failed-run', status: 'failed' },
+    ],
+  });
+  const svc = new RunWatchService(api);
+
+  const runIds = await (svc as unknown as {
+    resolveRunIds(provided?: string[]): Promise<string[]>;
+  }).resolveRunIds(undefined);
+
+  assert.deepEqual(runIds, ['ready-run', 'running-run', 'paused-run']);
+  assert.deepEqual(api.listRunArgs, [{
+    statuses: ['ready', 'running', 'paused'],
+    limit: MAX_RUN_IDS,
+  }]);
 });
 
 test('initial sweep returns an already-gated run immediately, without arming a subscription', async () => {

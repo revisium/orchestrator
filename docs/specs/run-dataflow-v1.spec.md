@@ -2,7 +2,7 @@
 
 - **Status:** Accepted.
 - **Source files:** `src/pipeline-core/types.ts`, `src/pipeline-core/validate-dataflow.ts`,
-  `src/pipeline/data-driven-task.workflow.ts`, `src/run/run-outputs.ts`, `src/control-plane/**`.
+  `src/pipeline/data-driven-task.workflow.ts`, `src/run/run-outputs.ts`, `src/run/prisma-runtime-data-access.ts`.
 - **Related specs:** [pipeline-state-machine-v1.spec.md](./pipeline-state-machine-v1.spec.md).
 
 ## Scope
@@ -18,7 +18,7 @@ The key words MUST, MUST NOT, SHOULD, SHOULD NOT, MAY are to be interpreted as i
 | Layer | Carries | Owner |
 | --- | --- | --- |
 | Routing signal | `outcome`, domain `verdict`, counters, join arrivals | DBOS progress through `RunState` and `LastResult` |
-| Step output | plans, review findings, integration reports, PR feedback summaries | Revisium `run_outputs` plus adapter accumulator |
+| Step output | plans, review findings, integration reports, PR feedback summaries | Prisma `RunOutput` plus adapter accumulator |
 | Code/diff | source changes, branches, PRs | Git worktree and remote |
 
 The pure core validates `produces` and `consumes`; the DBOS adapter resolves and persists content.
@@ -53,7 +53,7 @@ Defaults:
 ## Runtime Contract
 
 Before an effect node runs, the adapter resolves `consumes` from the workflow-local output accumulator, not from a
-live Revisium query. This keeps DBOS replay deterministic.
+live storage query. This keeps DBOS replay deterministic.
 
 Resolution rules:
 
@@ -80,7 +80,7 @@ Uses:
 - `run_outputs.ordinal`.
 - deterministic output row id based on `(runId, nodeId, ordinal)`.
 
-Ordinals MUST NOT be computed by counting live Revisium rows or by time.
+Ordinals MUST NOT be computed by counting live Prisma rows or by time.
 
 ## `run_outputs`
 
@@ -103,7 +103,7 @@ run_outputs {
 
 Rules:
 
-- Runtime/draft scope; rows MUST NOT be committed as versioned meaning.
+- Prisma runtime scope; rows MUST NOT be committed as versioned meaning.
 - Append-only: rows MUST NOT be updated or deleted.
 - One row per node execution that declares `produces`.
 - For retried runner attempts, `attempt_id` and over-cap `payload_ref` point at the winning physical attempt id,
@@ -111,7 +111,8 @@ Rules:
 - Latest output is `max(ordinal)` per `(run_id, node_id)`.
 - Payload is serialized JSON, secret-redacted, and size-capped.
 - Oversized content spills by reference in `payload_ref`.
-- Code and diffs MUST NOT be copied into Revisium; downstream nodes receive pointers such as branch/head/PR metadata.
+- Code and diffs MUST NOT be copied into runtime storage; downstream nodes receive pointers such as branch/head/PR
+  metadata.
 
 ### `schema:change` Produced Artifact
 

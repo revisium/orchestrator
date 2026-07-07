@@ -7,17 +7,23 @@ import type { Template } from '../pipeline-core/types.js';
 import { materializeTemplate } from '../pipeline-core/materialize.js';
 import {
   validateDefaultPlaybookPolicy,
-  validateVariantParity,
   type DefaultPlaybookPolicyDiagnostic,
   type DefaultPlaybookPolicyDiagnosticCode,
 } from './default-playbook-policy.js';
-import { CODEX_CONSENSUS_PROFILE, CONSENSUS_TOGGLE_ALLOWLIST } from './topology-profiles.js';
+import { topologyProfileFromRunProfile } from './run-profiles.js';
 
 type PipelineCatalogEntry = {
   id: string;
   execution_policy?: {
     template_json?: Template;
   };
+};
+type RunProfileCatalogEntry = {
+  id: string;
+  pipelineId: string;
+  topology: unknown;
+  bindings: unknown;
+  status: string;
 };
 
 type MutableTemplate = Template & {
@@ -27,6 +33,9 @@ type MutableTemplate = Template & {
 const pipelines = JSON.parse(
   readFileSync(join(repoRoot, 'control-plane/default-playbook/catalog/pipelines.json'), 'utf8'),
 ) as PipelineCatalogEntry[];
+const runProfiles = JSON.parse(
+  readFileSync(join(repoRoot, 'control-plane/default-playbook/catalog/run-profiles.json'), 'utf8'),
+) as RunProfileCatalogEntry[];
 
 function bundledFeatureDevelopment(): Template {
   const template = pipelines.find((pipeline) => pipeline.id === 'feature-development')
@@ -41,40 +50,21 @@ function mutateTemplate(mutator: (template: MutableTemplate) => void): Template 
   return template as Template;
 }
 
-function materializedCodexConsensus(): Template {
+function materializedConsensusProfile(): Template {
   const base = bundledFeatureDevelopment();
-  const allowlist = CONSENSUS_TOGGLE_ALLOWLIST['feature-development'];
-  assert.ok(allowlist, 'feature-development must have a toggle allowlist');
-  const { template, diagnostics } = materializeTemplate(base, CODEX_CONSENSUS_PROFILE, { allowlist });
+  const profile = runProfiles.find((item) => item.id === 'codex-primary-claude-review-consensus');
+  assert.ok(profile, 'codex-primary-claude-review-consensus profile exists');
+  const { template, diagnostics } = materializeTemplate(
+    base,
+    topologyProfileFromRunProfile(profile as never),
+    { allowlist: ['planReviewer', 'codeReview'] },
+  );
   assert.deepEqual(diagnostics, [], `materializeTemplate emitted diagnostics: ${JSON.stringify(diagnostics)}`);
   return template;
 }
 
-function mutateCodex(mutator: (template: MutableTemplate) => void): Template {
-  const template = materializedCodexConsensus() as MutableTemplate;
-  mutator(template);
-  return template as Template;
-}
-
 function diagnosticsFor(template: Template): DefaultPlaybookPolicyDiagnostic[] {
   return validateDefaultPlaybookPolicy(template);
-}
-
-function parityDiagnosticsFor(template: Template): DefaultPlaybookPolicyDiagnostic[] {
-  return validateVariantParity(template);
-}
-
-function assertParityDiagnostic(
-  template: Template,
-  code: DefaultPlaybookPolicyDiagnosticCode,
-): DefaultPlaybookPolicyDiagnostic {
-  const diagnostics = parityDiagnosticsFor(template);
-  const diagnostic = diagnostics.find((candidate) => candidate.code === code);
-  assert.ok(
-    diagnostic,
-    `expected parity ${code}; got ${diagnostics.map((candidate) => candidate.code).join(', ') || 'no diagnostics'}`,
-  );
-  return diagnostic;
 }
 
 function assertDiagnostic(
@@ -823,33 +813,8 @@ test('default playbook policy: every declared gate outcome must have an explicit
   assert.match(diagnostic.expected ?? '', /wontfix/);
 });
 
-test('default playbook policy: reconciled codex-consensus has zero policy violations', () => {
-  const materialized = materializedCodexConsensus();
+test('default playbook policy: seeded consensus run profile has zero policy violations', () => {
+  const materialized = materializedConsensusProfile();
   const diags = diagnosticsFor(materialized);
-  assert.deepEqual(diags, [], `reconciled codex-consensus must have zero policy violations; got: ${diags.map((d) => d.code).join(', ')}`);
-
-  const parityDiags = parityDiagnosticsFor(materialized);
-  assert.deepEqual(
-    parityDiags,
-    [],
-    `validateVariantParity must return [] for reconciled codex; got: ${parityDiags.map((d) => d.code).join(', ')}`,
-  );
-});
-
-test('default playbook policy: unlisted codex violation triggers VARIANT_POLICY_GAP', () => {
-  const diagnostic = assertParityDiagnostic(
-    mutateCodex((template) => {
-      delete template.nodes['cancelledEnd'];
-    }),
-    'DEFAULT_POLICY_VARIANT_POLICY_GAP',
-  );
-
-  assert.match(diagnostic.actual ?? '', /CANCELLED_TERMINAL_MISSING/);
-});
-
-test('default playbook policy: reconciled codex violation set matches empty CODEX_LEGACY_WAIVERS (no PARITY_DRIFT)', () => {
-  const materialized = materializedCodexConsensus();
-  const parityDiags = parityDiagnosticsFor(materialized);
-  const driftDiag = parityDiags.find((d) => d.code === 'DEFAULT_POLICY_VARIANT_PARITY_DRIFT');
-  assert.equal(driftDiag, undefined, `VARIANT_PARITY_DRIFT must not fire on reconciled codex; got: ${JSON.stringify(driftDiag)}`);
+  assert.deepEqual(diags, [], `seeded consensus profile must have zero policy violations; got: ${diags.map((d) => d.code).join(', ')}`);
 });

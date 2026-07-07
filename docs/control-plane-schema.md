@@ -1,141 +1,94 @@
 # Control-plane schema
 
-The control plane is one Revisium project used by Revo for meaning and runtime projections. The authoritative
-schema source is `control-plane/bootstrap.config.json`; this document is the human-readable ownership map.
+The control plane has two storage classes:
 
-Storage note: this document describes the current control-plane table ownership map. Storage-v2 keeps the
-`control-plane` system project but moves the target storage foundation to embedded PostgreSQL, Revo Prisma, and the
-embedded Revisium engine contracts in [ADR-0007](./adr/0007-revo-storage-foundation.md) and
-[ADR-0008](./adr/0008-revo-projects-and-versioned-knowledge.md).
+- Revisium engine stores versioned meaning: playbooks, roles, pipelines, model profiles, run profiles, and routing
+  policy.
+- Revo Prisma stores runtime facts: projects, runs, tasks, events, attempts, inbox, outputs, and cost ledger.
 
-## Ownership classes
+`control-plane/bootstrap.config.json` is the human-authored bootstrap source for Revisium meaning tables. Prisma schema
+and migrations are the authoritative source for runtime tables.
 
-| Table | Class | Revision behavior |
-| --- | --- | --- |
-| `playbooks` | Versioned meaning | committed; route/import reads `head` |
-| `roles` | Versioned meaning | committed; execution reads `head` |
-| `pipelines` | Versioned meaning | committed; run start reads and pins template meaning |
-| `model_profiles` | Versioned meaning | committed; execution reads `head` |
-| `routing_policy` | Versioned meaning | committed; route policy reads `head` |
-| `task_runs` | Runtime projection | draft writes, never committed |
-| `tasks` | Runtime projection | draft writes, never committed |
-| `steps` | Retired compatibility table | defined but not part of the live engine contract |
-| `attempts` | Runtime provenance | draft writes, never committed |
-| `events` | Runtime journal | draft append, never committed |
-| `inbox` | Runtime human queue | draft writes, never committed |
-| `run_outputs` | Runtime dataflow artifacts | draft append, never committed |
-| `cost_ledger` | Runtime accounting | draft append, never committed |
+## Ownership Classes
 
-DBOS owns authoritative progress outside Revisium. Revisium runtime tables are projections, audit data, and human
-interaction records.
+| Storage | Table/model | Class | Revision behavior |
+| --- | --- | --- | --- |
+| Revisium | `playbooks` | Versioned meaning | committed; route/import reads head |
+| Revisium | `roles` | Versioned meaning | committed; execution reads head |
+| Revisium | `pipelines` | Versioned meaning | committed; run start reads and pins template meaning |
+| Revisium | `run_profiles` | Versioned meaning | committed; launch resolves profile data by playbook + pipeline |
+| Revisium | `model_profiles` | Versioned meaning | committed; execution reads head |
+| Revisium | `routing_policy` | Versioned meaning | committed; route policy reads head |
+| Prisma | `RevoProject` | Product state | soft-deleted project grouping and repository metadata |
+| Prisma | `TaskRun` | Runtime run | transactional runtime row; stores route pins |
+| Prisma | `RunTask` | Runtime task | transactional runtime row |
+| Prisma | `RunEvent` | Runtime journal | append-only runtime event |
+| Prisma | `RunAttempt` | Runtime provenance | per-attempt logs/cost/provenance |
+| Prisma | `InboxItem` | Runtime human queue | pending/resolved human decisions |
+| Prisma | `RunOutput` | Runtime dataflow artifact | node output and artifact pointers |
+| Prisma | `CostLedgerEntry` | Runtime accounting | token/cost ledger |
 
-## Schema rules
+DBOS owns workflow progress and replay. Prisma runtime rows are Revo's product/runtime state around that workflow.
+Revisium rows are never the authoritative store for run lifecycle facts.
+
+## Revisium Schema Rules
 
 - Row identity is the Revisium row id. Explicit `id` fields are readability mirrors.
-- Runtime rows are draft-only.
 - Versioned meaning edits require a commit.
 - Free-form JSON is stored in serialized string fields where the Revisium schema layer requires it.
-- Product services should use data-access APIs, not raw table reads from transport adapters.
+- Serialized JSON fields that carry structured control-plane config must be AJV-validated before import/write. The
+  Revisium table schema protects storage shape; the importer protects nested JSON semantics.
+- Bootstrap seed rows validate `roles.scope_rules`, `model_profiles.params`, and `routing_policy.rule` before they are
+  written.
+- Product services should use domain APIs, not raw transport table reads.
 
-## Tables
-
-### `task_runs`
-
-Fields: `id, project_id, title, description, status, repos[], scope, priority, playbook_id, pipeline_id, params,
-route_decision, execution_profile, created_by, created_at, updated_at`.
-
-Serialized JSON fields: `params`, `route_decision`, `execution_profile`.
-
-`route_decision` provenance stamps (since #242): `requestedPipelineId` (caller-supplied, may be an alias),
-`basePipelineId` (resolved base pipeline), `profileId`/`profileVersion`/`profileHash` (topology profile stamps;
-absent when no profile applied), `materializedTemplateHash` (content hash of the materialized template),
-`materializerVersion`, `policyVersion`. Read-only audit fields for observability and test assertions; not used
-for routing decisions.
-
-`execution_profile` shape: `{ id: string, runnerOverrides?: Record<string,string>, availableRunners?: string[], bindingOverrides?: BindingOverride[] }`. A `BindingOverride` targets a role, node, or runner via `match: { roleId?, nodeId?, runnerId? }` and may set `runnerId`, `modelLevel`, `timeoutMs` (positive integer, ≤ 86 400 000 ms), or `permissionMode`. Phase A validates the whole profile pre-start (error code `PROFILE_SCHEMA_CLOSED`); Phase B records provenance on each `RouteRoleBinding` (`modelSource`, `timeoutSource`, `permissionSource`, each `'playbook' | 'execution-profile'`).
-
-`params.issueRef` is the canonical issue traceability location for issue-bound runs. Shape:
-`{ repo: string, number: positive integer, url: string }`. `params.issueAction` controls delivery linkage and is
-one of `close`, `refs`, or `none`; issue-bound runs default it to `close`. These fields are public, non-secret
-metadata projected by read, digest, status, and readiness surfaces. Do not add parallel `task_runs.issue_ref`,
-`task_runs.issue_action`, `tasks.issue_ref`, or `tasks.issue_action` columns.
-
-### `tasks`
-
-Fields: `id, run_id, repo_ref, role_hint, title, status, depends_on[], scope, priority, created_at, updated_at`.
-
-### `steps`
-
-Compatibility table retained in schema for existing installations. The live data-driven engine does not use it as
-the source of progress.
-
-Fields: `id, task_id, run_id, role, kind, status, input, output, model_profile, run_after, attempt_count,
-max_attempts, priority, depends_on[], lease_owner, lease_expires_at, dead_reason, created_at, updated_at`.
-
-Serialized JSON fields: `input`, `output`.
-
-### `attempts`
-
-Per-attempt provenance for logs, verdict assertions, costs, and UI/MCP summaries.
-
-Fields: `id, step_id, run_id, worker_id, attempt_no, status, idempotency_key, model_profile, input_tokens,
-output_tokens, lesson, error, started_at, finished_at`.
-
-### `events`
-
-Append-only runtime journal.
-
-Fields: `id, run_id, task_id, step_id, type, payload, actor, created_at`.
-
-`payload` is serialized JSON and must be secret-redacted before write.
-
-### `inbox`
-
-Single human decision queue.
-
-Fields: `id, kind, run_id, task_id, step_id, project_id, title, context, options[], status, answer, resolved_by,
-created_at, resolved_at`.
-
-`kind` values are `approval`, `question`, or `alert`. `status` values are `pending` or `resolved`.
-
-Serialized JSON fields: `context`, `answer`.
-
-### `roles`
-
-Versioned role definitions.
-
-Fields: `id, name, system_prompt, model_level, effort, runner_id, runner, allowed_tools[], scope_rules,
-timeout_ms, permission_mode, playbook_id, playbook_role_id, source_path, source_hash, surface, rights, updated_at`.
-
-`scope_rules` is serialized JSON. `runner` is a compatibility alias; `runner_id` is the preferred imported
-playbook field. `timeout_ms` is the role-level runner wall-clock safety cap; `0` or an absent value uses the
-runner default wall-clock cap and does not change the global idle timeout.
+## Revisium Meaning Tables
 
 ### `playbooks`
 
 Installed playbook metadata.
 
 Fields: `id, name, package_name, source, version, schema_version, manifest_path, roles_catalog_path,
-pipelines_catalog_path, catalog_hash, installed_at, updated_at`.
+pipelines_catalog_path, run_profiles_catalog_path, catalog_hash, installed_at, updated_at`.
+
+### `roles`
+
+Versioned role definitions.
+
+Fields: `id, name, system_prompt, model_level, effort, runner_id, runner, allowed_tools[], scope_rules,
+timeout_ms, permission_mode, playbook_id, playbook_role_id, source_path, source_hash, surface, rights, status,
+retired_at, updated_at`.
+
+`scope_rules` is serialized JSON. `runner_id` is the preferred imported playbook field; `runner` remains a readability
+mirror while role imports settle.
 
 ### `pipelines`
 
 Imported pipeline definitions.
 
 Fields: `id, playbook_id, pipeline_id, path, triggers[], required_roles[], alternative_roles_json,
-optional_roles[], route_gates[], platform_invocation, execution_policy_json, updated_at`.
+optional_roles[], route_gates[], platform_invocation, execution_policy_json, status, retired_at, updated_at`.
 
-`execution_policy_json` carries the data-driven pipeline template. Exact grammar lives in
-[specs/pipeline-state-machine-v1.spec.md](./specs/pipeline-state-machine-v1.spec.md).
+`execution_policy_json` carries the data-driven pipeline template. The base pipeline owns workflow semantics only.
+Provider/model/topology launch choices belong to `run_profiles`.
+When imported from a playbook catalog, `execution_policy.template_json` must pass JSON Schema validation before it is
+serialized into this field.
 
-### `run_outputs`
+### `run_profiles`
 
-Append-only runtime dataflow artifacts produced by pipeline nodes.
+Versioned launch profiles scoped to an imported playbook and pipeline.
 
-Fields: `id, run_id, node_id, ordinal, name, schema_ref, payload, payload_ref, attempt_id, produced_at`.
+Fields: `id, playbook_id, pipeline_id, profile_id, schema_version, version, display_name, summary, profile_json,
+profile_hash, status, retired_at, source_path, source_hash, updated_at`.
 
-`payload` is serialized JSON, secret-redacted, and size-capped at the adapter boundary. `payload_ref` is set instead
-of `payload` when content exceeds the inline cap.
+`profile_json` stores the normalized run profile. `profile_hash` is pinned into Prisma `TaskRun.routeDecision` when a run
+is created. Updating a built-in profile means changing `control-plane/default-playbook/catalog/run-profiles.json` and
+importing a new version/hash.
+Catalog run profiles must pass the `run-profile/v1` JSON Schema before they are serialized into `profile_json`.
+
+The public pipeline/profile identifiers are `pipeline_id` and `profile_id`. The storage row `id` is an internal scoped
+row id and is not accepted as a launch alias. When a built-in catalog removes a row, import marks the previous row
+`status=removed`; runtime listing/resolution ignores removed rows.
 
 ### `model_profiles`
 
@@ -143,7 +96,8 @@ Versioned model-level mapping.
 
 Fields: `id, level, provider, model_id, params, cost_per_input, cost_per_output, updated_at`.
 
-Route and role data reference levels such as `cheap`, `standard`, and `deep`, not raw provider model ids.
+Route and role data reference levels such as `cheap`, `standard`, `deep`, `codex-standard`, and `codex-deep`, not raw
+provider model ids.
 
 ### `routing_policy`
 
@@ -151,9 +105,28 @@ Versioned routing policy.
 
 Fields: `id, rule, model_level, requires_human, updated_at`.
 
-### `cost_ledger`
+## Prisma Runtime Models
 
-Append-only accounting rows.
+### `TaskRun`
 
-Fields: `id, run_id, step_id, attempt_id, model_profile, input_tokens, output_tokens, cost_amount, currency,
-recorded_at`.
+Runtime run record.
+
+Important fields: `id, projectId, title, description, status, repos, scope, priority, playbookId, pipelineId, params,
+routeDecision, executionProfile, createdBy, createdAt, updatedAt`.
+
+`routeDecision` pins `requestedPipelineId`, `basePipelineId`, `profileId`, `profileVersion`, `profileHash`,
+`profileSnapshot`, `materializedTemplateHash`, `materializedTemplate`, `materializerVersion`, and `policyVersion` when a
+stored profile is applied. Replay uses this pin, not the latest Revisium profile row.
+
+`params.issueRef` is the canonical issue traceability location for issue-bound runs. Shape:
+`{ repo: string, number: positive integer, url: string }`. `params.issueAction` controls delivery linkage and is one of
+`close`, `refs`, or `none`.
+
+### Runtime Child Models
+
+- `RunTask`: task rows under a run.
+- `RunEvent`: append-only runtime journal with a monotonic `sequence` for deterministic ordering. Payloads must be secret-redacted before write.
+- `RunAttempt`: per-attempt provenance for logs, verdict assertions, decimal cost amounts, and summaries.
+- `InboxItem`: human approval/question/alert queue.
+- `RunOutput`: node output and artifact pointers. Large content should use `payloadRef`.
+- `CostLedgerEntry`: token and decimal cost accounting.
