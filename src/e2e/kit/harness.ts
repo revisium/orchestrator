@@ -1,14 +1,20 @@
 import 'reflect-metadata';
 import { join } from 'node:path';
+import type { INestApplicationContext } from '@nestjs/common';
+import { NestFactory } from '@nestjs/core';
+import { EngineApiService } from '@revisium/engine';
+import { bootstrapEngineControlPlane } from '../../control-plane/bootstrap.js';
 import { HostLifecycle } from '../../host/host.lifecycle.js';
 import { DbosService } from '../../engine/dbos.service.js';
 import { getConfig } from '../../cli/config.js';
-import { createClientTransport } from '../../control-plane/client-transport.js';
 import { AgentObservabilityService } from '../../observability/agent-observability.service.js';
 import { RolesService } from '../../revisium/roles.service.js';
 import { RunService } from '../../revisium/run.service.js';
 import { InboxService } from '../../revisium/inbox.service.js';
 import { PlaybooksService } from '../../revisium/playbooks.service.js';
+import { RevisiumModule } from '../../revisium/revisium.module.js';
+import { RevoPrismaService } from '../../storage/revo-prisma.service.js';
+import { ensureStorage } from '../../storage/ensure-storage.js';
 import { PipelineService } from '../../pipeline/pipeline.service.js';
 import { WorktreeService } from '../../runners/worktree.service.js';
 import { TaskControlPlaneApiService } from '../../task-control-plane/task-control-plane-api.service.js';
@@ -34,6 +40,8 @@ export type RunHarnessOptions = {
   integrator?: (base: IntegratorService) => IntegratorService;
   /** Test-only override for the cleanupWorktree release step. */
   releaseWorktree?: (runId: string, taskId: string) => Promise<void>;
+  /** Bootstrap an isolated Revisium project before using it. Suite default project is bootstrapped by scripts/e2e-setup.ts. */
+  bootstrapControlPlane?: boolean;
 };
 
 export type RunHarness = {
@@ -41,6 +49,7 @@ export type RunHarness = {
   api: TaskControlPlaneApiService;
   dbos: DbosService;
   lifecycle: HostLifecycle;
+  context: INestApplicationContext;
   /** Recorded agent invocations (populated by the default {@link deterministicAgent}). */
   agentCalls: AgentCall[];
   /** runId → worktree where the developer role writes a change (so the real integrator has a diff). */
@@ -48,7 +57,7 @@ export type RunHarness = {
   /** Recorded `gh` argv (populated by the default emulator). */
   ghCalls: string[][];
   /**
-   * Shut the host down (DBOS drain); the standalone daemon is intentionally left running.
+   * Shut the file-local DBOS runtime down. The suite-level host daemon owns embedded Postgres.
    * `keepWorkflowsParked` skips the DBOS-level workflow cancel sweep — only for tests whose
    * subject IS a workflow parked across teardown (teardown-drain).
    */
@@ -56,20 +65,25 @@ export type RunHarness = {
 };
 
 /**
- * Boot the real host (DBOS + Revisium standalone + Postgres) with only the agent and `gh` faked.
+ * Boot the real control-plane services (DBOS + embedded Revisium engine) with only the agent and `gh` faked.
  * Mirrors the wiring of the production `AppModule` closely enough that the returned `api` behaves
  * like the live MCP/CLI surface. Always pair with `harness.close()` (or {@link closeHarness}) in a
  * `finally` block.
  */
 export async function createRunHarness(opts: RunHarnessOptions = {}): Promise<RunHarness> {
+  await ensureStorage();
+  const context = await NestFactory.createApplicationContext(RevisiumModule, { logger: ['error', 'warn'] });
+  if (opts.bootstrapControlPlane || process.env['REVO_E2E_HARNESS_BOOTSTRAP'] === '1') {
+    const engine = context.get(EngineApiService, { strict: false });
+    const prisma = context.get(RevoPrismaService, { strict: false });
+    await bootstrapEngineControlPlane(engine, prisma);
+  }
   const dbos = new DbosService();
   const lifecycle = new HostLifecycle(dbos);
-  const draft = createClientTransport('draft');
-  const head = createClientTransport('head');
-  const roles = new RolesService(head);
-  const runs = new RunService(draft);
-  const inbox = new InboxService(draft);
-  const playbooks = new PlaybooksService(head);
+  const roles = context.get(RolesService, { strict: false });
+  const runs = context.get(RunService, { strict: false });
+  const inbox = context.get(InboxService, { strict: false });
+  const playbooks = context.get(PlaybooksService, { strict: false });
 
   const ghCalls: string[][] = [];
   const agentCalls: AgentCall[] = [];
@@ -102,6 +116,7 @@ export async function createRunHarness(opts: RunHarnessOptions = {}): Promise<Ru
     api,
     dbos,
     lifecycle,
+    context,
     agentCalls,
     developerWrites,
     ghCalls,
@@ -123,6 +138,7 @@ export async function createRunHarness(opts: RunHarnessOptions = {}): Promise<Ru
         }
       }
       await lifecycle.onApplicationShutdown();
+      await context.close();
     },
   };
 }

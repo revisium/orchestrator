@@ -3,7 +3,9 @@ import { existsSync, readFileSync, statSync } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { Inject, Injectable } from '@nestjs/common';
-import { baseUrl, getConfig, isAlive, isHealthy, readRuntime } from '../cli/config.js';
+import { baseUrl, getConfig, isAlive } from '../cli/config.js';
+import { isGraphqlHealthy } from '../host/ensure-host.js';
+import { readHostRuntime } from '../host/host-runtime.js';
 import { AgentObservabilityService, type GetAgentLogInput } from '../observability/agent-observability.service.js';
 import type {
   AgentAttemptSummary,
@@ -599,17 +601,17 @@ export class TaskControlPlaneApiService {
   ) {}
 
   async getStatus() {
-    const runtime = readRuntime();
-    const alive = runtime ? isAlive(runtime.pid) : false;
-    const healthy = runtime && alive ? await isHealthy(runtime.httpPort) : false;
+    const host = readHostRuntime();
+    const hostAlive = host ? isAlive(host.pid) : false;
+    const hostHealthy = host && hostAlive ? await isGraphqlHealthy(host.graphqlPort) : false;
     return {
       daemon: {
-        running: Boolean(runtime && alive),
-        healthy,
-        pid: runtime?.pid ?? null,
-        baseUrl: runtime ? baseUrl(runtime.httpPort) : null,
-        httpPort: runtime?.httpPort ?? null,
-        pgPort: runtime?.pgPort ?? null,
+        running: Boolean(host && hostAlive),
+        healthy: hostHealthy,
+        pid: host?.pid ?? null,
+        baseUrl: host ? `${baseUrl(host.graphqlPort)}/graphql` : null,
+        graphqlPort: host?.graphqlPort ?? null,
+        mcpPort: host?.mcpPort ?? null,
       },
       project: this.getProject(),
     };

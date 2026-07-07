@@ -1,17 +1,8 @@
 import { createServer } from 'node:net';
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import os from 'node:os';
-
-export type RuntimeState = {
-  httpPort: number;
-  pgPort: number;
-  pid: number;
-  startedAt: string;
-
-  dataDir?: string;
-};
 
 type ConfigFile = {
   host: string;
@@ -29,8 +20,8 @@ type ConfigFile = {
 
 
 export const PROFILES = {
-  default: { suffix: '', portOffset: 0, dbosDb: 'dbos' },
-  dev: { suffix: '-dev', portOffset: 400, dbosDb: 'dbos_dev' },
+  default: { suffix: '', portOffset: 0, dbosDb: 'dbos', revoDb: 'revo' },
+  dev: { suffix: '-dev', portOffset: 400, dbosDb: 'dbos_dev', revoDb: 'revo_dev' },
 } as const;
 
 export type ProfileName = keyof typeof PROFILES;
@@ -38,9 +29,7 @@ export type ProfileName = keyof typeof PROFILES;
 export type RevoConfig = ConfigFile & {
   dataDir: string;
   profile: ProfileName;
-  logFile: string;
   hostLogFile: string;
-  runtimeFile: string;
 };
 
 export const GRAPHQL_PORT_OFFSET = 1;
@@ -126,32 +115,16 @@ export function getConfig(): RevoConfig {
 
   cachedConfig = {
     ...rawConfig,
+    project: process.env['REVO_PROJECT'] ?? rawConfig.project,
+    branch: process.env['REVO_BRANCH'] ?? rawConfig.branch,
     profile,
     dataDir,
     preferredPort,
     preferredPgPort,
-    logFile: join(dataDir, 'standalone.log'),
     hostLogFile: join(dataDir, 'host.log'),
-    runtimeFile: join(dataDir, 'runtime.json'),
   };
 
   return cachedConfig;
-}
-
-export function readRuntime(): RuntimeState | null {
-  const { runtimeFile } = getConfig();
-  if (!existsSync(runtimeFile)) return null;
-
-  try {
-    return JSON.parse(readFileSync(runtimeFile, 'utf8')) as RuntimeState;
-  } catch {
-    return null;
-  }
-}
-
-export function removeRuntime(): void {
-  const { runtimeFile } = getConfig();
-  if (existsSync(runtimeFile)) rmSync(runtimeFile);
 }
 
 export function isAlive(pid: number): boolean {
@@ -168,30 +141,8 @@ export function baseUrl(port: number): string {
   return `http://${host}:${port}`;
 }
 
-export function healthUrl(port: number): string {
-  return `${baseUrl(port)}/api`;
-}
-
-export function revisiumUri(port: number): string {
-  const { host, org, project, branch } = getConfig();
-  return `revisium://${host}:${port}/${org}/${project}/${branch}`;
-}
-
-export async function resolvePorts(): Promise<{ httpPort: number; pgPort: number }> {
-  const runtime = readRuntime();
-  if (runtime && isAlive(runtime.pid)) {
-    return { httpPort: runtime.httpPort, pgPort: runtime.pgPort };
-  }
-
-  const { preferredPort, preferredPgPort } = getConfig();
-  return { httpPort: preferredPort, pgPort: preferredPgPort };
-}
-
 export function resolveDefaultGraphqlPort(): number {
-  const runtime = readRuntime();
-  const basePort = runtime && isAlive(runtime.pid)
-    ? runtime.httpPort
-    : getConfig().preferredPort;
+  const basePort = getConfig().preferredPort;
   if (!Number.isInteger(basePort) || basePort <= 0 || basePort > 65_535) {
     throw new Error(`Cannot derive GraphQL port from invalid HTTP port ${basePort}`);
   }
@@ -217,13 +168,4 @@ export async function findFreePort(from: number): Promise<number> {
   }
 
   throw new Error(`No free port found from ${from}`);
-}
-
-export async function isHealthy(port: number): Promise<boolean> {
-  try {
-    const response = await fetch(healthUrl(port), { signal: AbortSignal.timeout(3000) });
-    return response.status >= 200 && response.status < 400;
-  } catch {
-    return false;
-  }
 }

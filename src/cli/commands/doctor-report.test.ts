@@ -1,10 +1,3 @@
-/**
- * doctor-report.test.ts — the `revo doctor` diagnosis rules.
- *
- * buildDoctorReport is pure (no IO), so every stack state is exercised here as a plain input:
- * down, healthy, stale pid, unhealthy, and the two partial-stack permutations. lifecycle.ts only
- * gathers the observations (read files + probe ports) and prints — it has no decision logic to test.
- */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildDoctorReport, type TierObservation } from './doctor-report.js';
@@ -19,47 +12,43 @@ const healthy = (pid: number, port: number): TierObservation => ({
 
 const absent: TierObservation = { present: false, alive: false, healthy: false, pid: null, port: null };
 
-test('both tiers down → "not running", not an error condition', () => {
-  const r = buildDoctorReport({ host: absent, standalone: absent });
+test('host down -> "not running"', () => {
+  const r = buildDoctorReport({ host: absent });
   assert.equal(r.ok, false);
   assert.deepEqual(r.issues, ['Stack is not running. Run `revo start`.']);
 });
 
-test('unexpected process on a profile port → flags an untracked/duplicate daemon (the zoo signal)', () => {
+test('unexpected process on a profile port flags an untracked/duplicate daemon', () => {
   const r = buildDoctorReport({
     host: healthy(100, 19223),
-    standalone: healthy(101, 19222),
     unexpectedPortOwners: [{ label: 'GraphQL', port: 19223, pid: 777 }],
   });
   assert.equal(r.ok, false);
   assert.ok(r.issues.some((i) => /Unexpected process \(pid 777\).*19223.*duplicate daemon/.test(i)));
 });
 
-test('a rogue process while host.json/runtime.json are absent is still flagged (not "stack not running")', () => {
+test('a rogue process while host.json is absent is still flagged', () => {
   const r = buildDoctorReport({
     host: absent,
-    standalone: absent,
-    unexpectedPortOwners: [{ label: 'standalone HTTP', port: 19222, pid: 888 }],
+    unexpectedPortOwners: [{ label: 'Postgres', port: 15440, pid: 888 }],
   });
   assert.equal(r.ok, false);
   assert.ok(r.issues.some((i) => i.includes('pid 888')), 'reports the rogue process');
   assert.ok(!r.issues.includes('Stack is not running. Run `revo start`.'), 'not the plain down message');
 });
 
-test('version mismatch → flags a stale daemon and suggests restart', () => {
+test('version mismatch flags a stale daemon and suggests restart', () => {
   const r = buildDoctorReport({
     host: healthy(100, 19223),
-    standalone: healthy(101, 19222),
     versionMismatch: { running: '0.1.0-alpha.6', current: '0.1.0-alpha.7' },
   });
   assert.equal(r.ok, false);
   assert.ok(r.issues.some((i) => /version 0\.1\.0-alpha\.6 but this build is 0\.1\.0-alpha\.7.*revo restart/.test(i)));
 });
 
-test('matching version + no rogue ports → no false issues', () => {
+test('matching version plus no rogue ports has no false issues', () => {
   const r = buildDoctorReport({
     host: healthy(100, 19223),
-    standalone: healthy(101, 19222),
     unexpectedPortOwners: [],
     versionMismatch: { running: '0.1.0-alpha.7', current: '0.1.0-alpha.7' },
   });
@@ -67,10 +56,9 @@ test('matching version + no rogue ports → no false issues', () => {
   assert.deepEqual(r.issues, []);
 });
 
-test('rogue queue poller → flags a foreign executor on the dbos DB with its backend pids', () => {
+test('rogue queue poller flags a foreign executor on the dbos DB with backend pids', () => {
   const r = buildDoctorReport({
     host: healthy(100, 19223),
-    standalone: healthy(101, 19222),
     queuePollerRogues: [
       { pid: 501, executorId: 'local', applicationName: 'dbos_transact_local_' },
       { pid: 502, executorId: 'local', applicationName: 'dbos_transact_local_' },
@@ -83,10 +71,9 @@ test('rogue queue poller → flags a foreign executor on the dbos DB with its ba
   );
 });
 
-test('rogue census groups by executor: distinct foreign executors → distinct issues', () => {
+test('rogue census groups distinct foreign executors into distinct issues', () => {
   const r = buildDoctorReport({
     host: healthy(100, 19223),
-    standalone: healthy(101, 19222),
     queuePollerRogues: [
       { pid: 601, executorId: 'local', applicationName: 'dbos_transact_local_' },
       { pid: 602, executorId: 'revo-dev', applicationName: 'dbos_transact_revo-dev_1' },
@@ -96,10 +83,9 @@ test('rogue census groups by executor: distinct foreign executors → distinct i
   assert.equal(r.issues.filter((i) => i.includes('foreign executor')).length, 2);
 });
 
-test('census unavailable (no superuser / DB unreachable) → warns, never reports clean', () => {
+test('census unavailable warns and never reports clean', () => {
   const r = buildDoctorReport({
     host: healthy(100, 19223),
-    standalone: healthy(101, 19222),
     queuePollerRogues: [],
     rogueCensusUnavailable: true,
   });
@@ -107,10 +93,9 @@ test('census unavailable (no superuser / DB unreachable) → warns, never report
   assert.ok(r.issues.some((i) => /Could not census.*single-ownership could not be verified/.test(i)));
 });
 
-test('census ran clean (no rogues, available) → no false issue', () => {
+test('census ran clean with no rogues has no false issue', () => {
   const r = buildDoctorReport({
     host: healthy(100, 19223),
-    standalone: healthy(101, 19222),
     queuePollerRogues: [],
     rogueCensusUnavailable: false,
   });
@@ -118,16 +103,15 @@ test('census ran clean (no rogues, available) → no false issue', () => {
   assert.deepEqual(r.issues, []);
 });
 
-test('both tiers healthy → ok with no issues', () => {
-  const r = buildDoctorReport({ host: healthy(100, 19223), standalone: healthy(101, 19222) });
+test('healthy host has no issues', () => {
+  const r = buildDoctorReport({ host: healthy(100, 19223) });
   assert.equal(r.ok, true);
   assert.deepEqual(r.issues, []);
 });
 
-test('stale host.json (recorded pid dead) is flagged with the pid', () => {
+test('stale host.json is flagged with the pid', () => {
   const r = buildDoctorReport({
     host: { present: true, alive: false, healthy: false, pid: 999, port: 19223 },
-    standalone: healthy(101, 19222),
   });
   assert.equal(r.ok, false);
   assert.equal(r.issues.length, 1);
@@ -137,62 +121,7 @@ test('stale host.json (recorded pid dead) is flagged with the pid', () => {
 test('host alive but GraphQL not responding is flagged with the port', () => {
   const r = buildDoctorReport({
     host: { present: true, alive: true, healthy: false, pid: 100, port: 19223 },
-    standalone: healthy(101, 19222),
   });
   assert.equal(r.ok, false);
   assert.match(r.issues[0], /GraphQL front door on port 19223/);
-});
-
-test('stale standalone runtime.json (recorded pid dead) is flagged', () => {
-  const r = buildDoctorReport({
-    host: healthy(100, 19223),
-    standalone: { present: true, alive: false, healthy: false, pid: 888, port: 19222 },
-  });
-  assert.equal(r.ok, false);
-  assert.match(r.issues[0], /Stale runtime\.json.*888/);
-});
-
-test('standalone alive but unhealthy is flagged with the port', () => {
-  const r = buildDoctorReport({
-    host: healthy(100, 19223),
-    standalone: { present: true, alive: true, healthy: false, pid: 101, port: 19222 },
-  });
-  assert.equal(r.ok, false);
-  assert.match(r.issues[0], /unhealthy on port 19222/);
-});
-
-test('host up but standalone absent → partial stack, suggests restart', () => {
-  const r = buildDoctorReport({ host: healthy(100, 19223), standalone: absent });
-  assert.equal(r.ok, false);
-  assert.equal(r.issues.length, 1);
-  assert.match(r.issues[0], /partial.*revo restart/);
-});
-
-test('standalone up but host absent → partial stack, suggests start', () => {
-  const r = buildDoctorReport({ host: absent, standalone: healthy(101, 19222) });
-  assert.equal(r.ok, false);
-  assert.equal(r.issues.length, 1);
-  assert.match(r.issues[0], /Host daemon is not running.*partial.*revo start/);
-});
-
-// A stale tier (present-but-dead) must NOT be reported as "running" by the other tier's
-// partial-stack message — that gates on `alive`, so only the stale issue surfaces.
-test('stale host + standalone absent reports only the stale host, not a partial stack', () => {
-  const r = buildDoctorReport({
-    host: { present: true, alive: false, healthy: false, pid: 999, port: 19223 },
-    standalone: absent,
-  });
-  assert.equal(r.ok, false);
-  assert.equal(r.issues.length, 1);
-  assert.match(r.issues[0], /Stale host\.json/);
-});
-
-test('stale standalone + host absent reports only the stale standalone, not a partial stack', () => {
-  const r = buildDoctorReport({
-    host: absent,
-    standalone: { present: true, alive: false, healthy: false, pid: 888, port: 19222 },
-  });
-  assert.equal(r.ok, false);
-  assert.equal(r.issues.length, 1);
-  assert.match(r.issues[0], /Stale runtime\.json/);
 });

@@ -17,17 +17,19 @@
 
 
 import { type Server as HttpServer } from 'node:http';
+import { EngineApiService } from '@revisium/engine';
 import { getConfig } from '../config.js';
-import { startGraphqlHost } from '../http/graphql-host.js';
-import { ensureRevisium } from './ensure-revisium.js';
-import { bootstrapControlPlane, listInstalledPlaybooks } from '../control-plane/bootstrap.js';
+import { bootstrapEngineControlPlane } from '../control-plane/bootstrap.js';
 import {
-  createDaemonInstaller,
   seedDefaultPlaybook,
   seedDefaultPlaybookBestEffort,
 } from '../control-plane/seed-default-playbook.js';
+import { startGraphqlHost } from '../http/graphql-host.js';
 import { McpFacadeService } from '../mcp/mcp-facade.service.js';
 import { McpHttpService } from '../mcp/mcp-http.service.js';
+import { PlaybooksService } from '../revisium/playbooks.service.js';
+import { RevoPrismaService } from '../storage/revo-prisma.service.js';
+import { ensureStorage, shutdownStorage } from '../storage/ensure-storage.js';
 import { RunWatchService, type WatchPubSub } from '../task-control-plane/run-watch.service.js';
 import { TaskControlPlaneApiService } from '../task-control-plane/task-control-plane-api.service.js';
 import { APP_PUB_SUB } from '../api/graphql-api/graphql-ws/constants.js';
@@ -40,11 +42,15 @@ function resolveMcpPort(graphqlPort: number): number {
   return env && /^\d+$/.test(env.trim()) ? Number(env.trim()) : graphqlPort + 1;
 }
 
+function isKnownDbosShutdownNoise(error: unknown): boolean {
+  return error instanceof Error && error.message.includes('Release called on client which has already been released to the pool');
+}
+
 
 export async function runHostDaemon(): Promise<void> {
-  const { runtime } = await ensureRevisium();
+  const storage = await ensureStorage();
 
-  const ownership = await acquireQueueOwnership(getConfig().profile, runtime.pgPort);
+  const ownership = await acquireQueueOwnership(getConfig().profile, storage.pgPort);
   if (!ownership.owned) {
     console.error(
       `[host] profile "${getConfig().profile}" is already owned by another daemon — exiting; the owner serves the queue.`,
@@ -52,12 +58,20 @@ export async function runHostDaemon(): Promise<void> {
     process.exit(0);
   }
 
-  await bootstrapControlPlane(runtime.httpPort);
-  await seedDefaultPlaybookBestEffort(() =>
-    seedDefaultPlaybook(createDaemonInstaller(() => listInstalledPlaybooks(runtime.httpPort))),
-  );
-
-  const started = await startGraphqlHost();
+  const started = await startGraphqlHost({
+    beforeListen: async (app) => {
+      const engine = app.get(EngineApiService, { strict: false });
+      const prisma = app.get(RevoPrismaService, { strict: false });
+      await bootstrapEngineControlPlane(engine, prisma);
+      const playbooks = app.get(PlaybooksService, { strict: false });
+      await seedDefaultPlaybookBestEffort(() =>
+        seedDefaultPlaybook({
+          listPlaybooks: () => playbooks.listPlaybooks(),
+          install: (options) => playbooks.install(options),
+        }),
+      );
+    },
+  });
 
   let mcpServer: HttpServer | undefined;
   try {
@@ -79,6 +93,7 @@ export async function runHostDaemon(): Promise<void> {
       pid: process.pid,
       graphqlPort: started.port,
       mcpPort,
+      pgPort: storage.pgPort,
       startedAt,
       profile: getConfig().profile,
       version: hostCodeVersion(),
@@ -89,6 +104,13 @@ export async function runHostDaemon(): Promise<void> {
     const shutdown = (): void => {
       if (closing) return;
       closing = true;
+      process.once('uncaughtException', (error) => {
+        if (isKnownDbosShutdownNoise(error)) {
+          process.exit(0);
+        }
+        console.error(error);
+        process.exit(1);
+      });
       runningMcp.close();
       started.app
         .close()
@@ -109,6 +131,7 @@ export async function runHostDaemon(): Promise<void> {
     mcpServer?.close();
     await started.app.close().catch(() => undefined);
     await ownership.release().catch(() => undefined);
+    await shutdownStorage().catch(() => undefined);
     throw err;
   }
 }

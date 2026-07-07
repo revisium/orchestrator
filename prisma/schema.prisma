@@ -1,0 +1,173 @@
+generator client {
+  provider        = "prisma-client"
+  output          = "../src/__generated__/client"
+  moduleFormat    = "cjs"
+  previewFeatures = ["fullTextSearchPostgres", "typedSql"]
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum RevoProjectKind {
+  USER
+  SYSTEM
+}
+
+enum RevoProjectStatus {
+  ACTIVE
+  ARCHIVED
+  DELETED
+}
+
+model RevoProject {
+  id        String            @id @default(cuid())
+  createdAt DateTime          @default(now())
+  updatedAt DateTime          @updatedAt
+  deletedAt DateTime?
+  kind      RevoProjectKind   @default(USER)
+  name      String
+  slug      String            @unique
+  status    RevoProjectStatus @default(ACTIVE)
+
+  revisiumBranches Branch[]
+
+  @@index([status])
+  @@index([kind, status])
+  @@index([deletedAt])
+}
+
+model Branch {
+  id          String      @id
+  createdAt   DateTime    @default(now())
+  isRoot      Boolean     @default(false)
+  name        String
+  projectId   String
+  revoProject RevoProject @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  revisions   Revision[]
+
+  @@unique([name, projectId])
+  @@index([projectId])
+}
+
+model Revision {
+  id         String   @id
+  sequence   Int      @unique @default(autoincrement())
+  createdAt  DateTime @default(now())
+  comment    String   @default("")
+  isHead     Boolean  @default(false)
+  isDraft    Boolean  @default(false)
+  isStart    Boolean  @default(false)
+  hasChanges Boolean  @default(false)
+
+  branchId String
+  branch   Branch     @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  parentId String?
+  parent   Revision?  @relation("parentRevision", fields: [parentId], references: [id], onDelete: SetNull)
+  children Revision[] @relation("parentRevision")
+  tables   Table[]
+
+  @@index([branchId])
+}
+
+model Table {
+  versionId String @id
+  createdId String
+  id        String
+
+  readonly Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+
+  system Boolean @default(false)
+
+  revisions Revision[]
+  rows      Row[]
+
+  @@index([id])
+}
+
+model Row {
+  versionId String @id
+  createdId String
+  id        String
+
+  readonly Boolean @default(false)
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @default(now())
+  publishedAt DateTime @default(now())
+
+  data       Json
+  meta       Json   @default("{}")
+  hash       String
+  schemaHash String
+
+  tables    Table[]
+  fileBlobs FileBlob[] @relation("FileBlobToRow")
+
+  @@index([data], type: Gin)
+  @@index([id])
+  @@index([hash])
+  @@index([schemaHash])
+  @@index([publishedAt])
+}
+
+model FileBlob {
+  id        String    @id @default(nanoid())
+  createdAt DateTime  @default(now())
+  deletedAt DateTime?
+
+  projectId String
+  hash      String
+  size      BigInt
+
+  rows Row[] @relation("FileBlobToRow")
+
+  @@unique([projectId, hash])
+  @@index([projectId])
+  @@index([hash])
+  @@index([deletedAt])
+}
+
+model ProjectFileUsage {
+  projectId String   @id
+  fileBytes BigInt   @default(0)
+  updatedAt DateTime @updatedAt
+}
+
+model TableMigration {
+  id                   String    @id @default(cuid())
+  revisionId           String
+  tableId              String
+  sourceTableVersionId String
+  shadowTableVersionId String?
+  status               String    @default("PENDING")
+  phase                String    @default("INIT")
+  patches              Json
+  previousSchema       Json
+  previousSchemaHash   String
+  targetSchemaHash     String
+  totalRows            Int
+  copiedRows           Int       @default(0)
+  lastCopiedRowId      String?
+  batchSize            Int       @default(1000)
+  currentBatch         Int       @default(0)
+  totalBatches         Int       @default(0)
+  createdAt            DateTime  @default(now())
+  startedAt            DateTime?
+  completedAt          DateTime?
+  lastProgressAt       DateTime?
+  lockedBy             String?
+  lockedAt             DateTime?
+  heartbeatAt          DateTime?
+  errorMessage         String?
+  retryCount           Int       @default(0)
+  maxRetries           Int       @default(3)
+
+  @@unique([revisionId, tableId])
+  @@index([status])
+  @@index([lockedBy])
+  @@index([status, heartbeatAt])
+}

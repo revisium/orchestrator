@@ -63,7 +63,7 @@ function assertReviewReplyIncludes(calls: string[][], expected: string): void {
   );
 }
 
-test('#272: no registered checks are advisory and still reach mergeGate', async () => {
+test('#272: no registered checks are advisory and still reach mergeGate', { skip: e2eSkip }, async () => {
   await runTargetScenario('#272: no registered checks are advisory and still reach mergeGate', {
     executionProfile: STUB_AGENT,
     gh: 'no-checks-registered',
@@ -80,7 +80,7 @@ test('#272: no registered checks are advisory and still reach mergeGate', async 
   });
 });
 
-test('#272: never-settling checks route to recoveryGate instead of spinning to MAX_STEPS', async () => {
+test('#272: never-settling checks route to recoveryGate instead of spinning to MAX_STEPS', { skip: e2eSkip }, async () => {
   await runTargetScenario('#272: never-settling checks route to recoveryGate instead of spinning to MAX_STEPS', {
     executionProfile: STUB_AGENT,
     gh: 'checks-never-settle',
@@ -97,7 +97,7 @@ test('#272: never-settling checks route to recoveryGate instead of spinning to M
   });
 });
 
-test('#272: unclassifiable poll state routes through classifyRecovery to recoveryGate', async () => {
+test('#272: unclassifiable poll state routes through classifyRecovery to recoveryGate', { skip: e2eSkip }, async () => {
   await runTargetScenario('#272: unclassifiable poll state routes through classifyRecovery to recoveryGate', {
     executionProfile: STUB_AGENT,
     gh: 'nonsense-poll-state',
@@ -114,7 +114,7 @@ test('#272: unclassifiable poll state routes through classifyRecovery to recover
   });
 });
 
-test('#273: externally merged PR completes through cleanup without recovery or merge attempt', async () => {
+test('#273: externally merged PR completes through cleanup without recovery or merge attempt', { skip: e2eSkip }, async () => {
   await runTargetScenario('#273: externally merged PR completes through cleanup without recovery or merge attempt', {
     executionProfile: STUB_AGENT,
     gh: 'merged-externally',
@@ -133,7 +133,7 @@ test('#273: externally merged PR completes through cleanup without recovery or m
   });
 });
 
-test('#273: externally closed unmerged PR reaches recoveryGate immediately with closed reason', async () => {
+test('#273: externally closed unmerged PR reaches recoveryGate immediately with closed reason', { skip: e2eSkip }, async () => {
   await runTargetScenario('#273: externally closed unmerged PR reaches recoveryGate immediately with closed reason', {
     executionProfile: STUB_AGENT,
     gh: 'closed-externally',
@@ -154,7 +154,7 @@ test('#273: externally closed unmerged PR reaches recoveryGate immediately with 
   });
 });
 
-test('#274: head moved after merge approval re-presents mergeGate with fresh artifact', async () => {
+test('#274: head moved after merge approval re-presents mergeGate with fresh artifact', { skip: e2eSkip }, async () => {
   await runTargetScenario('#274: head moved after merge approval re-presents mergeGate with fresh artifact', {
     executionProfile: STUB_AGENT,
     gh: 'head-moved-after-approve',
@@ -171,7 +171,7 @@ test('#274: head moved after merge approval re-presents mergeGate with fresh art
   });
 });
 
-test('#275: GraphQL partial outage routes to recovery instead of clean readiness', async () => {
+test('#275: GraphQL partial outage routes to recovery instead of clean readiness', { skip: e2eSkip }, async () => {
   await runTargetScenario('#275: GraphQL partial outage is never treated as clean readiness', {
     executionProfile: STUB_AGENT,
     gh: 'empty-graphql-data',

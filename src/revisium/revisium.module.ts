@@ -1,5 +1,8 @@
 import { Module } from '@nestjs/common';
-import { createClientTransport } from '../control-plane/client-transport.js';
+import { EngineApiService, EngineModule as RevisiumEngineModule } from '@revisium/engine';
+import { createEngineTransport } from '../control-plane/engine-transport.js';
+import { RevoPrismaService } from '../storage/revo-prisma.service.js';
+import { RevoStorageModule } from '../storage/revo-storage.module.js';
 import { REVISIUM_TRANSPORT_DRAFT, REVISIUM_TRANSPORT_HEAD } from './tokens.js';
 import { RolesService } from './roles.service.js';
 import { RunService } from './run.service.js';
@@ -17,14 +20,19 @@ import { PlaybooksService } from './playbooks.service.js';
 
 
 @Module({
+  imports: [RevoStorageModule, RevisiumEngineModule.forRoot()],
   providers: [
     {
       provide: REVISIUM_TRANSPORT_DRAFT,
-      useFactory: () => createClientTransport('draft'),
+      inject: [EngineApiService, RevoPrismaService],
+      useFactory: (engine: EngineApiService, prisma: RevoPrismaService) =>
+        createEngineTransport('draft', engine, prisma),
     },
     {
       provide: REVISIUM_TRANSPORT_HEAD,
-      useFactory: () => createClientTransport('head'),
+      inject: [EngineApiService, RevoPrismaService],
+      useFactory: (engine: EngineApiService, prisma: RevoPrismaService) =>
+        createEngineTransport('head', engine, prisma),
     },
     RolesService,
     RunService,

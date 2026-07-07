@@ -30,8 +30,15 @@ const crashed: { planResume: string; mergeResume: string; planReject: string } =
   planReject: '',
 };
 
+function isolateRecoveryProject(): void {
+  process.env['REVO_PROJECT'] = 'agent-orchestrator-e2e-recovery';
+  process.env['REVO_BRANCH'] = 'main';
+  process.env['REVO_E2E_HARNESS_BOOTSTRAP'] = '1';
+}
+
 before(async () => {
   if (!RUN_REAL_E2E) return;
+  isolateRecoveryProject();
   // Crash three runs at their durable points, THEN launch one host that recovers all of them.
   crashed.planResume = (await crashRunAt('plan-gate')).runId;
   crashed.mergeResume = (await crashRunAt('merge-gate')).runId;

@@ -17,6 +17,9 @@
 import pg from 'pg';
 import { PROFILES, resolveProfileName } from '../config.js';
 
+const RESERVED_DATABASE_NAMES = new Set(['postgres', 'template0', 'template1']);
+const MAX_DATABASE_IDENTIFIER_BYTES = 63;
+
 
 
 
@@ -25,6 +28,12 @@ export function resolveDbosDbName(): string {
   const name = process.env['REVO_DBOS_DB'] ?? PROFILES[resolveProfileName()].dbosDb;
   if (!/^[a-z_][a-z0-9_]*$/i.test(name)) {
     throw new Error(`Invalid REVO_DBOS_DB '${name}': must be a SQL identifier (/^[a-z_][a-z0-9_]*$/i)`);
+  }
+  if (Buffer.byteLength(name, 'utf8') > MAX_DATABASE_IDENTIFIER_BYTES) {
+    throw new Error(`Invalid REVO_DBOS_DB '${name}': must be <= ${MAX_DATABASE_IDENTIFIER_BYTES} bytes`);
+  }
+  if (RESERVED_DATABASE_NAMES.has(name.toLowerCase())) {
+    throw new Error(`Invalid REVO_DBOS_DB '${name}': reserved PostgreSQL database name`);
   }
   return name;
 }

@@ -1,5 +1,5 @@
 /**
- * process-tree.test.ts — ancestry predicate `revo doctor` uses to tell its own standalone tier
+ * process-tree.test.ts — ancestry predicate `revo doctor` uses to identify owned child processes
  * (launcher → HTTP worker → embedded Postgres) from a genuine rogue daemon. The parent lookup is
  * injected so the traversal is exercised without real processes.
  */
@@ -7,7 +7,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { isPidWithin } from './process-tree.js';
 
-// The real topology seen in dogfood: host daemon 84885 → standalone launcher 84887 → HTTP worker
+// The real topology seen in dogfood: host daemon 84885 -> child worker 84887 -> subprocess
 // 84888 → embedded Postgres 84949. (host daemon is detached: its parent is init.)
 const PARENTS: Record<number, number> = {
   84885: 1,
@@ -34,7 +34,7 @@ test('isPidWithin: a pid outside the tracked tree is NOT within (a real rogue da
   assert.equal(isPidWithin(99999, new Set([84887]), () => 1), false);
 });
 
-test('isPidWithin: matches against any of several ancestors (host OR standalone)', () => {
+test('isPidWithin: matches against any of several ancestors', () => {
   assert.equal(isPidWithin(84949, new Set([84885, 84887]), parentOf), true);
   assert.equal(isPidWithin(84885, new Set([84885, 84887]), parentOf), true);
 });
