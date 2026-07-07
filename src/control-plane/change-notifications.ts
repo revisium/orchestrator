@@ -1,5 +1,5 @@
 import pg from 'pg';
-import { isAlive, readRuntime } from '../config.js';
+import { ensureStorage, getActiveStorage } from '../storage/ensure-storage.js';
 import type { ControlPlaneRow } from './data-access.js';
 import type { RuntimeTable } from './tables.js';
 
@@ -11,18 +11,22 @@ export type ControlPlaneChange = {
   table: RuntimeTable;
   action: ControlPlaneChangeAction;
   rowId: string;
-  row: ControlPlaneRow;
+  runId?: string;
+  row?: ControlPlaneRow;
+  rowOmitted?: boolean;
   emittedAt: string;
 };
 
-function notificationDatabaseUrl(pgPort: number): string {
-  return `postgresql://revisium:password@localhost:${pgPort}/postgres`;
+const PG_NOTIFY_PAYLOAD_SOFT_LIMIT_BYTES = 7000;
+
+function rowRunId(table: RuntimeTable, rowId: string, row: ControlPlaneRow): string | undefined {
+  if (table === 'task_runs') return rowId;
+  const candidate = row.data.run_id;
+  return typeof candidate === 'string' && candidate.length > 0 ? candidate : undefined;
 }
 
-export function controlPlaneNotificationDatabaseUrl(): string | null {
-  const runtime = readRuntime();
-  if (!runtime || !isAlive(runtime.pid)) return null;
-  return notificationDatabaseUrl(runtime.pgPort);
+export async function controlPlaneNotificationDatabaseUrl(): Promise<string> {
+  return (await ensureStorage()).revoDatabaseUrl;
 }
 
 let pool: pg.Pool | null = null;
@@ -38,11 +42,24 @@ function getPool(url: string): pg.Pool {
 }
 
 export async function notifyControlPlaneChange(change: Omit<ControlPlaneChange, 'emittedAt'>): Promise<void> {
-  const url = controlPlaneNotificationDatabaseUrl();
-  if (!url) return;
-  const payload = JSON.stringify({ ...change, emittedAt: new Date().toISOString() } satisfies ControlPlaneChange);
+  const storage = getActiveStorage();
+  if (!storage) return;
   try {
-    await getPool(url).query('SELECT pg_notify($1, $2)', [CONTROL_PLANE_CHANGE_CHANNEL, payload]);
+    const emittedAt = new Date().toISOString();
+    const runId = change.runId ?? (change.row ? rowRunId(change.table, change.rowId, change.row) : undefined);
+    const fullChange = { ...change, ...(runId ? { runId } : {}), emittedAt } satisfies ControlPlaneChange;
+    let payload = JSON.stringify(fullChange);
+    if (Buffer.byteLength(payload, 'utf8') > PG_NOTIFY_PAYLOAD_SOFT_LIMIT_BYTES) {
+      payload = JSON.stringify({
+        table: change.table,
+        action: change.action,
+        rowId: change.rowId,
+        ...(runId ? { runId } : {}),
+        rowOmitted: true,
+        emittedAt,
+      } satisfies ControlPlaneChange);
+    }
+    await getPool(storage.revoDatabaseUrl).query('SELECT pg_notify($1, $2)', [CONTROL_PLANE_CHANGE_CHANNEL, payload]);
   } catch {
   }
 }

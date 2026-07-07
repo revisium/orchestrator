@@ -71,10 +71,8 @@
     "@nestjs/platform-express": "11.1.24",
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
-    "@revisium/client": "^0.6.0",
     "@revisium/engine": "0.7.0",
     "@revisium/prisma-pg-json": "^1.6.0",
-    "@revisium/standalone": "2.8.2",
     "cache-manager": "^7.2.9",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.4",
@@ -94,6 +92,7 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.39.4",
+    "@revisium/client": "^0.6.0",
     "@types/node": "^24.0.0",
     "@types/pg": "^8.20.0",
     "eslint": "^9.39.4",

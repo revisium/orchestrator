@@ -21,9 +21,6 @@ export type TierObservation = {
 
 export type DoctorObservation = {
   host: TierObservation;
-  standalone: TierObservation;
-
-
 
   unexpectedPortOwners?: Array<{ label: string; port: number; pid: number }>;
 
@@ -75,7 +72,7 @@ export function buildDoctorReport(o: DoctorObservation): DoctorReport {
     );
   }
 
-  if (!o.host.present && !o.standalone.present) {
+  if (!o.host.present) {
     if (issues.length === 0) return { ok: false, issues: ['Stack is not running. Run `revo start`.'] };
     return { ok: false, issues };
   }
@@ -88,19 +85,6 @@ export function buildDoctorReport(o: DoctorObservation): DoctorReport {
     issues.push(
       `Host daemon (pid ${o.host.pid}) is running but its GraphQL front door on port ${o.host.port} is not responding.`,
     );
-  }
-
-  if (o.standalone.present && !o.standalone.alive) {
-    issues.push(`Stale runtime.json: recorded standalone pid ${o.standalone.pid} is not alive.`);
-  } else if (o.standalone.alive) {
-    if (o.host.alive) {
-      issues.push(
-        `Legacy standalone Revisium (pid ${o.standalone.pid}) is running on port ${o.standalone.port}; ` +
-          'Revo should use the host daemon and embedded storage only. Run `revo stop`.',
-      );
-    } else {
-      issues.push('Legacy standalone Revisium is running without the host daemon. Run `revo stop` to clear it.');
-    }
   }
 
   return { ok: issues.length === 0, issues };

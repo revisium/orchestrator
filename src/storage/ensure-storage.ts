@@ -29,6 +29,7 @@ export type StorageRuntime = {
 
 let ensurePromise: Promise<StorageRuntime> | undefined;
 let activeEmbeddedPostgres: EmbeddedPostgres | undefined;
+let activeStorage: StorageRuntime | undefined;
 
 function quoteIdentifier(name: string): string {
   return `"${name.replaceAll('"', '""')}"`;
@@ -112,12 +113,13 @@ async function ensureStorageUncached(): Promise<StorageRuntime> {
   process.env['DATABASE_URL'] = revoDatabaseUrl;
   runPrismaMigrations(revoDatabaseUrl);
 
-  return {
+  activeStorage = {
     pgPort,
     dataDir: config.dataDir,
     revoDatabaseUrl,
     dbosDatabaseUrl: dbosDatabaseUrl(pgPort),
   };
+  return activeStorage;
 }
 
 export async function ensureStorage(): Promise<StorageRuntime> {
@@ -128,9 +130,14 @@ export async function ensureStorage(): Promise<StorageRuntime> {
   return ensurePromise;
 }
 
+export function getActiveStorage(): StorageRuntime | undefined {
+  return activeStorage;
+}
+
 export async function shutdownStorage(): Promise<void> {
   const embedded = activeEmbeddedPostgres;
   activeEmbeddedPostgres = undefined;
+  activeStorage = undefined;
   ensurePromise = undefined;
   if (!embedded) return;
   await embedded.stop().catch(() => undefined);

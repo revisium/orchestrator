@@ -1,10 +1,9 @@
 import { guardSmokeIsolation } from '../src/smoke/isolation.js';
+import { createSmokeDataAccess } from './smoke-support.js';
 
 guardSmokeIsolation({ scriptName: 'smoke:control-plane' });
 
-const { createControlPlaneDataAccess } = await import('../src/control-plane/index.js');
-
-const cp = createControlPlaneDataAccess();
+const { ctx, draft: cp, head: headCp } = await createSmokeDataAccess();
 const suffix = Date.now();
 const runId = `smoke-run-${suffix}`;
 const taskId = `smoke-task-${suffix}`;
@@ -99,14 +98,17 @@ if (!runs.some((row) => row.rowId === runId)) {
   throw new Error(`Smoke run ${runId} was not listed from draft task_runs`);
 }
 
-const headCp = createControlPlaneDataAccess({ revision: 'head' });
-const headStep = await headCp.getRow('steps', stepId);
-if (headStep !== null) {
-  throw new Error(`Smoke step ${stepId} unexpectedly visible from head`);
-}
+try {
+  const headStep = await headCp.getRow('steps', stepId);
+  if (headStep !== null) {
+    throw new Error(`Smoke step ${stepId} unexpectedly visible from head`);
+  }
 
-console.log(`smokeRunId=${runId}`);
-console.log(`smokeTaskId=${taskId}`);
-console.log(`smokeStepId=${stepId}`);
-console.log('draftContainsSmokeRows=true');
-console.log('headContainsSmokeStep=false');
+  console.log(`smokeRunId=${runId}`);
+  console.log(`smokeTaskId=${taskId}`);
+  console.log(`smokeStepId=${stepId}`);
+  console.log('draftContainsSmokeRows=true');
+  console.log('headContainsSmokeStep=false');
+} finally {
+  await ctx.close();
+}

@@ -1,8 +1,4 @@
-import { sdk } from '@revisium/client';
-import type { Client, GetTableRowsDto } from '@revisium/client';
 import { ControlPlaneError } from './errors.js';
-import { legacyRevisiumDisabled } from './legacy-revisium.js';
-import { runtimeTables } from './tables.js';
 import type { ListRowsOptions } from './data-access.js';
 import type { PatchOperation } from './json-fields.js';
 
@@ -32,16 +28,10 @@ export type ControlPlaneTransport = {
   invalidate?(): void;
 };
 
-type ScopeContext = { revisionId: string; client: Client };
 type RecoverableScopeResolver<T> = {
   resolve(): Promise<T>;
   invalidate(): void;
 };
-type TablesData = NonNullable<Awaited<ReturnType<typeof sdk.tables>>['data']>;
-type RowsData = NonNullable<Awaited<ReturnType<typeof sdk.rows>>['data']>;
-type RowData = NonNullable<Awaited<ReturnType<typeof sdk.row>>['data']>;
-type CreateRowData = NonNullable<Awaited<ReturnType<typeof sdk.createRow>>['data']>;
-type MutationRowData = NonNullable<Awaited<ReturnType<typeof sdk.updateRow>>['data']>;
 
 export function withRequestTimeout(baseFetch: typeof fetch, timeoutMs: number): typeof fetch {
   return (input, init) => {
@@ -67,44 +57,7 @@ export function makeRecoverableScopeResolver<T>(loadScope: () => Promise<T>): Re
   };
 }
 
-function mapApiError(err: unknown, context: string): ControlPlaneError {
-  if (err instanceof ControlPlaneError) return err;
-  const apiErr = err as { statusCode?: number; message?: string };
-  const status = apiErr.statusCode;
-  const message = apiErr.message ?? String(err);
-
-  if (status === 404) {
-    return new ControlPlaneError('ROW_NOT_FOUND', `Row not found: ${context}`, { status, details: err });
-  }
-  if (status === 409 || (status === 400 && message.startsWith('Rows already exist:'))) {
-    return new ControlPlaneError('ROW_CONFLICT', `Row conflict: ${context}`, { status, details: err });
-  }
-  if (status === 400 || status === 422) {
-    return new ControlPlaneError('VALIDATION_FAILURE', `Validation failure: ${context}`, { status, details: err });
-  }
-  return new ControlPlaneError('HTTP_ERROR', `HTTP error ${status ?? 'unknown'}: ${context}: ${message}`, {
-    status,
-    details: err,
-  });
-}
-
-function toTransportRow(row: {
-  id: string;
-  data: Record<string, unknown>;
-  readonly?: boolean;
-  createdAt?: string;
-  updatedAt?: string;
-}): TransportRow {
-  return {
-    id: row.id,
-    data: row.data,
-    readonly: row.readonly,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-  };
-}
-
-type SdkListEdge = {
+type ListEdge = {
   cursor?: string;
   node?: {
     id: string;
@@ -115,7 +68,17 @@ type SdkListEdge = {
   };
 };
 
-export function mapTransportListEdges(edges: SdkListEdge[]): TransportList['edges'] {
+function toTransportRow(row: NonNullable<ListEdge['node']>): TransportRow {
+  return {
+    id: row.id,
+    data: row.data,
+    readonly: row.readonly,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
+export function mapTransportListEdges(edges: ListEdge[]): TransportList['edges'] {
   return edges.flatMap((edge) => edge.node ? [{ cursor: edge.cursor, node: toTransportRow(edge.node) }] : []);
 }
 
@@ -125,120 +88,4 @@ export function extractMutationRow(result: {
   const row = result.data?.row;
   if (!row) throw new ControlPlaneError('HTTP_ERROR', 'Malformed response');
   return row;
-}
-
-async function getScope(mode: RevisionMode): Promise<ScopeContext> {
-  return legacyRevisiumDisabled(`Legacy Revisium REST ${mode} transport`);
-}
-
-export function createClientTransport(mode: RevisionMode): ControlPlaneTransport {
-  const resolveScope = makeRecoverableScopeResolver<ScopeContext>(() => getScope(mode));
-
-  async function withScopeRetry<T>(
-    operation: (scope: ScopeContext) => Promise<{ data?: T; error?: unknown }>,
-    context: string,
-  ): Promise<T> {
-    const firstScope = await resolveScope.resolve();
-    const first = await operation(firstScope);
-    if (!first.error) return first.data as T;
-
-    const err = first.error as { statusCode?: number };
-    if (mode === 'draft' && err.statusCode === 404) {
-      resolveScope.invalidate();
-      const secondScope = await resolveScope.resolve();
-      const second = await operation(secondScope);
-      if (!second.error) return second.data as T;
-      throw mapApiError(second.error, context);
-    }
-
-    throw mapApiError(first.error, context);
-  }
-
-  async function assertReady(): Promise<void> {
-    let resultData: TablesData;
-    try {
-      resultData = await withScopeRetry<TablesData>(
-        ({ revisionId, client }) => sdk.tables({ client, path: { revisionId }, query: { first: 100 } }),
-        '/tables',
-      );
-    } catch (error) {
-      if (error instanceof ControlPlaneError && error.status === 404) {
-        throw new ControlPlaneError('BOOTSTRAP_NOT_APPLIED', 'Control-plane bootstrap is missing or not committed', {
-          status: 404,
-          details: error.details,
-        });
-      }
-      throw error;
-    }
-    const tableIds = new Set(
-      (resultData?.edges ?? []).flatMap((edge: { node?: { id: string } }) => edge.node ? [edge.node.id] : []),
-    );
-    const missing = runtimeTables.filter((t) => !tableIds.has(t));
-    if (missing.length > 0) {
-      throw new ControlPlaneError('BOOTSTRAP_NOT_APPLIED', 'Control-plane bootstrap is missing runtime tables', {
-        details: { missing },
-      });
-    }
-  }
-
-  async function listRows(table: string, options?: ListRowsOptions): Promise<TransportList> {
-    const body: GetTableRowsDto = {
-      first: options?.first ?? 100,
-      after: options?.after,
-      where: options?.where,
-      orderBy: options?.orderBy,
-    };
-    const data = await withScopeRetry<RowsData>(
-      ({ revisionId, client }) => sdk.rows({ client, path: { revisionId, tableId: table }, body }),
-      `${table}/rows`,
-    );
-    const edges = mapTransportListEdges((data?.edges ?? []) as SdkListEdge[]);
-    return { edges };
-  }
-
-  async function getRow(table: string, rowId: string): Promise<TransportRow> {
-    const data = await withScopeRetry<RowData>(
-      ({ revisionId, client }) => sdk.row({ client, path: { revisionId, tableId: table, rowId } }),
-      `${table}/${rowId}`,
-    );
-    return toTransportRow(data);
-  }
-
-  async function createRow(table: string, rowId: string, data: object): Promise<TransportRow> {
-    const resultData = await withScopeRetry<CreateRowData>(
-      ({ revisionId, client }) => sdk.createRow({
-        client,
-        path: { revisionId, tableId: table },
-        body: { rowId, data: data as Record<string, unknown> },
-      }),
-      `${table}/${rowId}`,
-    );
-    return toTransportRow(resultData!.row);
-  }
-
-  async function updateRow(table: string, rowId: string, data: object): Promise<TransportRow> {
-    const resultData = await withScopeRetry<MutationRowData>(
-      ({ revisionId, client }) => sdk.updateRow({
-        client,
-        path: { revisionId, tableId: table, rowId },
-        body: { data: data as Record<string, unknown> },
-      }),
-      `${table}/${rowId}`,
-    );
-    return toTransportRow(extractMutationRow({ data: resultData }));
-  }
-
-  async function patchRow(table: string, rowId: string, patches: PatchOperation[]): Promise<TransportRow> {
-    const resultData = await withScopeRetry<MutationRowData>(
-      ({ revisionId, client }) => sdk.patchRow({
-        client,
-        path: { revisionId, tableId: table, rowId },
-        body: { patches: patches as Array<{ op: 'replace'; path: string; value?: unknown }> },
-      }),
-      `${table}/${rowId}`,
-    );
-    return toTransportRow(extractMutationRow({ data: resultData }));
-  }
-
-  return { mode, assertReady, listRows, getRow, createRow, updateRow, patchRow, invalidate: () => resolveScope.invalidate() };
 }

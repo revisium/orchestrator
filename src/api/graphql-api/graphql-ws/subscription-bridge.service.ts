@@ -29,15 +29,14 @@ export class ControlPlaneSubscriptionBridge implements OnModuleInit, OnModuleDes
   ) {}
 
   async onModuleInit() {
-    const url = controlPlaneNotificationDatabaseUrl();
-    if (!url) return;
-    const client = new pg.Client({ connectionString: url });
+    let client: pg.Client | null = null;
     try {
+      client = new pg.Client({ connectionString: await controlPlaneNotificationDatabaseUrl() });
       await client.connect();
       await client.query(`LISTEN ${CONTROL_PLANE_CHANGE_CHANNEL}`);
     } catch (error) {
       this.logger.warn(`Control-plane LISTEN setup skipped: ${error instanceof Error ? error.message : String(error)}`);
-      await client.end().catch(() => undefined);
+      await client?.end().catch(() => undefined);
       return;
     }
     client.on('notification', (message) => void this.handleNotification(message.payload));
@@ -63,23 +62,29 @@ export class ControlPlaneSubscriptionBridge implements OnModuleInit, OnModuleDes
 
   private async publishChange(change: ControlPlaneChange): Promise<void> {
     if (change.table === 'task_runs') {
-      await this.pubSub.publish(RUN_UPDATED_TOPIC, { runUpdated: mapRunRow(change.row), runId: change.rowId });
+      if (change.row) {
+        await this.pubSub.publish(RUN_UPDATED_TOPIC, { runUpdated: mapRunRow(change.row), runId: change.rowId });
+      }
       await this.publishWorkflow(change.rowId);
       return;
     }
     if (change.table === 'events' && change.action === 'create') {
       const runId = changeRunId(change);
-      await this.pubSub.publish(RUN_EVENT_APPENDED_TOPIC, { runEventAppended: mapRunEventRow(change.row), runId });
+      if (change.row) {
+        await this.pubSub.publish(RUN_EVENT_APPENDED_TOPIC, { runEventAppended: mapRunEventRow(change.row), runId });
+      }
       await this.publishWorkflow(runId);
       return;
     }
     if (change.table === 'inbox' && change.action === 'create') {
       const runId = changeRunId(change);
-      await this.pubSub.publish(INBOX_ITEM_ADDED_TOPIC, { inboxItemAdded: mapInboxRow(change.row), runId });
+      if (change.row) {
+        await this.pubSub.publish(INBOX_ITEM_ADDED_TOPIC, { inboxItemAdded: mapInboxRow(change.row), runId });
+      }
       await this.publishWorkflow(runId);
       return;
     }
-    if (change.table === 'inbox' && change.row.data.status === 'resolved') {
+    if (change.table === 'inbox' && change.row?.data.status === 'resolved') {
       const runId = changeRunId(change);
       await this.pubSub.publish(INBOX_ITEM_RESOLVED_TOPIC, { inboxItemResolved: mapInboxRow(change.row), runId });
       await this.publishWorkflow(runId);
@@ -87,7 +92,14 @@ export class ControlPlaneSubscriptionBridge implements OnModuleInit, OnModuleDes
     }
     if (change.table === 'cost_ledger' && change.action === 'create') {
       const runId = changeRunId(change);
-      await this.pubSub.publish(RUN_COST_RECORDED_TOPIC, { runCostRecorded: mapRunCostRow(change.row), runId });
+      if (change.row) {
+        await this.pubSub.publish(RUN_COST_RECORDED_TOPIC, { runCostRecorded: mapRunCostRow(change.row), runId });
+      }
+      await this.publishWorkflow(runId);
+      return;
+    }
+    const runId = changeRunId(change);
+    if (runId) {
       await this.publishWorkflow(runId);
     }
   }

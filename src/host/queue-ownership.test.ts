@@ -55,7 +55,7 @@ test('acquireQueueOwnership: loser is not owner and closes its probe connection 
   assert.equal(calls.ended, 1, 'release is a no-op for a loser');
 });
 
-test('acquireQueueOwnership: connects to the standalone maintenance db on the given port', async () => {
+test('acquireQueueOwnership: connects to the embedded Postgres maintenance db on the given port', async () => {
   let seenUrl = '';
   const { client } = fakeClient(true);
   await acquireQueueOwnership('dev', 15840, { createClient: (u) => { seenUrl = u; return client; } });

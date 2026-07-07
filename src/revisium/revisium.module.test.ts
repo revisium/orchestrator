@@ -29,9 +29,9 @@ function configureIsolatedStorageEnv(label: string): void {
   process.env['REVO_DBOS_DB'] = `dbos_${label}_${suffix}`;
 }
 
-// ─── Nest module standalone context test ─────────────────────
+// ─── Nest module application context test ─────────────────────
 
-test('RevisiumModule creates a standalone context and provides all services without network call (edge 11)', async () => {
+test('RevisiumModule creates an application context and provides all services without network call (edge 11)', async () => {
   configureIsolatedStorageEnv('module');
   const { ensureStorage, shutdownStorage } = await import('../storage/ensure-storage.js');
   await ensureStorage();
@@ -132,19 +132,15 @@ function srcPath(...parts: string[]): string {
 
 /**
  * Documented baseline: the EXACT set of non-test .ts files under src/ that are
- * allowed to import @revisium/client (the control-plane/run layer) PLUS the named
- * legacy exception (src/worker/build-context.ts).
+ * allowed to import @revisium/client type-only DTOs.
  *
  * If a future file is correctly added to the control-plane/run layer this test will
  * need updating — that is intentional: changes to the baseline require explicit review.
  */
 const BASELINE_IMPORTERS = new Set([
-  srcPath('control-plane', 'bootstrap.ts'),
-  srcPath('control-plane', 'client-transport.ts'),
   srcPath('control-plane', 'data-access.ts'),
   srcPath('control-plane', 'schema-migration.ts'),
   srcPath('run', 'inspect-run.ts'),
-  // Named legacy exception (§3.9): worker loop, slated for deletion (ADR-0001).
   srcPath('worker', 'build-context.ts'),
 ]);
 
@@ -187,16 +183,13 @@ test('Invariant #4 (b): full-tree @revisium/client importer set equals the docum
   );
 });
 
-test('Invariant #4 (c): build-context.ts is the named legacy exception', () => {
+test('Invariant #4 (c): @revisium/client imports remain type-only', () => {
   const buildContextPath = srcPath('worker', 'build-context.ts');
   const src = readFileSync(buildContextPath, 'utf8');
-  // Verify it still imports @revisium/client (so the exception is still valid).
   assert.ok(
-    src.includes('@revisium/client'),
-    'build-context.ts should still import @revisium/client (it is the documented legacy exception)',
+    src.includes("import type { JsonFilterDto } from '@revisium/client'"),
+    'build-context.ts should only import @revisium/client as a type-only DTO source',
   );
-  // The rationale is documented in TASK.md §3.9 and AGENTS.md (do not extend the legacy worker loop).
-  assert.ok(true, 'build-context.ts acknowledged as legacy exception per §3.9');
 });
 
 test('Invariant #4 (b2): new service/module files do NOT import @revisium/client directly', () => {

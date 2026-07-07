@@ -90,6 +90,7 @@ export function mapInboxRow(row: ControlPlaneRow) {
 }
 
 export function changeRunId(change: ControlPlaneChange): string {
+  if (change.runId) return change.runId;
   if (change.table === 'task_runs') return change.rowId;
-  return str(change.row.data.run_id);
+  return change.row ? str(change.row.data.run_id) : '';
 }

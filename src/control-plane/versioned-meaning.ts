@@ -1,4 +1,4 @@
-import { legacyRevisiumDisabled } from './legacy-revisium.js';
+import { ControlPlaneError } from './errors.js';
 
 export type VersionedMeaningTable = 'playbooks' | 'roles' | 'pipelines';
 
@@ -45,18 +45,17 @@ function isRowNotFound(error: unknown): boolean {
   );
 }
 
-async function createDraftScope(): Promise<VersionedMeaningScope> {
-  return legacyRevisiumDisabled('Legacy Revisium versioned-meaning draft scope');
-}
-
 export function createVersionedMeaningAccess(
   options: VersionedMeaningAccessOptions = {},
 ): VersionedMeaningAccess {
   const dryRun = options.dryRun ?? false;
-  const scopeFactory = options.scopeFactory ?? createDraftScope;
+  const scopeFactory = options.scopeFactory;
   let scopePromise: Promise<VersionedMeaningScope> | undefined;
 
   function scope(): Promise<VersionedMeaningScope> {
+    if (!scopeFactory) {
+      throw new ControlPlaneError('DAEMON_NOT_RUNNING', 'Engine-backed versioned-meaning scope is not available');
+    }
     scopePromise ??= scopeFactory();
     return scopePromise;
   }

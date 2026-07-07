@@ -11,12 +11,11 @@
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { repoRoot } from '../config.js';
-import { PlaybookInstaller, type PlaybookInstallResult } from '../playbook/playbook-installer.js';
+import type { PlaybookInstallResult } from '../playbook/playbook-installer.js';
 import { resolvePlaybookSource } from '../playbook/source-resolver.js';
 import { readPlaybookManifest } from '../playbook/manifest.js';
 import { loadPlaybookCatalogs } from '../playbook/catalog-loader.js';
 import { mapPlaybookRows } from '../playbook/import-mapper.js';
-import { createVersionedMeaningAccess } from './versioned-meaning.js';
 
 
 export const DEFAULT_PLAYBOOK_ID = 'revisium-default';
@@ -134,20 +133,6 @@ export async function seedDefaultPlaybook(
     throw err;
   }
 }
-
-
-
-
-export function createDaemonInstaller(
-  listPlaybooks: () => Promise<Array<{ id: string; version?: string; catalogHash?: string }>>,
-): DefaultPlaybookInstaller {
-  return {
-    listPlaybooks,
-    install: (options) =>
-      new PlaybookInstaller({ access: createVersionedMeaningAccess({}) }).install(options),
-  };
-}
-
 
 
 
