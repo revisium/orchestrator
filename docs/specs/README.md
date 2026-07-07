@@ -25,6 +25,9 @@ archive of superseded plans.
 | [run-profiles-v1.spec.md](./run-profiles-v1.spec.md) | Draft public run-profile contract for provider-neutral `feature-development`, profile-driven topology/bindings, MCP ergonomics, and replay pins |
 | [playbook-storage-v1.spec.md](./playbook-storage-v1.spec.md) | Versioned playbook snapshot storage, document/entity projections, relation records, and route-time pins |
 | [revo-playbook-materialization-v1.spec.md](./revo-playbook-materialization-v1.spec.md) | `.revo/playbook` worktree bundle layout, manifest validation, per-step selected references, and worker prompt discovery |
+| [storage-database-layout-v1.spec.md](./storage-database-layout-v1.spec.md) | Draft storage v2 topology, database ownership, bootstrap order, and migration planes |
+| [revo-prisma-engine-schema-v1.spec.md](./revo-prisma-engine-schema-v1.spec.md) | Draft Revo product DB schema ownership and embedded engine table compatibility |
+| [revo-project-knowledge-migrations-v1.spec.md](./revo-project-knowledge-migrations-v1.spec.md) | Draft Revo project ADR/KB table initialization and engine migration contract |
 
 ## Authoring rules
 
