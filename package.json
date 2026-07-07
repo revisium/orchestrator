@@ -40,7 +40,7 @@
     "build": "tsc -p tsconfig.build.json",
     "prepack": "pnpm run build",
     "prisma:generate": "prisma generate",
-    "prisma:generated:check": "pnpm run prisma:generate && git diff --exit-code -- src/__generated__",
+    "prisma:generated:check": "pnpm run prisma:generate && git diff --exit-code -- src/__generated__ && git status --short -- src/__generated__ && test -z \"$(git status --porcelain -- src/__generated__)\"",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "revo": "tsx src/cli/index.ts",
     "smoke:control-plane": "tsx scripts/smoke-control-plane-data-access.ts",

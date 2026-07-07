@@ -24,35 +24,87 @@ const ALLOWED_REVO_ADDITIVE_LINES: Record<string, Set<string>> = {
   ]),
 };
 
-function normalizeLine(line: string): string {
-  return line.trim().replace(/\s+/g, ' ');
+function normalizeEntry(entry: string): string {
+  return entry
+    .trim()
+    .replace(/\s+/g, ' ')
+    .replace(/\(\s+/g, '(')
+    .replace(/\s+\)/g, ')')
+    .replace(/\[\s+/g, '[')
+    .replace(/\s+\]/g, ']')
+    .replace(/\s*,\s*/g, ', ');
 }
 
-function readModelLines(schema: string): Map<string, Set<string>> {
+function delimiterBalance(value: string): number {
+  let balance = 0;
+  for (const char of value) {
+    if (char === '(' || char === '[') balance += 1;
+    if (char === ')' || char === ']') balance -= 1;
+  }
+  return balance;
+}
+
+function readModelEntries(schema: string): Map<string, Set<string>> {
   const models = new Map<string, Set<string>>();
   const modelRegex = /^model\s+(\w+)\s+\{([\s\S]*?)^}/gm;
   for (const match of schema.matchAll(modelRegex)) {
     const [, modelName, body] = match;
-    models.set(
-      modelName,
-      new Set(
-        body
-          .split(/\r?\n/)
-          .map(normalizeLine)
-          .filter((line) => line.length > 0 && !line.startsWith('//')),
-      ),
-    );
+    const entries = new Set<string>();
+    const current: string[] = [];
+    let balance = 0;
+
+    function flush(): void {
+      const entry = normalizeEntry(current.join(' '));
+      if (entry.length > 0 && !entry.startsWith('//')) entries.add(entry);
+      current.length = 0;
+      balance = 0;
+    }
+
+    for (const rawLine of body.split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (line.length === 0 || line.startsWith('//')) continue;
+      current.push(line);
+      balance += delimiterBalance(line);
+      if (balance <= 0) flush();
+    }
+    if (current.length > 0) flush();
+
+    models.set(modelName, entries);
   }
   return models;
 }
+
+test('schema fragment comparison normalizes multiline Prisma attributes', () => {
+  const singleLine = readModelEntries(`
+model Example {
+  id String @id
+  left String
+  right String
+  @@unique([left, right])
+}
+`).get('Example');
+  const multiLine = readModelEntries(`
+model Example {
+  id String @id
+  left String
+  right String
+  @@unique([
+    left,
+    right
+  ])
+}
+`).get('Example');
+
+  assert.deepEqual(multiLine, singleLine);
+});
 
 test('Revo Prisma schema contains the pinned engine-required model fragment', () => {
   const engineRoot = dirname(require.resolve('@revisium/engine/package.json'));
   const engineSchema = readFileSync(join(engineRoot, 'prisma/schema.prisma'), 'utf8');
   const revoSchema = readFileSync(repoSchemaPath, 'utf8');
 
-  const engineModels = readModelLines(engineSchema);
-  const revoModels = readModelLines(revoSchema);
+  const engineModels = readModelEntries(engineSchema);
+  const revoModels = readModelEntries(revoSchema);
   const violations: string[] = [];
 
   for (const modelName of ENGINE_REQUIRED_MODELS) {
