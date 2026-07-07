@@ -2001,16 +2001,46 @@ test('pollPr: a failing REQUIRED check → ci_changes', async () => {
   }
 });
 
-test('pollPr: unknown/empty required-set → fail-safe, counts ALL failures (current behavior)', async () => {
+test('pollPr: empty required-set still fail-safes to all failures, but required-check fetch failure rechecks', async () => {
   const collect = async (): Promise<PollPrReadiness> =>
     readiness({ fail: ['SonarCloud'], list: [{ name: 'Verify', result: 'SUCCESS' }, { name: 'SonarCloud', result: 'FAILURE' }] });
   // Empty required-set (can't determine required-ness) → fall back to counting all failures.
   const empty = await pollPr(POLL_INPUT, pollDeps(collect, { requiredChecks: () => new Set<string>() }));
   assert.ok(!('needsHuman' in empty) && empty.verdict === 'ci_changes', 'empty required-set falls back to all-failures (never silently clean)');
 
-  // gh error path → same fail-safe.
   const errored = await pollPr(POLL_INPUT, pollDeps(collect, { requiredChecks: () => { throw new Error('gh graphql failed'); } }));
-  assert.ok(!('needsHuman' in errored) && errored.verdict === 'ci_changes', 'a gh error falls back to all-failures');
+  assert.ok(!('needsHuman' in errored));
+  if (!('needsHuman' in errored)) {
+    assert.equal(errored.verdict, 'recheck', 'a gh error rechecks instead of burning ciLoop on advisory failures');
+    assert.deepEqual(errored.ciFailures.map((c) => c.name), ['SonarCloud'], 'ciFailures keeps advisory context');
+    assert.ok(errored.evidence.some((item) => item.includes('gh graphql failed')), 'evidence names required-check fetch failure');
+  }
+});
+
+test('#275: required-check fetch failure rechecks, then success cleans advisory CI', async () => {
+  const collect = async (): Promise<PollPrReadiness> =>
+    readiness({ fail: ['SonarCloud'], list: [{ name: 'Verify', result: 'SUCCESS' }, { name: 'SonarCloud', result: 'FAILURE' }] });
+  let requiredFetches = 0;
+  const requiredChecks: PollPrDeps['requiredChecks'] = () => {
+    requiredFetches++;
+    if (requiredFetches === 1) throw new Error('gh graphql failed while fetching required checks');
+    return new Set(['Verify']);
+  };
+
+  const first = await pollPr(POLL_INPUT, pollDeps(collect, { requiredChecks }));
+  assert.ok(!('needsHuman' in first));
+  if (!('needsHuman' in first)) {
+    assert.equal(first.verdict, 'recheck');
+    assert.deepEqual(first.ciFailures.map((c) => c.name), ['SonarCloud']);
+    assert.ok(first.evidence.some((item) => item.includes('gh graphql failed while fetching required checks')));
+  }
+
+  const second = await pollPr(POLL_INPUT, pollDeps(collect, { requiredChecks }));
+  assert.ok(!('needsHuman' in second));
+  if (!('needsHuman' in second)) {
+    assert.equal(second.verdict, 'clean', 'non-required red check stops driving the verdict after required checks are known');
+    assert.deepEqual(second.ciFailures.map((c) => c.name), ['SonarCloud'], 'advisory failure evidence is preserved');
+  }
 });
 
 test('pollPr: all green, no threads → clean', async () => {
@@ -2281,7 +2311,7 @@ test('pollPr: CI red does NOT ready the PR (no review of broken code) → ci_cha
   const ghCalls: string[][] = [];
   const collect = async (): Promise<PollPrReadiness> =>
     readiness({ fail: ['build'], list: [{ name: 'build', result: 'FAILURE' }] });
-  const deps = pollDeps(collect, { reviewGracePolls: 0 });
+  const deps = pollDeps(collect, { reviewGracePolls: 0, requiredChecks: () => new Set(['build']) });
   deps.execGh = (args) => { ghCalls.push(args); return ''; };
   const r = await pollPr(POLL_INPUT, deps);
   assert.ok(!('needsHuman' in r) && r.verdict === 'ci_changes');

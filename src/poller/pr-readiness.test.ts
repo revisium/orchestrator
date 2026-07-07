@@ -1807,7 +1807,7 @@ test('fetchRequiredCheckNames: empty/missing rollup → empty set (caller applie
   assert.equal(fetchRequiredCheckNames('owner/repo', 42, nullRollup).size, 0);
 });
 
-test('fetchRequiredCheckNames: non-JSON gh output throws (so pollPr can fail-safe to all-failures)', () => {
+test('fetchRequiredCheckNames: non-JSON gh output throws so pollPr can classify the fetch failure', () => {
   const execGh: ExecGhFn = () => 'Error: authentication required';
   assert.throws(() => fetchRequiredCheckNames('owner/repo', 42, execGh), /non-JSON/);
 });
@@ -1875,6 +1875,18 @@ test('#233: green CI + unresolved review threads → review_changes, not ready/c
   assert.equal(readiness.verdict, 'needs_work', 'unresolved threads cause needs_work verdict');
   assert.equal(readiness.nextAction, 'developer_fix', 'nextAction is developer_fix with threads');
   assert.equal(readiness.reviewThreads.unresolvedCount, 1);
+});
+
+test('#275: incomplete reviewThreads GraphQL response is invalid, not empty threads', async () => {
+  const terminalView = prViewResponse([checkRun('CI', 'COMPLETED', 'SUCCESS')], {
+    number: 42, state: 'OPEN',
+  });
+  const execGh = makeFullResponses(terminalView, [], [], [], null, { data: {} });
+
+  await assert.rejects(
+    collectPrReadiness({ repo: 'owner/repo', prNumber: 42, includeReviewThreads: true }, execGh),
+    /invalid GraphQL shape.*reviewThreads.*repository/,
+  );
 });
 
 test('#233: COMMENTED bot review state does not suppress unresolved threads', async () => {
