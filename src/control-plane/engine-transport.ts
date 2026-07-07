@@ -148,10 +148,23 @@ function isStaleDraftScopeError(error: unknown): boolean {
   );
 }
 
+function isBranchUniqueConstraintError(error: unknown): boolean {
+  const err = error as { code?: unknown; meta?: { modelName?: unknown } } | null;
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    err?.code === 'P2002' &&
+    (err.meta?.modelName === 'Branch' ||
+      /Branch_name_projectId_key|Unique constraint failed.*name.*projectId/i.test(
+        message,
+      ))
+  );
+}
+
 export async function ensureControlPlaneProject(
   prisma: RevoPrismaService,
 ): Promise<void> {
   const { project, branch } = getConfig();
+  const branchWhere = { name_projectId: { name: branch, projectId: project } };
   await prisma.revoProject.upsert({
     where: { id: project },
     create: {
@@ -171,7 +184,7 @@ export async function ensureControlPlaneProject(
   });
 
   const existing = await prisma.branch.findUnique({
-    where: { name_projectId: { name: branch, projectId: project } },
+    where: branchWhere,
     select: { id: true },
   });
   if (existing) return;
@@ -180,54 +193,63 @@ export async function ensureControlPlaneProject(
   const headRevisionId = nowId('revision');
   const draftRevisionId = nowId('revision');
 
-  await prisma.$transaction(async (tx) => {
-    const raced = await tx.branch.findUnique({
-      where: { name_projectId: { name: branch, projectId: project } },
-      select: { id: true },
-    });
-    if (raced) return;
+  try {
+    await prisma.$transaction(async (tx) => {
+      const raced = await tx.branch.findUnique({
+        where: branchWhere,
+        select: { id: true },
+      });
+      if (raced) return;
 
-    await tx.branch.create({
-      data: {
-        id: branchId,
-        name: branch,
-        isRoot: true,
-        projectId: project,
-      },
-    });
-    await tx.revision.create({
-      data: {
-        id: headRevisionId,
-        branchId,
-        isHead: true,
-        isStart: true,
-        hasChanges: false,
-      },
-    });
-    await tx.revision.create({
-      data: {
-        id: draftRevisionId,
-        branchId,
-        parentId: headRevisionId,
-        isDraft: true,
-        hasChanges: false,
-      },
-    });
-    for (const tableId of SYSTEM_TABLES) {
-      await tx.table.create({
+      await tx.branch.create({
         data: {
-          id: tableId,
-          versionId: nowId('table'),
-          createdId: nowId('table-created'),
-          readonly: true,
-          system: true,
-          revisions: {
-            connect: [{ id: headRevisionId }, { id: draftRevisionId }],
-          },
+          id: branchId,
+          name: branch,
+          isRoot: true,
+          projectId: project,
         },
       });
-    }
-  });
+      await tx.revision.create({
+        data: {
+          id: headRevisionId,
+          branchId,
+          isHead: true,
+          isStart: true,
+          hasChanges: false,
+        },
+      });
+      await tx.revision.create({
+        data: {
+          id: draftRevisionId,
+          branchId,
+          parentId: headRevisionId,
+          isDraft: true,
+          hasChanges: false,
+        },
+      });
+      for (const tableId of SYSTEM_TABLES) {
+        await tx.table.create({
+          data: {
+            id: tableId,
+            versionId: nowId('table'),
+            createdId: nowId('table-created'),
+            readonly: true,
+            system: true,
+            revisions: {
+              connect: [{ id: headRevisionId }, { id: draftRevisionId }],
+            },
+          },
+        });
+      }
+    });
+  } catch (error) {
+    if (!isBranchUniqueConstraintError(error)) throw error;
+    const raced = await prisma.branch.findUnique({
+      where: branchWhere,
+      select: { id: true },
+    });
+    if (!raced) throw error;
+  }
 }
 
 async function resolveScope(

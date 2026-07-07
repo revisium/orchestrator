@@ -67,7 +67,7 @@ type DepOverrides = {
 function buildDeps(events: AppendEventInput[], overrides: DepOverrides = {}): ScriptRegistryDeps {
   return {
     appendEvent: async (e) => { events.push(e); },
-    releaseWorktreeFn: overrides.releaseWorktreeFn ?? (async () => {}),
+    releaseWorktreeFn: overrides.releaseWorktreeFn ?? (async () => ({ released: true, worktreePath: '/fake/worktree' })),
     integrateFn: overrides.integrateFn ?? (async (_: IntegratorInput): Promise<IntegratorOutput> => ({
       prUrl: 'https://example/pr/1', branch: 'feat/x', prNumber: 1, headSha: 'sha1', status: 'pushed',
     })),
@@ -98,7 +98,12 @@ function buildDeps(events: AppendEventInput[], overrides: DepOverrides = {}): Sc
 test('registry: cleanupWorktree releases worktree, emits worktree_released, returns ok', async () => {
   const events: AppendEventInput[] = [];
   let released = false;
-  const deps = buildDeps(events, { releaseWorktreeFn: async () => { released = true; } });
+  const deps = buildDeps(events, {
+    releaseWorktreeFn: async () => {
+      released = true;
+      return { released: true, worktreePath: '/fake/worktree' };
+    },
+  });
   const registry = buildSystemScriptRegistry(deps);
   const handler = registry.get('script:cleanupWorktree')!;
 
@@ -113,7 +118,26 @@ test('registry: cleanupWorktree releases worktree, emits worktree_released, retu
   assert.deepEqual(events[0].payload, { nodeId: 'scriptNode' });
 });
 
-test('registry: cleanupWorktree swallows a throwing releaseWorktreeFn and still emits event', async () => {
+test('registry: cleanupWorktree emits cleanup_failed when releaseWorktreeFn preserves a dirty worktree', async () => {
+  const events: AppendEventInput[] = [];
+  const worktreePath = '/fake/worktree/dirty-run';
+  const deps = buildDeps(events, {
+    releaseWorktreeFn: async () => ({ released: false, reason: 'dirty', worktreePath }),
+  });
+  const registry = buildSystemScriptRegistry(deps);
+  const handler = registry.get('script:cleanupWorktree')!;
+
+  const result = await handler({ runId: RUN_ID, decision: makeDecision('script:cleanupWorktree'), ctx: CTX, bindingByRef: new Map(), stepKey: 'cleanupWorktree', inputs: {} });
+
+  assert.equal(result.outcome, 'ok');
+  assert.deepEqual((result as { outcome: 'ok'; pointer: unknown }).pointer, { released: false, reason: 'dirty', worktreePath });
+  assert.equal(events.length, 1);
+  assert.equal(events[0].type, 'cleanup_failed');
+  assert.equal(events[0].stepKey, 'cleanupWorktree');
+  assert.deepEqual(events[0].payload, { nodeId: 'scriptNode', released: false, reason: 'dirty', worktreePath });
+});
+
+test('registry: cleanupWorktree emits cleanup_failed when releaseWorktreeFn throws', async () => {
   const events: AppendEventInput[] = [];
   const deps = buildDeps(events, { releaseWorktreeFn: async () => { throw new Error('disk error'); } });
   const registry = buildSystemScriptRegistry(deps);
@@ -122,8 +146,11 @@ test('registry: cleanupWorktree swallows a throwing releaseWorktreeFn and still 
   const result = await handler({ runId: RUN_ID, decision: makeDecision('script:cleanupWorktree'), ctx: CTX, bindingByRef: new Map(), stepKey: 'cleanupWorktree', inputs: {} });
 
   assert.equal(result.outcome, 'ok');
-  assert.equal(events.length, 1, 'event still emitted despite throw');
-  assert.equal(events[0].type, 'worktree_released');
+  assert.deepEqual((result as { outcome: 'ok'; pointer: unknown }).pointer, { released: false, error: 'disk error' });
+  assert.equal(events.length, 1);
+  assert.equal(events[0].type, 'cleanup_failed');
+  assert.equal(events[0].stepKey, 'cleanupWorktree');
+  assert.deepEqual(events[0].payload, { nodeId: 'scriptNode', error: 'disk error', released: false });
 });
 
 // ──────────────────────────────────────────────────────────────────────────────

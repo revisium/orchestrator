@@ -49,6 +49,7 @@ export type RunCase = {
   integrator?: IntegratorOutcome;
   agent?: AgentSpec;
   developerWrite?: string;
+  cleanup?: { releaseWorktreeFails?: boolean; dirtyWorktreeBeforeRelease?: boolean };
 };
 
 export type PipelineScenario = {
@@ -63,7 +64,7 @@ export type PipelineScenario = {
   integrator?: IntegratorOutcome;
   agent?: AgentSpec;
   developerWrite?: boolean;
-  cleanup?: { releaseWorktreeFails?: boolean };
+  cleanup?: { releaseWorktreeFails?: boolean; dirtyWorktreeBeforeRelease?: boolean };
   gates?: GateStep[];
   expect: ScenarioExpect;
 };
@@ -213,6 +214,7 @@ export async function pipelineScenario(
     ...(scenario.integrator ? { integrator: scenario.integrator } : {}),
     ...(scenario.agent ? { agent: scenario.agent } : {}),
     ...(scenario.developerWrite === false ? {} : { developerWrite: repo }),
+    ...(scenario.cleanup ? { cleanup: scenario.cleanup } : {}),
   };
   runCases.set(created.runId, runCase);
   if (runCase.developerWrite) h.developerWrites.set(created.runId, runCase.developerWrite);

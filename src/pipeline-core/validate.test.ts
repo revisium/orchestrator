@@ -702,8 +702,8 @@ test('error: CYCLE_WITHOUT_COUNTER fires for conjunctive counter branches gated 
   assert.ok(diags.some((diag) => diag.code === 'CYCLE_WITHOUT_COUNTER' && diag.nodeId === 'router'));
 });
 
-test('warning: SCRIPT_FAILURE_UNROUTED fires on current bundled default template', () => {
-  assert.deepEqual(bundledWarningSites('SCRIPT_FAILURE_UNROUTED'), ['cleanupWorktree']);
+test('warning: SCRIPT_FAILURE_UNROUTED is absent from the current bundled default template', () => {
+  assert.deepEqual(bundledWarningSites('SCRIPT_FAILURE_UNROUTED'), []);
 });
 
 test('warning: HUMAN_OFFRAMP_UNREACHABLE is absent from the current bundled default template', () => {

@@ -1,5 +1,9 @@
 import { after, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { getConfig } from '../config.js';
+import { worktreePathFor } from '../control-plane/resolve-cwd.js';
 import {
   createRunHarness,
   createTargetRepo,
@@ -26,6 +30,17 @@ async function targetHarness(): Promise<RunHarness> {
     sharedHarness = await createRunHarness({
       gh: (calls) => routedGhEmulator(sharedRunCases, calls),
       agent: (sink) => routedRunCaseAgent(sharedRunCases, sink),
+      releaseWorktree: async (runId, taskId, baseRelease) => {
+        const cleanup = sharedRunCases.get(runId)?.cleanup;
+        if (cleanup?.releaseWorktreeFails) {
+          throw new Error('forced cleanup release failure');
+        }
+        if (cleanup?.dirtyWorktreeBeforeRelease) {
+          const worktreePath = worktreePathFor(getConfig().dataDir, runId);
+          writeFileSync(join(worktreePath, 'dirty-before-release.txt'), 'preserve worktree\n', 'utf8');
+        }
+        return baseRelease(runId, taskId);
+      },
     });
     await givenSeededDefaultPlaybook(sharedHarness);
   }
@@ -34,21 +49,13 @@ async function targetHarness(): Promise<RunHarness> {
 
 async function runTargetScenario(title: string, scenario: Omit<PipelineScenario, 'title' | 'playbook' | 'repo'>): Promise<string[][]> {
   const target = createTargetRepo();
-  const runCases = scenario.cleanup?.releaseWorktreeFails ? new Map<string, RunCase>() : sharedRunCases;
-  const h = scenario.cleanup?.releaseWorktreeFails
-    ? await createRunHarness({
-        gh: (calls) => routedGhEmulator(runCases, calls),
-        agent: (sink) => routedRunCaseAgent(runCases, sink),
-        releaseWorktree: async () => { throw new Error('forced cleanup release failure'); },
-      })
-    : await targetHarness();
+  const runCases = sharedRunCases;
+  const h = await targetHarness();
   try {
-    if (scenario.cleanup?.releaseWorktreeFails) await givenSeededDefaultPlaybook(h);
     const ghCallStart = h.ghCalls.length;
     await pipelineScenario(h, runCases, { title, playbook: 'default', repo: target, ...scenario });
     return h.ghCalls.slice(ghCallStart);
   } finally {
-    if (scenario.cleanup?.releaseWorktreeFails) await h.close();
     target.cleanup();
   }
 }
@@ -231,17 +238,19 @@ test('#276: questionGate wontfix routes directly to respondThreads with the huma
   assertReviewReplyIncludes(calls, note);
 });
 
-test('#277: cleanupWorktree failure after successful merge completes with cleanup_failed event', {
-  skip: '#277: pending cleanup failure target routing',
-}, async () => {
-  await runTargetScenario('#277: cleanupWorktree failure after successful merge completes with cleanup_failed event', {
+test('#277: cleanupWorktree dirty preserve after successful merge completes with cleanup_failed event', { skip: e2eSkip }, async () => {
+  await runTargetScenario('#277: cleanupWorktree dirty preserve after successful merge completes with cleanup_failed event', {
     executionProfile: STUB_AGENT,
     gh: 'happy',
-    cleanup: { releaseWorktreeFails: true },
+    cleanup: { dirtyWorktreeBeforeRelease: true },
     gates: [['plan', 'approved'], ['merge', 'approved']],
     expect: {
       terminal: 'completed',
-      path: ['merge_confirmed', 'cleanup_failed', 'run_completed'],
+      path: [
+        'merge_confirmed',
+        { type: 'cleanup_failed', payload: { reason: 'dirty', released: false } },
+        'run_completed',
+      ],
       noEvents: ['pipeline_blocked'],
     },
   });
