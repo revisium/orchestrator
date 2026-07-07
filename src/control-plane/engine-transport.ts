@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import type { EngineApiService, InputJsonValue, RowWhereInput } from '@revisium/engine';
+import type {
+  EngineApiService,
+  InputJsonValue,
+  RowWhereInput,
+} from '@revisium/engine';
 import { getConfig } from '../config.js';
 import type { RevoPrismaService } from '../storage/revo-prisma.service.js';
 import { ControlPlaneError } from './errors.js';
@@ -13,7 +17,10 @@ import {
   type TransportRow,
 } from './client-transport.js';
 import type { ListRowsOptions, PatchOperation } from './data-access.js';
-import type { VersionedMeaningRevision, VersionedMeaningScope } from './versioned-meaning.js';
+import type {
+  VersionedMeaningRevision,
+  VersionedMeaningScope,
+} from './versioned-meaning.js';
 
 const SYSTEM_TABLES = [
   'revisium_schema_table',
@@ -24,6 +31,10 @@ const SYSTEM_TABLES = [
 type ScopeContext = { revisionId: string; branchId: string };
 type BootstrapTable = { id: string; schema: Record<string, unknown> };
 type EngineOrderBy = Record<string, 'asc' | 'desc'>;
+type EngineTablesPage = {
+  edges?: Array<{ cursor?: string; node?: { id: string } }>;
+  pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+};
 
 function nowId(prefix: string): string {
   return `${prefix}-${randomUUID()}`;
@@ -43,29 +54,37 @@ function toTransportRow(row: {
 }): TransportRow {
   return {
     id: row.id,
-    data: row.data && typeof row.data === 'object' && !Array.isArray(row.data)
-      ? row.data as Record<string, unknown>
-      : {},
+    data:
+      row.data && typeof row.data === 'object' && !Array.isArray(row.data)
+        ? (row.data as Record<string, unknown>)
+        : {},
     readonly: row.readonly,
     createdAt: toIso(row.createdAt),
     updatedAt: toIso(row.updatedAt),
   };
 }
 
-function mapOrderBy(orderBy: ListRowsOptions['orderBy']): EngineOrderBy[] | undefined {
+function mapOrderBy(
+  orderBy: ListRowsOptions['orderBy'],
+): EngineOrderBy[] | undefined {
   if (!orderBy || orderBy.length === 0) return undefined;
   return orderBy.flatMap((entry) => {
     const field = (entry as { field?: unknown }).field;
     const direction = (entry as { direction?: unknown }).direction;
     if (typeof field !== 'string') return [];
     if (direction !== 'asc' && direction !== 'desc') return [];
-    if (!['id', 'createdAt', 'updatedAt', 'publishedAt'].includes(field)) return [];
+    if (!['id', 'createdAt', 'updatedAt', 'publishedAt'].includes(field))
+      return [];
     return [{ [field]: direction }];
   });
 }
 
 function statusCode(error: unknown): number | undefined {
-  const err = error as { status?: unknown; statusCode?: unknown; getStatus?: () => number } | null;
+  const err = error as {
+    status?: unknown;
+    statusCode?: unknown;
+    getStatus?: () => number;
+  } | null;
   if (typeof err?.status === 'number') return err.status;
   if (typeof err?.statusCode === 'number') return err.statusCode;
   if (typeof err?.getStatus === 'function') return err.getStatus();
@@ -77,26 +96,57 @@ function mapEngineError(error: unknown, context: string): ControlPlaneError {
   const status = statusCode(error);
   const message = error instanceof Error ? error.message : String(error);
   if (status === 404 || /not found/i.test(message)) {
-    return new ControlPlaneError('ROW_NOT_FOUND', `Row not found: ${context}`, { status, details: error });
+    return new ControlPlaneError('ROW_NOT_FOUND', `Row not found: ${context}`, {
+      status,
+      details: error,
+    });
   }
-  if (status === 409 || (status === 400 && message.startsWith('Rows already exist:'))) {
-    return new ControlPlaneError('ROW_CONFLICT', `Row conflict: ${context}`, { status, details: error });
+  if (
+    status === 409 ||
+    (status === 400 && message.startsWith('Rows already exist:'))
+  ) {
+    return new ControlPlaneError('ROW_CONFLICT', `Row conflict: ${context}`, {
+      status,
+      details: error,
+    });
   }
   if (status === 400 || status === 422) {
-    return new ControlPlaneError('VALIDATION_FAILURE', `Validation failure: ${context}`, { status, details: error });
+    return new ControlPlaneError(
+      'VALIDATION_FAILURE',
+      `Validation failure: ${context}`,
+      { status, details: error },
+    );
   }
-  return new ControlPlaneError('HTTP_ERROR', `Engine error ${status ?? 'unknown'}: ${context}: ${message}`, {
-    status,
-    details: error,
-  });
+  return new ControlPlaneError(
+    'HTTP_ERROR',
+    `Engine error ${status ?? 'unknown'}: ${context}: ${message}`,
+    {
+      status,
+      details: error,
+    },
+  );
+}
+
+function isEngineNotFoundError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    statusCode(error) === 404 ||
+    /not found/i.test(message) ||
+    /table .*does not exist|does not exist in the revision/i.test(message)
+  );
 }
 
 function isStaleDraftScopeError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
-  return statusCode(error) === 404 || (statusCode(error) === 400 && /not a draft/i.test(message));
+  return (
+    statusCode(error) === 404 ||
+    (statusCode(error) === 400 && /not a draft/i.test(message))
+  );
 }
 
-export async function ensureControlPlaneProject(prisma: RevoPrismaService): Promise<void> {
+export async function ensureControlPlaneProject(
+  prisma: RevoPrismaService,
+): Promise<void> {
   const { project, branch } = getConfig();
   await prisma.revoProject.upsert({
     where: { id: project },
@@ -183,10 +233,14 @@ async function resolveScope(
 ): Promise<ScopeContext> {
   await ensureControlPlaneProject(prisma);
   const { project, branch } = getConfig();
-  const branchRow = await engine.getBranch({ projectId: project, branchName: branch });
-  const revision = mode === 'draft'
-    ? await engine.getDraftRevision(branchRow.id)
-    : await engine.getHeadRevision(branchRow.id);
+  const branchRow = await engine.getBranch({
+    projectId: project,
+    branchName: branch,
+  });
+  const revision =
+    mode === 'draft'
+      ? await engine.getDraftRevision(branchRow.id)
+      : await engine.getHeadRevision(branchRow.id);
   return { branchId: branchRow.id, revisionId: revision.id };
 }
 
@@ -195,9 +249,14 @@ export function createEngineTransport(
   engine: EngineApiService,
   prisma: RevoPrismaService,
 ): ControlPlaneTransport {
-  const scope = makeRecoverableScopeResolver(() => resolveScope(mode, engine, prisma));
+  const scope = makeRecoverableScopeResolver(() =>
+    resolveScope(mode, engine, prisma),
+  );
 
-  async function withScopeRetry<T>(operation: (revisionId: string) => Promise<T>, context: string): Promise<T> {
+  async function withScopeRetry<T>(
+    operation: (revisionId: string) => Promise<T>,
+    context: string,
+  ): Promise<T> {
     const firstScope = await scope.resolve();
     try {
       return await operation(firstScope.revisionId);
@@ -216,39 +275,66 @@ export function createEngineTransport(
   }
 
   async function assertReady(): Promise<void> {
-    const tables = await withScopeRetry(
-      (revisionId) => engine.getTables({ revisionId, first: 100 }),
-      '/tables',
-    );
-    const tableIds = new Set(
-      (tables.edges ?? []).flatMap((edge: { node?: { id: string } }) => edge.node ? [edge.node.id] : []),
-    );
+    const tableIds = await withScopeRetry(async (revisionId) => {
+      const ids = new Set<string>();
+      let after: string | undefined;
+      for (;;) {
+        const tables = (await engine.getTables({
+          revisionId,
+          first: 100,
+          after,
+        })) as EngineTablesPage;
+        let lastCursor: string | undefined;
+        for (const edge of tables.edges ?? []) {
+          lastCursor = edge.cursor ?? lastCursor;
+          if (edge.node) ids.add(edge.node.id);
+        }
+        if (runtimeTables.every((table) => ids.has(table))) return ids;
+        if (!tables.pageInfo?.hasNextPage) return ids;
+        after = tables.pageInfo.endCursor ?? lastCursor;
+        if (!after) return ids;
+      }
+    }, '/tables');
     const missing = runtimeTables.filter((table) => !tableIds.has(table));
     if (missing.length > 0) {
-      throw new ControlPlaneError('BOOTSTRAP_NOT_APPLIED', 'Control-plane bootstrap is missing runtime tables', {
-        details: { missing },
-      });
+      throw new ControlPlaneError(
+        'BOOTSTRAP_NOT_APPLIED',
+        'Control-plane bootstrap is missing runtime tables',
+        {
+          details: { missing },
+        },
+      );
     }
   }
 
   return {
     mode,
     assertReady,
-    async listRows(table: string, options?: ListRowsOptions): Promise<TransportList> {
+    async listRows(
+      table: string,
+      options?: ListRowsOptions,
+    ): Promise<TransportList> {
       const rows = await withScopeRetry(
-        (revisionId) => engine.getRows({
-          revisionId,
-          tableId: table,
-          first: options?.first ?? 100,
-          after: options?.after,
-          orderBy: mapOrderBy(options?.orderBy) as never,
-          where: options?.where as RowWhereInput | undefined,
-        }),
+        (revisionId) =>
+          engine.getRows({
+            revisionId,
+            tableId: table,
+            first: options?.first ?? 100,
+            after: options?.after,
+            orderBy: mapOrderBy(options?.orderBy) as never,
+            where: options?.where as RowWhereInput | undefined,
+          }),
         `${table}/rows`,
       );
       return {
-        edges: (rows.edges ?? []).flatMap((edge: { cursor?: string; node?: Parameters<typeof toTransportRow>[0] }) =>
-          edge.node ? [{ cursor: edge.cursor, node: toTransportRow(edge.node) }] : [],
+        edges: (rows.edges ?? []).flatMap(
+          (edge: {
+            cursor?: string;
+            node?: Parameters<typeof toTransportRow>[0];
+          }) =>
+            edge.node
+              ? [{ cursor: edge.cursor, node: toTransportRow(edge.node) }]
+              : [],
         ),
       };
     },
@@ -258,47 +344,81 @@ export function createEngineTransport(
         `${table}/${rowId}`,
       );
       if (!row) {
-        throw new ControlPlaneError('ROW_NOT_FOUND', `Row not found: ${table}/${rowId}`, { status: 404 });
+        throw new ControlPlaneError(
+          'ROW_NOT_FOUND',
+          `Row not found: ${table}/${rowId}`,
+          { status: 404 },
+        );
       }
       return toTransportRow(row);
     },
-    async createRow(table: string, rowId: string, data: object): Promise<TransportRow> {
+    async createRow(
+      table: string,
+      rowId: string,
+      data: object,
+    ): Promise<TransportRow> {
       const result = await withScopeRetry(
-        (revisionId) => engine.createRow({
-          revisionId,
-          tableId: table,
-          rowId,
-          data: data as InputJsonValue,
-        }),
+        (revisionId) =>
+          engine.createRow({
+            revisionId,
+            tableId: table,
+            rowId,
+            data: data as InputJsonValue,
+          }),
         `${table}/${rowId}`,
       );
-      if (!result.row) throw new ControlPlaneError('ROW_NOT_FOUND', `Row not found: ${table}/${rowId}`, { status: 404 });
+      if (!result.row)
+        throw new ControlPlaneError(
+          'ROW_NOT_FOUND',
+          `Row not found: ${table}/${rowId}`,
+          { status: 404 },
+        );
       return toTransportRow(result.row);
     },
-    async updateRow(table: string, rowId: string, data: object): Promise<TransportRow> {
+    async updateRow(
+      table: string,
+      rowId: string,
+      data: object,
+    ): Promise<TransportRow> {
       const result = await withScopeRetry(
-        (revisionId) => engine.updateRow({
-          revisionId,
-          tableId: table,
-          rowId,
-          data: data as InputJsonValue,
-        }),
+        (revisionId) =>
+          engine.updateRow({
+            revisionId,
+            tableId: table,
+            rowId,
+            data: data as InputJsonValue,
+          }),
         `${table}/${rowId}`,
       );
-      if (!result.row) throw new ControlPlaneError('ROW_NOT_FOUND', `Row not found: ${table}/${rowId}`, { status: 404 });
+      if (!result.row)
+        throw new ControlPlaneError(
+          'ROW_NOT_FOUND',
+          `Row not found: ${table}/${rowId}`,
+          { status: 404 },
+        );
       return toTransportRow(result.row);
     },
-    async patchRow(table: string, rowId: string, patches: PatchOperation[]): Promise<TransportRow> {
+    async patchRow(
+      table: string,
+      rowId: string,
+      patches: PatchOperation[],
+    ): Promise<TransportRow> {
       const result = await withScopeRetry(
-        (revisionId) => engine.patchRow({
-          revisionId,
-          tableId: table,
-          rowId,
-          patches: patches as never,
-        }),
+        (revisionId) =>
+          engine.patchRow({
+            revisionId,
+            tableId: table,
+            rowId,
+            patches: patches as never,
+          }),
         `${table}/${rowId}`,
       );
-      if (!result.row) throw new ControlPlaneError('ROW_NOT_FOUND', `Row not found: ${table}/${rowId}`, { status: 404 });
+      if (!result.row)
+        throw new ControlPlaneError(
+          'ROW_NOT_FOUND',
+          `Row not found: ${table}/${rowId}`,
+          { status: 404 },
+        );
       return toTransportRow(result.row);
     },
     invalidate: () => scope.invalidate(),
@@ -316,7 +436,11 @@ export function createEngineVersionedMeaningScope(
     updateRow: (tableId, rowId, data) => draft.updateRow(tableId, rowId, data),
     async commit(comment?: string): Promise<VersionedMeaningRevision> {
       const { project, branch } = getConfig();
-      const revision = await engine.createRevision({ projectId: project, branchName: branch, comment });
+      const revision = await engine.createRevision({
+        projectId: project,
+        branchName: branch,
+        comment,
+      });
       draft.invalidate?.();
       return revision;
     },
@@ -334,8 +458,12 @@ export async function applyEngineBootstrapTables(
   for (const table of tables) {
     let currentSchema: unknown;
     try {
-      currentSchema = await engine.resolveTableSchema({ revisionId, tableId: table.id });
-    } catch {
+      currentSchema = await engine.resolveTableSchema({
+        revisionId,
+        tableId: table.id,
+      });
+    } catch (error) {
+      if (!isEngineNotFoundError(error)) throw error;
       await engine.createTable({
         revisionId,
         tableId: table.id,

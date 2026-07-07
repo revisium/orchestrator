@@ -23,7 +23,11 @@ export type ControlPlaneTransport = {
   getRow(table: string, rowId: string): Promise<TransportRow>;
   createRow(table: string, rowId: string, data: object): Promise<TransportRow>;
   updateRow(table: string, rowId: string, data: object): Promise<TransportRow>;
-  patchRow(table: string, rowId: string, patches: PatchOperation[]): Promise<TransportRow>;
+  patchRow(
+    table: string,
+    rowId: string,
+    patches: PatchOperation[],
+  ): Promise<TransportRow>;
 
   invalidate?(): void;
 };
@@ -33,15 +37,22 @@ type RecoverableScopeResolver<T> = {
   invalidate(): void;
 };
 
-export function withRequestTimeout(baseFetch: typeof fetch, timeoutMs: number): typeof fetch {
+export function withRequestTimeout(
+  baseFetch: typeof fetch,
+  timeoutMs: number,
+): typeof fetch {
   return (input, init) => {
     const timeout = AbortSignal.timeout(timeoutMs);
-    const signal = init?.signal ? AbortSignal.any([init.signal, timeout]) : timeout;
+    const signal = init?.signal
+      ? AbortSignal.any([init.signal, timeout])
+      : timeout;
     return baseFetch(input, { ...init, signal });
   };
 }
 
-export function makeRecoverableScopeResolver<T>(loadScope: () => Promise<T>): RecoverableScopeResolver<T> {
+export function makeRecoverableScopeResolver<T>(
+  loadScope: () => Promise<T>,
+): RecoverableScopeResolver<T> {
   let cachedScope: Promise<T> | undefined;
   return {
     resolve() {
@@ -57,34 +68,23 @@ export function makeRecoverableScopeResolver<T>(loadScope: () => Promise<T>): Re
   };
 }
 
-type ListEdge = {
-  cursor?: string;
-  node?: {
-    id: string;
-    data: Record<string, unknown>;
-    readonly?: boolean;
-    createdAt?: string;
-    updatedAt?: string;
-  };
-};
-
-function toTransportRow(row: NonNullable<ListEdge['node']>): TransportRow {
-  return {
-    id: row.id,
-    data: row.data,
-    readonly: row.readonly,
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
-  };
-}
-
-export function mapTransportListEdges(edges: ListEdge[]): TransportList['edges'] {
-  return edges.flatMap((edge) => edge.node ? [{ cursor: edge.cursor, node: toTransportRow(edge.node) }] : []);
-}
-
 export function extractMutationRow(result: {
-  data?: { row?: { id: string; data: Record<string, unknown>; readonly?: boolean; createdAt?: string; updatedAt?: string } };
-}): { id: string; data: Record<string, unknown>; readonly?: boolean; createdAt?: string; updatedAt?: string } {
+  data?: {
+    row?: {
+      id: string;
+      data: Record<string, unknown>;
+      readonly?: boolean;
+      createdAt?: string;
+      updatedAt?: string;
+    };
+  };
+}): {
+  id: string;
+  data: Record<string, unknown>;
+  readonly?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+} {
   const row = result.data?.row;
   if (!row) throw new ControlPlaneError('HTTP_ERROR', 'Malformed response');
   return row;

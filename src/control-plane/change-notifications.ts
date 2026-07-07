@@ -19,10 +19,16 @@ export type ControlPlaneChange = {
 
 const PG_NOTIFY_PAYLOAD_SOFT_LIMIT_BYTES = 7000;
 
-function rowRunId(table: RuntimeTable, rowId: string, row: ControlPlaneRow): string | undefined {
+function rowRunId(
+  table: RuntimeTable,
+  rowId: string,
+  row: ControlPlaneRow,
+): string | undefined {
   if (table === 'task_runs') return rowId;
   const candidate = row.data.run_id;
-  return typeof candidate === 'string' && candidate.length > 0 ? candidate : undefined;
+  return typeof candidate === 'string' && candidate.length > 0
+    ? candidate
+    : undefined;
 }
 
 export async function controlPlaneNotificationDatabaseUrl(): Promise<string> {
@@ -41,15 +47,34 @@ function getPool(url: string): pg.Pool {
   return pool;
 }
 
-export async function notifyControlPlaneChange(change: Omit<ControlPlaneChange, 'emittedAt'>): Promise<void> {
+export async function closeControlPlaneNotificationPool(): Promise<void> {
+  const current = pool;
+  pool = null;
+  poolUrl = '';
+  await current?.end().catch(() => undefined);
+}
+
+export async function notifyControlPlaneChange(
+  change: Omit<ControlPlaneChange, 'emittedAt'>,
+): Promise<void> {
   const storage = getActiveStorage();
   if (!storage) return;
   try {
     const emittedAt = new Date().toISOString();
-    const runId = change.runId ?? (change.row ? rowRunId(change.table, change.rowId, change.row) : undefined);
-    const fullChange = { ...change, ...(runId ? { runId } : {}), emittedAt } satisfies ControlPlaneChange;
+    const runId =
+      change.runId ??
+      (change.row
+        ? rowRunId(change.table, change.rowId, change.row)
+        : undefined);
+    const fullChange = {
+      ...change,
+      ...(runId ? { runId } : {}),
+      emittedAt,
+    } satisfies ControlPlaneChange;
     let payload = JSON.stringify(fullChange);
-    if (Buffer.byteLength(payload, 'utf8') > PG_NOTIFY_PAYLOAD_SOFT_LIMIT_BYTES) {
+    if (
+      Buffer.byteLength(payload, 'utf8') > PG_NOTIFY_PAYLOAD_SOFT_LIMIT_BYTES
+    ) {
       payload = JSON.stringify({
         table: change.table,
         action: change.action,
@@ -59,7 +84,9 @@ export async function notifyControlPlaneChange(change: Omit<ControlPlaneChange, 
         emittedAt,
       } satisfies ControlPlaneChange);
     }
-    await getPool(storage.revoDatabaseUrl).query('SELECT pg_notify($1, $2)', [CONTROL_PLANE_CHANGE_CHANNEL, payload]);
-  } catch {
-  }
+    await getPool(storage.revoDatabaseUrl).query('SELECT pg_notify($1, $2)', [
+      CONTROL_PLANE_CHANGE_CHANNEL,
+      payload,
+    ]);
+  } catch {}
 }

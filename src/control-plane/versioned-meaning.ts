@@ -30,31 +30,40 @@ export type VersionedMeaningAccess = {
   commit(message: string): Promise<VersionedMeaningRevision | null>;
 };
 
-export type VersionedMeaningAccessOptions = {
-  dryRun?: boolean;
-  scopeFactory?: () => Promise<VersionedMeaningScope>;
-};
+export type VersionedMeaningAccessOptions =
+  | { dryRun: true; scopeFactory?: () => Promise<VersionedMeaningScope> }
+  | { dryRun?: false; scopeFactory: () => Promise<VersionedMeaningScope> }
+  | { dryRun: boolean; scopeFactory: () => Promise<VersionedMeaningScope> };
 
 function isRowNotFound(error: unknown): boolean {
-  const err = error as { statusCode?: number; status?: number; code?: string; message?: string } | null;
+  const err = error as {
+    statusCode?: number;
+    status?: number;
+    code?: string;
+    message?: string;
+  } | null;
   return (
     err?.statusCode === 404 ||
     err?.status === 404 ||
     err?.code === 'ROW_NOT_FOUND' ||
-    (typeof err?.message === 'string' && err.message.toLowerCase().includes('not found'))
+    (typeof err?.message === 'string' &&
+      err.message.toLowerCase().includes('not found'))
   );
 }
 
 export function createVersionedMeaningAccess(
-  options: VersionedMeaningAccessOptions = {},
+  options: VersionedMeaningAccessOptions,
 ): VersionedMeaningAccess {
-  const dryRun = options.dryRun ?? false;
+  const dryRun = options.dryRun === true;
   const scopeFactory = options.scopeFactory;
   let scopePromise: Promise<VersionedMeaningScope> | undefined;
 
   function scope(): Promise<VersionedMeaningScope> {
     if (!scopeFactory) {
-      throw new ControlPlaneError('DAEMON_NOT_RUNNING', 'Engine-backed versioned-meaning scope is not available');
+      throw new ControlPlaneError(
+        'DAEMON_NOT_RUNNING',
+        'Engine-backed versioned-meaning scope is not available',
+      );
     }
     scopePromise ??= scopeFactory();
     return scopePromise;

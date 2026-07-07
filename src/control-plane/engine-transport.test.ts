@@ -62,7 +62,11 @@ function makePrisma(existingBranch = false) {
   };
 }
 
-function makeEngine(overrides: Partial<Record<keyof EngineApiService, (...args: never[]) => unknown>> = {}) {
+function makeEngine(
+  overrides: Partial<
+    Record<keyof EngineApiService, (...args: never[]) => unknown>
+  > = {},
+) {
   const calls: Call[] = [];
   const engine = {
     calls,
@@ -142,10 +146,22 @@ test('ensureControlPlaneProject creates the system project, root branch, seed re
 
   await ensureControlPlaneProject(prisma as unknown as RevoPrismaService);
 
-  assert.equal(prisma.calls.filter((call) => call.name === 'revoProject.upsert').length, 1);
-  assert.equal(prisma.calls.filter((call) => call.name === 'tx.branch.create').length, 1);
-  assert.equal(prisma.calls.filter((call) => call.name === 'tx.revision.create').length, 2);
-  assert.equal(prisma.calls.filter((call) => call.name === 'tx.table.create').length, 3);
+  assert.equal(
+    prisma.calls.filter((call) => call.name === 'revoProject.upsert').length,
+    1,
+  );
+  assert.equal(
+    prisma.calls.filter((call) => call.name === 'tx.branch.create').length,
+    1,
+  );
+  assert.equal(
+    prisma.calls.filter((call) => call.name === 'tx.revision.create').length,
+    2,
+  );
+  assert.equal(
+    prisma.calls.filter((call) => call.name === 'tx.table.create').length,
+    3,
+  );
 });
 
 test('ensureControlPlaneProject is idempotent when the branch already exists', async () => {
@@ -153,13 +169,20 @@ test('ensureControlPlaneProject is idempotent when the branch already exists', a
 
   await ensureControlPlaneProject(prisma as unknown as RevoPrismaService);
 
-  assert.equal(prisma.calls.filter((call) => call.name === '$transaction').length, 0);
+  assert.equal(
+    prisma.calls.filter((call) => call.name === '$transaction').length,
+    0,
+  );
 });
 
 test('createEngineTransport maps engine CRUD responses to transport rows and filters unsupported ordering', async () => {
   const engine = makeEngine();
   const prisma = makePrisma(true);
-  const transport = createEngineTransport('head', engine, prisma as unknown as RevoPrismaService);
+  const transport = createEngineTransport(
+    'head',
+    engine,
+    prisma as unknown as RevoPrismaService,
+  );
 
   await transport.assertReady();
   const list = await transport.listRows('task_runs', {
@@ -173,9 +196,15 @@ test('createEngineTransport maps engine CRUD responses to transport rows and fil
     where: { id: { equals: 'row-1' } } as never,
   });
   const row = await transport.getRow('task_runs', 'row-1');
-  const created = await transport.createRow('task_runs', 'row-2', { title: 'Created' });
-  const updated = await transport.updateRow('task_runs', 'row-2', { title: 'Updated' });
-  const patched = await transport.patchRow('task_runs', 'row-2', [{ op: 'replace', path: 'title', value: 'Patched' }]);
+  const created = await transport.createRow('task_runs', 'row-2', {
+    title: 'Created',
+  });
+  const updated = await transport.updateRow('task_runs', 'row-2', {
+    title: 'Updated',
+  });
+  const patched = await transport.patchRow('task_runs', 'row-2', [
+    { op: 'replace', path: 'title', value: 'Patched' },
+  ]);
 
   assert.deepEqual(list.edges, [
     {
@@ -192,9 +221,15 @@ test('createEngineTransport maps engine CRUD responses to transport rows and fil
   assert.deepEqual(row.data, { title: 'Run' });
   assert.deepEqual(created.data, { title: 'Created' });
   assert.deepEqual(updated.data, { title: 'Updated' });
-  assert.deepEqual(patched.data, { patches: [{ op: 'replace', path: 'title', value: 'Patched' }] });
+  assert.deepEqual(patched.data, {
+    patches: [{ op: 'replace', path: 'title', value: 'Patched' }],
+  });
   assert.deepEqual(
-    (engine.calls.find((call) => call.name === 'getRows')?.args as { orderBy?: unknown }).orderBy,
+    (
+      engine.calls.find((call) => call.name === 'getRows')?.args as {
+        orderBy?: unknown;
+      }
+    ).orderBy,
     [{ createdAt: 'desc' }],
   );
 });
@@ -216,7 +251,11 @@ test('draft engine transport invalidates a stale draft scope once and retries wi
     },
   });
   const prisma = makePrisma(true);
-  const transport = createEngineTransport('draft', engine, prisma as unknown as RevoPrismaService);
+  const transport = createEngineTransport(
+    'draft',
+    engine,
+    prisma as unknown as RevoPrismaService,
+  );
 
   const rows = await transport.listRows('task_runs');
 
@@ -238,15 +277,21 @@ test('engine transport maps engine failures to control-plane errors', async () =
     },
   });
   const prisma = makePrisma(true);
-  const transport = createEngineTransport('head', engine, prisma as unknown as RevoPrismaService);
+  const transport = createEngineTransport(
+    'head',
+    engine,
+    prisma as unknown as RevoPrismaService,
+  );
 
   await assert.rejects(
     () => transport.createRow('task_runs', 'row-1', {}),
-    (error) => error instanceof ControlPlaneError && error.code === 'ROW_CONFLICT',
+    (error) =>
+      error instanceof ControlPlaneError && error.code === 'ROW_CONFLICT',
   );
   await assert.rejects(
     () => transport.updateRow('task_runs', 'row-1', {}),
-    (error) => error instanceof ControlPlaneError && error.code === 'VALIDATION_FAILURE',
+    (error) =>
+      error instanceof ControlPlaneError && error.code === 'VALIDATION_FAILURE',
   );
 });
 
@@ -257,18 +302,57 @@ test('assertReady reports missing runtime tables as a bootstrap failure', async 
     },
   });
   const prisma = makePrisma(true);
-  const transport = createEngineTransport('head', engine, prisma as unknown as RevoPrismaService);
+  const transport = createEngineTransport(
+    'head',
+    engine,
+    prisma as unknown as RevoPrismaService,
+  );
 
   await assert.rejects(
     () => transport.assertReady(),
-    (error) => error instanceof ControlPlaneError && error.code === 'BOOTSTRAP_NOT_APPLIED',
+    (error) =>
+      error instanceof ControlPlaneError &&
+      error.code === 'BOOTSTRAP_NOT_APPLIED',
   );
+});
+
+test('assertReady paginates engine tables before reporting bootstrap readiness', async () => {
+  const calls: Array<{ after?: string }> = [];
+  const engine = makeEngine({
+    async getTables(args: { after?: string }) {
+      calls.push(args);
+      if (calls.length === 1) {
+        return {
+          edges: [{ cursor: 'cursor-1', node: { id: runtimeTables[0] } }],
+          pageInfo: { hasNextPage: true, endCursor: 'cursor-1' },
+        };
+      }
+      return {
+        edges: runtimeTables.slice(1).map((id) => ({ node: { id } })),
+        pageInfo: { hasNextPage: false },
+      };
+    },
+  });
+  const prisma = makePrisma(true);
+  const transport = createEngineTransport(
+    'head',
+    engine,
+    prisma as unknown as RevoPrismaService,
+  );
+
+  await transport.assertReady();
+
+  assert.equal(calls.length, 2);
+  assert.equal(calls[1]?.after, 'cursor-1');
 });
 
 test('createEngineVersionedMeaningScope delegates writes and commits a new engine revision', async () => {
   const engine = makeEngine();
   const prisma = makePrisma(true);
-  const scope = createEngineVersionedMeaningScope(engine, prisma as unknown as RevoPrismaService);
+  const scope = createEngineVersionedMeaningScope(
+    engine,
+    prisma as unknown as RevoPrismaService,
+  );
 
   await scope.getRow('task_runs', 'row-1');
   await scope.createRow('task_runs', 'row-2', { title: 'Created' });
@@ -276,26 +360,89 @@ test('createEngineVersionedMeaningScope delegates writes and commits a new engin
   const revision = await scope.commit('seed');
 
   assert.deepEqual(revision, { id: 'revision-2', sequence: 2 });
-  assert.equal(engine.calls.filter((call) => call.name === 'createRevision').length, 1);
+  assert.equal(
+    engine.calls.filter((call) => call.name === 'createRevision').length,
+    1,
+  );
 });
 
 test('applyEngineBootstrapTables creates missing tables and applies additive schema patches', async () => {
   const engine = makeEngine({
     async resolveTableSchema(args: { tableId: string }) {
-      if (args.tableId === 'missing') throw new Error('not found');
-      if (args.tableId === 'current') return { type: 'object', properties: { kept: { type: 'string' } } };
+      if (args.tableId === 'missing') {
+        const error = new Error(
+          `Table "${args.tableId}" does not exist in the revision`,
+        );
+        (error as { status?: number }).status = 400;
+        throw error;
+      }
+      if (args.tableId === 'current')
+        return { type: 'object', properties: { kept: { type: 'string' } } };
       return { type: 'object', properties: { field: { type: 'string' } } };
     },
   });
   const prisma = makePrisma(true);
 
-  const changes = await applyEngineBootstrapTables(engine, prisma as unknown as RevoPrismaService, [
-    { id: 'missing', schema: { type: 'object', properties: { created: { type: 'string' } } } },
-    { id: 'current', schema: { type: 'object', properties: { kept: { type: 'string' }, added: { type: 'number' } } } },
-    { id: 'unchanged', schema: { type: 'object', properties: { field: { type: 'string' } } } },
-  ]);
+  const changes = await applyEngineBootstrapTables(
+    engine,
+    prisma as unknown as RevoPrismaService,
+    [
+      {
+        id: 'missing',
+        schema: { type: 'object', properties: { created: { type: 'string' } } },
+      },
+      {
+        id: 'current',
+        schema: {
+          type: 'object',
+          properties: { kept: { type: 'string' }, added: { type: 'number' } },
+        },
+      },
+      {
+        id: 'unchanged',
+        schema: { type: 'object', properties: { field: { type: 'string' } } },
+      },
+    ],
+  );
 
   assert.equal(changes, 2);
-  assert.equal(engine.calls.filter((call) => call.name === 'createTable').length, 1);
-  assert.equal(engine.calls.filter((call) => call.name === 'updateTable').length, 1);
+  assert.equal(
+    engine.calls.filter((call) => call.name === 'createTable').length,
+    1,
+  );
+  assert.equal(
+    engine.calls.filter((call) => call.name === 'updateTable').length,
+    1,
+  );
+});
+
+test('applyEngineBootstrapTables does not create a table when schema resolution fails for non-not-found errors', async () => {
+  const engine = makeEngine({
+    async resolveTableSchema() {
+      throw new Error('database unavailable');
+    },
+  });
+  const prisma = makePrisma(true);
+
+  await assert.rejects(
+    () =>
+      applyEngineBootstrapTables(
+        engine,
+        prisma as unknown as RevoPrismaService,
+        [
+          {
+            id: 'broken',
+            schema: {
+              type: 'object',
+              properties: { field: { type: 'string' } },
+            },
+          },
+        ],
+      ),
+    /database unavailable/,
+  );
+  assert.equal(
+    engine.calls.filter((call) => call.name === 'createTable').length,
+    0,
+  );
 });

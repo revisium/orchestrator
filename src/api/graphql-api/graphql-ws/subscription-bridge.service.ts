@@ -1,4 +1,11 @@
-import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+  Optional,
+} from '@nestjs/common';
 import pg from 'pg';
 import { PubSub } from 'graphql-subscriptions';
 import { RunsApiService } from '../../../features/runs/runs-api.service.js';
@@ -8,6 +15,12 @@ import {
   type ControlPlaneChange,
 } from '../../../control-plane/change-notifications.js';
 import {
+  createControlPlaneDataAccessForTransport,
+  type ControlPlaneDataAccess,
+  type ControlPlaneTransport,
+} from '../../../control-plane/data-access.js';
+import { REVISIUM_TRANSPORT_DRAFT } from '../../../revisium/tokens.js';
+import {
   APP_PUB_SUB,
   INBOX_ITEM_ADDED_TOPIC,
   INBOX_ITEM_RESOLVED_TOPIC,
@@ -16,31 +29,52 @@ import {
   RUN_UPDATED_TOPIC,
   RUN_WORKFLOW_UPDATED_TOPIC,
 } from './constants.js';
-import { changeRunId, mapInboxRow, mapRunCostRow, mapRunEventRow, mapRunRow } from './subscription-mappers.js';
+import {
+  changeRunId,
+  mapInboxRow,
+  mapRunCostRow,
+  mapRunEventRow,
+  mapRunRow,
+} from './subscription-mappers.js';
 
 @Injectable()
-export class ControlPlaneSubscriptionBridge implements OnModuleInit, OnModuleDestroy {
+export class ControlPlaneSubscriptionBridge
+  implements OnModuleInit, OnModuleDestroy
+{
   private readonly logger = new Logger(ControlPlaneSubscriptionBridge.name);
   private client: pg.Client | null = null;
+  private draftDataAccess?: ControlPlaneDataAccess;
 
   constructor(
     @Inject(APP_PUB_SUB) private readonly pubSub: PubSub,
     @Inject(RunsApiService) private readonly runsApi: RunsApiService,
+    @Optional()
+    @Inject(REVISIUM_TRANSPORT_DRAFT)
+    private readonly draftTransport?: ControlPlaneTransport,
   ) {}
 
   async onModuleInit() {
     let client: pg.Client | null = null;
     try {
-      client = new pg.Client({ connectionString: await controlPlaneNotificationDatabaseUrl() });
+      client = new pg.Client({
+        connectionString: await controlPlaneNotificationDatabaseUrl(),
+      });
       await client.connect();
       await client.query(`LISTEN ${CONTROL_PLANE_CHANGE_CHANNEL}`);
     } catch (error) {
-      this.logger.warn(`Control-plane LISTEN setup skipped: ${error instanceof Error ? error.message : String(error)}`);
+      this.logger.warn(
+        `Control-plane LISTEN setup skipped: ${error instanceof Error ? error.message : String(error)}`,
+      );
       await client?.end().catch(() => undefined);
       return;
     }
-    client.on('notification', (message) => void this.handleNotification(message.payload));
-    client.on('error', (error) => this.logger.warn(`Control-plane LISTEN error: ${error.message}`));
+    client.on(
+      'notification',
+      (message) => void this.handleNotification(message.payload),
+    );
+    client.on('error', (error) =>
+      this.logger.warn(`Control-plane LISTEN error: ${error.message}`),
+    );
     this.client = client;
   }
 
@@ -61,35 +95,76 @@ export class ControlPlaneSubscriptionBridge implements OnModuleInit, OnModuleDes
   }
 
   private async publishChange(change: ControlPlaneChange): Promise<void> {
-    if (change.table === 'task_runs') {
-      await this.publishRunChange(change);
+    const hydratedChange = await this.withRehydratedRow(change);
+    if (hydratedChange.table === 'task_runs') {
+      await this.publishRunChange(hydratedChange);
       return;
     }
-    if (change.table === 'events' && change.action === 'create') {
-      await this.publishEventChange(change);
+    if (
+      hydratedChange.table === 'events' &&
+      hydratedChange.action === 'create'
+    ) {
+      await this.publishEventChange(hydratedChange);
       return;
     }
-    if (change.table === 'inbox' && change.action === 'create') {
-      await this.publishInboxAdded(change);
+    if (
+      hydratedChange.table === 'inbox' &&
+      hydratedChange.action === 'create'
+    ) {
+      await this.publishInboxAdded(hydratedChange);
       return;
     }
-    if (change.table === 'inbox' && change.row?.data.status === 'resolved') {
-      await this.publishInboxResolved(change);
+    if (
+      hydratedChange.table === 'inbox' &&
+      hydratedChange.row?.data.status === 'resolved'
+    ) {
+      await this.publishInboxResolved(hydratedChange);
       return;
     }
-    if (change.table === 'cost_ledger' && change.action === 'create') {
-      await this.publishCostChange(change);
+    if (
+      hydratedChange.table === 'cost_ledger' &&
+      hydratedChange.action === 'create'
+    ) {
+      await this.publishCostChange(hydratedChange);
       return;
     }
-    const runId = changeRunId(change);
+    const runId = changeRunId(hydratedChange);
     if (runId) {
       await this.publishWorkflow(runId);
     }
   }
 
+  private dataAccess(): ControlPlaneDataAccess | undefined {
+    if (!this.draftTransport) return undefined;
+    this.draftDataAccess ??= createControlPlaneDataAccessForTransport(
+      this.draftTransport,
+    );
+    return this.draftDataAccess;
+  }
+
+  private async withRehydratedRow(
+    change: ControlPlaneChange,
+  ): Promise<ControlPlaneChange> {
+    if (change.row || !change.rowOmitted) return change;
+    const dataAccess = this.dataAccess();
+    if (!dataAccess) return change;
+    try {
+      const row = await dataAccess.getRow(change.table, change.rowId);
+      return row ? { ...change, row } : change;
+    } catch (error) {
+      this.logger.warn(
+        `Control-plane notification row rehydrate skipped for ${change.table}/${change.rowId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      return change;
+    }
+  }
+
   private async publishRunChange(change: ControlPlaneChange): Promise<void> {
     if (change.row) {
-      await this.pubSub.publish(RUN_UPDATED_TOPIC, { runUpdated: mapRunRow(change.row), runId: change.rowId });
+      await this.pubSub.publish(RUN_UPDATED_TOPIC, {
+        runUpdated: mapRunRow(change.row),
+        runId: change.rowId,
+      });
     }
     await this.publishWorkflow(change.rowId);
   }
@@ -97,7 +172,10 @@ export class ControlPlaneSubscriptionBridge implements OnModuleInit, OnModuleDes
   private async publishEventChange(change: ControlPlaneChange): Promise<void> {
     const runId = changeRunId(change);
     if (change.row) {
-      await this.pubSub.publish(RUN_EVENT_APPENDED_TOPIC, { runEventAppended: mapRunEventRow(change.row), runId });
+      await this.pubSub.publish(RUN_EVENT_APPENDED_TOPIC, {
+        runEventAppended: mapRunEventRow(change.row),
+        runId,
+      });
     }
     await this.publishWorkflow(runId);
   }
@@ -105,15 +183,23 @@ export class ControlPlaneSubscriptionBridge implements OnModuleInit, OnModuleDes
   private async publishInboxAdded(change: ControlPlaneChange): Promise<void> {
     const runId = changeRunId(change);
     if (change.row) {
-      await this.pubSub.publish(INBOX_ITEM_ADDED_TOPIC, { inboxItemAdded: mapInboxRow(change.row), runId });
+      await this.pubSub.publish(INBOX_ITEM_ADDED_TOPIC, {
+        inboxItemAdded: mapInboxRow(change.row),
+        runId,
+      });
     }
     await this.publishWorkflow(runId);
   }
 
-  private async publishInboxResolved(change: ControlPlaneChange): Promise<void> {
+  private async publishInboxResolved(
+    change: ControlPlaneChange,
+  ): Promise<void> {
     const runId = changeRunId(change);
     if (change.row) {
-      await this.pubSub.publish(INBOX_ITEM_RESOLVED_TOPIC, { inboxItemResolved: mapInboxRow(change.row), runId });
+      await this.pubSub.publish(INBOX_ITEM_RESOLVED_TOPIC, {
+        inboxItemResolved: mapInboxRow(change.row),
+        runId,
+      });
     }
     await this.publishWorkflow(runId);
   }
@@ -121,7 +207,10 @@ export class ControlPlaneSubscriptionBridge implements OnModuleInit, OnModuleDes
   private async publishCostChange(change: ControlPlaneChange): Promise<void> {
     const runId = changeRunId(change);
     if (change.row) {
-      await this.pubSub.publish(RUN_COST_RECORDED_TOPIC, { runCostRecorded: mapRunCostRow(change.row), runId });
+      await this.pubSub.publish(RUN_COST_RECORDED_TOPIC, {
+        runCostRecorded: mapRunCostRow(change.row),
+        runId,
+      });
     }
     await this.publishWorkflow(runId);
   }
@@ -130,9 +219,14 @@ export class ControlPlaneSubscriptionBridge implements OnModuleInit, OnModuleDes
     if (!runId) return;
     try {
       const workflow = await this.runsApi.getRunWorkflow({ runId });
-      await this.pubSub.publish(RUN_WORKFLOW_UPDATED_TOPIC, { runWorkflowUpdated: workflow, runId });
+      await this.pubSub.publish(RUN_WORKFLOW_UPDATED_TOPIC, {
+        runWorkflowUpdated: workflow,
+        runId,
+      });
     } catch (error) {
-      this.logger.warn(`Run workflow subscription publish skipped for ${runId}: ${error instanceof Error ? error.message : String(error)}`);
+      this.logger.warn(
+        `Run workflow subscription publish skipped for ${runId}: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 }

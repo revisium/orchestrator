@@ -24,8 +24,10 @@ try {
   console.log(`run list: ${listData.length} run(s), run appears OK`);
 
   const showData = await smoke.api.getRun({ runId, includeEvents: true });
-  if (showData.runId !== runId) throw new Error(`show: runId mismatch: ${showData.runId}`);
-  if (showData.tasks.length !== 1) throw new Error(`show: expected 1 task, got ${showData.tasks.length}`);
+  if (showData.run.runId !== runId)
+    throw new Error(`show: runId mismatch: ${showData.run.runId}`);
+  if (showData.tasks.length !== 1)
+    throw new Error(`show: expected 1 task, got ${showData.tasks.length}`);
   console.log(`run show: run=${runId} tasks=${showData.tasks.length} OK`);
 
   const eventsData = await smoke.api.getRunEvents({ runId });
@@ -39,9 +41,13 @@ try {
   const taskRow = await smoke.draft.getRow('tasks', taskId);
   if (!runRow) throw new Error(`Missing task_runs row ${runId} after inspect`);
   if (!taskRow) throw new Error(`Missing tasks row ${taskId} after inspect`);
-  if (runRow.data.status !== 'ready') throw new Error(`Run status mutated: ${String(runRow.data.status)}`);
-  if (taskRow.data.status !== 'ready') throw new Error(`Task status mutated: ${String(taskRow.data.status)}`);
-  console.log(`no mutation confirmed: run=${String(runRow.data.status)} task=${String(taskRow.data.status)}`);
+  if (runRow.data.status !== 'ready')
+    throw new Error(`Run status mutated: ${String(runRow.data.status)}`);
+  if (taskRow.data.status !== 'ready')
+    throw new Error(`Task status mutated: ${String(taskRow.data.status)}`);
+  console.log(
+    `no mutation confirmed: run=${String(runRow.data.status)} task=${String(taskRow.data.status)}`,
+  );
 
   await smoke.api.getRun({ runId: 'nonexistent-run-id' }).then(
     () => {
