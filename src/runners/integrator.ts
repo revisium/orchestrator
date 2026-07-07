@@ -985,18 +985,20 @@ export async function pollPr(
   const ciFailures = ciFailuresFrom(settled);
 
   let ciVerdictFailures = ciFailures;
+  let requiredCheckFetchFailure: string | undefined;
   if (ciFailures.length > 0 && settled.pr.number !== null) {
     try {
       const required = requiredChecks(ownerRepo, settled.pr.number, gh);
       if (required.size > 0) ciVerdictFailures = ciFailures.filter((f) => required.has(f.name));
-    } catch {
+    } catch (err) {
+      requiredCheckFetchFailure = err instanceof Error ? err.message : String(err);
     }
   }
 
-  const makeFeedback = (verdict: PrFeedback['verdict']): PrFeedback => ({
+  const makeFeedback = (verdict: PrFeedback['verdict'], extraEvidence: string[] = []): PrFeedback => ({
     prNumber: settled.pr.number ?? null,
     headSha: settled.pr.headSha,
-    evidence: [...settled.evidence, ...readinessEvidence(settled), `PR headSha=${settled.pr.headSha}`, `pollPr verdict=${verdict}`],
+    evidence: [...settled.evidence, ...readinessEvidence(settled), ...extraEvidence, `PR headSha=${settled.pr.headSha}`, `pollPr verdict=${verdict}`],
     ...(input.issueRef ? { issueRef: input.issueRef } : {}),
     verdict,
     ciFailures,
@@ -1006,6 +1008,9 @@ export async function pollPr(
   });
 
   if (reviewThreads.length > 0 || readinessRequiresReview(settled)) return makeFeedback('review_changes');
+  if (requiredCheckFetchFailure) {
+    return makeFeedback('recheck', [`Required check names unavailable: ${requiredCheckFetchFailure}`]);
+  }
   if (ciVerdictFailures.length > 0) return makeFeedback('ci_changes');
 
   const signal = mergeSignal(settled.mergeStateStatus, settled.mergeable);

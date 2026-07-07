@@ -171,15 +171,18 @@ test('#274: head moved after merge approval re-presents mergeGate with fresh art
   });
 });
 
-test('#275: GraphQL partial outage is never treated as clean readiness', {
-  skip: '#275: pending GraphQL partial-outage target behavior',
-}, async () => {
+test('#275: GraphQL partial outage routes to recovery instead of clean readiness', async () => {
   await runTargetScenario('#275: GraphQL partial outage is never treated as clean readiness', {
     executionProfile: STUB_AGENT,
     gh: 'empty-graphql-data',
-    gates: [['plan', 'approved'], ['merge', 'cancel']],
+    gates: [
+      ['plan', 'approved'],
+      { topic: 'merge', outcome: 'cancel', nodeId: 'recoveryGate' },
+    ],
     expect: {
       terminal: 'cancelled',
+      path: [{ type: 'step_failed', payload: { error: 'invalid GraphQL shape in reviewThreads response: missing repository' } }],
+      agentNodeCalled: ['classifyRecovery'],
       noEvents: ['merge_confirmed'],
       ghNotCalled: [['pr', 'merge']],
     },

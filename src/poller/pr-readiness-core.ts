@@ -497,12 +497,24 @@ function unwrapGraphqlData(raw: unknown): unknown {
   return data ?? raw;
 }
 
+function requireGraphqlRecord(value: unknown, context: string, path: string): Record<string, unknown> {
+  const record = asRecord(value);
+  if (!record) throw new Error(`invalid GraphQL shape in ${context} response: missing ${path}`);
+  return record;
+}
+
+function requireGraphqlArray(value: unknown, context: string, path: string): unknown[] {
+  if (!Array.isArray(value)) throw new Error(`invalid GraphQL shape in ${context} response: missing ${path}`);
+  return value;
+}
+
 function mapReviewThreads(raw: unknown): FetchedReviewThread[] {
-  const root = asRecord(unwrapGraphqlData(raw));
-  const repository = asRecord(root?.['repository']);
-  const pullRequest = asRecord(repository?.['pullRequest']);
-  const reviewThreads = asRecord(pullRequest?.['reviewThreads']);
-  const nodes = Array.isArray(reviewThreads?.['nodes']) ? reviewThreads.nodes : [];
+  const context = 'reviewThreads';
+  const root = requireGraphqlRecord(unwrapGraphqlData(raw), context, 'root');
+  const repository = requireGraphqlRecord(root['repository'], context, 'repository');
+  const pullRequest = requireGraphqlRecord(repository['pullRequest'], context, 'repository.pullRequest');
+  const reviewThreads = requireGraphqlRecord(pullRequest['reviewThreads'], context, 'repository.pullRequest.reviewThreads');
+  const nodes = requireGraphqlArray(reviewThreads['nodes'], context, 'repository.pullRequest.reviewThreads.nodes');
   return nodes.flatMap((node): FetchedReviewThread[] => {
     const thread = asRecord(node);
     if (!thread) return [];
@@ -563,12 +575,14 @@ function fetchReviewThreads(repo: string, prNumber: number, execGh: ExecGhFn): F
 
 
 function mapRequiredCheckNames(raw: unknown): Set<string> {
-  const root = asRecord(unwrapGraphqlData(raw));
-  const repository = asRecord(root?.['repository']);
-  const pullRequest = asRecord(repository?.['pullRequest']);
-  const rollup = asRecord(pullRequest?.['statusCheckRollup']);
-  const contexts = asRecord(rollup?.['contexts']);
-  const nodes = Array.isArray(contexts?.['nodes']) ? contexts.nodes : [];
+  const context = 'required-checks';
+  const root = requireGraphqlRecord(unwrapGraphqlData(raw), context, 'root');
+  const repository = requireGraphqlRecord(root['repository'], context, 'repository');
+  const pullRequest = requireGraphqlRecord(repository['pullRequest'], context, 'repository.pullRequest');
+  if (pullRequest['statusCheckRollup'] === null) return new Set<string>();
+  const rollup = requireGraphqlRecord(pullRequest['statusCheckRollup'], context, 'repository.pullRequest.statusCheckRollup');
+  const contexts = requireGraphqlRecord(rollup['contexts'], context, 'repository.pullRequest.statusCheckRollup.contexts');
+  const nodes = requireGraphqlArray(contexts['nodes'], context, 'repository.pullRequest.statusCheckRollup.contexts.nodes');
   const required = new Set<string>();
   for (const node of nodes) {
     const ctx = asRecord(node);
