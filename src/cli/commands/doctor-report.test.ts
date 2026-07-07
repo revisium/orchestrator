@@ -2,7 +2,7 @@
  * doctor-report.test.ts — the `revo doctor` diagnosis rules.
  *
  * buildDoctorReport is pure (no IO), so every stack state is exercised here as a plain input:
- * down, healthy, stale pid, unhealthy, and the two partial-stack permutations. lifecycle.ts only
+ * down, healthy, stale pid, unhealthy, and forbidden legacy standalone states. lifecycle.ts only
  * gathers the observations (read files + probe ports) and prints — it has no decision logic to test.
  */
 import test from 'node:test';
@@ -28,7 +28,7 @@ test('both tiers down → "not running", not an error condition', () => {
 test('unexpected process on a profile port → flags an untracked/duplicate daemon (the zoo signal)', () => {
   const r = buildDoctorReport({
     host: healthy(100, 19223),
-    standalone: healthy(101, 19222),
+    standalone: absent,
     unexpectedPortOwners: [{ label: 'GraphQL', port: 19223, pid: 777 }],
   });
   assert.equal(r.ok, false);
@@ -49,7 +49,7 @@ test('a rogue process while host.json/runtime.json are absent is still flagged (
 test('version mismatch → flags a stale daemon and suggests restart', () => {
   const r = buildDoctorReport({
     host: healthy(100, 19223),
-    standalone: healthy(101, 19222),
+    standalone: absent,
     versionMismatch: { running: '0.1.0-alpha.6', current: '0.1.0-alpha.7' },
   });
   assert.equal(r.ok, false);
@@ -59,7 +59,7 @@ test('version mismatch → flags a stale daemon and suggests restart', () => {
 test('matching version + no rogue ports → no false issues', () => {
   const r = buildDoctorReport({
     host: healthy(100, 19223),
-    standalone: healthy(101, 19222),
+    standalone: absent,
     unexpectedPortOwners: [],
     versionMismatch: { running: '0.1.0-alpha.7', current: '0.1.0-alpha.7' },
   });
@@ -70,7 +70,7 @@ test('matching version + no rogue ports → no false issues', () => {
 test('rogue queue poller → flags a foreign executor on the dbos DB with its backend pids', () => {
   const r = buildDoctorReport({
     host: healthy(100, 19223),
-    standalone: healthy(101, 19222),
+    standalone: absent,
     queuePollerRogues: [
       { pid: 501, executorId: 'local', applicationName: 'dbos_transact_local_' },
       { pid: 502, executorId: 'local', applicationName: 'dbos_transact_local_' },
@@ -86,7 +86,7 @@ test('rogue queue poller → flags a foreign executor on the dbos DB with its ba
 test('rogue census groups by executor: distinct foreign executors → distinct issues', () => {
   const r = buildDoctorReport({
     host: healthy(100, 19223),
-    standalone: healthy(101, 19222),
+    standalone: absent,
     queuePollerRogues: [
       { pid: 601, executorId: 'local', applicationName: 'dbos_transact_local_' },
       { pid: 602, executorId: 'revo-dev', applicationName: 'dbos_transact_revo-dev_1' },
@@ -99,7 +99,7 @@ test('rogue census groups by executor: distinct foreign executors → distinct i
 test('census unavailable (no superuser / DB unreachable) → warns, never reports clean', () => {
   const r = buildDoctorReport({
     host: healthy(100, 19223),
-    standalone: healthy(101, 19222),
+    standalone: absent,
     queuePollerRogues: [],
     rogueCensusUnavailable: true,
   });
@@ -110,7 +110,7 @@ test('census unavailable (no superuser / DB unreachable) → warns, never report
 test('census ran clean (no rogues, available) → no false issue', () => {
   const r = buildDoctorReport({
     host: healthy(100, 19223),
-    standalone: healthy(101, 19222),
+    standalone: absent,
     queuePollerRogues: [],
     rogueCensusUnavailable: false,
   });
@@ -118,8 +118,8 @@ test('census ran clean (no rogues, available) → no false issue', () => {
   assert.deepEqual(r.issues, []);
 });
 
-test('both tiers healthy → ok with no issues', () => {
-  const r = buildDoctorReport({ host: healthy(100, 19223), standalone: healthy(101, 19222) });
+test('host healthy with no legacy standalone → ok with no issues', () => {
+  const r = buildDoctorReport({ host: healthy(100, 19223), standalone: absent });
   assert.equal(r.ok, true);
   assert.deepEqual(r.issues, []);
 });
@@ -127,7 +127,7 @@ test('both tiers healthy → ok with no issues', () => {
 test('stale host.json (recorded pid dead) is flagged with the pid', () => {
   const r = buildDoctorReport({
     host: { present: true, alive: false, healthy: false, pid: 999, port: 19223 },
-    standalone: healthy(101, 19222),
+    standalone: absent,
   });
   assert.equal(r.ok, false);
   assert.equal(r.issues.length, 1);
@@ -137,7 +137,7 @@ test('stale host.json (recorded pid dead) is flagged with the pid', () => {
 test('host alive but GraphQL not responding is flagged with the port', () => {
   const r = buildDoctorReport({
     host: { present: true, alive: true, healthy: false, pid: 100, port: 19223 },
-    standalone: healthy(101, 19222),
+    standalone: absent,
   });
   assert.equal(r.ok, false);
   assert.match(r.issues[0], /GraphQL front door on port 19223/);
@@ -152,27 +152,26 @@ test('stale standalone runtime.json (recorded pid dead) is flagged', () => {
   assert.match(r.issues[0], /Stale runtime\.json.*888/);
 });
 
-test('standalone alive but unhealthy is flagged with the port', () => {
+test('legacy standalone alive is forbidden even when reachable', () => {
   const r = buildDoctorReport({
     host: healthy(100, 19223),
-    standalone: { present: true, alive: true, healthy: false, pid: 101, port: 19222 },
+    standalone: healthy(101, 19222),
   });
   assert.equal(r.ok, false);
-  assert.match(r.issues[0], /unhealthy on port 19222/);
+  assert.match(r.issues[0], /Legacy standalone Revisium.*19222.*embedded storage/);
 });
 
-test('host up but standalone absent → partial stack, suggests restart', () => {
+test('host up and legacy standalone absent → healthy embedded storage stack', () => {
   const r = buildDoctorReport({ host: healthy(100, 19223), standalone: absent });
-  assert.equal(r.ok, false);
-  assert.equal(r.issues.length, 1);
-  assert.match(r.issues[0], /partial.*revo restart/);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.issues, []);
 });
 
-test('standalone up but host absent → partial stack, suggests start', () => {
+test('legacy standalone up but host absent → suggests clearing legacy process', () => {
   const r = buildDoctorReport({ host: absent, standalone: healthy(101, 19222) });
   assert.equal(r.ok, false);
   assert.equal(r.issues.length, 1);
-  assert.match(r.issues[0], /Host daemon is not running.*partial.*revo start/);
+  assert.match(r.issues[0], /Legacy standalone Revisium is running without the host daemon.*revo stop/);
 });
 
 // A stale tier (present-but-dead) must NOT be reported as "running" by the other tier's

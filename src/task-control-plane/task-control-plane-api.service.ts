@@ -4,6 +4,8 @@ import { basename, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { Inject, Injectable } from '@nestjs/common';
 import { baseUrl, getConfig, isAlive, isHealthy, readRuntime } from '../cli/config.js';
+import { isGraphqlHealthy } from '../host/ensure-host.js';
+import { readHostRuntime } from '../host/host-runtime.js';
 import { AgentObservabilityService, type GetAgentLogInput } from '../observability/agent-observability.service.js';
 import type {
   AgentAttemptSummary,
@@ -599,17 +601,28 @@ export class TaskControlPlaneApiService {
   ) {}
 
   async getStatus() {
-    const runtime = readRuntime();
-    const alive = runtime ? isAlive(runtime.pid) : false;
-    const healthy = runtime && alive ? await isHealthy(runtime.httpPort) : false;
+    const host = readHostRuntime();
+    const hostAlive = host ? isAlive(host.pid) : false;
+    const hostHealthy = host && hostAlive ? await isGraphqlHealthy(host.graphqlPort) : false;
+    const standalone = readRuntime();
+    const standaloneAlive = standalone ? isAlive(standalone.pid) : false;
+    const standaloneHealthy = standalone && standaloneAlive ? await isHealthy(standalone.httpPort) : false;
     return {
       daemon: {
-        running: Boolean(runtime && alive),
-        healthy,
-        pid: runtime?.pid ?? null,
-        baseUrl: runtime ? baseUrl(runtime.httpPort) : null,
-        httpPort: runtime?.httpPort ?? null,
-        pgPort: runtime?.pgPort ?? null,
+        running: Boolean(host && hostAlive),
+        healthy: hostHealthy,
+        pid: host?.pid ?? null,
+        baseUrl: host ? `${baseUrl(host.graphqlPort)}/graphql` : null,
+        graphqlPort: host?.graphqlPort ?? null,
+        mcpPort: host?.mcpPort ?? null,
+      },
+      standalone: {
+        running: Boolean(standalone && standaloneAlive),
+        healthy: standaloneHealthy,
+        pid: standalone?.pid ?? null,
+        baseUrl: standalone ? baseUrl(standalone.httpPort) : null,
+        httpPort: standalone?.httpPort ?? null,
+        pgPort: standalone?.pgPort ?? null,
       },
       project: this.getProject(),
     };

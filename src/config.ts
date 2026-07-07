@@ -29,8 +29,8 @@ type ConfigFile = {
 
 
 export const PROFILES = {
-  default: { suffix: '', portOffset: 0, dbosDb: 'dbos' },
-  dev: { suffix: '-dev', portOffset: 400, dbosDb: 'dbos_dev' },
+  default: { suffix: '', portOffset: 0, dbosDb: 'dbos', revoDb: 'revo' },
+  dev: { suffix: '-dev', portOffset: 400, dbosDb: 'dbos_dev', revoDb: 'revo_dev' },
 } as const;
 
 export type ProfileName = keyof typeof PROFILES;

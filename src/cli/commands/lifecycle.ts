@@ -7,7 +7,7 @@
 
 import { Command } from 'commander';
 import pg from 'pg';
-import { closeSync, existsSync, openSync, readSync, statSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readFileSync, readSync, statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import {
   baseUrl,
@@ -59,17 +59,39 @@ function listenerPid(port: number): number | null {
   }
 }
 
+type PostmasterRuntime = { pid: number; port: number };
+
+function readStoragePostmasterRuntime(dataDir: string): PostmasterRuntime | null {
+  const postmasterPid = `${dataDir}/pgdata/postmaster.pid`;
+  if (!existsSync(postmasterPid)) return null;
+  try {
+    const lines = readFileSync(postmasterPid, 'utf8').split(/\r?\n/);
+    const pid = Number(lines[0]?.trim());
+    const port = Number(lines[3]?.trim());
+    if (!Number.isInteger(pid) || pid <= 0) return null;
+    if (!Number.isInteger(port) || port <= 0 || port > 65_535) return null;
+    return { pid, port };
+  } catch {
+    return null;
+  }
+}
+
 
 function profilePortList(host: HostRuntimeState | null, standalone: RuntimeState | null): number[] {
   const cfg = getConfig();
   const gql = host?.graphqlPort ?? expectedGraphqlPort();
+  const ports = [
+    gql,
+    host?.mcpPort ?? gql + 1,
+    host?.pgPort ?? cfg.preferredPgPort,
+    standalone?.httpPort,
+    standalone?.pgPort,
+  ];
   return [
-    ...new Set([
-      gql,
-      host?.mcpPort ?? gql + 1,
-      standalone?.httpPort ?? cfg.preferredPort,
-      standalone?.pgPort ?? cfg.preferredPgPort,
-    ]),
+    ...new Set(
+      ports.filter((port): port is number =>
+        typeof port === 'number' && Number.isInteger(port) && port > 0 && port <= 65_535),
+    ),
   ];
 }
 
@@ -92,7 +114,8 @@ async function startStack(options: ProfileOptions): Promise<void> {
     console.log(alreadyRunning ? `Revo already running (profile ${profile})` : `Revo started (profile ${profile})`);
     console.log(`Host daemon: pid ${runtime.pid}`);
     console.log(`GraphQL: ${baseUrl(runtime.graphqlPort)}/graphql`);
-    if (standalone) console.log(`Revisium: ${baseUrl(standalone.httpPort)} (pg ${standalone.pgPort})`);
+    if (runtime.pgPort) console.log(`Storage PG: localhost:${runtime.pgPort}`);
+    if (standalone) console.log(`Legacy Revisium: ${baseUrl(standalone.httpPort)} (pg ${standalone.pgPort})`);
     console.log(`Data dir: ${dataDir}`);
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
@@ -118,6 +141,9 @@ async function stopStack(options: ProfileOptions & { all?: boolean }): Promise<v
   const ports = profilePortList(host, standalone);
   let stopped = false;
 
+  if (options.all && host && isAlive(host.pid)) {
+    await evictQueuePollers(getConfig().profile, host.pgPort ?? getConfig().preferredPgPort);
+  }
   if (options.all && standalone && isAlive(standalone.pid)) {
     await evictQueuePollers(getConfig().profile, standalone.pgPort);
   }
@@ -163,6 +189,7 @@ async function statusStack(options: ProfileOptions): Promise<void> {
   if (host && isHostRunning()) {
     const healthy = await isGraphqlHealthy(host.graphqlPort);
     console.log(`Host daemon: running (pid ${host.pid}) — GraphQL ${baseUrl(host.graphqlPort)}/graphql ${healthy ? 'OK' : 'FAILING'}`);
+    if (host.pgPort) console.log(`Storage PG: localhost:${host.pgPort}`);
   } else {
     console.log(`Host daemon: stopped (GraphQL port ${expectedGraphqlPort()})`);
   }
@@ -170,9 +197,9 @@ async function statusStack(options: ProfileOptions): Promise<void> {
   const standalone = readRuntime();
   if (standalone && isAlive(standalone.pid)) {
     const healthy = await isHealthy(standalone.httpPort);
-    console.log(`Revisium: running (pid ${standalone.pid}) on ${baseUrl(standalone.httpPort)} pg ${standalone.pgPort} — health ${healthy ? 'OK' : 'FAILING'}`);
+    console.log(`Legacy Revisium: running (pid ${standalone.pid}) on ${baseUrl(standalone.httpPort)} pg ${standalone.pgPort} — health ${healthy ? 'OK' : 'FAILING'}`);
   } else {
-    console.log('Revisium: stopped');
+    console.log('Legacy Revisium: stopped (expected)');
   }
 }
 
@@ -301,14 +328,22 @@ async function doctorStack(options: ProfileOptions & { fix?: boolean }): Promise
   const standalone = readRuntime();
   const standaloneAlive = standalone !== null && isAlive(standalone.pid);
   const standaloneHealthy = standalone !== null && standaloneAlive && (await isHealthy(standalone.httpPort));
+  const storagePostmaster = readStoragePostmasterRuntime(dataDir);
+  const storagePgPort = host?.pgPort ?? storagePostmaster?.port ?? getConfig().preferredPgPort;
+  const storageExpectedPid = storagePostmaster?.pid ?? host?.pid ?? null;
 
   const gql = host?.graphqlPort ?? expectedGraphqlPort();
   const portChecks: Array<{ label: string; port: number; expected: number | null }> = [
     { label: 'GraphQL', port: gql, expected: host?.pid ?? null },
     { label: 'MCP', port: host?.mcpPort ?? gql + 1, expected: host?.pid ?? null },
-    { label: 'standalone HTTP', port: standalone?.httpPort ?? getConfig().preferredPort, expected: standalone?.pid ?? null },
-    { label: 'Postgres', port: standalone?.pgPort ?? getConfig().preferredPgPort, expected: standalone?.pid ?? null },
+    { label: 'Postgres', port: storagePgPort, expected: storageExpectedPid },
   ];
+  if (standalone) {
+    portChecks.push(
+      { label: 'legacy standalone HTTP', port: standalone.httpPort, expected: standalone.pid },
+      { label: 'legacy standalone Postgres', port: standalone.pgPort, expected: standalone.pid },
+    );
+  }
   const unexpectedPortOwners: Array<{ label: string; port: number; pid: number }> = [];
   for (const check of portChecks) {
     const pid = listenerPid(check.port);
@@ -323,8 +358,8 @@ async function doctorStack(options: ProfileOptions & { fix?: boolean }): Promise
 
   let queuePollerRogues: QueuePollerRogue[] | undefined;
   let rogueCensusUnavailable: boolean | undefined;
-  if (standalone && standaloneAlive) {
-    const census = await censusQueuePollers(profile, standalone.pgPort);
+  if (host && hostAlive) {
+    const census = await censusQueuePollers(profile, storagePgPort);
     queuePollerRogues = census.rogues;
     rogueCensusUnavailable = census.unavailable;
   }
@@ -449,20 +484,20 @@ function prefixLines(label: string, chunk: string): string {
 export function registerLifecycle(program: Command): void {
   program
     .command('start')
-    .description('Start the Revo stack (host daemon + standalone Revisium)')
+    .description('Start the Revo stack (host daemon + embedded storage)')
     .option('--profile <name>', 'Runtime profile (default|dev)')
     .action((options: ProfileOptions) => startStack(options));
 
   program
     .command('stop')
-    .description('Stop the Revo stack (host daemon first, then standalone)')
+    .description('Stop the Revo stack (host daemon and embedded storage)')
     .option('--profile <name>', 'Runtime profile (default|dev)')
     .option('--all', 'Also evict rogue queue pollers + reap untracked revo processes machine-wide')
     .action((options: ProfileOptions & { all?: boolean }) => stopStack(options));
 
   program
     .command('status')
-    .description('Show Revo stack status (host daemon, Revisium, profile)')
+    .description('Show Revo stack status (host daemon, storage, profile)')
     .option('--profile <name>', 'Runtime profile (default|dev)')
     .action((options: ProfileOptions) => statusStack(options));
 

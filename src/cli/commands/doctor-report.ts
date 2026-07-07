@@ -88,20 +88,19 @@ export function buildDoctorReport(o: DoctorObservation): DoctorReport {
     issues.push(
       `Host daemon (pid ${o.host.pid}) is running but its GraphQL front door on port ${o.host.port} is not responding.`,
     );
-  } else if (!o.host.present && o.standalone.alive) {
-    issues.push('Host daemon is not running while the standalone daemon is — the stack is partial. Run `revo start`.');
   }
 
   if (o.standalone.present && !o.standalone.alive) {
     issues.push(`Stale runtime.json: recorded standalone pid ${o.standalone.pid} is not alive.`);
-  } else if (o.standalone.alive && !o.standalone.healthy) {
-    issues.push(
-      `Standalone Revisium (pid ${o.standalone.pid}) is running but unhealthy on port ${o.standalone.port}.`,
-    );
-  } else if (!o.standalone.present && o.host.alive) {
-    issues.push(
-      'Standalone Revisium is not running while the host daemon is — the stack is partial. Run `revo restart`.',
-    );
+  } else if (o.standalone.alive) {
+    if (o.host.alive) {
+      issues.push(
+        `Legacy standalone Revisium (pid ${o.standalone.pid}) is running on port ${o.standalone.port}; ` +
+          'Revo should use the host daemon and embedded storage only. Run `revo stop`.',
+      );
+    } else {
+      issues.push('Legacy standalone Revisium is running without the host daemon. Run `revo stop` to clear it.');
+    }
   }
 
   return { ok: issues.length === 0, issues };

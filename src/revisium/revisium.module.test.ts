@@ -12,16 +12,30 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
+import { tmpdir } from 'node:os';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SRC_DIR = join(__dirname, '..'); // agent-orchestrator/src/
 
+function configureIsolatedStorageEnv(label: string): void {
+  const suffix = `${process.pid}`;
+  process.env['REVO_DATA_DIR'] = mkdtempSync(join(tmpdir(), `revo-${label}-${suffix}-`));
+  process.env['REVO_PORT'] = String(28_000 + (process.pid % 1_000));
+  process.env['REVO_PG_PORT'] = String(26_000 + (process.pid % 1_000));
+  process.env['REVO_DB'] = `revo_${label}_${suffix}`;
+  process.env['REVO_DBOS_DB'] = `dbos_${label}_${suffix}`;
+}
+
 // ─── Nest module standalone context test ─────────────────────
 
 test('RevisiumModule creates a standalone context and provides all services without network call (edge 11)', async () => {
+  configureIsolatedStorageEnv('module');
+  const { ensureStorage, shutdownStorage } = await import('../storage/ensure-storage.js');
+  await ensureStorage();
+
   // Lazy imports to avoid loading Nest at top-level.
   const { NestFactory } = await import('@nestjs/core');
   const { RevisiumModule } = await import('./revisium.module.js');
@@ -54,6 +68,7 @@ test('RevisiumModule creates a standalone context and provides all services with
     assert.equal(headTransport.mode, 'head');
   } finally {
     await ctx.close();
+    await shutdownStorage();
   }
 });
 
@@ -128,7 +143,6 @@ const BASELINE_IMPORTERS = new Set([
   srcPath('control-plane', 'client-transport.ts'),
   srcPath('control-plane', 'data-access.ts'),
   srcPath('control-plane', 'schema-migration.ts'),
-  srcPath('control-plane', 'versioned-meaning.ts'),
   srcPath('run', 'inspect-run.ts'),
   // Named legacy exception (§3.9): worker loop, slated for deletion (ADR-0001).
   srcPath('worker', 'build-context.ts'),

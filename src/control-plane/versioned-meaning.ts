@@ -1,6 +1,4 @@
-import { RevisiumClient } from '@revisium/client';
-import { baseUrl, getConfig, isAlive, isHealthy, readRuntime } from '../config.js';
-import { ControlPlaneError } from './errors.js';
+import { legacyRevisiumDisabled } from './legacy-revisium.js';
 
 export type VersionedMeaningTable = 'playbooks' | 'roles' | 'pipelines';
 
@@ -48,14 +46,7 @@ function isRowNotFound(error: unknown): boolean {
 }
 
 async function createDraftScope(): Promise<VersionedMeaningScope> {
-  const runtime = readRuntime();
-  if (!runtime || !isAlive(runtime.pid) || !(await isHealthy(runtime.httpPort))) {
-    throw new ControlPlaneError('DAEMON_NOT_RUNNING', 'Local Revisium daemon is not running or healthy');
-  }
-
-  const { org, project, branch } = getConfig();
-  const client = new RevisiumClient({ baseUrl: baseUrl(runtime.httpPort) });
-  return client.revision({ org, project, branch, revision: 'draft' });
+  return legacyRevisiumDisabled('Legacy Revisium versioned-meaning draft scope');
 }
 
 export function createVersionedMeaningAccess(

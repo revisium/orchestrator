@@ -1,7 +1,7 @@
-import { RevisiumClient, sdk } from '@revisium/client';
+import { sdk } from '@revisium/client';
 import type { Client, GetTableRowsDto } from '@revisium/client';
-import { baseUrl, getConfig, isAlive, isHealthy, readRuntime } from '../config.js';
 import { ControlPlaneError } from './errors.js';
+import { legacyRevisiumDisabled } from './legacy-revisium.js';
 import { runtimeTables } from './tables.js';
 import type { ListRowsOptions } from './data-access.js';
 import type { PatchOperation } from './json-fields.js';
@@ -42,13 +42,6 @@ type RowsData = NonNullable<Awaited<ReturnType<typeof sdk.rows>>['data']>;
 type RowData = NonNullable<Awaited<ReturnType<typeof sdk.row>>['data']>;
 type CreateRowData = NonNullable<Awaited<ReturnType<typeof sdk.createRow>>['data']>;
 type MutationRowData = NonNullable<Awaited<ReturnType<typeof sdk.updateRow>>['data']>;
-
-
-
-
-
-const REQUEST_TIMEOUT_MS = 15_000;
-
 
 export function withRequestTimeout(baseFetch: typeof fetch, timeoutMs: number): typeof fetch {
   return (input, init) => {
@@ -135,34 +128,7 @@ export function extractMutationRow(result: {
 }
 
 async function getScope(mode: RevisionMode): Promise<ScopeContext> {
-  const runtime = readRuntime();
-  if (!runtime || !isAlive(runtime.pid) || !(await isHealthy(runtime.httpPort))) {
-    throw new ControlPlaneError('DAEMON_NOT_RUNNING', 'Local Revisium daemon is not running or healthy');
-  }
-
-  const { org, project, branch } = getConfig();
-  const revisiumClient = new RevisiumClient({ baseUrl: baseUrl(runtime.httpPort) });
-  const clientInstance = revisiumClient.client;
-  clientInstance.setConfig({ fetch: withRequestTimeout(globalThis.fetch, REQUEST_TIMEOUT_MS) });
-
-  const result =
-    mode === 'draft'
-      ? await sdk.draftRevision({ client: clientInstance, path: { organizationId: org, projectName: project, branchName: branch } })
-      : await sdk.headRevision({ client: clientInstance, path: { organizationId: org, projectName: project, branchName: branch } });
-
-  if (result.error) {
-    const err = result.error as { statusCode?: number };
-    if (err.statusCode === 404) {
-      throw new ControlPlaneError(
-        'BOOTSTRAP_NOT_APPLIED',
-        `Control-plane bootstrap is missing or not committed: ${org}/${project}/${branch}`,
-        { status: 404, details: result.error },
-      );
-    }
-    throw mapApiError(result.error, `${org}/${project}/${branch}:${mode}`);
-  }
-
-  return { revisionId: result.data!.id, client: clientInstance };
+  return legacyRevisiumDisabled(`Legacy Revisium REST ${mode} transport`);
 }
 
 export function createClientTransport(mode: RevisionMode): ControlPlaneTransport {
