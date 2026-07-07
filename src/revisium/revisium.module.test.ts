@@ -6,7 +6,7 @@
  *  - RolesService, RunService, InboxService, PlaybooksService resolve and are defined.
  *  - REVISIUM_TRANSPORT_DRAFT and REVISIUM_TRANSPORT_HEAD tokens resolve with correct mode.
  *  - Module construction makes NO network call (context creation succeeds without a live daemon).
- *  - Invariant #4 guard (§5.8): no source file or package manifest depends on @revisium/client.
+ *  - Revo source and package manifests use only approved @revisium packages.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -98,84 +98,74 @@ function collectTsFiles(rootDir: string): string[] {
   return collectFiles(rootDir, (entry) => entry.endsWith('.ts') && !entry.endsWith('.test.ts'));
 }
 
-/**
- * Regex that matches all import forms for a given bare module specifier:
- *   import ... from 'pkg'
- *   export ... from 'pkg'
- *   require('pkg')
- *   import('pkg')   (dynamic import)
- * Both single and double quotes.
- * Deliberately NOT wrapped in catch — if file IO fails, let it throw (C1 fix).
- */
-function buildImportRegex(pkg: string): RegExp {
-  // Escape special regex chars in the package name (handles @scope/name).
-  const escaped = pkg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(
-    `(?:from|require|import)\\s*\\(?\\s*['"]${escaped}['"]`,
-  );
-}
+const APPROVED_REVISIUM_PACKAGES = new Set([
+  '@revisium/engine',
+  '@revisium/prisma-pg-json',
+]);
 
-/**
- * Find all non-test *.ts files under rootDir that contain an import/require/export
- * statement for the given package. Reads files with readFileSync — no shell, no
- * swallowed errors. Throws if any file cannot be read (not wrapped in catch).
- */
-function findImporters(rootDir: string, pkg: string): string[] {
-  const regex = buildImportRegex(pkg);
-  return collectTsFiles(rootDir).filter((file) => {
+function findUnapprovedRevisiumImports(rootDir: string): string[] {
+  const importRegex = /(?:from|require|import)\s*\(?\s*['"](@revisium\/[^'"]+)['"]/g;
+  const violations: string[] = [];
+  for (const file of collectTsFiles(rootDir)) {
     const src = readFileSync(file, 'utf8');
-    return regex.test(src);
-  });
+    for (const match of src.matchAll(importRegex)) {
+      const pkg = match[1];
+      if (!APPROVED_REVISIUM_PACKAGES.has(pkg)) violations.push(`${file}: ${pkg}`);
+    }
+  }
+  return violations;
 }
 
-test('Invariant #4: no source file imports @revisium/client generated SDK', () => {
-  const allImporters = findImporters(SRC_DIR, '@revisium/client');
+test('RevisiumModule: source imports only approved @revisium packages', () => {
+  const violations = findUnapprovedRevisiumImports(SRC_DIR);
   assert.deepEqual(
-    allImporters,
+    violations,
     [],
-    `src/ must not import @revisium/client. Found violations:\n${allImporters.join('\n')}`,
+    `src/ must import only approved @revisium packages:\n${violations.join('\n')}`,
   );
 });
 
-test('Invariant #4: package manifest does not depend on @revisium/client generated SDK', () => {
+test('RevisiumModule: package manifest depends only on approved @revisium packages', () => {
   const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')) as {
     dependencies?: Record<string, string>;
     devDependencies?: Record<string, string>;
   };
-  assert.equal(
-    manifest.dependencies?.['@revisium/client'],
-    undefined,
-    '@revisium/client must not be a runtime dependency',
-  );
-  assert.equal(
-    manifest.devDependencies?.['@revisium/client'],
-    undefined,
-    '@revisium/client must not be a dev dependency',
+  const deps = {
+    ...manifest.dependencies,
+    ...manifest.devDependencies,
+  };
+  const violations = Object.keys(deps)
+    .filter((name) => name.startsWith('@revisium/') && !APPROVED_REVISIUM_PACKAGES.has(name))
+    .sort();
+  assert.deepEqual(
+    violations,
+    [],
+    `package.json must depend only on approved @revisium packages:\n${violations.join('\n')}`,
   );
 });
 
-test('Invariant #4: agent guidance does not expose legacy standalone commands', () => {
-  const forbidden = [
-    /revo\s+revisium\b/i,
-    /revo\s+bootstrap\b/i,
-    /@revisium\/standalone\b/i,
-    /runtime\.json\b/i,
-    /Revisium HTTP/i,
-    /standalone HTTP/i,
+test('RevisiumModule: packaged agent guidance references only current top-level revo commands', () => {
+  const currentCommands = new Set(['start', 'stop', 'status', 'restart', 'doctor', 'logs', 'mcp']);
+  const files = [
+    ...collectFiles(join(REPO_ROOT, '.agents'), (entry) => entry.endsWith('.md')),
+    join(REPO_ROOT, 'control-plane', 'default-playbook', 'package.json'),
   ];
-  const files = collectFiles(join(REPO_ROOT, '.agents'), (entry) => entry.endsWith('.md'));
   const violations: string[] = [];
+  const commandRegex = /`revo\s+([a-z][a-z0-9_-]*)\b[^`]*`/gi;
   for (const file of files) {
     const lines = readFileSync(file, 'utf8').split(/\r?\n/);
     lines.forEach((line, index) => {
-      if (forbidden.some((pattern) => pattern.test(line))) {
-        violations.push(`${file}:${index + 1}: ${line}`);
+      for (const match of line.matchAll(commandRegex)) {
+        const command = match[1].toLowerCase();
+        if (!currentCommands.has(command)) {
+          violations.push(`${file}:${index + 1}: revo ${command}`);
+        }
       }
     });
   }
   assert.deepEqual(
     violations,
     [],
-    `Tracked .agents guidance must not expose legacy standalone commands:\n${violations.join('\n')}`,
+    `Packaged guidance must reference only current top-level revo commands:\n${violations.join('\n')}`,
   );
 });

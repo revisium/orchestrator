@@ -4,8 +4,7 @@
 - **Version:** v1
 - **Owners:** Revo host lifecycle, storage bootstrap, DBOS adapter, Prisma runtime
 - **Source files:** `src/config.ts`, `src/storage/ensure-storage.ts`, `src/storage/revo-database.ts`,
-  `src/engine/ensure-postgres.ts`, `src/host/host.lifecycle.ts`, `src/engine/dbos.service.ts`,
-  `prisma/schema.prisma`
+  `src/host/host.lifecycle.ts`, `src/engine/dbos.service.ts`, `prisma/schema.prisma`
 - **Related ADRs:** [ADR-0007](../adr/0007-revo-storage-foundation.md)
 
 ## Scope
@@ -37,8 +36,8 @@ Orchestrator owns a first-party Prisma schema and starts embedded PostgreSQL dir
 bootstrap. The host provisions the Revo product database and DBOS system database, runs Prisma Migrate against the Revo
 product database, initializes the embedded Revisium engine in-process, and then calls `DBOS.launch()`.
 
-The previous standalone-based contract was replaced. Revo must not start `@revisium/standalone`, read standalone runtime
-JSON, or depend on a standalone HTTP health endpoint during normal startup.
+The previous external storage-daemon contract was replaced. Revo starts embedded storage itself and must not discover
+storage through external runtime files or local storage health endpoints during normal startup.
 
 Profiles currently define DBOS database names:
 
@@ -56,7 +55,7 @@ DBOS creates its own schema and tables in the DBOS database during `DBOS.launch(
 ### Physical topology
 
 One Revo installation owns one embedded PostgreSQL cluster per profile/data directory. Revo starts that cluster
-directly through a Revo-owned embedded PostgreSQL provider/wrapper, not through `@revisium/standalone`. That cluster
+directly through a Revo-owned embedded PostgreSQL provider/wrapper. That cluster
 contains at least these databases:
 
 | Logical database | Default profile name | Dev profile name | Owner | DDL owner |
@@ -143,9 +142,9 @@ reading `dbos.dbos_migrations` in doctor/status commands.
 
 For internal alpha:
 
-- legacy local data is not considered;
+- pre-v2 local data is outside this contract;
 - reset means deleting the Revo data directory and recreating storage from scratch;
-- no automatic migration from standalone data is required unless a later ADR changes the product stage.
+- no automatic migration from pre-v2 local data is required unless a later ADR changes the product stage.
 
 Before destructive storage migrations after alpha, Revo SHOULD create a `pg_dump` backup for the Revo product DB and
 record its path in the host log. DBOS backup policy can be separate because DBOS stores recoverable workflow progress,
@@ -181,12 +180,12 @@ Required tests:
   DBOS tables in Revo DB;
 - user APIs reject new writes for archived or soft-deleted projects;
 - startup does not serve requests when Revo migrations fail;
-- fresh bootstrap works without `@revisium/standalone`, standalone runtime JSON, or standalone HTTP health checks.
+- fresh bootstrap works without external storage-daemon runtime files or health checks.
 
 ## Compatibility
 
 This contract is for the internal alpha target. Existing local data directories may be deleted. No compatibility shim
-for old standalone draft rows is required.
+for pre-v2 draft rows is required.
 
 ## Examples
 

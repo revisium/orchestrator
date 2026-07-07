@@ -1,11 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-test('HostLifecycle: dbosSystemDatabaseUrl uses the provided embedded Postgres port', async () => {
-  const { dbosSystemDatabaseUrl } = await import('../engine/ensure-postgres.js');
+test('HostLifecycle: dbosDatabaseUrl uses the provided embedded Postgres port', async () => {
+  const { dbosDatabaseUrl } = await import('../storage/revo-database.js');
 
   const provenPort = 15441;
-  const url = dbosSystemDatabaseUrl(provenPort);
+  const url = dbosDatabaseUrl(provenPort);
   assert.ok(
     url.includes(`:${provenPort}/`),
     `URL must contain the proven port ${provenPort}: ${url}`,
