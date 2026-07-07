@@ -18,6 +18,7 @@ import {
 } from '../task-control-plane/run-watch.service.js';
 import { MCP_TOOL_NAMES } from './mcp-capabilities.js';
 import { buildMonitoringDirective } from './monitoring-directive.js';
+import { listFeatureDevelopmentProfiles } from '../control-plane/topology-profiles.js';
 
 export type { RepositoryContext, RepositoryValidation };
 
@@ -29,6 +30,7 @@ type SimulateRouteMcpInput = {
   title: string;
   repo?: string;
   pipeline?: string;
+  profileId?: string;
   playbookId?: string;
   params?: unknown;
   executionProfile?: unknown;
@@ -40,6 +42,9 @@ type ListPipelinesMcpInput = {
 type GetPipelineMcpInput = {
   pipelineId: string;
   includeDetails?: boolean;
+};
+type ListProfilesMcpInput = {
+  pipelineId?: string;
 };
 
 function formatCause(error: unknown): string {
@@ -146,6 +151,10 @@ function compactRouteDecision(value: unknown): unknown {
   return definedEntries({
     ...summary,
     source: asString(route.source),
+    requestedPipelineId: asString(route.requestedPipelineId),
+    basePipelineId: asString(route.basePipelineId),
+    profileId: asString(route.profileId),
+    profileVersion: asString(route.profileVersion),
     executionProfile: compactExecutionProfile(route.executionProfile),
     roleBindingCount: roleBindings.length > 0 ? roleBindings.length : undefined,
   });
@@ -369,6 +378,12 @@ export class McpFacadeService {
         'Runs are driven by installed playbooks, pipeline catalogs, and execution profiles.',
         'Agent run monitoring: follow task_monitoring_loop — poll get_run_attention, react to nextAction.',
       ],
+      profiles: {
+        acceptedSources: ['profileId'],
+        schemaVersion: 'run-profile/v1-compat',
+        tools: ['list_profiles', 'simulate_route', 'create_run'],
+        profileIds: listFeatureDevelopmentProfiles('feature-development').map((profile) => profile.profileId),
+      },
       observation: {
         primaryTool: 'get_run_attention',
         supportingTools: ['get_run_status', 'get_run_digest', 'get_run_events', 'get_agent_activity', 'get_agent_log'],
@@ -413,6 +428,7 @@ export class McpFacadeService {
     scope?: string;
     playbookId?: string;
     pipelineId?: string;
+    profileId?: string;
     params?: Record<string, unknown>;
     executionProfile?: unknown;
     issueRef?: { repo: string; number: number; url: string };
@@ -624,6 +640,10 @@ export class McpFacadeService {
   async getPipeline(input: GetPipelineMcpInput) {
     const pipeline = await this.api.getPipeline(input.pipelineId);
     return input.includeDetails ? pipeline : compactPipeline(pipeline);
+  }
+
+  listProfiles(input: ListProfilesMcpInput = {}) {
+    return this.api.listProfiles(input);
   }
 
   async simulateRoute(input: SimulateRouteMcpInput) {

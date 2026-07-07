@@ -17,9 +17,14 @@ import type { RunService } from '../revisium/run.service.js';
 import { CreateRunWorkflowError, previewCreateRunIds } from '../run/create-run.js';
 import { hasWorkflowProgress, TaskControlPlaneApiService } from './task-control-plane-api.service.js';
 import {
+  CLAUDE_CODEX_REVIEW_CONSENSUS_PROFILE,
+  CLAUDE_STANDARD_PROFILE,
+  CODEX_CLAUDE_REVIEW_CONSENSUS_PROFILE,
   CODEX_CONSENSUS_PROFILE,
   CODEX_CONSENSUS_PROFILE_VERSION,
+  CODEX_STANDARD_PROFILE,
   CONSENSUS_TOGGLE_ALLOWLIST,
+  getFeatureDevelopmentProfile,
 } from '../control-plane/topology-profiles.js';
 import { hashProfile, materializeTemplate, MATERIALIZER_VERSION } from '../pipeline-core/materialize.js';
 import { POLICY_VERSION } from '../control-plane/default-playbook-policy.js';
@@ -4150,6 +4155,97 @@ test('resolveRouteDecision: base pipeline direct + profileId=codex-consensus (ru
   assert.equal(viaDirect.basePipelineId, 'feature-development');
   assert.equal(viaDirect.profileId, 'codex-consensus');
   assert.equal(viaDirect.materializedTemplateHash, viaAlias.materializedTemplateHash, 'same materialized hash via both paths');
+});
+
+test('listProfiles: feature-development exposes Claude/Codex launch profiles plus legacy codex-consensus', () => {
+  const api = makeApiForCodexAliasTests();
+  const profileIds = api.listProfiles({ pipelineId: 'feature-development' }).map((profile) => profile.profileId);
+
+  assert.deepEqual(profileIds, [
+    'claude-standard',
+    'codex-standard',
+    'codex-claude-review-consensus',
+    'claude-codex-review-consensus',
+    'codex-consensus',
+  ]);
+});
+
+function assertDirectProfileProvenance(route: RouteDecision, profileId: string): void {
+  const entry = getFeatureDevelopmentProfile(profileId);
+  assert.ok(entry, `profile ${profileId} must be registered`);
+  assert.equal(route.requestedPipelineId, 'feature-development');
+  assert.equal(route.basePipelineId, 'feature-development');
+  assert.equal(route.profileId, profileId);
+  assert.equal(route.profileVersion, entry.version);
+  assert.equal(route.profileHash, hashProfile(entry.profile));
+  assert.equal(route.materializerVersion, MATERIALIZER_VERSION);
+  assert.equal(route.policyVersion, POLICY_VERSION);
+  assert.ok(typeof route.materializedTemplateHash === 'string' && route.materializedTemplateHash.length === 64);
+}
+
+test('resolveRouteDecision: claude-standard profile keeps Claude runner and uses deep only for analyst/reviewer', async () => {
+  const api = makeApiForCodexAliasTests();
+  const route = await api.simulateRoute({ title: 'test', pipeline: 'feature-development', profileId: CLAUDE_STANDARD_PROFILE.profileId });
+  assertDirectProfileProvenance(route, CLAUDE_STANDARD_PROFILE.profileId);
+
+  const byRole = new Map(route.roleBindings.map((b) => [b.roleId, b]));
+  for (const roleId of ['orchestrator', 'analyst', 'reviewer', 'triager', 'developer', 'watcher']) {
+    assert.equal(byRole.get(roleId)?.resolvedRunnerId, 'claude-code', `${roleId} stays on claude-code`);
+  }
+  assert.equal(byRole.get('analyst')?.resolvedModelLevel, 'deep');
+  assert.equal(byRole.get('reviewer')?.resolvedModelLevel, 'deep');
+  for (const roleId of ['orchestrator', 'triager', 'developer', 'watcher']) {
+    assert.equal(byRole.get(roleId)?.resolvedModelLevel, 'standard', `${roleId} uses standard model level`);
+  }
+
+  const template = (route.executionPolicy as { template_json?: { nodes?: Record<string, unknown> } }).template_json;
+  assert.equal('planReviewFanout' in (template?.nodes ?? {}), false, 'standard profile does not fan out plan review');
+  assert.equal('codeReviewFanout' in (template?.nodes ?? {}), false, 'standard profile does not fan out code review');
+});
+
+test('resolveRouteDecision: codex-standard profile maps feature agents to Codex and uses deep only for analyst/reviewer', async () => {
+  const api = makeApiForCodexAliasTests();
+  const route = await api.simulateRoute({ title: 'test', pipeline: 'feature-development', profileId: CODEX_STANDARD_PROFILE.profileId });
+  assertDirectProfileProvenance(route, CODEX_STANDARD_PROFILE.profileId);
+
+  const byRole = new Map(route.roleBindings.map((b) => [b.roleId, b]));
+  for (const roleId of ['orchestrator', 'analyst', 'reviewer', 'triager', 'developer', 'watcher']) {
+    assert.equal(byRole.get(roleId)?.resolvedRunnerId, 'codex', `${roleId} resolves to codex runner`);
+    assert.equal(byRole.get(roleId)?.runnerSource, 'execution-profile');
+  }
+  assert.equal(byRole.get('analyst')?.resolvedModelLevel, 'codex-deep');
+  assert.equal(byRole.get('reviewer')?.resolvedModelLevel, 'codex-deep');
+  for (const roleId of ['orchestrator', 'triager', 'developer', 'watcher']) {
+    assert.equal(byRole.get(roleId)?.resolvedModelLevel, 'codex-standard', `${roleId} uses codex-standard model level`);
+  }
+});
+
+test('resolveRouteDecision: codex-claude-review-consensus adds Claude secondary review lanes over Codex mainline', async () => {
+  const api = makeApiForCodexAliasTests();
+  const route = await api.simulateRoute({ title: 'test', pipeline: 'feature-development', profileId: CODEX_CLAUDE_REVIEW_CONSENSUS_PROFILE.profileId });
+  assertDirectProfileProvenance(route, CODEX_CLAUDE_REVIEW_CONSENSUS_PROFILE.profileId);
+
+  const byRole = new Map(route.roleBindings.map((b) => [b.roleId, b]));
+  assert.equal(byRole.get('reviewer')?.resolvedRunnerId, 'codex', 'primary reviewer binding follows Codex mainline');
+  const overrides = route.executionProfile.bindingOverrides ?? [];
+  assert.ok(overrides.some((o) => o.match.nodeId === 'planReviewSecondary' && o.runnerId === 'claude-code' && o.modelLevel === 'deep'));
+  assert.ok(overrides.some((o) => o.match.nodeId === 'codeReviewSecondary' && o.runnerId === 'claude-code' && o.modelLevel === 'deep'));
+
+  const template = (route.executionPolicy as { template_json?: { nodes?: Record<string, unknown> } }).template_json;
+  assert.ok('planReviewFanout' in (template?.nodes ?? {}), 'mixed profile fans out plan review');
+  assert.ok('codeReviewFanout' in (template?.nodes ?? {}), 'mixed profile fans out code review');
+});
+
+test('resolveRouteDecision: claude-codex-review-consensus adds Codex secondary review lanes over Claude mainline', async () => {
+  const api = makeApiForCodexAliasTests();
+  const route = await api.simulateRoute({ title: 'test', pipeline: 'feature-development', profileId: CLAUDE_CODEX_REVIEW_CONSENSUS_PROFILE.profileId });
+  assertDirectProfileProvenance(route, CLAUDE_CODEX_REVIEW_CONSENSUS_PROFILE.profileId);
+
+  const byRole = new Map(route.roleBindings.map((b) => [b.roleId, b]));
+  assert.equal(byRole.get('reviewer')?.resolvedRunnerId, 'claude-code', 'primary reviewer binding follows Claude mainline');
+  const overrides = route.executionProfile.bindingOverrides ?? [];
+  assert.ok(overrides.some((o) => o.match.nodeId === 'planReviewSecondary' && o.runnerId === 'codex' && o.modelLevel === 'codex-deep'));
+  assert.ok(overrides.some((o) => o.match.nodeId === 'codeReviewSecondary' && o.runnerId === 'codex' && o.modelLevel === 'codex-deep'));
 });
 
 test('resolveRouteDecision: alias + conflicting explicit profileId throws VALIDATION_FAILURE', async () => {

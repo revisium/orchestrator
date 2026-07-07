@@ -198,7 +198,7 @@ test('resolveLaunchOverrides: playbook sources on binding -> undefined (no overr
 
 test('resolveLaunchOverrides: nodeId match wins over binding per-role values', () => {
   const profile = makeProfile({
-    bindingOverrides: [{ match: { nodeId: 'n1' }, modelLevel: 'cheap', timeoutMs: 30000 }],
+    bindingOverrides: [{ match: { nodeId: 'n1' }, runnerId: 'codex', modelLevel: 'cheap', timeoutMs: 30000 }],
   });
   const binding = makeBinding({
     resolvedModelLevel: 'deep',
@@ -208,6 +208,7 @@ test('resolveLaunchOverrides: nodeId match wins over binding per-role values', (
   });
   const result = resolveLaunchOverrides(binding, 'n1', profile);
   assert.ok(result !== undefined);
+  assert.equal(result?.runnerId, 'codex');
   assert.equal(result?.modelLevel, 'cheap');
   assert.equal(result?.timeoutMs, 30000);
 });

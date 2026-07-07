@@ -227,13 +227,14 @@ test('H7: gate-only verbs are enforced — answer_question on a gate is rejected
 });
 
 test('H8: get_capabilities advertises the full stdio tool set with new observation names', { skip: e2eSkip }, async () => {
-  const caps = await inv<{ transport: string; auth: string; tools: string[] }>('get_capabilities');
+  const caps = await inv<{ transport: string; auth: string; tools: string[]; profiles?: { profileIds?: string[] } }>('get_capabilities');
   assert.equal(caps.transport, 'stdio');
   assert.equal(caps.auth, 'none');
   assert.deepEqual([...caps.tools].sort(), [...mcp.toolNames].sort(), 'advertised tools match the registered handlers');
-  for (const t of ['create_run', 'start_run', 'get_run_attention', 'get_run_status', 'watch_run_changes', 'approve_gate', 'resolve_gate', 'get_run']) {
+  for (const t of ['create_run', 'start_run', 'get_run_attention', 'get_run_status', 'watch_run_changes', 'approve_gate', 'resolve_gate', 'get_run', 'list_profiles']) {
     assert.ok(caps.tools.includes(t), `capabilities must list ${t}`);
   }
+  assert.ok(caps.profiles?.profileIds?.includes('codex-standard'), 'capabilities must advertise feature-development profiles');
   assert.equal(caps.tools.includes('observe_run'), false, 'observe_run must not be advertised');
   assert.equal(caps.tools.includes('wait_for_run'), false, 'wait_for_run must not be advertised');
   assert.equal(caps.tools.includes('wait_for_any_gate'), false, 'wait_for_any_gate must not be advertised');
@@ -242,9 +243,11 @@ test('H8: get_capabilities advertises the full stdio tool set with new observati
 
 test('H9: catalog tools reflect the installed playbook', { skip: e2eSkip }, async () => {
   const pipelines = await inv<unknown[]>('list_pipelines');
+  const profiles = await inv<Array<{ profileId: string }>>('list_profiles', { pipelineId: 'feature-development' });
   const roles = await inv<unknown[]>('list_roles');
   const playbooks = await inv<Array<{ id: string }>>('list_playbooks');
   assert.ok(pipelines.length > 0, 'list_pipelines must return the installed catalog');
+  assert.ok(profiles.some((profile) => profile.profileId === 'claude-codex-review-consensus'), 'list_profiles must return built-in launch profiles');
   assert.ok(roles.length > 0, 'list_roles must return the installed catalog');
   assert.ok(playbooks.some((p) => p.id === PLAYBOOK_ID), 'list_playbooks must include the installed playbook');
 });

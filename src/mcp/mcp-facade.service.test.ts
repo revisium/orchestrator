@@ -42,6 +42,15 @@ test('McpFacadeService.getCapabilities exposes the MCP transport surface', () =>
   assert.ok(capabilities.tools.includes('get_agent_log'));
   assert.ok(capabilities.tools.includes('tail_agent_log'));
   assert.ok(capabilities.tools.includes('read_agent_output_events'));
+  assert.ok(capabilities.tools.includes('list_profiles'));
+  assert.deepEqual(capabilities.profiles.profileIds, [
+    'claude-standard',
+    'codex-standard',
+    'codex-claude-review-consensus',
+    'claude-codex-review-consensus',
+    'codex-consensus',
+  ]);
+  assert.deepEqual(capabilities.profiles.tools, ['list_profiles', 'simulate_route', 'create_run']);
   assert.ok(capabilities.tools.includes('get_run_attention'), 'get_run_attention must be in tools');
   assert.ok(capabilities.tools.includes('get_run_status'), 'get_run_status must be in tools');
   assert.ok(capabilities.tools.includes('watch_run_changes'), 'watch_run_changes must be in tools');
@@ -871,6 +880,10 @@ test('McpFacadeService.simulateRoute: compact response includes bindingOverrideC
     async simulateRoute() {
       return {
         playbookId: 'pb', pipelineId: 'feature-development', source: 'explicit',
+        requestedPipelineId: 'feature-development',
+        basePipelineId: 'feature-development',
+        profileId: 'codex-standard',
+        profileVersion: '1',
         routeGates: [], roles: [],
         executionPolicy: {},
         executionProfile: { id: 'test-profile', runnerOverrides: {}, bindingOverrides: [{ match: { roleId: 'developer' }, modelLevel: 'deep' }] },
@@ -882,6 +895,9 @@ test('McpFacadeService.simulateRoute: compact response includes bindingOverrideC
 
   const result = await facade.simulateRoute({ title: 'Task' }) as Record<string, unknown>;
   const ep = result.executionProfile as Record<string, unknown>;
+  assert.equal(result.profileId, 'codex-standard');
+  assert.equal(result.profileVersion, '1');
+  assert.equal(result.basePipelineId, 'feature-development');
   assert.equal(ep.id, 'test-profile');
   assert.equal(ep.bindingOverrideCount, 1, 'compact response includes bindingOverrideCount');
 });

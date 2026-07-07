@@ -11,6 +11,7 @@ export type BindingOverride = {
 };
 
 export type LaunchOverrides = {
+  runnerId?: string;
   modelLevel?: string;
   timeoutMs?: number;
   permissionMode?: string;
@@ -255,6 +256,8 @@ export function resolveLaunchOverrides(
 
   const nodeOverride = nodeMatches[0]!;
   const lo: LaunchOverrides = {};
+
+  if (nodeOverride.runnerId) lo.runnerId = nodeOverride.runnerId;
 
   const modelLevel = nodeOverride.modelLevel ?? (binding.modelSource === 'execution-profile' ? binding.resolvedModelLevel : undefined);
   if (modelLevel) lo.modelLevel = modelLevel;

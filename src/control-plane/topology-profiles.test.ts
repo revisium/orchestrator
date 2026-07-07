@@ -7,7 +7,13 @@ import type { Template } from '../pipeline-core/types.js';
 import { validateTemplate, classifyTemplateDiff } from '../pipeline-core/validate.js';
 import { materializeTemplate, hashTemplate } from '../pipeline-core/materialize.js';
 import { validateDefaultPlaybookPolicy } from './default-playbook-policy.js';
-import { CODEX_CONSENSUS_PROFILE, CONSENSUS_TOGGLE_ALLOWLIST, resolvePipelineProfile } from './topology-profiles.js';
+import {
+  CODEX_CONSENSUS_PROFILE,
+  CONSENSUS_TOGGLE_ALLOWLIST,
+  FEATURE_DEVELOPMENT_PROFILES,
+  listFeatureDevelopmentProfiles,
+  resolvePipelineProfile,
+} from './topology-profiles.js';
 
 type PipelineCatalogEntry = {
   id: string;
@@ -34,6 +40,32 @@ function materializeCodexConsensus(): Template {
 }
 
 // ─── real-base validateTemplate pass ─────────────────────────────────────────
+
+test('topology-profiles: registry exposes the supported feature-development profile ids', () => {
+  assert.deepEqual(
+    listFeatureDevelopmentProfiles('feature-development').map((profile) => profile.profileId),
+    [
+      'claude-standard',
+      'codex-standard',
+      'codex-claude-review-consensus',
+      'claude-codex-review-consensus',
+      'codex-consensus',
+    ],
+  );
+});
+
+test('topology-profiles: every registered feature-development profile materializes to a valid template', () => {
+  const base = catalogFeatureDevelopment();
+  const allowlist = CONSENSUS_TOGGLE_ALLOWLIST['feature-development'];
+  assert.ok(allowlist, 'feature-development must have a toggle allowlist');
+
+  for (const entry of FEATURE_DEVELOPMENT_PROFILES) {
+    const { template, diagnostics } = materializeTemplate(base, entry.profile, { allowlist });
+    assert.deepEqual(diagnostics, [], `${entry.profileId} materializeTemplate diagnostics`);
+    const errors = validateTemplate(template).filter((d) => d.severity === 'error');
+    assert.deepEqual(errors, [], `${entry.profileId} validateTemplate errors`);
+  }
+});
 
 test('topology-profiles: materializeTemplate(canonicalCatalog, codexProfile) has zero validateTemplate errors', () => {
   const materialized = materializeCodexConsensus();
@@ -199,6 +231,22 @@ test('resolvePipelineProfile: rule (1) alias id expands to base+profile', () => 
   assert.equal(r.requestedPipelineId, 'feature-development-codex-consensus');
   assert.equal(r.basePipelineId, 'feature-development');
   assert.equal(r.profileId, 'codex-consensus');
+});
+
+test('resolvePipelineProfile: feature-development profile aliases expand to base+profile', () => {
+  const aliases: Record<string, string> = {
+    'feature-development-claude-standard': 'claude-standard',
+    'feature-development-codex-standard': 'codex-standard',
+    'feature-development-codex-claude-review-consensus': 'codex-claude-review-consensus',
+    'feature-development-claude-codex-review-consensus': 'claude-codex-review-consensus',
+  };
+
+  for (const [alias, profileId] of Object.entries(aliases)) {
+    const r = resolvePipelineProfile(alias);
+    assert.equal(r.requestedPipelineId, alias);
+    assert.equal(r.basePipelineId, 'feature-development');
+    assert.equal(r.profileId, profileId);
+  }
 });
 
 test('resolvePipelineProfile: rule (2) base id + explicit profileId', () => {

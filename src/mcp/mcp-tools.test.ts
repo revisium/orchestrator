@@ -135,6 +135,31 @@ test('pipeline MCP tools expose compact defaults with explicit detail opt-in', a
   assert.equal(getTool.config.description?.includes('Compact by default'), true);
 });
 
+test('list_profiles MCP tool exposes profileId discovery', async () => {
+  const { z } = await import('zod');
+  const { server, tools } = makeServer();
+  let received: unknown;
+  const facade = {
+    listProfiles(input: unknown) {
+      received = input;
+      return [{ profileId: 'codex-standard', pipelineId: 'feature-development', version: '1', summary: 'Codex' }];
+    },
+  } as unknown as McpFacadeService;
+
+  registerRevoMcpTools(server as never, facade);
+
+  const tool = tools.find((registered) => registered.name === 'list_profiles');
+  assert.ok(tool, 'list_profiles tool registered');
+  const schema = z.object(tool.config.inputSchema as Record<string, never>);
+  assert.equal(schema.safeParse({}).success, true);
+  assert.equal(schema.safeParse({ pipelineId: 'feature-development' }).success, true);
+  assert.equal(tool.config.description?.includes('profileId'), true);
+
+  const result = await tool.handler({ pipelineId: 'feature-development' } as never);
+  assert.deepEqual(received, { pipelineId: 'feature-development' });
+  assert.deepEqual(parseToolText(result), [{ profileId: 'codex-standard', pipelineId: 'feature-development', version: '1', summary: 'Codex' }]);
+});
+
 test('watch_run_changes handler forwards the request abort signal to the facade', async () => {
   const { server, tools } = makeServer();
   let received: { runId?: string; signal?: AbortSignal } | undefined;

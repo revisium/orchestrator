@@ -24,10 +24,9 @@ import { validateMergeOverrideAudit, type MergeOverrideAuditInput } from '../con
 import { fnv1a64Hex } from '../control-plane/steps.js';
 import { POLICY_VERSION } from '../control-plane/default-playbook-policy.js';
 import {
-  CODEX_CONSENSUS_BINDINGS,
-  CODEX_CONSENSUS_PROFILE,
-  CODEX_CONSENSUS_PROFILE_VERSION,
   CONSENSUS_TOGGLE_ALLOWLIST,
+  getFeatureDevelopmentProfile,
+  listFeatureDevelopmentProfiles,
   resolvePipelineProfile,
 } from '../control-plane/topology-profiles.js';
 import { hashProfile, materializeTemplate, MATERIALIZER_VERSION } from '../pipeline-core/materialize.js';
@@ -1500,6 +1499,10 @@ export class TaskControlPlaneApiService {
     return this.playbooks.listPipelines();
   }
 
+  listProfiles(input: { pipelineId?: string } = {}) {
+    return listFeatureDevelopmentProfiles(input.pipelineId);
+  }
+
   async getPipeline(pipelineId: string) {
     const result = await this.playbooks.getPipeline(pipelineId);
     if (!result) throw new ControlPlaneError('ROW_NOT_FOUND', `pipeline not found: ${pipelineId}`);
@@ -1594,7 +1597,7 @@ export class TaskControlPlaneApiService {
     const provenanceFields: Partial<RouteDecision> = {};
 
     if (profileId !== undefined) {
-      const profileEntry = profileId === CODEX_CONSENSUS_PROFILE.profileId ? CODEX_CONSENSUS_PROFILE : undefined;
+      const profileEntry = getFeatureDevelopmentProfile(profileId);
       if (!profileEntry) {
         throw new ControlPlaneError('VALIDATION_FAILURE', `unknown profileId "${profileId}"`);
       }
@@ -1611,13 +1614,13 @@ export class TaskControlPlaneApiService {
 
       const { template: materializedTemplate, materializedTemplateHash } = materializeTemplate(
         baseTemplate as Parameters<typeof materializeTemplate>[0],
-        profileEntry,
+        profileEntry.profile,
         { allowlist },
       );
 
       executionPolicy = { template_json: materializedTemplate };
 
-      const derivedBindings = CODEX_CONSENSUS_BINDINGS;
+      const derivedBindings = profileEntry.bindings;
       executionProfile = {
         ...callerProfile,
         runnerOverrides: { ...derivedBindings.runnerOverrides, ...callerProfile.runnerOverrides },
@@ -1630,8 +1633,8 @@ export class TaskControlPlaneApiService {
       provenanceFields.requestedPipelineId = requestedPipelineId;
       provenanceFields.basePipelineId = basePipelineId;
       provenanceFields.profileId = profileId;
-      provenanceFields.profileVersion = CODEX_CONSENSUS_PROFILE_VERSION;
-      provenanceFields.profileHash = hashProfile(profileEntry);
+      provenanceFields.profileVersion = profileEntry.version;
+      provenanceFields.profileHash = hashProfile(profileEntry.profile);
       provenanceFields.materializedTemplateHash = materializedTemplateHash;
       provenanceFields.materializerVersion = MATERIALIZER_VERSION;
       provenanceFields.policyVersion = POLICY_VERSION;

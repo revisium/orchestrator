@@ -766,6 +766,13 @@ function reopenNodeState(state: RunState, nodeId: string): RunState {
   return { ...state, activeNodeIds: new Set([nodeId]), status: 'running' };
 }
 
+function routeNeedsLivePreflight(route: RouteDecision): boolean {
+  return route.roleBindings.some((b) => runnerNeedsLivePreflight(b.resolvedRunnerId)) ||
+    (route.executionProfile.bindingOverrides ?? []).some((override) =>
+      override.runnerId !== undefined && runnerNeedsLivePreflight(override.runnerId),
+    );
+}
+
 
 
 
@@ -1175,7 +1182,7 @@ export function makeDataDrivenTask(
 
     const { taskId, title, base, issueRef, issueAction } = await loadRunTaskContext(runId);
 
-    const live = route.roleBindings.some((b) => runnerNeedsLivePreflight(b.resolvedRunnerId));
+    const live = routeNeedsLivePreflight(route);
     if (live) {
       const pf = await preflightFn(taskId, base);
       if ('needsHuman' in pf) {
@@ -1609,12 +1616,13 @@ export function makeDataDrivenTask(
       const physicalAttempt = physicalAttemptFor(runId, stepKey, attemptNo);
       attemptIds.push(physicalAttempt.attemptId);
       const launchOverrides = resolveLaunchOverrides(binding, decision.nodeId, ctx.executionProfile);
+      const launchRunnerId = launchOverrides?.runnerId ?? binding.resolvedRunnerId;
       const result = await runStepFn(
         runId,
         binding.rowId,
         stepKey,
         stepInputForAttempt(decision.nodeId, inputs, physicalAttempt),
-        binding.resolvedRunnerId,
+        launchRunnerId,
         ctx.executionProfile,
         physicalAttempt,
         ctx.template.verdicts.domain,
@@ -1639,7 +1647,7 @@ export function makeDataDrivenTask(
         nodeProducesChange(node) &&
         !hasProducedChange &&
         ctx.live &&
-        runnerProducesWorktreeChanges(binding.resolvedRunnerId);
+        runnerProducesWorktreeChanges(launchRunnerId);
       if (shouldCaptureChange) {
         const artifactRef = artifactRefFromResult(result);
         const change = await captureChangeFn({

@@ -2615,6 +2615,28 @@ function makeLocalChangeRoute(developerBindingOverrides: Partial<RouteRoleBindin
   };
 }
 
+test('dispatch: node-level live runnerId override triggers preflight before any step runs', async () => {
+  let stepCalls = 0;
+  const runStepFn = async (): Promise<AttemptResult> => {
+    stepCalls += 1;
+    return { output: { ok: true }, verdict: 'approved', nextSteps: [], costs: [] };
+  };
+  const deps = makeMinimalDeps();
+  deps.preflightFn = async () => ({ needsHuman: true, lesson: 'node-level live runner requires preflight' });
+  const route = makeLocalChangeRoute({ resolvedRunnerId: 'script' });
+  route.executionProfile = {
+    id: 'node-live-runner',
+    runnerOverrides: {},
+    bindingOverrides: [{ match: { nodeId: 'developer' }, runnerId: 'codex', modelLevel: 'codex-standard' }],
+  };
+
+  const fn = makeDataDrivenTask(runStepFn, deps);
+  const result = await fn(RUN_ID, { route, template: localChange(), runnerRetryPolicy: resolveRunnerTransientRetryPolicy() });
+
+  assert.equal(result.status, 'blocked');
+  assert.equal(stepCalls, 0, 'preflight blocks before invoking any node');
+});
+
 test('dispatch: launchOverrides forwarded to runStepFn when bindingOverride has execution-profile source', async () => {
   const capturedLaunchOverrides = new Map<string, LaunchOverrides | undefined>();
 
@@ -2653,6 +2675,41 @@ test('dispatch: launchOverrides forwarded to runStepFn when bindingOverride has 
   assert.equal(developerLaunchOverrides?.modelLevel, 'cheap');
   assert.equal(developerLaunchOverrides?.timeoutMs, 60000);
   assert.equal(developerLaunchOverrides?.permissionMode, undefined);
+});
+
+test('dispatch: node-level runnerId launchOverride selects the runner for that node', async () => {
+  const capturedRunnerIds = new Map<string, string | undefined>();
+  const capturedLaunchOverrides = new Map<string, LaunchOverrides | undefined>();
+
+  const runStepFn = async (
+    _runId: string,
+    _role: string,
+    stepKey: string,
+    _input: unknown,
+    resolvedRunnerId?: string,
+    _executionProfile?: unknown,
+    _physicalAttempt?: { attemptNo: number; attemptId: string },
+    _acceptedVerdicts?: readonly string[],
+    launchOverrides?: LaunchOverrides,
+  ): Promise<AttemptResult> => {
+    capturedRunnerIds.set(stepKey, resolvedRunnerId);
+    capturedLaunchOverrides.set(stepKey, launchOverrides);
+    return { output: { from: stepKey }, verdict: 'approved', nextSteps: [], costs: [] };
+  };
+
+  const route = makeLocalChangeRoute({ resolvedRunnerId: 'claude-code' });
+  route.executionProfile = {
+    id: 'mixed-node-runner',
+    runnerOverrides: {},
+    bindingOverrides: [{ match: { nodeId: 'developer' }, runnerId: 'codex', modelLevel: 'codex-standard' }],
+  };
+
+  const fn = makeDataDrivenTask(runStepFn, makeMinimalDeps());
+  await fn(RUN_ID, { route, template: localChange(), runnerRetryPolicy: resolveRunnerTransientRetryPolicy() });
+
+  assert.equal(capturedRunnerIds.get('developer'), 'codex');
+  assert.equal(capturedLaunchOverrides.get('developer')?.runnerId, 'codex');
+  assert.equal(capturedLaunchOverrides.get('developer')?.modelLevel, 'codex-standard');
 });
 
 test('dispatch: no launchOverrides when binding has only playbook sources', async () => {

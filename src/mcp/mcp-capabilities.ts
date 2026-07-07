@@ -39,6 +39,7 @@ export const MCP_TOOL_NAMES = [
   'get_role',
   'list_pipelines',
   'get_pipeline',
+  'list_profiles',
   'simulate_route',
   'get_pr_readiness',
   'list_pr_feedback',
@@ -61,7 +62,7 @@ Use these tools to manage tasks end-to-end from your coding agent. When you crea
 - observe run state and attention requirements through the intent-named observation tools;
 - inspect bounded digests, events, attempts, agent activity, and logs only when needed;
 - resolve human inbox gates and questions;
-- inspect installed playbooks, roles, and pipelines;
+- inspect installed playbooks, roles, pipelines, and launch profiles;
 - inspect PR readiness and actionable review feedback before resuming work;
 - validate repository context before starting live work.
 

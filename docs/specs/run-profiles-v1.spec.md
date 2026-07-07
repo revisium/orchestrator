@@ -45,23 +45,29 @@ Implemented pieces:
 - `feature-development` is the reconciled default policy variant.
 - The bundled catalog also contains `feature-development-codex-consensus` as an alias entry with
   `{ basePipelineId: "feature-development", profileId: "codex-consensus" }`.
-- `CODEX_CONSENSUS_PROFILE` is a hardcoded `TopologyProfile` that toggles `planReviewer` and `codeReview` into
-  two-branch fanout plus deterministic joins.
+- `src/control-plane/topology-profiles.ts` declares built-in compatibility profile ids:
+  `claude-standard`, `codex-standard`, `codex-claude-review-consensus`, `claude-codex-review-consensus`, and legacy
+  `codex-consensus`.
+- Review-consensus profiles toggle `planReviewer` and `codeReview` into two-branch fanout plus deterministic joins.
+- Standard profiles apply runner/model bindings without changing the base topology.
 - `materializeTemplate` supports `TopologyProfile` with `toggles[]`, `fanout.branches`, `joinMode`,
   `verdictReducer`, and `merge` reducers.
+- `list_profiles` exposes built-in compatibility profile summaries over MCP.
 - `create_run` and `simulate_route` accept optional `profileId` and optional `executionProfile`.
 - Route decisions stamp `profileId`, `profileVersion`, `profileHash`, `materializedTemplateHash`,
   `materializerVersion`, and binding provenance when a topology profile is applied.
 - `executionProfile` can override runner mapping, available runners, model level, timeout, and permission mode.
+- Node-level `bindingOverrides` can override the launch runner/model for profile-created lanes; mixed
+  Claude+Codex review consensus uses this compatibility path.
 
 Current limitations:
 
 - no inline public `profile` parameter;
 - no requirement that `profileId` or inline `profile` be supplied;
 - public MCP still exposes `executionProfile` as a separate concept;
-- only `codex-consensus` is recognized as a stored topology profile;
+- built-in profiles are hardcoded compatibility profiles, not versioned user-created stored profiles;
 - profile topology can only clone an existing agent into identical branches plus a join;
-- branch lane bindings are not first-class profile data;
+- branch lane bindings are encoded as `nodeId` execution-profile overrides, not as first-class profile lane data;
 - `JoinArrival` records only branch id, sequence, and verdict, so post-join synthesis cannot consume a full branch
   output bundle;
 - `feature-development-codex-consensus` remains a public pipeline alias for compatibility.
@@ -551,7 +557,7 @@ bindings:
     developer: { runnerId: codex, modelLevel: standard, permissionMode: workspace-write }
     codeReview: { runnerId: codex, modelLevel: deep }
     triager: { runnerId: codex, modelLevel: standard }
-    watcher: { runnerId: codex, modelLevel: cheap }
+    watcher: { runnerId: codex, modelLevel: standard }
     integrator: { runnerId: revo-integrator }
     merger: { runnerId: revo-merger }
 ```
@@ -575,7 +581,7 @@ bindings:
     developer: { runnerId: claude-code, modelLevel: standard, permissionMode: acceptEdits }
     codeReview: { runnerId: claude-code, modelLevel: deep }
     triager: { runnerId: claude-code, modelLevel: standard }
-    watcher: { runnerId: claude-code, modelLevel: cheap }
+    watcher: { runnerId: claude-code, modelLevel: standard }
     integrator: { runnerId: revo-integrator }
     merger: { runnerId: revo-merger }
 ```
@@ -621,7 +627,7 @@ bindings:
     analyst: { runnerId: codex, modelLevel: deep, permissionMode: workspace-write }
     developer: { runnerId: codex, modelLevel: standard, permissionMode: workspace-write }
     triager: { runnerId: codex, modelLevel: standard }
-    watcher: { runnerId: codex, modelLevel: cheap }
+    watcher: { runnerId: codex, modelLevel: standard }
     integrator: { runnerId: revo-integrator }
     merger: { runnerId: revo-merger }
   lanes:
@@ -786,5 +792,7 @@ bindings:
 
 ## Changelog
 
+- 2026-07-07: Added compatibility profile discovery and built-in `feature-development` profiles for all-Claude,
+  all-Codex, Codex-main Claude+Codex review consensus, and Claude-main Claude+Codex review consensus.
 - 2026-07-03: Initial draft for explicit run profiles, provider-neutral `feature-development`, MCP profile
   ergonomics, replay pins, and consensus examples.

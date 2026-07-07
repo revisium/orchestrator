@@ -135,6 +135,20 @@ for (const level of referencedLevels) {
   });
 }
 
+test('seed: model profile ids match current Claude/Codex launch profile tiers', async () => {
+  const expected: Record<string, string> = {
+    standard: 'claude-sonnet-5',
+    deep: 'claude-opus-4-8',
+    'codex-standard': 'gpt-5.5',
+    'codex-deep': 'gpt-5.5',
+  };
+
+  for (const [level, modelId] of Object.entries(expected)) {
+    const profile = await loadModelProfile(level, transport);
+    assert.equal(profile.modelId, modelId, `${level}: unexpected model_id`);
+  }
+});
+
 // ---------------------------------------------------------------------------
 // T1-c: referential integrity — each required role's model_level has a profile row in the seed.
 // ---------------------------------------------------------------------------

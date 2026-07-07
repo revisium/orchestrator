@@ -528,6 +528,25 @@ test('launchOverrides: permissionMode and timeoutMs forwarded to dispatchRole fo
   assert.equal(harness.appendEventArgs.at(-1)?.type, 'step_succeeded');
 });
 
+test('launchOverrides: runnerId override selects dispatch runner for this step', async () => {
+  const runId = 'run-lo-runner';
+  let capturedRole: Role | undefined;
+  const { deps, harness } = buildRunStepDeps();
+  deps.runAgent = async (input) => {
+    capturedRole = input.role as Role;
+    return { output: { ok: true }, verdict: 'approved', nextSteps: [], costs: [], needsHuman: false };
+  };
+  const runStep = makeRunStep(deps);
+  const profile: ExecutionProfile = { id: 'test', runnerOverrides: {} };
+  const overrides: LaunchOverrides = { runnerId: 'codex', modelLevel: 'codex-standard' };
+
+  await runStep(runId, 'developer', 'developer', { phase: 'implement' }, 'claude-code', profile, undefined, undefined, overrides);
+
+  assert.ok(capturedRole !== undefined, 'runAgent was called');
+  assert.equal((capturedRole as Role).runner, 'codex');
+  assert.equal(harness.appendEventArgs.at(-1)?.type, 'step_succeeded');
+});
+
 test('launchOverrides: null/undefined overrides do not set permissionMode or timeoutMs on dispatchRole', async () => {
   const runId = 'run-lo-nullpm';
   let capturedRole: Role | undefined;

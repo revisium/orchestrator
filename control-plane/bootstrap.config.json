@@ -982,7 +982,7 @@
         "id": "standard",
         "level": "standard",
         "provider": "anthropic",
-        "model_id": "claude-sonnet-4-6",
+        "model_id": "claude-sonnet-5",
         "params": "{}",
         "cost_per_input": 3.0,
         "cost_per_output": 15.0,

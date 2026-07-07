@@ -183,7 +183,7 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
         scope: z.string().optional(),
         playbookId: z.string().min(1).optional(),
         pipelineId: z.string().min(1).optional().describe('Required: the pipeline to use. Omit to receive candidatePipelines for selection (no run is created).'),
-        profileId: z.string().min(1).optional().describe('Optional topology profile to apply (e.g. "codex-consensus"). Use with base pipelineId or an alias that expands to it.'),
+        profileId: z.string().min(1).optional().describe('Optional topology profile to apply. Use list_profiles to discover ids such as claude-standard, codex-standard, codex-claude-review-consensus, claude-codex-review-consensus, and legacy codex-consensus.'),
         params: paramsSchema,
         executionProfile: executionProfileSchema,
         issueRef: issueRefSchema,
@@ -614,6 +614,18 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
   );
 
   server.registerTool(
+    'list_profiles',
+    {
+      description: 'List known launch profiles for feature-development. These are built-in profileId values accepted by simulate_route and create_run.',
+      inputSchema: {
+        pipelineId: z.string().min(1).optional().describe('Filter by base pipeline id, for example feature-development.'),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async (input) => json(facade.listProfiles(input)),
+  );
+
+  server.registerTool(
     'simulate_route',
     {
       description: 'Return the current advisory route for a task without creating a run. Compact by default; pass includeDetails:true only for route graph/debugging.',
@@ -621,7 +633,7 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
         title: z.string().min(1),
         repo: z.string().optional(),
         pipeline: z.string().optional(),
-        profileId: z.string().min(1).optional().describe('Optional topology profile to apply (e.g. "codex-consensus").'),
+        profileId: z.string().min(1).optional().describe('Optional topology profile to apply. Use list_profiles to discover accepted ids.'),
         playbookId: z.string().optional(),
         params: paramsSchema,
         executionProfile: executionProfileSchema,
