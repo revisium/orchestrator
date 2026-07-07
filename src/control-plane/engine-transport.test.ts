@@ -12,10 +12,32 @@ import {
 import { runtimeTables } from './tables.js';
 
 type Call = { name: string; args: unknown };
+type PrismaKnownError = Error & {
+  code?: string;
+  meta?: { modelName?: string };
+};
+type PrismaOptions =
+  | boolean
+  | {
+      existingBranch?: boolean;
+      branchCreateError?: unknown;
+      branchExistsAfterBranchCreateError?: boolean;
+    };
 
-function makePrisma(existingBranch = false) {
+function branchUniqueConstraintError(): PrismaKnownError {
+  const error = new Error(
+    'Unique constraint failed on the fields: (`name`, `"projectId"`)',
+  ) as PrismaKnownError;
+  error.code = 'P2002';
+  error.meta = { modelName: 'Branch' };
+  return error;
+}
+
+function makePrisma(options: PrismaOptions = false) {
+  const opts =
+    typeof options === 'boolean' ? { existingBranch: options } : options;
   const calls: Call[] = [];
-  let branchExists = existingBranch;
+  let branchExists = opts.existingBranch ?? false;
   const tx = {
     branch: {
       async findUnique(args: unknown) {
@@ -24,6 +46,10 @@ function makePrisma(existingBranch = false) {
       },
       async create(args: { data: { id: string } }) {
         calls.push({ name: 'tx.branch.create', args });
+        if (opts.branchCreateError) {
+          branchExists = opts.branchExistsAfterBranchCreateError ?? branchExists;
+          throw opts.branchCreateError;
+        }
         branchExists = true;
         return { id: args.data.id };
       },
@@ -171,6 +197,28 @@ test('ensureControlPlaneProject is idempotent when the branch already exists', a
 
   assert.equal(
     prisma.calls.filter((call) => call.name === '$transaction').length,
+    0,
+  );
+});
+
+test('ensureControlPlaneProject tolerates a concurrent root branch insert', async () => {
+  const prisma = makePrisma({
+    branchCreateError: branchUniqueConstraintError(),
+    branchExistsAfterBranchCreateError: true,
+  });
+
+  await ensureControlPlaneProject(prisma as unknown as RevoPrismaService);
+
+  assert.equal(
+    prisma.calls.filter((call) => call.name === 'tx.branch.create').length,
+    1,
+  );
+  assert.equal(
+    prisma.calls.filter((call) => call.name === 'branch.findUnique').length,
+    2,
+  );
+  assert.equal(
+    prisma.calls.filter((call) => call.name === 'tx.revision.create').length,
     0,
   );
 });
