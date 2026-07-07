@@ -62,46 +62,68 @@ export class ControlPlaneSubscriptionBridge implements OnModuleInit, OnModuleDes
 
   private async publishChange(change: ControlPlaneChange): Promise<void> {
     if (change.table === 'task_runs') {
-      if (change.row) {
-        await this.pubSub.publish(RUN_UPDATED_TOPIC, { runUpdated: mapRunRow(change.row), runId: change.rowId });
-      }
-      await this.publishWorkflow(change.rowId);
+      await this.publishRunChange(change);
       return;
     }
     if (change.table === 'events' && change.action === 'create') {
-      const runId = changeRunId(change);
-      if (change.row) {
-        await this.pubSub.publish(RUN_EVENT_APPENDED_TOPIC, { runEventAppended: mapRunEventRow(change.row), runId });
-      }
-      await this.publishWorkflow(runId);
+      await this.publishEventChange(change);
       return;
     }
     if (change.table === 'inbox' && change.action === 'create') {
-      const runId = changeRunId(change);
-      if (change.row) {
-        await this.pubSub.publish(INBOX_ITEM_ADDED_TOPIC, { inboxItemAdded: mapInboxRow(change.row), runId });
-      }
-      await this.publishWorkflow(runId);
+      await this.publishInboxAdded(change);
       return;
     }
     if (change.table === 'inbox' && change.row?.data.status === 'resolved') {
-      const runId = changeRunId(change);
-      await this.pubSub.publish(INBOX_ITEM_RESOLVED_TOPIC, { inboxItemResolved: mapInboxRow(change.row), runId });
-      await this.publishWorkflow(runId);
+      await this.publishInboxResolved(change);
       return;
     }
     if (change.table === 'cost_ledger' && change.action === 'create') {
-      const runId = changeRunId(change);
-      if (change.row) {
-        await this.pubSub.publish(RUN_COST_RECORDED_TOPIC, { runCostRecorded: mapRunCostRow(change.row), runId });
-      }
-      await this.publishWorkflow(runId);
+      await this.publishCostChange(change);
       return;
     }
     const runId = changeRunId(change);
     if (runId) {
       await this.publishWorkflow(runId);
     }
+  }
+
+  private async publishRunChange(change: ControlPlaneChange): Promise<void> {
+    if (change.row) {
+      await this.pubSub.publish(RUN_UPDATED_TOPIC, { runUpdated: mapRunRow(change.row), runId: change.rowId });
+    }
+    await this.publishWorkflow(change.rowId);
+  }
+
+  private async publishEventChange(change: ControlPlaneChange): Promise<void> {
+    const runId = changeRunId(change);
+    if (change.row) {
+      await this.pubSub.publish(RUN_EVENT_APPENDED_TOPIC, { runEventAppended: mapRunEventRow(change.row), runId });
+    }
+    await this.publishWorkflow(runId);
+  }
+
+  private async publishInboxAdded(change: ControlPlaneChange): Promise<void> {
+    const runId = changeRunId(change);
+    if (change.row) {
+      await this.pubSub.publish(INBOX_ITEM_ADDED_TOPIC, { inboxItemAdded: mapInboxRow(change.row), runId });
+    }
+    await this.publishWorkflow(runId);
+  }
+
+  private async publishInboxResolved(change: ControlPlaneChange): Promise<void> {
+    const runId = changeRunId(change);
+    if (change.row) {
+      await this.pubSub.publish(INBOX_ITEM_RESOLVED_TOPIC, { inboxItemResolved: mapInboxRow(change.row), runId });
+    }
+    await this.publishWorkflow(runId);
+  }
+
+  private async publishCostChange(change: ControlPlaneChange): Promise<void> {
+    const runId = changeRunId(change);
+    if (change.row) {
+      await this.pubSub.publish(RUN_COST_RECORDED_TOPIC, { runCostRecorded: mapRunCostRow(change.row), runId });
+    }
+    await this.publishWorkflow(runId);
   }
 
   private async publishWorkflow(runId: string): Promise<void> {
