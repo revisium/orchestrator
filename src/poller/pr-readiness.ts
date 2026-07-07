@@ -14,6 +14,7 @@ import {
 export {
   defaultExecGh,
   defaultFetchSonar,
+  GITHUB_CHECK_ROLLUP_UNAVAILABLE,
   type CiSummary,
   type ExecGhFn,
   type FetchSonarFn,

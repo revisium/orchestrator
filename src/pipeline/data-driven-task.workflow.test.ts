@@ -27,6 +27,7 @@ import type {
   IntegratorBlocked,
   ConfirmMergeOutput,
   PrFeedback,
+  MergeOverrideOutput,
   RespondThreadsOutput,
   ProducedChangeArtifact,
 } from '../runners/integrator.js';
@@ -168,6 +169,8 @@ function buildAdapter(opts: {
   confirmMerge?: (input: IntegratorInput) => ConfirmMergeOutput | IntegratorBlocked | Promise<ConfirmMergeOutput | IntegratorBlocked>;
   /** Override pollPr (default: clean). Lets a test drive review_changes / ci_changes / a block. */
   pollPr?: (input: IntegratorInput) => PrFeedback | IntegratorBlocked | Promise<PrFeedback | IntegratorBlocked>;
+  /** Override overrideMerge (default: clean). Lets a test drive override refusals. */
+  overrideMerge?: (input: IntegratorInput) => MergeOverrideOutput | IntegratorBlocked | Promise<MergeOverrideOutput | IntegratorBlocked>;
   /** Override respondThreads (default: replied/resolved 0). Lets a test capture the triage it consumed. */
   respondThreads?: (input: IntegratorInput) => RespondThreadsOutput | IntegratorBlocked | Promise<RespondThreadsOutput | IntegratorBlocked>;
   /** Exact per-node result override for invalid-result contract tests. */
@@ -308,6 +311,27 @@ function buildAdapter(opts: {
       return { merged: true as const, prNumber: 1, prUrl: `https://example/pr/${input.taskId}/merged` };
     },
     runConfirmStub: (input: IntegratorInput) => ({ merged: true as const, prNumber: 0, prUrl: `stub://pr/${input.taskId}/merged` }),
+    overrideMergeFn: async (input: IntegratorInput): Promise<MergeOverrideOutput | IntegratorBlocked> => {
+      if (opts.overrideMerge) return opts.overrideMerge(input);
+      return {
+        prNumber: 1,
+        headSha: 'ready-head',
+        evidence: [`overrideMerge call for ${input.taskId}: clean`],
+        verdict: 'clean' as const,
+        ciFailures: [],
+        reviewThreads: [],
+        override: { accepted: true, actor: 'test', note: 'test override', source: { gate: 'mergeGate' as const, inboxId: 'inbox-test' }, facts: [], replied: 0, resolved: 0 },
+      };
+    },
+    runOverrideStub: (input: IntegratorInput): MergeOverrideOutput => ({
+      prNumber: 0,
+      headSha: 'stub',
+      evidence: [`stub overrideMerge for ${input.taskId}: clean`],
+      verdict: 'clean',
+      ciFailures: [],
+      reviewThreads: [],
+      override: { accepted: true, actor: 'test', note: 'stub override', source: { gate: 'mergeGate', inboxId: 'inbox-stub' }, facts: [], replied: 0, resolved: 0 },
+    }),
     // pollPr (plan 0018): default fake reports a CLEAN PR so the loop converges to the merge gate.
     pollPrFn: async (input: IntegratorInput): Promise<PrFeedback | IntegratorBlocked> => {
       rec.pollPrCalls++;
@@ -595,6 +619,96 @@ test('DD-issue-274: moved head after merge approval reopens mergeGate with the r
   assert.equal(rec.pollPrCalls, 3);
   assert.equal(rec.confirmMergeCalls, 0);
   assert.ok(!rec.events.some((event) => event.startsWith('merge_confirmed:')));
+});
+
+test('DD-issue-279: override refused on trusted gate head mismatch never calls confirmMerge', async () => {
+  const note = 'operator reviewed advisory thread';
+  const audit = {
+    reason: 'operator accepts advisory concern',
+    risk: 'known reviewer concern may remain',
+    verificationResponsibility: 'operator verified locally',
+    headSha: 'new-head',
+  };
+  const { run, rec } = buildAdapter({
+    template: defaultCodexConsensusTemplate(),
+    route: makeCodexConsensusRoute(),
+    verdicts: {
+      planReviewPrimary: 'approved',
+      planReviewSecondary: 'approved',
+      codeReviewPrimary: 'approved',
+      codeReviewSecondary: 'approved',
+    },
+    gate: (_topic, _gateKey, summary) => {
+      if (summary.nodeId === 'recoveryGate') return { outcome: 'cancel' };
+      if (summary.nodeId === 'mergeGate') {
+        assert.equal((summary.gatedArtifact?.payload as { headSha?: string } | undefined)?.headSha, 'old-head');
+        return {
+          outcome: 'override_merge',
+          note,
+          mergeOverrideAudit: {
+            threadIds: [],
+            actor: 'human',
+            ...audit,
+          },
+        };
+      }
+      return { decision: 'approve' };
+    },
+    pollPr: () => ({
+      prNumber: 1,
+      headSha: 'old-head',
+      evidence: ['pollPr clean old-head'],
+      verdict: 'clean' as const,
+      ciFailures: [],
+      reviewThreads: [],
+    }),
+    overrideMerge: (input) => {
+      const gateResolution = input.gateResolution as Record<string, unknown>;
+      assert.equal(gateResolution['trustedGateHeadSha'], 'old-head');
+      assert.deepEqual(gateResolution['mergeOverrideAudit'], { threadIds: [], actor: 'human', ...audit });
+      return {
+        prNumber: 1,
+        headSha: 'new-head',
+        evidence: ['overrideMerge verdict=recheck'],
+        verdict: 'recheck' as const,
+        ciFailures: [],
+        reviewThreads: [],
+        override: {
+          accepted: false,
+          actor: 'human',
+          note,
+          audit,
+          source: { gate: 'mergeGate', inboxId: 'mergeGate' },
+          facts: [{ severity: 'hard', kind: 'head_moved', summary: 'approved head old-head no longer matches fresh head new-head' }],
+          replied: 0,
+          resolved: 0,
+          reason: 'override_merge refused because hard blockers remain',
+        },
+      };
+    },
+  });
+
+  const result = await run();
+
+  assert.equal(result.status, 'cancelled');
+  assert.equal(rec.confirmMergeCalls, 0);
+  const refused = rec.eventRecords.find((event) => event.type === 'merge_override_refused');
+  assert.ok(refused, 'refused override is durably audited');
+  assert.deepEqual(refused.payload, {
+    actor: 'human',
+    note,
+    reason: audit.reason,
+    risk: audit.risk,
+    verificationResponsibility: audit.verificationResponsibility,
+    headSha: audit.headSha,
+    freshHeadSha: 'new-head',
+    prNumber: 1,
+    source: { gate: 'mergeGate', inboxId: 'mergeGate' },
+    overriddenFacts: [{ severity: 'hard', kind: 'head_moved', summary: 'approved head old-head no longer matches fresh head new-head' }],
+    replied: 0,
+    resolved: 0,
+    refusalReason: 'override_merge refused because hard blockers remain',
+  });
 });
 
 test('cancel gate outcome reaches cancelled terminal and calls cancelRun', async () => {
@@ -2454,6 +2568,24 @@ function makeMinimalDeps(): DataDrivenTaskDeps {
     releaseWorktreeFn: async () => ({ released: true, worktreePath: '/fake/worktree' }),
     confirmMergeFn: async (input) => ({ merged: true as const, prNumber: 1, prUrl: `stub://pr/${input.taskId}` }),
     runConfirmStub: (input) => ({ merged: true as const, prNumber: 0, prUrl: `stub://pr/${input.taskId}` }),
+    overrideMergeFn: async (input) => ({
+      prNumber: 1,
+      headSha: 'sha',
+      evidence: [`overrideMerge ${input.taskId}: clean`],
+      verdict: 'clean' as const,
+      ciFailures: [],
+      reviewThreads: [],
+      override: { accepted: true, actor: 'test', note: 'test override', source: { gate: 'mergeGate', inboxId: 'inbox-test' }, facts: [], replied: 0, resolved: 0 },
+    }),
+    runOverrideStub: (input) => ({
+      prNumber: 0,
+      headSha: 'stub',
+      evidence: [`stub overrideMerge ${input.taskId}: clean`],
+      verdict: 'clean' as const,
+      ciFailures: [],
+      reviewThreads: [],
+      override: { accepted: true, actor: 'test', note: 'stub override', source: { gate: 'mergeGate', inboxId: 'inbox-stub' }, facts: [], replied: 0, resolved: 0 },
+    }),
     pollPrFn: async () => ({ prNumber: 1, headSha: 'sha', evidence: [], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] }),
     runPollStub: () => ({ prNumber: 0, headSha: 'stub', evidence: [], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] }),
     respondThreadsFn: async () => ({ replied: 0, resolved: 0 }),

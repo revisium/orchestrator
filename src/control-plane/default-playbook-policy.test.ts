@@ -296,16 +296,58 @@ test('default playbook policy: merge-gate return_to_development must route to tr
   assert.match(diagnostic.expected ?? '', /return_to_development -> triage/);
 });
 
-test('default playbook policy: merge-gate override_merge must route to mergeApproveReverify', () => {
+test('default playbook policy: merge-gate override_merge must route to overrideMerge', () => {
   const diagnostic = assertDiagnostic(
     mutateTemplate((template) => {
       guardedBranchContaining(template, 'mergeGate', 'override_merge').goto = 'blockedEnd';
     }),
-    'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING',
+    'DEFAULT_POLICY_OVERRIDE_MERGE_ROUTE_MISSING',
   );
 
   assert.equal(diagnostic.nodeId, 'mergeGate');
-  assert.match(diagnostic.expected ?? '', /override_merge -> mergeApproveReverify/);
+  assert.match(diagnostic.expected ?? '', /override_merge -> overrideMerge/);
+});
+
+test('default playbook policy: overrideMerge must consume mergeGate resolution and route clean to overrideConfirmMerge', () => {
+  const diagnostics = diagnosticsFor(
+    mutateTemplate((template) => {
+      template.nodes['overrideMerge']['scriptRef'] = 'script:pollPr';
+      (template.nodes['overrideMerge']['consumes'] as unknown[]) = [];
+      guardedBranchContaining(template, 'overrideMergeRouter', 'clean').goto = 'confirmMerge';
+    }),
+  ).filter((diagnostic) => diagnostic.code === 'DEFAULT_POLICY_OVERRIDE_MERGE_ROUTE_MISSING');
+
+  assert.ok(
+    diagnostics.some((diagnostic) =>
+      diagnostic.nodeId === 'overrideMerge' && /script:overrideMerge/.test(diagnostic.expected ?? ''),
+    ),
+    'overrideMerge must use the override script',
+  );
+  assert.ok(
+    diagnostics.some((diagnostic) =>
+      diagnostic.nodeId === 'overrideMerge' && /mergeGate as=gateResolution/.test(diagnostic.expected ?? ''),
+    ),
+    'overrideMerge must consume the operator gate resolution',
+  );
+  assert.ok(
+    diagnostics.some((diagnostic) =>
+      diagnostic.nodeId === 'overrideMergeRouter' && /clean -> overrideConfirmMerge/.test(diagnostic.expected ?? ''),
+    ),
+    'overrideMerge clean route must use the override-specific confirm node',
+  );
+});
+
+test('default playbook policy: overrideConfirmMerge must consume overrideMerge evidence', () => {
+  const diagnostic = assertDiagnostic(
+    mutateTemplate((template) => {
+      const overrideConfirmMerge = template.nodes['overrideConfirmMerge'];
+      overrideConfirmMerge['consumes'] = [{ node: 'mergeApproveReverify', as: 'mergeReadiness' }];
+    }),
+    'DEFAULT_POLICY_OVERRIDE_MERGE_ROUTE_MISSING',
+  );
+
+  assert.equal(diagnostic.nodeId, 'overrideConfirmMerge');
+  assert.match(diagnostic.expected ?? '', /node=overrideMerge/);
 });
 
 test('default playbook policy: merge-gate approved must route through reverify before confirmMerge', () => {

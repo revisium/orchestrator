@@ -445,6 +445,9 @@
               "override_merge",
               "cancel"
             ],
+            "produces": {
+              "name": "gateResolution"
+            },
             "branches": [
               {
                 "when": {
@@ -479,7 +482,7 @@
                   "op": "verdict.eq",
                   "value": "override_merge"
                 },
-                "goto": "mergeApproveReverify"
+                "goto": "overrideMerge"
               },
               {
                 "when": {
@@ -599,6 +602,88 @@
             "consumes": [
               {
                 "node": "mergeApproveReverify",
+                "as": "mergeReadiness"
+              }
+            ]
+          },
+          "overrideMerge": {
+            "id": "overrideMerge",
+            "kind": "script",
+            "scriptRef": "script:overrideMerge",
+            "next": "overrideMergeRouter",
+            "onFailure": "route",
+            "resultSchema": "schema:prFeedback",
+            "produces": {
+              "name": "prFeedback"
+            },
+            "consumes": [
+              {
+                "node": "mergeGate",
+                "as": "gateResolution",
+                "iteration": "latest"
+              }
+            ],
+            "catch": [
+              {
+                "onError": "revo.ScriptBlocked",
+                "goto": "classifyRecovery"
+              },
+              {
+                "onError": "revo.ScriptFailed",
+                "goto": "classifyRecovery"
+              }
+            ]
+          },
+          "overrideMergeRouter": {
+            "id": "overrideMergeRouter",
+            "kind": "choice",
+            "branches": [
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "clean"
+                },
+                "goto": "overrideConfirmMerge"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "merged"
+                },
+                "goto": "cleanupWorktree"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "closed"
+                },
+                "goto": "recoveryGate"
+              },
+              {
+                "default": "classifyRecovery"
+              }
+            ]
+          },
+          "overrideConfirmMerge": {
+            "id": "overrideConfirmMerge",
+            "kind": "script",
+            "scriptRef": "script:confirmMerge",
+            "next": "cleanupWorktree",
+            "catch": [
+              {
+                "onError": "revo.ScriptBlocked",
+                "goto": "classifyRecovery"
+              },
+              {
+                "onError": "revo.ScriptFailed",
+                "goto": "classifyRecovery"
+              }
+            ],
+            "onFailure": "route",
+            "resultSchema": "schema:integration",
+            "consumes": [
+              {
+                "node": "overrideMerge",
                 "as": "mergeReadiness"
               }
             ]
@@ -1237,6 +1322,12 @@
               {
                 "node": "mergeApproveReverify",
                 "as": "approveFeedback",
+                "optional": true,
+                "staleOk": true
+              },
+              {
+                "node": "overrideMerge",
+                "as": "overrideFeedback",
                 "optional": true,
                 "staleOk": true
               },
