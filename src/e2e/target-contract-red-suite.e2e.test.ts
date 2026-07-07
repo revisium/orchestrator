@@ -257,9 +257,12 @@ test('#277: cleanupWorktree dirty preserve after successful merge completes with
 });
 
 test('#279: override_merge over advisory review threads replies, resolves, audits, and merges', {
-  skip: '#279: pending force-merge target behavior',
+  skip: e2eSkip,
 }, async () => {
-  await runTargetScenario('#279: override_merge over advisory review threads replies, resolves, audits, and merges', {
+  const note = 'force merge target contract: advisory review thread accepted';
+  const risk = 'synthetic e2e target contract';
+  const verificationResponsibility = 'e2e';
+  const calls = await runTargetScenario('#279: override_merge over advisory review threads replies, resolves, audits, and merges', {
     executionProfile: STUB_AGENT,
     gh: 'force-advisory-thread',
     gates: [
@@ -267,19 +270,25 @@ test('#279: override_merge over advisory review threads replies, resolves, audit
       {
         topic: 'merge',
         outcome: 'override_merge',
+        note,
         mergeOverrideAudit: {
           threadIds: ['PRRT_T1'],
           actor: 'e2e',
-          reason: 'force merge target contract: advisory review thread accepted',
-          risk: 'synthetic e2e target contract',
-          verificationResponsibility: 'e2e',
+          reason: note,
+          risk,
+          verificationResponsibility,
           headSha: 'deadbeefcafe',
         },
       },
     ],
     expect: {
       terminal: 'completed',
-      events: ['threads_responded', 'merge_confirmed', 'run_completed'],
+      events: ['threads_responded', 'merge_overridden', 'merge_confirmed', 'run_completed'],
+      path: [{
+        type: 'merge_overridden',
+        payload: { actor: 'e2e', note, reason: note, risk, verificationResponsibility, headSha: 'deadbeefcafe', prNumber: 7 },
+      }],
     },
   });
+  assertReviewReplyIncludes(calls, `merged by operator override: ${note}`);
 });

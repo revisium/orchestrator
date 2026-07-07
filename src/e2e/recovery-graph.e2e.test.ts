@@ -57,6 +57,7 @@ recoveryScenario('RG-C: mergeGate override_merge -> mergeApproveReverify(stub:cl
     {
       topic: 'merge',
       outcome: 'override_merge',
+      note: 'e2e override: reviewed and accepting the open thread',
       mergeOverrideAudit: {
         threadIds: ['PRRT_OVERRIDE'],
         actor: 'e2e',

@@ -606,6 +606,10 @@ export class PipelineService {
       'PipelineService.pollPr',
       this.integratorService.runPollPr.bind(this.integratorService),
     );
+    const overrideMergeFn = this.dbos.registerStep(
+      'PipelineService.overrideMerge',
+      this.integratorService.runOverrideMerge.bind(this.integratorService),
+    );
     const respondThreadsFn = this.dbos.registerStep(
       'PipelineService.respondThreads',
       this.integratorService.runRespondThreads.bind(this.integratorService),
@@ -662,6 +666,8 @@ export class PipelineService {
       runConfirmStub: this.integratorService.runConfirmStub,
       pollPrFn,
       runPollStub: this.integratorService.runPollStub,
+      overrideMergeFn,
+      runOverrideStub: this.integratorService.runOverrideStub,
       respondThreadsFn,
       runRespondStub: this.integratorService.runRespondStub,
       captureChangeFn,

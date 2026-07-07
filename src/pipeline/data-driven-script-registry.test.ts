@@ -10,6 +10,7 @@ import type {
   IntegratorBlocked,
   ConfirmMergeOutput,
   PrFeedback,
+  MergeOverrideOutput,
   RespondThreadsOutput,
 } from '../runners/integrator.js';
 
@@ -23,6 +24,8 @@ type ScriptRegistryDeps = Pick<
   | 'runConfirmStub'
   | 'pollPrFn'
   | 'runPollStub'
+  | 'overrideMergeFn'
+  | 'runOverrideStub'
   | 'respondThreadsFn'
   | 'runRespondStub'
 >;
@@ -59,6 +62,8 @@ type DepOverrides = {
   runConfirmStub?: ScriptRegistryDeps['runConfirmStub'];
   pollPrFn?: ScriptRegistryDeps['pollPrFn'];
   runPollStub?: ScriptRegistryDeps['runPollStub'];
+  overrideMergeFn?: ScriptRegistryDeps['overrideMergeFn'];
+  runOverrideStub?: ScriptRegistryDeps['runOverrideStub'];
   respondThreadsFn?: ScriptRegistryDeps['respondThreadsFn'];
   runRespondStub?: ScriptRegistryDeps['runRespondStub'];
   releaseWorktreeFn?: ScriptRegistryDeps['releaseWorktreeFn'];
@@ -85,6 +90,24 @@ function buildDeps(events: AppendEventInput[], overrides: DepOverrides = {}): Sc
     })),
     runPollStub: overrides.runPollStub ?? ((_: IntegratorInput): PrFeedback => ({
       prNumber: 0, headSha: 'stub', verdict: 'clean', evidence: [], ciFailures: [], reviewThreads: [],
+    })),
+    overrideMergeFn: overrides.overrideMergeFn ?? (async (_: IntegratorInput): Promise<MergeOverrideOutput> => ({
+      prNumber: 1,
+      headSha: 'sha1',
+      verdict: 'clean',
+      evidence: ['override accepted'],
+      ciFailures: [],
+      reviewThreads: [],
+      override: { accepted: true, actor: 'test', note: 'test override', source: { gate: 'mergeGate', inboxId: 'inbox-test' }, facts: [], replied: 0, resolved: 0 },
+    })),
+    runOverrideStub: overrides.runOverrideStub ?? ((_: IntegratorInput): MergeOverrideOutput => ({
+      prNumber: 0,
+      headSha: 'stub',
+      verdict: 'clean',
+      evidence: ['stub override accepted'],
+      ciFailures: [],
+      reviewThreads: [],
+      override: { accepted: true, actor: 'test', note: 'stub override', source: { gate: 'mergeGate', inboxId: 'inbox-stub' }, facts: [], replied: 0, resolved: 0 },
     })),
     respondThreadsFn: overrides.respondThreadsFn ?? (async (_: IntegratorInput): Promise<RespondThreadsOutput> => ({ replied: 2, resolved: 1 })),
     runRespondStub: overrides.runRespondStub ?? ((_: IntegratorInput): RespondThreadsOutput => ({ replied: 0, resolved: 0 })),
@@ -358,6 +381,113 @@ test('registry: script:pollPr needsHuman → pipeline_blocked with reason=poll-p
   const payload = events[0].payload as Record<string, unknown>;
   assert.equal(payload.reason, 'poll-pr');
   assert.equal(payload.nodeId, 'ppNode');
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// script:overrideMerge
+// ──────────────────────────────────────────────────────────────────────────────
+
+test('registry: script:overrideMerge accepted event preserves normalized audit fields', async () => {
+  const events: AppendEventInput[] = [];
+  const overrideResult: MergeOverrideOutput = {
+    prNumber: 42,
+    headSha: 'audit-head',
+    verdict: 'clean',
+    evidence: ['override accepted'],
+    ciFailures: [],
+    reviewThreads: [],
+    override: {
+      accepted: true,
+      actor: 'reviewer',
+      note: 'operator note',
+      audit: {
+        reason: 'known advisory issue accepted',
+        risk: 'advisory concern remains',
+        verificationResponsibility: 'operator verified locally',
+        headSha: 'audit-head',
+      },
+      source: { gate: 'mergeGate', inboxId: 'inbox-42' },
+      facts: [{ severity: 'advisory', kind: 'review_thread', summary: 'thread accepted', threadId: 'T1' }],
+      replied: 1,
+      resolved: 1,
+    },
+  };
+  const deps = buildDeps(events, { overrideMergeFn: async () => overrideResult });
+  const registry = buildSystemScriptRegistry(deps);
+  const handler = registry.get('script:overrideMerge')!;
+  const bindings = makeBindings({ ref: 'script:overrideMerge', binding: realBinding() });
+
+  const result = await handler({ runId: RUN_ID, decision: makeDecision('script:overrideMerge'), ctx: CTX, bindingByRef: bindings, stepKey: 'overrideMerge', inputs: {} });
+
+  assert.equal(result.outcome, 'ok');
+  assert.equal(events[0].type, 'threads_responded');
+  assert.equal(events[1].type, 'merge_overridden');
+  assert.deepEqual(events[1].payload, {
+    actor: 'reviewer',
+    note: 'operator note',
+    reason: 'known advisory issue accepted',
+    risk: 'advisory concern remains',
+    verificationResponsibility: 'operator verified locally',
+    headSha: 'audit-head',
+    freshHeadSha: 'audit-head',
+    prNumber: 42,
+    source: { gate: 'mergeGate', inboxId: 'inbox-42' },
+    overriddenFacts: [{ severity: 'advisory', kind: 'review_thread', summary: 'thread accepted', threadId: 'T1' }],
+    replied: 1,
+    resolved: 1,
+  });
+});
+
+test('registry: script:overrideMerge refused event preserves audit fields and refusal reason separately', async () => {
+  const events: AppendEventInput[] = [];
+  const overrideResult: MergeOverrideOutput = {
+    prNumber: 42,
+    headSha: 'fresh-head',
+    verdict: 'recheck',
+    evidence: ['override refused'],
+    ciFailures: [],
+    reviewThreads: [],
+    override: {
+      accepted: false,
+      actor: 'reviewer',
+      note: 'operator note',
+      audit: {
+        reason: 'known advisory issue accepted',
+        risk: 'advisory concern remains',
+        verificationResponsibility: 'operator verified locally',
+        headSha: 'audit-head',
+      },
+      source: { gate: 'mergeGate', inboxId: 'inbox-42' },
+      facts: [{ severity: 'hard', kind: 'head_moved', summary: 'head moved' }],
+      replied: 0,
+      resolved: 0,
+      reason: 'override_merge refused because hard blockers remain',
+    },
+  };
+  const deps = buildDeps(events, { overrideMergeFn: async () => overrideResult });
+  const registry = buildSystemScriptRegistry(deps);
+  const handler = registry.get('script:overrideMerge')!;
+  const bindings = makeBindings({ ref: 'script:overrideMerge', binding: realBinding() });
+
+  const result = await handler({ runId: RUN_ID, decision: makeDecision('script:overrideMerge'), ctx: CTX, bindingByRef: bindings, stepKey: 'overrideMerge', inputs: {} });
+
+  assert.equal(result.outcome, 'ok');
+  assert.equal(events[0].type, 'merge_override_refused');
+  assert.deepEqual(events[0].payload, {
+    actor: 'reviewer',
+    note: 'operator note',
+    reason: 'known advisory issue accepted',
+    risk: 'advisory concern remains',
+    verificationResponsibility: 'operator verified locally',
+    headSha: 'audit-head',
+    freshHeadSha: 'fresh-head',
+    prNumber: 42,
+    source: { gate: 'mergeGate', inboxId: 'inbox-42' },
+    overriddenFacts: [{ severity: 'hard', kind: 'head_moved', summary: 'head moved' }],
+    replied: 0,
+    resolved: 0,
+    refusalReason: 'override_merge refused because hard blockers remain',
+  });
 });
 
 // ──────────────────────────────────────────────────────────────────────────────

@@ -197,6 +197,9 @@ function assertRequiredGateNote(item: InboxItem, outcome: string, note: string |
   if (outcome === 'approve_anyway' && !note) {
     throw new ControlPlaneError('VALIDATION_FAILURE', 'approve_anyway requires a non-empty note');
   }
+  if (outcome === 'override_merge' && !note) {
+    throw new ControlPlaneError('VALIDATION_FAILURE', 'override_merge requires a non-empty note');
+  }
   if (isQuestionGateReasonOutcome(item, outcome) && !note) {
     throw new ControlPlaneError('VALIDATION_FAILURE', `questionGate ${outcome} requires a non-empty note`);
   }

@@ -85,6 +85,9 @@ type GhState = {
    * default 4; test:e2e does not override the grace count).
    */
   readyCount: number;
+  /** Test-driver switch: reveal the advisory review thread after the operator chooses override_merge. */
+  forceAdvisoryThreadVisible: boolean;
+  forceAdvisoryThreadSeeded: boolean;
 };
 
 function newGhState(): GhState {
@@ -95,6 +98,8 @@ function newGhState(): GhState {
     repushedBranches: new Set(),
     unresolvedThreads: new Map(),
     readyCount: 0,
+    forceAdvisoryThreadVisible: false,
+    forceAdvisoryThreadSeeded: false,
   };
 }
 
@@ -116,10 +121,13 @@ function hasOpenPr(scenario: GhScenario, st: GhState, branch: string): boolean {
 function threadsFor(scenario: GhScenario, st: GhState, branch: string): Set<string> {
   let set = st.unresolvedThreads.get(branch);
   if (!set) {
-    set = new Set(scenario === 'review-comment' || (scenario === 'force-advisory-thread' && st.readyCount >= 3) ? ['PRRT_T1'] : []);
+    set = new Set(scenario === 'review-comment' ? ['PRRT_T1'] : []);
     st.unresolvedThreads.set(branch, set);
   }
-  if (scenario === 'force-advisory-thread' && st.readyCount >= 3 && set.size === 0) set.add('PRRT_T1');
+  if (scenario === 'force-advisory-thread' && st.forceAdvisoryThreadVisible && !st.forceAdvisoryThreadSeeded) {
+    set.add('PRRT_T1');
+    st.forceAdvisoryThreadSeeded = true;
+  }
   return set;
 }
 
@@ -144,6 +152,7 @@ function ghBehavior(scenario: GhScenario, args: string[], st: GhState): string {
           repository: {
             pullRequest: {
               reviewThreads: {
+                pageInfo: { hasNextPage: false },
                 nodes: ids.map((id) => ({
                   id,
                   isResolved: false,
@@ -385,6 +394,7 @@ export function routedGhEmulator(runCases: Map<string, RunCase>, calls: string[]
     if (runCase !== undefined) {
       st = stByRun.get(runCase.runId) ?? newGhState();
       stByRun.set(runCase.runId, st);
+      st.forceAdvisoryThreadVisible = runCase.forceAdvisoryThreadVisible === true;
     }
     return ghBehavior(scenario, args, st);
   };

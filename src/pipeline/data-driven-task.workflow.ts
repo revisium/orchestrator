@@ -50,6 +50,7 @@ import type {
   IntegratorBlocked,
   ConfirmMergeOutput,
   PrFeedback,
+  MergeOverrideOutput,
   RespondThreadsOutput,
   ProducedChangeArtifact,
   CaptureProducedChangeInput,
@@ -366,7 +367,10 @@ function mergeReadinessFromInputs(inputs: Record<string, unknown>): IntegratorIn
   if (!isRecord(value)) return undefined;
   const headSha = value.headSha;
   if (typeof headSha !== 'string' || headSha.trim().length === 0) return undefined;
-  return { headSha };
+  const override = isRecord(value.override) && value.override.accepted === true
+    ? { accepted: true }
+    : undefined;
+  return { headSha, ...(override ? { override } : {}) };
 }
 
 function headShaFromPayload(value: unknown): string | undefined {
@@ -557,6 +561,10 @@ export type DataDrivenTaskDeps = {
 
   runPollStub: (input: IntegratorInput) => PrFeedback;
 
+  overrideMergeFn: (input: IntegratorInput) => Promise<MergeOverrideOutput | IntegratorBlocked>;
+
+  runOverrideStub: (input: IntegratorInput) => MergeOverrideOutput;
+
   respondThreadsFn: (input: IntegratorInput) => Promise<RespondThreadsOutput | IntegratorBlocked>;
 
   runRespondStub: (input: IntegratorInput) => RespondThreadsOutput;
@@ -596,13 +604,29 @@ function gateVerdict(decision: GateDecision, outcomes: string[]): string | undef
   return outcomes.length > 1 ? outcomes.at(-1) : undefined;
 }
 
-function gateResolutionOutput(decision: GateDecision, verdict: string | undefined, fallbackInboxId: string): Record<string, unknown> {
+function gateResolutionOutput(
+  decision: GateDecision,
+  verdict: string | undefined,
+  fallbackInboxId: string,
+  trustedGateHeadSha?: string | null,
+): Record<string, unknown> {
+  const decisionRecord: Record<string, unknown> = isRecord(decision) ? decision : {};
+  const answer = isRecord(decision.answer) ? decision.answer : {};
+  const note = decision.note ?? (typeof answer.note === 'string' ? answer.note : undefined);
+  const resolvedBy = decision.resolvedBy ?? (typeof answer.resolvedBy === 'string' ? answer.resolvedBy : '');
+  const resolvedAt = decision.resolvedAt ?? (typeof answer.resolvedAt === 'string' ? answer.resolvedAt : '');
+  const inboxId = decision.inboxId ?? (typeof answer.inboxId === 'string' ? answer.inboxId : fallbackInboxId);
+  const mergeOverrideAudit = answer.mergeOverrideAudit ?? decisionRecord['mergeOverrideAudit'];
+  const adoptionAudit = answer.adoptionAudit ?? decisionRecord['adoptionAudit'];
   return {
     outcome: decision.outcome ?? verdict ?? decision.decision,
-    ...(decision.note !== undefined ? { note: decision.note } : {}),
-    resolvedBy: decision.resolvedBy ?? '',
-    resolvedAt: decision.resolvedAt ?? '',
-    inboxId: decision.inboxId ?? fallbackInboxId,
+    ...(note !== undefined ? { note } : {}),
+    resolvedBy,
+    resolvedAt,
+    inboxId,
+    ...(trustedGateHeadSha !== undefined ? { trustedGateHeadSha } : {}),
+    ...(mergeOverrideAudit !== undefined ? { mergeOverrideAudit } : {}),
+    ...(adoptionAudit !== undefined ? { adoptionAudit } : {}),
     ...(decision.decision ? { decision: decision.decision } : {}),
   };
 }
@@ -772,6 +796,8 @@ type ScriptRegistryDeps = Pick<
   | 'runConfirmStub'
   | 'pollPrFn'
   | 'runPollStub'
+  | 'overrideMergeFn'
+  | 'runOverrideStub'
   | 'respondThreadsFn'
   | 'runRespondStub'
 >;
@@ -796,8 +822,40 @@ function integratorProgressEventType(result: IntegratorOutput): IntegratorProgre
   return result.foreignPr ? 'foreign_pr_adopted' : 'integrate_succeeded';
 }
 
+function mergeOverrideEventPayload(result: MergeOverrideOutput): Record<string, unknown> {
+  const audit = result.override.audit;
+  return {
+    actor: result.override.actor,
+    note: result.override.note,
+    reason: audit?.reason ?? result.override.reason ?? '',
+    risk: audit?.risk ?? '',
+    verificationResponsibility: audit?.verificationResponsibility ?? '',
+    headSha: audit?.headSha ?? result.headSha,
+    freshHeadSha: result.headSha,
+    prNumber: result.prNumber,
+    source: result.override.source,
+    overriddenFacts: result.override.facts,
+    replied: result.override.replied,
+    resolved: result.override.resolved,
+    ...(result.override.reason ? { refusalReason: result.override.reason } : {}),
+  };
+}
+
 export function buildSystemScriptRegistry(deps: ScriptRegistryDeps): Map<string, SystemScriptHandler> {
-  const { appendEvent, releaseWorktreeFn, integrateFn, runStub, confirmMergeFn, runConfirmStub, pollPrFn, runPollStub, respondThreadsFn, runRespondStub } = deps;
+  const {
+    appendEvent,
+    releaseWorktreeFn,
+    integrateFn,
+    runStub,
+    confirmMergeFn,
+    runConfirmStub,
+    pollPrFn,
+    runPollStub,
+    overrideMergeFn,
+    runOverrideStub,
+    respondThreadsFn,
+    runRespondStub,
+  } = deps;
 
   function buildIntegratorInput(
     runId: string,
@@ -945,6 +1003,53 @@ export function buildSystemScriptRegistry(deps: ScriptRegistryDeps): Map<string,
     }),
   });
 
+  const overrideMergeScript: SystemScriptHandler = async ({ runId, decision, ctx, bindingByRef, stepKey, inputs }) => {
+    const integratorInput = buildIntegratorInput(runId, ctx, inputs);
+    const binding = bindingByRef.get(decision.scriptRef) ?? bindingByRef.get('script:integrator');
+    const useReal = !!binding && runnerUsesRealIntegrator(binding.resolvedRunnerId);
+    let result: MergeOverrideOutput | IntegratorBlocked;
+    try {
+      result = useReal ? await overrideMergeFn(integratorInput) : runOverrideStub(integratorInput);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      await appendEvent({
+        runId, taskId: ctx.taskId, stepId: '', stepKey,
+        type: 'step_failed',
+        payload: { scriptRef: decision.scriptRef, error: reason },
+      });
+      return { outcome: 'failed', reason };
+    }
+    if ('needsHuman' in result) {
+      await appendEvent({
+        runId, taskId: ctx.taskId, stepId: '', stepKey: 'pipeline',
+        type: 'pipeline_blocked',
+        payload: { reason: 'override-merge', lesson: result.lesson, nodeId: decision.nodeId },
+      });
+      return { outcome: 'blocked' };
+    }
+    if (result.override.replied > 0 || result.override.resolved > 0) {
+      await appendEvent({
+        runId,
+        taskId: ctx.taskId,
+        stepId: '',
+        stepKey,
+        type: 'threads_responded',
+        payload: { replied: result.override.replied, resolved: result.override.resolved },
+      });
+    }
+    if (result.override.accepted || result.verdict !== 'merged') {
+      await appendEvent({
+        runId,
+        taskId: ctx.taskId,
+        stepId: '',
+        stepKey,
+        type: result.override.accepted ? 'merge_overridden' : 'merge_override_refused',
+        payload: mergeOverrideEventPayload(result),
+      });
+    }
+    return { outcome: 'ok', pointer: result, verdict: result.verdict };
+  };
+
   const respondThreadsScript = makeIntegratorScript({
     real: respondThreadsFn,
     stub: runRespondStub,
@@ -960,6 +1065,7 @@ export function buildSystemScriptRegistry(deps: ScriptRegistryDeps): Map<string,
     ['script:cleanupWorktree', cleanupWorktree],
     ['script:confirmMerge', confirmMergeScript],
     ['script:pollPr', pollPrScript],
+    ['script:overrideMerge', overrideMergeScript],
     ['script:respondThreads', respondThreadsScript],
     // Unknown refs fall through to this entry, matching the original else-branch behavior.
     ['script:integrator', integratorScript],
@@ -1443,7 +1549,7 @@ export function makeDataDrivenTask(
           resolveNode(template, decision.nodeId),
           ordinal,
           stepKeyFor(decision.nodeId, ordinal),
-          gateResolutionOutput(human, verdict, stepKeyFor(decision.nodeId, ordinal)),
+          gateResolutionOutput(human, verdict, stepKeyFor(decision.nodeId, ordinal), approvedHeadSha),
           ctx.outputsByNode,
         );
         return {

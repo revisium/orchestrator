@@ -864,17 +864,48 @@ test('TaskControlPlaneApiService.resolveGate requires complete audit for overrid
   });
 
   await assert.rejects(
-    () => api.resolveGate({ inboxId: 'inbox-1', outcome: 'override_merge', resolvedBy: 'human' }),
+    () => api.resolveGate({
+      inboxId: 'inbox-1',
+      outcome: 'override_merge',
+      note: 'operator accepts advisory risk',
+      resolvedBy: 'human',
+    }),
     /requires mergeOverrideAudit/,
   );
   await assert.rejects(
     () => api.resolveGate({
       inboxId: 'inbox-1',
       outcome: 'override_merge',
+      note: 'operator accepts advisory risk',
       resolvedBy: 'human',
-      mergeOverrideAudit: { ...completeMergeOverrideAudit, threadIds: [] },
+      mergeOverrideAudit: {
+        actor: completeMergeOverrideAudit.actor,
+        reason: completeMergeOverrideAudit.reason,
+        risk: completeMergeOverrideAudit.risk,
+        verificationResponsibility: completeMergeOverrideAudit.verificationResponsibility,
+        headSha: completeMergeOverrideAudit.headSha,
+      },
     }),
-    /threadIds must be a non-empty array/,
+    /threadIds must be an array/,
+  );
+  await assert.rejects(
+    () => api.resolveGate({
+      inboxId: 'inbox-1',
+      outcome: 'override_merge',
+      note: 'operator accepts advisory risk',
+      resolvedBy: 'human',
+      mergeOverrideAudit: { ...completeMergeOverrideAudit, threadIds: ['ok', ''] },
+    }),
+    /threadIds must contain non-empty strings/,
+  );
+  await assert.rejects(
+    () => api.resolveGate({
+      inboxId: 'inbox-1',
+      outcome: 'override_merge',
+      resolvedBy: 'human',
+      mergeOverrideAudit: completeMergeOverrideAudit,
+    }),
+    /override_merge requires a non-empty note/,
   );
 });
 
@@ -902,11 +933,13 @@ test('TaskControlPlaneApiService.resolveGate persists mergeOverrideAudit for ove
   await api.resolveGate({
     inboxId: 'inbox-1',
     outcome: 'override_merge',
+    note: 'operator accepts advisory risk',
     resolvedBy: 'human',
-    mergeOverrideAudit: completeMergeOverrideAudit,
+    mergeOverrideAudit: { ...completeMergeOverrideAudit, threadIds: [] },
   });
 
-  assert.deepEqual((resolvedAnswers[0] as { mergeOverrideAudit: unknown }).mergeOverrideAudit, completeMergeOverrideAudit);
+  assert.deepEqual((resolvedAnswers[0] as { mergeOverrideAudit: unknown }).mergeOverrideAudit, { ...completeMergeOverrideAudit, threadIds: [] });
+  assert.equal((resolvedAnswers[0] as { note: string }).note, 'operator accepts advisory risk');
 });
 
 test('TaskControlPlaneApiService.resolveInboxItem normalizes named gate outcome before persist and signal', async () => {

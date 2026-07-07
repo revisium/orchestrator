@@ -230,6 +230,56 @@ test('resolve_gate MCP schema and handler require adoption audit before facade d
   assert.deepEqual(calls, [{ inboxId: 'inbox-1', outcome: 'adopt_patch_manually', adoptionAudit }]);
 });
 
+test('resolve_gate MCP schema and handler require merge override audit threadIds array but allow it to be empty', async () => {
+  const { z } = await import('zod');
+  const { server, tools } = makeServer();
+  const calls: unknown[] = [];
+  const mergeOverrideAudit = {
+    threadIds: [],
+    actor: 'kap',
+    reason: 'threads are advisory and accepted',
+    risk: 'review concern may resurface',
+    verificationResponsibility: 'operator rechecks after merge',
+    headSha: 'abc123',
+  };
+  const mergeOverrideAuditWithoutThreadIds = {
+    actor: mergeOverrideAudit.actor,
+    reason: mergeOverrideAudit.reason,
+    risk: mergeOverrideAudit.risk,
+    verificationResponsibility: mergeOverrideAudit.verificationResponsibility,
+    headSha: mergeOverrideAudit.headSha,
+  };
+  const facade = {
+    async resolveGate(input: unknown) {
+      calls.push(input);
+      return { ok: true };
+    },
+  } as unknown as McpFacadeService;
+
+  registerRevoMcpTools(server as never, facade);
+  const tool = tools.find((registered) => registered.name === 'resolve_gate');
+  assert.ok(tool);
+  const schema = z.object(tool.config.inputSchema as Record<string, never>);
+  assert.equal(schema.safeParse({ inboxId: 'inbox-1', outcome: 'override_merge', mergeOverrideAudit }).success, true);
+  assert.equal(
+    schema.safeParse({
+      inboxId: 'inbox-1',
+      outcome: 'override_merge',
+      mergeOverrideAudit: mergeOverrideAuditWithoutThreadIds,
+    }).success,
+    false,
+  );
+
+  await assert.rejects(
+    () => Promise.resolve(tool.handler({ inboxId: 'inbox-1', outcome: 'override_merge' } as never)),
+    /VALIDATION_FAILURE: override_merge requires complete mergeOverrideAudit/,
+  );
+  assert.deepEqual(calls, []);
+
+  await tool.handler({ inboxId: 'inbox-1', outcome: 'override_merge', mergeOverrideAudit } as never);
+  assert.deepEqual(calls, [{ inboxId: 'inbox-1', outcome: 'override_merge', mergeOverrideAudit }]);
+});
+
 test('get_run_attention description marks it as default/primary monitoring tool and answers "what currently requires attention?"', () => {
   const { server, tools } = makeServer();
   registerRevoMcpTools(server as never, {} as McpFacadeService);

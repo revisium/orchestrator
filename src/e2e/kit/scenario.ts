@@ -50,6 +50,7 @@ export type RunCase = {
   agent?: AgentSpec;
   developerWrite?: string;
   cleanup?: { releaseWorktreeFails?: boolean; dirtyWorktreeBeforeRelease?: boolean };
+  forceAdvisoryThreadVisible?: boolean;
 };
 
 export type PipelineScenario = {
@@ -225,6 +226,9 @@ export async function pipelineScenario(
     const gateStep = normalizeGate(step);
     const gate = await waitForGate(h.api, created.runId, gateStep.topic);
     assertGateContext(gate, gateStep);
+    if (gateStep.outcome === 'override_merge' && runCase.gh === 'force-advisory-thread') {
+      runCase.forceAdvisoryThreadVisible = true;
+    }
     await h.api.resolveGate({
       inboxId: gate.inboxId,
       outcome: gateStep.outcome,
