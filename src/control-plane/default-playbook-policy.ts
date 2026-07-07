@@ -715,6 +715,14 @@ function checkPostMergeCleanup(template: Template, sink: PolicySink): void {
     next: 'mergedEnd',
     resultSchema: 'schema:integration',
   });
+  for (const onError of ['revo.ScriptBlocked', 'revo.ScriptFailed']) {
+    expectCatch(template, sink, {
+      code: 'DEFAULT_POLICY_POST_MERGE_CLEANUP_MISSING',
+      nodeId: 'cleanupWorktree',
+      onError,
+      target: 'mergedEnd',
+    });
+  }
 }
 
 function checkGateOutcomesExplicit(template: Template, sink: PolicySink): void {
@@ -863,6 +871,37 @@ function expectScript(
     nodeId: rule.nodeId,
     expected: `script ${rule.scriptRef} next=${rule.next} resultSchema=${rule.resultSchema}`,
     actual: describeNode(node),
+  });
+}
+
+function expectCatch(
+  template: Template,
+  sink: PolicySink,
+  rule: {
+    code: DefaultPlaybookPolicyDiagnosticCode;
+    nodeId: string;
+    onError: string;
+    target: string;
+  },
+): void {
+  const node = effectNode(template, rule.nodeId);
+  const actual = node?.catch?.find((entry) => entry.onError === rule.onError)?.goto;
+  if (actual === rule.target) return;
+
+  let actualDescription: string;
+  if (actual) {
+    actualDescription = `${rule.onError} -> ${actual}`;
+  } else if (node) {
+    actualDescription = `missing catch for ${rule.onError}`;
+  } else {
+    actualDescription = describeNode(template.nodes[rule.nodeId]);
+  }
+
+  sink.error(rule.code, `node ${rule.nodeId} must route ${rule.onError} to ${rule.target}`, {
+    nodeId: rule.nodeId,
+    path: 'catch',
+    expected: `${rule.onError} -> ${rule.target}`,
+    actual: actualDescription,
   });
 }
 

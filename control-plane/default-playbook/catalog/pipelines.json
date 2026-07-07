@@ -608,6 +608,16 @@
             "kind": "script",
             "scriptRef": "script:cleanupWorktree",
             "next": "mergedEnd",
+            "catch": [
+              {
+                "onError": "revo.ScriptBlocked",
+                "goto": "mergedEnd"
+              },
+              {
+                "onError": "revo.ScriptFailed",
+                "goto": "mergedEnd"
+              }
+            ],
             "resultSchema": "schema:integration"
           },
           "mergedEnd": {
