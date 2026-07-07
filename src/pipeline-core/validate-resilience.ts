@@ -75,7 +75,7 @@ function ruleVerdictCyclesHaveCounterOrHumanGate(template: Template, d: DiagSink
     if (node.kind !== 'choice' && node.kind !== 'humanGate') continue;
     for (const branch of node.branches) {
       if (!shouldWarnOnVerdictCycle(template, node.id, branch, emitted)) continue;
-      d.warn(
+      d.error(
         'CYCLE_WITHOUT_COUNTER',
         `verdict branch ${node.id} → ${branch.goto} forms an automated cycle with no human gate or counter cap`,
         { nodeId: node.id },

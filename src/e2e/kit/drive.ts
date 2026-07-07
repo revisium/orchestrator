@@ -46,7 +46,7 @@ export async function waitForGate(
   api: TaskControlPlaneApiService,
   runId: string,
   expectedTopic?: 'plan' | 'merge' | 'question',
-): Promise<{ inboxId: string; topic: string }> {
+): Promise<{ inboxId: string; topic: string; context: Record<string, unknown> }> {
   const state = await waitState(api, runId);
   assert.equal(state.state, 'pending_gate', `expected pending_gate, got ${state.state}`);
   const inbox = state.inbox;
@@ -56,7 +56,7 @@ export async function waitForGate(
   const topic = (context as Record<string, unknown>)['topic'];
   assert.equal(typeof topic, 'string');
   if (expectedTopic) assert.equal(topic, expectedTopic, `expected ${expectedTopic} gate, got ${String(topic)}`);
-  return { inboxId: inbox.id, topic: topic as string };
+  return { inboxId: inbox.id, topic: topic as string, context: context as Record<string, unknown> };
 }
 
 /**

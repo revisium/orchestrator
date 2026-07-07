@@ -18,7 +18,7 @@ export function resolveWriteDir(registered: string | undefined, context: string)
 }
 
 /** One recorded agent invocation — lets tests assert who ran with which runner (scoped by runId). */
-export type AgentCall = { role: string; runner: string; attemptId: string; runId: string; context: string };
+export type AgentCall = { role: string; runner: string; attemptId: string; runId: string; context: string; nodeId?: string };
 
 /** runId → worktree path where the `developer` role should write a change file. */
 export type DeveloperWrites = Map<string, string>;
@@ -49,6 +49,31 @@ function pickBehavior(spec: AgentSpec, role: string, callIndex: number): RoleBeh
   const entry = spec.byRole?.[role];
   if (Array.isArray(entry)) return entry[Math.min(callIndex, entry.length - 1)] ?? { kind: 'pass' };
   return entry ?? spec.default ?? { kind: 'pass' };
+}
+
+function nodeIdFromStepInput(input: unknown): string | undefined {
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) return undefined;
+  const nodeId = (input as Record<string, unknown>).nodeId;
+  return typeof nodeId === 'string' && nodeId.length > 0 ? nodeId : undefined;
+}
+
+function recordAgentCall(agentCalls: AgentCall[], input: {
+  logicalRole: string;
+  runner: string;
+  attemptId: string;
+  runId: string;
+  context: string;
+  stepInput: unknown;
+}): void {
+  const nodeId = nodeIdFromStepInput(input.stepInput);
+  agentCalls.push({
+    role: input.logicalRole,
+    runner: input.runner,
+    attemptId: input.attemptId,
+    runId: input.runId,
+    context: input.context,
+    ...(nodeId ? { nodeId } : {}),
+  });
 }
 
 function defaultVerdictFor(role: string): string {
@@ -118,7 +143,7 @@ export function scriptedAgent(spec: AgentSpec, sink: AgentSink): RunAgent {
   const counts = new Map<string, number>();
   return async ({ role, profile, attemptId, step, context }): Promise<AttemptResult> => {
     const logicalRole = role.playbookRoleId ?? role.name;
-    sink.agentCalls.push({ role: logicalRole, runner: role.runner, attemptId, runId: step.runId, context });
+    recordAgentCall(sink.agentCalls, { logicalRole, runner: role.runner, attemptId, runId: step.runId, context, stepInput: step.input });
     const n = counts.get(logicalRole) ?? 0;
     counts.set(logicalRole, n + 1);
     return runBehavior(pickBehavior(spec, logicalRole, n), {
@@ -141,7 +166,7 @@ export function routedScriptedAgent(specs: Map<string, AgentSpec>, sink: AgentSi
   const counts = new Map<string, number>();
   return async ({ role, profile, attemptId, step, context }): Promise<AttemptResult> => {
     const logicalRole = role.playbookRoleId ?? role.name;
-    sink.agentCalls.push({ role: logicalRole, runner: role.runner, attemptId, runId: step.runId, context });
+    recordAgentCall(sink.agentCalls, { logicalRole, runner: role.runner, attemptId, runId: step.runId, context, stepInput: step.input });
     const key = `${step.runId}::${logicalRole}`;
     const n = counts.get(key) ?? 0;
     counts.set(key, n + 1);
@@ -161,7 +186,7 @@ export function routedRunCaseAgent(runCases: Map<string, RunCase>, sink: AgentSi
   const counts = new Map<string, number>();
   return async ({ role, profile, attemptId, step, context }): Promise<AttemptResult> => {
     const logicalRole = role.playbookRoleId ?? role.name;
-    sink.agentCalls.push({ role: logicalRole, runner: role.runner, attemptId, runId: step.runId, context });
+    recordAgentCall(sink.agentCalls, { logicalRole, runner: role.runner, attemptId, runId: step.runId, context, stepInput: step.input });
     const key = `${step.runId}::${logicalRole}`;
     const n = counts.get(key) ?? 0;
     counts.set(key, n + 1);
@@ -191,7 +216,7 @@ export function deterministicAgent(
 ): RunAgent {
   return async ({ role, profile, attemptId, step, context }): Promise<AttemptResult> => {
     const logicalRole = role.playbookRoleId ?? role.name;
-    agentCalls.push({ role: logicalRole, runner: role.runner, attemptId, runId: step.runId, context });
+    recordAgentCall(agentCalls, { logicalRole, runner: role.runner, attemptId, runId: step.runId, context, stepInput: step.input });
     const writeRepo = logicalRole === 'developer' ? resolveWriteDir(developerWrites.get(step.runId), context) : undefined;
     if (writeRepo) {
       writeFileSync(join(writeRepo, `developer-${attemptId}.txt`), `change from ${attemptId}\n`);

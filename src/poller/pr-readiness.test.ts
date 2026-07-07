@@ -21,7 +21,7 @@ function checkRun(name: string, status: 'QUEUED' | 'IN_PROGRESS' | 'COMPLETED', 
   return { __typename: 'CheckRun', name, status, conclusion };
 }
 
-function statusCtx(context: string, state: 'PENDING' | 'SUCCESS' | 'FAILURE' | 'ERROR') {
+function statusCtx(context: string, state: 'EXPECTED' | 'PENDING' | 'SUCCESS' | 'FAILURE' | 'ERROR') {
   return { __typename: 'StatusContext', context, state };
 }
 
@@ -126,6 +126,24 @@ test('pending CI with QUEUED status: re-queues', async () => {
   const result = await run(BASE_INPUT, STEP, execGh);
 
   assert.equal(result.nextSteps[0]?.role, 'ci-poller');
+});
+
+test('EXPECTED status context: re-queues as pending, NOT failed terminal', async () => {
+  const expectedView = prViewResponse([statusCtx('Required checks', 'EXPECTED')]);
+  const execGh = makeFullResponses(expectedView);
+
+  const readiness = await collectPrReadiness({ repo: 'owner/repo', prNumber: 42 }, execGh);
+  assert.deepEqual(readiness.checks.pending, ['Required checks']);
+  assert.deepEqual(readiness.checks.list, [{ name: 'Required checks', result: 'EXPECTED' }]);
+
+  const result = await run(BASE_INPUT, STEP, execGh);
+
+  assert.equal(result.nextSteps.length, 1);
+  const ns = result.nextSteps[0];
+  assert.equal(ns.role, 'ci-poller', 'EXPECTED status contexts stay on the bounded recheck path');
+  assert.equal(ns.kind, 'poll');
+  assert.equal((ns.input as PollInput).poll_count, 1);
+  assert.equal(result.needsHuman, undefined);
 });
 
 test('pending CI: uses custom modelProfile from step', async () => {
@@ -548,22 +566,21 @@ test('bot vs human comment separation', async () => {
   assert.equal(inp.bot_comments.length, 1, 'only bot inline comment');
 });
 
-test('empty statusCheckRollup ([]): re-queues as pending, NOT terminal (BLOCKER 2)', async () => {
-  // A freshly created PR has a transiently empty rollup before checks register. It must NOT
-  // be declared "terminal & passed" (the old `[].every() === true` bug) — re-queue instead.
-  const view = prViewResponse([]);
+test('empty statusCheckRollup ([]): zero-CI clean readiness is advisory terminal', async () => {
+  const view = prViewResponse([], { mergeStateStatus: 'CLEAN', mergeable: 'MERGEABLE' });
   const execGh = makeFullResponses(view);
 
   const result = await run(BASE_INPUT, STEP, execGh);
 
   assert.equal(result.nextSteps.length, 1);
   const ns = result.nextSteps[0];
-  assert.equal(ns.role, 'ci-poller', 'empty rollup must re-queue, not go to the judge');
-  assert.equal(ns.kind, 'poll');
-  assert.equal((ns.input as PollInput).poll_count, 1);
+  assert.equal(ns.role, 'pr-watcher', 'zero-CI readiness goes to the judge with an advisory, not a settle wait');
+  assert.equal(ns.kind, 'judge');
+  assert.deepEqual((ns.input as { checks: unknown[] }).checks, []);
   assert.equal(result.needsHuman, undefined);
-  const out = result.output as { verdict: string };
-  assert.equal(out.verdict, 'pending');
+  const out = result.output as { verdict: string; ci_passed: boolean };
+  assert.equal(out.verdict, 'terminal');
+  assert.equal(out.ci_passed, true);
 });
 
 test('null statusCheckRollup: re-queues as pending, NOT terminal (BLOCKER 2)', async () => {
@@ -574,6 +591,10 @@ test('null statusCheckRollup: re-queues as pending, NOT terminal (BLOCKER 2)', a
     mergeable: 'MERGEABLE',
   };
   const execGh = makeFullResponses(nullView);
+
+  const readiness = await collectPrReadiness({ repo: 'owner/repo', prNumber: 42 }, execGh);
+  assert.deepEqual(readiness.checks.pending, ['GitHub check rollup unavailable (re-polling for checks)']);
+  assert.match(readiness.evidence.join('\n'), /GitHub check rollup unavailable/);
 
   const result = await run(BASE_INPUT, STEP, execGh);
 
@@ -1080,7 +1101,70 @@ test('FIX4: CLOSED pr_number + no other open PR → needsHuman (closed), no thro
   assert.equal(result.needsHuman, true);
   assert.equal(result.nextSteps.length, 0);
   assert.equal((result.output as { verdict: string }).verdict, 'closed');
+  assert.match(result.lesson ?? '', /pr_closed_externally/);
   assert.deepEqual(result.costs, []);
+});
+
+test('#273: branch lookup falls back to all-state PR and reports externally merged', async () => {
+  const calls: string[][] = [];
+  const execGh: ExecGhFn = (args) => {
+    calls.push(args);
+    const key = args.join(' ');
+    if (key.includes('pr list') && key.includes('--state open')) return JSON.stringify([]);
+    if (key.includes('pr list') && key.includes('--state all')) {
+      return JSON.stringify([{ number: 77, baseRefName: 'master', state: 'MERGED' }]);
+    }
+    if (key.includes('statusCheckRollup')) {
+      return JSON.stringify(prViewResponse([], {
+        number: 77,
+        state: 'MERGED',
+        headRefOid: 'merged-sha',
+        headRefName: 'feat/my-feature',
+        baseRefName: 'master',
+      }));
+    }
+    throw new Error(`Unexpected gh call: ${key}`);
+  };
+
+  const readiness = await collectPrReadiness({ repo: 'owner/repo', headBranch: 'feat/my-feature' }, execGh);
+
+  assert.equal(readiness.verdict, 'merged');
+  assert.equal(readiness.pr.number, 77);
+  assert.equal(readiness.pr.headSha, 'merged-sha');
+  assert.ok(calls.some((args) => args.includes('--state') && args.includes('open')));
+  assert.ok(calls.some((args) => args.includes('--state') && args.includes('all')));
+});
+
+test('#273: branch lookup falls back to all-state PR and reports externally closed reason', async () => {
+  const calls: string[][] = [];
+  const execGh: ExecGhFn = (args) => {
+    calls.push(args);
+    const key = args.join(' ');
+    if (key.includes('pr list') && key.includes('--state open')) return JSON.stringify([]);
+    if (key.includes('pr list') && key.includes('--state all')) {
+      return JSON.stringify([{ number: 78, baseRefName: 'master', state: 'CLOSED' }]);
+    }
+    if (key.includes('statusCheckRollup')) {
+      return JSON.stringify(prViewResponse([], {
+        number: 78,
+        state: 'CLOSED',
+        headRefOid: 'closed-sha',
+        headRefName: 'feat/my-feature',
+        baseRefName: 'master',
+      }));
+    }
+    throw new Error(`Unexpected gh call: ${key}`);
+  };
+
+  const readiness = await collectPrReadiness({ repo: 'owner/repo', headBranch: 'feat/my-feature' }, execGh);
+
+  assert.equal(readiness.verdict, 'closed');
+  assert.equal(readiness.nextAction, 'human_decision');
+  assert.equal(readiness.pr.number, 78);
+  assert.equal(readiness.pr.headSha, 'closed-sha');
+  assert.ok(readiness.evidence.some((item) => item.includes('pr_closed_externally')));
+  assert.ok(calls.some((args) => args.includes('--state') && args.includes('open')));
+  assert.ok(calls.some((args) => args.includes('--state') && args.includes('all')));
 });
 
 test('FIX4: branch-resolved PR then view shows CLOSED (TOCTOU) → controlled needsHuman, no throw, no loop', async () => {
@@ -1723,7 +1807,7 @@ test('fetchRequiredCheckNames: empty/missing rollup → empty set (caller applie
   assert.equal(fetchRequiredCheckNames('owner/repo', 42, nullRollup).size, 0);
 });
 
-test('fetchRequiredCheckNames: non-JSON gh output throws (so pollPr can fail-safe to all-failures)', () => {
+test('fetchRequiredCheckNames: non-JSON gh output throws so pollPr can classify the fetch failure', () => {
   const execGh: ExecGhFn = () => 'Error: authentication required';
   assert.throws(() => fetchRequiredCheckNames('owner/repo', 42, execGh), /non-JSON/);
 });
@@ -1791,6 +1875,18 @@ test('#233: green CI + unresolved review threads → review_changes, not ready/c
   assert.equal(readiness.verdict, 'needs_work', 'unresolved threads cause needs_work verdict');
   assert.equal(readiness.nextAction, 'developer_fix', 'nextAction is developer_fix with threads');
   assert.equal(readiness.reviewThreads.unresolvedCount, 1);
+});
+
+test('#275: incomplete reviewThreads GraphQL response is invalid, not empty threads', async () => {
+  const terminalView = prViewResponse([checkRun('CI', 'COMPLETED', 'SUCCESS')], {
+    number: 42, state: 'OPEN',
+  });
+  const execGh = makeFullResponses(terminalView, [], [], [], null, { data: {} });
+
+  await assert.rejects(
+    collectPrReadiness({ repo: 'owner/repo', prNumber: 42, includeReviewThreads: true }, execGh),
+    /invalid GraphQL shape.*reviewThreads.*repository/,
+  );
 });
 
 test('#233: COMMENTED bot review state does not suppress unresolved threads', async () => {

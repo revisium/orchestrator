@@ -63,13 +63,14 @@ function assertReviewReplyIncludes(calls: string[][], expected: string): void {
   );
 }
 
-test('#272: no registered checks are advisory and still reach mergeGate', {
-  skip: '#272: pending zero-CI target behavior',
-}, async () => {
+test('#272: no registered checks are advisory and still reach mergeGate', { skip: e2eSkip }, async () => {
   await runTargetScenario('#272: no registered checks are advisory and still reach mergeGate', {
     executionProfile: STUB_AGENT,
     gh: 'no-checks-registered',
-    gates: [['plan', 'approved'], ['merge', 'cancel']],
+    gates: [
+      ['plan', 'approved'],
+      { topic: 'merge', outcome: 'cancel', nodeId: 'mergeGate', summaryIncludes: ['checks: none registered'] },
+    ],
     expect: {
       terminal: 'cancelled',
       path: [{ type: 'pr_polled', payload: { verdict: 'clean' } }],
@@ -79,13 +80,14 @@ test('#272: no registered checks are advisory and still reach mergeGate', {
   });
 });
 
-test('#272: never-settling checks route to recoveryGate instead of spinning to MAX_STEPS', {
-  skip: '#272: pending bounded recheck-loop target behavior',
-}, async () => {
+test('#272: never-settling checks route to recoveryGate instead of spinning to MAX_STEPS', { skip: e2eSkip }, async () => {
   await runTargetScenario('#272: never-settling checks route to recoveryGate instead of spinning to MAX_STEPS', {
     executionProfile: STUB_AGENT,
     gh: 'checks-never-settle',
-    gates: [['plan', 'approved'], ['merge', 'cancel']],
+    gates: [
+      ['plan', 'approved'],
+      { topic: 'merge', outcome: 'cancel', nodeId: 'recoveryGate' },
+    ],
     expect: {
       terminal: 'cancelled',
       path: [{ type: 'pr_polled', payload: { verdict: 'recheck' } }],
@@ -95,17 +97,33 @@ test('#272: never-settling checks route to recoveryGate instead of spinning to M
   });
 });
 
-test('#273: externally merged PR completes through cleanup without recovery or merge attempt', {
-  skip: '#273: pending externally merged PR target routing',
-}, async () => {
+test('#272: unclassifiable poll state routes through classifyRecovery to recoveryGate', { skip: e2eSkip }, async () => {
+  await runTargetScenario('#272: unclassifiable poll state routes through classifyRecovery to recoveryGate', {
+    executionProfile: STUB_AGENT,
+    gh: 'nonsense-poll-state',
+    gates: [
+      ['plan', 'approved'],
+      { topic: 'merge', outcome: 'cancel', nodeId: 'recoveryGate' },
+    ],
+    expect: {
+      terminal: 'cancelled',
+      agentNodeCalled: ['classifyRecovery'],
+      noEvents: ['merge_confirmed'],
+      ghNotCalled: [['pr', 'merge']],
+    },
+  });
+});
+
+test('#273: externally merged PR completes through cleanup without recovery or merge attempt', { skip: e2eSkip }, async () => {
   await runTargetScenario('#273: externally merged PR completes through cleanup without recovery or merge attempt', {
     executionProfile: STUB_AGENT,
     gh: 'merged-externally',
     gates: [['plan', 'approved']],
     expect: {
       terminal: 'completed',
-      path: [{ type: 'pr_polled', payload: { verdict: 'merged' } }, 'worktree_released', 'run_completed'],
-      noEvents: ['pipeline_blocked'],
+      events: ['run_completed'],
+      path: [{ type: 'pr_polled', payload: { verdict: 'merged' } }, 'worktree_released'],
+      noEvents: ['pipeline_blocked', 'merge_confirmed'],
       ghCalled: [
         ['pr', 'list', '--state', 'open'],
         ['pr', 'list', '--state', 'all'],
@@ -115,13 +133,14 @@ test('#273: externally merged PR completes through cleanup without recovery or m
   });
 });
 
-test('#273: externally closed unmerged PR reaches recoveryGate immediately with closed reason', {
-  skip: '#273: pending externally closed PR target routing',
-}, async () => {
+test('#273: externally closed unmerged PR reaches recoveryGate immediately with closed reason', { skip: e2eSkip }, async () => {
   await runTargetScenario('#273: externally closed unmerged PR reaches recoveryGate immediately with closed reason', {
     executionProfile: STUB_AGENT,
     gh: 'closed-externally',
-    gates: [['plan', 'approved'], ['merge', 'cancel']],
+    gates: [
+      ['plan', 'approved'],
+      { topic: 'merge', outcome: 'cancel', nodeId: 'recoveryGate', summaryIncludes: ['pr_closed_externally'] },
+    ],
     expect: {
       terminal: 'cancelled',
       path: [{ type: 'pr_polled', payload: { verdict: 'closed' } }],
@@ -135,13 +154,15 @@ test('#273: externally closed unmerged PR reaches recoveryGate immediately with 
   });
 });
 
-test('#274: head moved after merge approval re-presents mergeGate with fresh artifact', {
-  skip: '#274: pending merge approval headSha pinning',
-}, async () => {
+test('#274: head moved after merge approval re-presents mergeGate with fresh artifact', { skip: e2eSkip }, async () => {
   await runTargetScenario('#274: head moved after merge approval re-presents mergeGate with fresh artifact', {
     executionProfile: STUB_AGENT,
     gh: 'head-moved-after-approve',
-    gates: [['plan', 'approved'], ['merge', 'approved'], ['merge', 'cancel']],
+    gates: [
+      ['plan', 'approved'],
+      { topic: 'merge', outcome: 'approved', nodeId: 'mergeGate', artifactHeadSha: 'deadbeefcafe' },
+      { topic: 'merge', outcome: 'cancel', nodeId: 'mergeGate', artifactHeadSha: 'feedfacecafe' },
+    ],
     expect: {
       terminal: 'cancelled',
       noEvents: ['merge_confirmed'],
@@ -150,15 +171,18 @@ test('#274: head moved after merge approval re-presents mergeGate with fresh art
   });
 });
 
-test('#275: GraphQL partial outage is never treated as clean readiness', {
-  skip: '#275: pending GraphQL partial-outage target behavior',
-}, async () => {
+test('#275: GraphQL partial outage routes to recovery instead of clean readiness', { skip: e2eSkip }, async () => {
   await runTargetScenario('#275: GraphQL partial outage is never treated as clean readiness', {
     executionProfile: STUB_AGENT,
     gh: 'empty-graphql-data',
-    gates: [['plan', 'approved'], ['merge', 'cancel']],
+    gates: [
+      ['plan', 'approved'],
+      { topic: 'merge', outcome: 'cancel', nodeId: 'recoveryGate' },
+    ],
     expect: {
       terminal: 'cancelled',
+      path: [{ type: 'step_failed', payload: { error: 'invalid GraphQL shape in reviewThreads response: missing repository' } }],
+      agentNodeCalled: ['classifyRecovery'],
       noEvents: ['merge_confirmed'],
       ghNotCalled: [['pr', 'merge']],
     },

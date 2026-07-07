@@ -311,7 +311,7 @@ function buildAdapter(opts: {
       if (opts.pollPr) return opts.pollPr(input);
       return {
         prNumber: 1,
-        headSha: `sha-${rec.pollPrCalls}`,
+        headSha: 'ready-head',
         evidence: [`pollPr call ${rec.pollPrCalls}: clean`],
         verdict: 'clean' as const,
         ciFailures: [],
@@ -506,10 +506,22 @@ function restoreEnvVar(key: string, value: string | undefined): void {
 }
 
 test('DD1: happy path — analyst→plan→developer→review→integrate→pollPr(clean)→mergeReadiness(clean)→merge→confirmMerge → succeeded', async () => {
+  let pollCount = 0;
   const { run, rec } = buildAdapter({
     template: featureDevelopmentPrReview(),
     verdicts: { codeReview: 'approved' },
     gate: () => ({ decision: 'approve' }),
+    pollPr: () => {
+      pollCount++;
+      return {
+        prNumber: 1,
+        headSha: 'ready-head',
+        evidence: [`pollPr call ${pollCount}: clean`],
+        verdict: 'clean' as const,
+        ciFailures: [],
+        reviewThreads: [],
+      };
+    },
   });
   const result = await run();
   assert.equal(result.status, 'succeeded');
@@ -524,7 +536,7 @@ test('DD1: happy path — analyst→plan→developer→review→integrate→poll
     (mergeSummary?.gatedArtifact?.payload as { headSha?: string; evidence?: string[] } | undefined),
     {
       prNumber: 1,
-      headSha: 'sha-2',
+      headSha: 'ready-head',
       evidence: ['pollPr call 2: clean'],
       verdict: 'clean',
       ciFailures: [],
@@ -535,11 +547,51 @@ test('DD1: happy path — analyst→plan→developer→review→integrate→poll
   assert.equal(rec.confirmMergeCalls, 1, 'confirmMerge ran once at the success terminal');
   assert.deepEqual(
     rec.confirmMergeInputs[0]?.mergeReadiness,
-    { headSha: 'sha-3' },
+    { headSha: 'ready-head' },
     'confirmMerge consumes the post-approval mergeApproveReverify head sha for the GitHub merge guard',
   );
   assert.equal(rec.blocked.length, 0);
   assert.equal(rec.failed.length, 0);
+});
+
+test('DD-issue-274: moved head after merge approval reopens mergeGate with the reverify artifact', async () => {
+  let pollCount = 0;
+  let mergeSeen = 0;
+  const { run, rec } = buildAdapter({
+    template: featureDevelopmentPrReview(),
+    verdicts: { codeReview: 'approved' },
+    gate: (topic, _gateKey, summary) => {
+      if (topic !== 'merge') return { decision: 'approve' };
+      mergeSeen++;
+      const payload = summary.gatedArtifact?.payload as { headSha?: string } | undefined;
+      if (mergeSeen === 1) {
+        assert.equal(payload?.headSha, 'deadbeefcafe');
+        return { decision: 'approve' };
+      }
+      assert.equal(payload?.headSha, 'feedfacecafe');
+      return { outcome: 'cancel' };
+    },
+    pollPr: () => {
+      pollCount++;
+      const headSha = pollCount >= 3 ? 'feedfacecafe' : 'deadbeefcafe';
+      return {
+        prNumber: 1,
+        headSha,
+        evidence: [`poll ${pollCount}: ${headSha}`],
+        verdict: 'clean' as const,
+        ciFailures: [],
+        reviewThreads: [],
+      };
+    },
+  });
+
+  const result = await run();
+
+  assert.equal(result.status, 'cancelled');
+  assert.deepEqual(rec.gates, ['plan', 'merge', 'merge']);
+  assert.equal(rec.pollPrCalls, 3);
+  assert.equal(rec.confirmMergeCalls, 0);
+  assert.ok(!rec.events.some((event) => event.startsWith('merge_confirmed:')));
 });
 
 test('cancel gate outcome reaches cancelled terminal and calls cancelRun', async () => {
@@ -574,7 +626,7 @@ test('gate summaries preserve the latest produced artifact across non-producing 
     rec.gateSummaries[0]?.gatedArtifact?.payload,
     {
       prNumber: 1,
-      headSha: 'sha-1',
+      headSha: 'ready-head',
       evidence: ['pollPr call 1: clean'],
       verdict: 'clean',
       ciFailures: [],
@@ -971,7 +1023,7 @@ test('DD4: pollPr ci_changes → ciRework → re-integrate → pollPr(clean) →
       polls++;
       return polls === 1
         ? { prNumber: 1, headSha: 's1', evidence: ['poll 1: build failed'], verdict: 'ci_changes' as const, ciFailures: [{ name: 'build', conclusion: 'FAILURE' }], reviewThreads: [] }
-        : { prNumber: 1, headSha: `s${polls}`, evidence: [`poll ${polls}: clean`], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
+        : { prNumber: 1, headSha: 'ci-fixed-head', evidence: [`poll ${polls}: clean`], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
     },
   });
   const result = await run();
@@ -1009,7 +1061,7 @@ test('DD4-issue-143: mergeReadiness review_changes routes to triage with fresh f
           reviewThreads: [{ threadId: 'T9', body: 'fix before merge' }],
         };
       }
-      return { prNumber: 1, headSha: `post-triage-${polls}`, evidence: [`post-triage poll ${polls} clean`], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
+      return { prNumber: 1, headSha: 'post-triage-head', evidence: [`post-triage poll ${polls} clean`], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
     },
   });
 
@@ -1024,7 +1076,7 @@ test('DD4-issue-143: mergeReadiness review_changes routes to triage with fresh f
   const mergeSummary = rec.gateSummaries.find((summary) => summary.nodeId === 'mergeGate');
   assert.equal(
     (mergeSummary?.gatedArtifact?.payload as { headSha?: string } | undefined)?.headSha,
-    'post-triage-4',
+    'post-triage-head',
     'merge gate opens only after a later clean mergeReadiness recheck',
   );
 });
@@ -1050,7 +1102,7 @@ test('DD4-issue-143b: mergeReadiness ci_changes routes to ciRework with fresh fe
           reviewThreads: [],
         };
       }
-      return { prNumber: 1, headSha: `post-ci-${polls}`, evidence: [`post-ci poll ${polls} clean`], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
+      return { prNumber: 1, headSha: 'post-ci-head', evidence: [`post-ci poll ${polls} clean`], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
     },
   });
 
@@ -1171,7 +1223,7 @@ test('DD-issue-223: pollPr recheck verdict loops inside readiness polling', asyn
       if (polls === 1) {
         return { prNumber: 1, headSha: 'pending', evidence: ['provider pending'], verdict: 'recheck' as const, ciFailures: [], reviewThreads: [] };
       }
-      return { prNumber: 1, headSha: `clean-${polls}`, evidence: [`poll ${polls}: clean`], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
+      return { prNumber: 1, headSha: 'clean-head', evidence: [`poll ${polls}: clean`], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
     },
   });
 
@@ -1210,7 +1262,8 @@ test('DD-issue-141 (reroute): merge reject + a review_changes re-poll reroutes t
           reviewThreads: [{ threadId: 'T141', body: 'address before merge' }],
         };
       }
-      return { prNumber: 1, headSha: `poll-${polls}`, evidence: [`poll ${polls}: clean`], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
+      const headSha = polls < 3 ? 'pre-merge-head' : 'post-review-head';
+      return { prNumber: 1, headSha, evidence: [`poll ${polls}: clean`], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
     },
   });
 
@@ -1243,7 +1296,7 @@ test('DD-issue-141 (reroute): merge reject + a review_changes re-poll reroutes t
   );
   assert.equal(
     (mergeSummaries[1]?.gatedArtifact?.payload as { headSha?: string } | undefined)?.headSha,
-    'poll-5',
+    'post-review-head',
     'the recovered merge gate carries the latest clean readiness payload',
   );
 });
@@ -1274,7 +1327,8 @@ test('DD-issue-223: merge reject + a recheck re-poll continues readiness polling
           reviewThreads: [],
         };
       }
-      return { prNumber: 1, headSha: `poll-${polls}`, evidence: [`poll ${polls}: clean`], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
+      const headSha = polls < 3 ? 'pre-merge-head' : 'after-recheck-head';
+      return { prNumber: 1, headSha, evidence: [`poll ${polls}: clean`], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
     },
   });
 
@@ -1294,7 +1348,7 @@ test('DD-issue-223: merge reject + a recheck re-poll continues readiness polling
   );
   assert.equal(
     (mergeSummaries[1]?.gatedArtifact?.payload as { headSha?: string } | undefined)?.headSha,
-    'poll-4',
+    'after-recheck-head',
     'the re-polled merge gate carries the mergeReadiness payload that immediately preceded it',
   );
 });
@@ -1534,7 +1588,7 @@ test('DD4c: pollPr review_changes → triage(fix) → reviewRework → integrate
       polls++;
       return polls === 1
         ? { prNumber: 1, headSha: 's1', evidence: ['poll 1: review thread T1'], verdict: 'review_changes' as const, ciFailures: [], reviewThreads: [{ threadId: 'T1', body: 'fix this' }] }
-        : { prNumber: 1, headSha: `s${polls}`, evidence: [`poll ${polls}: clean`], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
+        : { prNumber: 1, headSha: 'review-fixed-head', evidence: [`poll ${polls}: clean`], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
     },
   });
   const result = await run();
@@ -1572,7 +1626,7 @@ test('DD4d: pollPr review_changes → triage(question) → questionGate(wontfix)
         polls++;
         return polls === 1
           ? { prNumber: 1, headSha: 's1', evidence: ['poll 1: review thread T1'], verdict: 'review_changes' as const, ciFailures: [], reviewThreads: [{ threadId: 'T1', body: 'why?' }] }
-          : { prNumber: 1, headSha: `s${polls}`, evidence: [`poll ${polls}: clean`], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
+          : { prNumber: 1, headSha: 'wontfix-clean-head', evidence: [`poll ${polls}: clean`], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
       };
     })(),
   });
@@ -1598,7 +1652,7 @@ test('DD4e: questionGate(fix) sends the human note to question rework without le
       if (polls === 2) {
         return { prNumber: 1, headSha: 's2', evidence: ['poll 2: review thread T2 needs a direct fix'], verdict: 'review_changes' as const, ciFailures: [], reviewThreads: [{ threadId: 'T2', body: 'fix this too' }] };
       }
-      return { prNumber: 1, headSha: `s${polls}`, evidence: [`poll ${polls}: clean`], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
+      return { prNumber: 1, headSha: 'question-fixed-head', evidence: [`poll ${polls}: clean`], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
     },
   });
   const result = await run();
@@ -2547,7 +2601,7 @@ test('DD-reverify-c: pollPr UNKNOWN recheck → second poll CLEAN → merges (AC
     pollPr: (): PrFeedback | IntegratorBlocked => {
       pollCount++;
       if (pollCount === 1) return { prNumber: 1, headSha: 'sha-1', evidence: ['unsettled: UNKNOWN'], verdict: 'recheck' as const, ciFailures: [], reviewThreads: [] };
-      return { prNumber: 1, headSha: `sha-${pollCount}`, evidence: [`poll ${pollCount}: clean`], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
+      return { prNumber: 1, headSha: 'stable-clean-head', evidence: [`poll ${pollCount}: clean`], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] };
     },
   });
   const result = await run();

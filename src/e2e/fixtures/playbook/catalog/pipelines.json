@@ -394,7 +394,9 @@
             "question",
             "recheck",
             "cancel",
-            "override_merge"
+            "override_merge",
+            "merged",
+            "closed"
           ]
         },
         "nodes": {
@@ -644,6 +646,20 @@
               {
                 "when": {
                   "op": "verdict.eq",
+                  "value": "merged"
+                },
+                "goto": "cleanupWorktree"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "closed"
+                },
+                "goto": "recoveryGate"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
                   "value": "review_changes"
                 },
                 "goto": "triage"
@@ -728,6 +744,9 @@
             "produces": {
               "name": "prFeedback"
             },
+            "incrementCounters": [
+              "pollLoop"
+            ],
             "catch": [
               {
                 "onError": "revo.ScriptBlocked",
@@ -753,7 +772,31 @@
               {
                 "when": {
                   "op": "verdict.eq",
-                  "value": "recheck"
+                  "value": "merged"
+                },
+                "goto": "cleanupWorktree"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "closed"
+                },
+                "goto": "recoveryGate"
+              },
+              {
+                "when": {
+                  "op": "all",
+                  "of": [
+                    {
+                      "op": "verdict.eq",
+                      "value": "recheck"
+                    },
+                    {
+                      "op": "counter.lt",
+                      "scope": "pollLoop",
+                      "value": 8
+                    }
+                  ]
                 },
                 "goto": "pollPr"
               },
@@ -796,6 +839,9 @@
             "produces": {
               "name": "prFeedback"
             },
+            "incrementCounters": [
+              "pollLoop"
+            ],
             "catch": [
               {
                 "onError": "revo.ScriptBlocked",
@@ -821,7 +867,31 @@
               {
                 "when": {
                   "op": "verdict.eq",
-                  "value": "recheck"
+                  "value": "merged"
+                },
+                "goto": "cleanupWorktree"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "closed"
+                },
+                "goto": "recoveryGate"
+              },
+              {
+                "when": {
+                  "op": "all",
+                  "of": [
+                    {
+                      "op": "counter.lt",
+                      "scope": "pollLoop",
+                      "value": 8
+                    },
+                    {
+                      "op": "verdict.eq",
+                      "value": "recheck"
+                    }
+                  ]
                 },
                 "goto": "mergeReadiness"
               },
@@ -1176,6 +1246,20 @@
                 "goto": "confirmMerge"
               },
               {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "merged"
+                },
+                "goto": "cleanupWorktree"
+              },
+              {
+                "when": {
+                  "op": "verdict.eq",
+                  "value": "closed"
+                },
+                "goto": "recoveryGate"
+              },
+              {
                 "default": "classifyRecovery"
               }
             ]
@@ -1302,6 +1386,10 @@
           },
           "ciLoop": {
             "cap": 3,
+            "parent": null
+          },
+          "pollLoop": {
+            "cap": 8,
             "parent": null
           },
           "reviewLoop": {

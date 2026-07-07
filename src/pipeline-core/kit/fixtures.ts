@@ -145,19 +145,20 @@ function prFeedbackConsumes(): ConsumesRef[] {
   ];
 }
 
-function readinessScript(id: string, next: string) {
+function readinessScript(id: string, next: string, countPollLoop = false) {
   return node.script(id, 'script:pollPr', next, {
     resultSchema: 'schema:prFeedback',
     onFailure: 'route',
     produces: { name: 'prFeedback' },
+    ...(countPollLoop ? { incrementCounters: ['pollLoop'] } : {}),
     catch: recoveryCatch(),
   });
 }
 
-function readinessRouter(id: string, cleanTo: string, recheckTo: string) {
+function readinessRouter(id: string, cleanTo: string, recheckTo: string, boundRecheck = false) {
   return node.choice(id, [
     on(verdictEq('clean'), cleanTo),
-    on(verdictEq('recheck'), recheckTo),
+    on(boundRecheck ? allOf(verdictEq('recheck'), counterLt('pollLoop', 8)) : verdictEq('recheck'), recheckTo),
     on(verdictEq('review_changes'), 'triage'),
     on(allOf(verdictEq('ci_changes'), counterLt('ciLoop', 3)), 'ciRework'),
     otherwise('recoveryGate'),
@@ -179,6 +180,7 @@ export function featureDevelopmentPrReview(): Template {
     .policy({ conflicts: [['developer', 'reviewer']], enforcement: 'strict' })
     .scope('codeReviewLoop', { cap: 3, parent: null })
     .scope('ciLoop', { cap: 3, parent: null })
+    .scope('pollLoop', { cap: 8, parent: null })
     .scope('reviewLoop', { cap: 3, parent: null })
     .scope('questionLoop', { cap: 3, parent: null })
     .scope('recoveryLoop', { cap: 3, parent: null })
@@ -222,10 +224,10 @@ export function featureDevelopmentPrReview(): Template {
         ],
         catch: recoveryCatch(),
       }),
-      readinessScript('pollPr', 'prRouter'),
-      readinessRouter('prRouter', 'mergeReadiness', 'pollPr'),
-      readinessScript('mergeReadiness', 'mergeReadinessRouter'),
-      readinessRouter('mergeReadinessRouter', 'mergeGate', 'mergeReadiness'),
+      readinessScript('pollPr', 'prRouter', true),
+      readinessRouter('prRouter', 'mergeReadiness', 'pollPr', true),
+      readinessScript('mergeReadiness', 'mergeReadinessRouter', true),
+      readinessRouter('mergeReadinessRouter', 'mergeGate', 'mergeReadiness', true),
       node.agent('ciRework', 'role:developer', 'integrator', {
         resultSchema: 'schema:change', incrementCounters: ['ciLoop'], onFailure: 'abort',
         produces: { name: 'change' },

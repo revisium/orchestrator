@@ -18,6 +18,9 @@ type GateStep =
       outcome: string;
       note?: string;
       mergeOverrideAudit?: Record<string, unknown>;
+      nodeId?: string;
+      summaryIncludes?: string[];
+      artifactHeadSha?: string;
     };
 
 type EventPathItem = string | { type: string; payload?: Record<string, unknown> };
@@ -29,6 +32,8 @@ type ScenarioExpect = {
   path?: EventPathItem[];
   ghCalled?: Array<readonly string[]>;
   ghNotCalled?: Array<readonly [string, string]>;
+  agentCalled?: string[];
+  agentNodeCalled?: string[];
 };
 
 type ScenarioRepo = string | TargetRepo;
@@ -73,17 +78,60 @@ function playbookId(scenario: PipelineScenario): string {
   return scenario.playbook === 'default' ? DEFAULT_PLAYBOOK_ID : PLAYBOOK_ID;
 }
 
-function normalizeGate(step: GateStep): { topic: GateTopic; outcome: string; note?: string; mergeOverrideAudit?: Record<string, unknown> } {
+function normalizeGate(step: GateStep): {
+  topic: GateTopic;
+  outcome: string;
+  note?: string;
+  mergeOverrideAudit?: Record<string, unknown>;
+  nodeId?: string;
+  summaryIncludes?: string[];
+  artifactHeadSha?: string;
+} {
   if ('topic' in step) {
     return {
       topic: step.topic,
       outcome: step.outcome,
       ...(step.note ? { note: step.note } : {}),
       ...(step.mergeOverrideAudit ? { mergeOverrideAudit: step.mergeOverrideAudit } : {}),
+      ...(step.nodeId ? { nodeId: step.nodeId } : {}),
+      ...(step.summaryIncludes ? { summaryIncludes: step.summaryIncludes } : {}),
+      ...(step.artifactHeadSha ? { artifactHeadSha: step.artifactHeadSha } : {}),
     };
   }
   const [topic, outcome] = step;
   return { topic, outcome };
+}
+
+function assertGateContext(gate: { topic: string; context: Record<string, unknown> }, expected: ReturnType<typeof normalizeGate>): void {
+  const summary = gate.context['summary'];
+  assert.ok(summary !== null && typeof summary === 'object' && !Array.isArray(summary), `${gate.topic} gate must include a summary`);
+  const summaryRecord = summary as Record<string, unknown>;
+  if (expected.nodeId) {
+    assert.equal(summaryRecord['nodeId'], expected.nodeId, `expected ${gate.topic} gate node ${expected.nodeId}`);
+  }
+  for (const needle of expected.summaryIncludes ?? []) {
+    assert.ok(
+      JSON.stringify(summaryRecord).includes(needle),
+      `expected ${gate.topic} gate summary to include ${JSON.stringify(needle)}; got ${JSON.stringify(summaryRecord)}`,
+    );
+  }
+  if (expected.artifactHeadSha) {
+    const artifact = summaryRecord['gatedArtifact'];
+    assert.ok(
+      artifact !== null && typeof artifact === 'object' && !Array.isArray(artifact),
+      `${gate.topic} gate must include a gated artifact`,
+    );
+    const payload = (artifact as Record<string, unknown>)['payload'];
+    assert.ok(
+      payload !== null && typeof payload === 'object' && !Array.isArray(payload),
+      `${gate.topic} gate gated artifact must include an inline payload`,
+    );
+    assert.equal(
+      (payload as Record<string, unknown>)['headSha'],
+      expected.artifactHeadSha,
+      `expected ${gate.topic} gate artifact head ${expected.artifactHeadSha}`,
+    );
+  }
 }
 
 function eventMatches(event: { type: string; payload: unknown }, expected: EventPathItem): boolean {
@@ -174,6 +222,7 @@ export async function pipelineScenario(
   for (const step of scenario.gates ?? []) {
     const gateStep = normalizeGate(step);
     const gate = await waitForGate(h.api, created.runId, gateStep.topic);
+    assertGateContext(gate, gateStep);
     await h.api.resolveGate({
       inboxId: gate.inboxId,
       outcome: gateStep.outcome,
@@ -194,6 +243,18 @@ export async function pipelineScenario(
   }
   for (const sub of scenario.expect.ghNotCalled ?? []) {
     assertGhNotCalledForRun(h, runCase, sub);
+  }
+  for (const role of scenario.expect.agentCalled ?? []) {
+    assert.ok(
+      h.agentCalls.some((call) => call.runId === created.runId && call.role === role),
+      `agent role ${role} must be called for ${created.runId}`,
+    );
+  }
+  for (const nodeId of scenario.expect.agentNodeCalled ?? []) {
+    assert.ok(
+      h.agentCalls.some((call) => call.runId === created.runId && call.nodeId === nodeId),
+      `agent node ${nodeId} must be called for ${created.runId}`,
+    );
   }
 
   return { runId: created.runId, taskId: created.taskId, runCase };

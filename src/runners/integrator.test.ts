@@ -2001,16 +2001,46 @@ test('pollPr: a failing REQUIRED check → ci_changes', async () => {
   }
 });
 
-test('pollPr: unknown/empty required-set → fail-safe, counts ALL failures (current behavior)', async () => {
+test('pollPr: empty required-set still fail-safes to all failures, but required-check fetch failure rechecks', async () => {
   const collect = async (): Promise<PollPrReadiness> =>
     readiness({ fail: ['SonarCloud'], list: [{ name: 'Verify', result: 'SUCCESS' }, { name: 'SonarCloud', result: 'FAILURE' }] });
   // Empty required-set (can't determine required-ness) → fall back to counting all failures.
   const empty = await pollPr(POLL_INPUT, pollDeps(collect, { requiredChecks: () => new Set<string>() }));
   assert.ok(!('needsHuman' in empty) && empty.verdict === 'ci_changes', 'empty required-set falls back to all-failures (never silently clean)');
 
-  // gh error path → same fail-safe.
   const errored = await pollPr(POLL_INPUT, pollDeps(collect, { requiredChecks: () => { throw new Error('gh graphql failed'); } }));
-  assert.ok(!('needsHuman' in errored) && errored.verdict === 'ci_changes', 'a gh error falls back to all-failures');
+  assert.ok(!('needsHuman' in errored));
+  if (!('needsHuman' in errored)) {
+    assert.equal(errored.verdict, 'recheck', 'a gh error rechecks instead of burning ciLoop on advisory failures');
+    assert.deepEqual(errored.ciFailures.map((c) => c.name), ['SonarCloud'], 'ciFailures keeps advisory context');
+    assert.ok(errored.evidence.some((item) => item.includes('gh graphql failed')), 'evidence names required-check fetch failure');
+  }
+});
+
+test('#275: required-check fetch failure rechecks, then success cleans advisory CI', async () => {
+  const collect = async (): Promise<PollPrReadiness> =>
+    readiness({ fail: ['SonarCloud'], list: [{ name: 'Verify', result: 'SUCCESS' }, { name: 'SonarCloud', result: 'FAILURE' }] });
+  let requiredFetches = 0;
+  const requiredChecks: PollPrDeps['requiredChecks'] = () => {
+    requiredFetches++;
+    if (requiredFetches === 1) throw new Error('gh graphql failed while fetching required checks');
+    return new Set(['Verify']);
+  };
+
+  const first = await pollPr(POLL_INPUT, pollDeps(collect, { requiredChecks }));
+  assert.ok(!('needsHuman' in first));
+  if (!('needsHuman' in first)) {
+    assert.equal(first.verdict, 'recheck');
+    assert.deepEqual(first.ciFailures.map((c) => c.name), ['SonarCloud']);
+    assert.ok(first.evidence.some((item) => item.includes('gh graphql failed while fetching required checks')));
+  }
+
+  const second = await pollPr(POLL_INPUT, pollDeps(collect, { requiredChecks }));
+  assert.ok(!('needsHuman' in second));
+  if (!('needsHuman' in second)) {
+    assert.equal(second.verdict, 'clean', 'non-required red check stops driving the verdict after required checks are known');
+    assert.deepEqual(second.ciFailures.map((c) => c.name), ['SonarCloud'], 'advisory failure evidence is preserved');
+  }
 });
 
 test('pollPr: all green, no threads → clean', async () => {
@@ -2018,6 +2048,188 @@ test('pollPr: all green, no threads → clean', async () => {
   const r = await pollPr(POLL_INPUT, pollDeps(collect));
   assert.ok(!('needsHuman' in r));
   if (!('needsHuman' in r)) assert.equal(r.verdict, 'clean');
+});
+
+test('pollPr: externally merged readiness bypasses ready/merge checks and returns merged', async () => {
+  const ghCalls: string[][] = [];
+  const collect = async (): Promise<PollPrReadiness> =>
+    readiness({
+      readinessVerdict: 'merged',
+      nextAction: 'none',
+      evidence: ['PR #5 is merged.'],
+    });
+
+  const r = await pollPr(POLL_INPUT, pollDeps(collect, { execGh: (args) => { ghCalls.push(args); return ''; } }));
+
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) {
+    assert.equal(r.verdict, 'merged');
+    assert.ok(r.evidence.some((item) => item === 'pollPr verdict=merged'));
+  }
+  assert.deepEqual(ghCalls, [], 'terminal merged PR must not call gh pr ready');
+});
+
+test('pollPr: externally closed readiness bypasses grace polling and returns closed reason', async () => {
+  const ghCalls: string[][] = [];
+  let collects = 0;
+  const collect = async (): Promise<PollPrReadiness> => {
+    collects++;
+    return readiness({
+      readinessVerdict: 'closed',
+      nextAction: 'human_decision',
+      evidence: ['pr_closed_externally: PR #5 was closed without merging - manual review needed'],
+    });
+  };
+
+  const r = await pollPr(POLL_INPUT, pollDeps(collect, { execGh: (args) => { ghCalls.push(args); return ''; }, reviewGracePolls: 4 }));
+
+  assert.equal(collects, 1, 'closed PR must not enter review grace polling');
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) {
+    assert.equal(r.verdict, 'closed');
+    assert.ok(r.evidence.some((item) => item.includes('pr_closed_externally')));
+  }
+  assert.deepEqual(ghCalls, [], 'terminal closed PR must not call gh pr ready');
+});
+
+test('pollPr: externally merged during review grace returns merged, not clean', async () => {
+  let collects = 0;
+  const collect = async (): Promise<PollPrReadiness> => {
+    collects++;
+    return collects === 1
+      ? readiness({ headSha: 'open-clean-sha' })
+      : readiness({
+          headSha: 'merged-sha',
+          readinessVerdict: 'merged',
+          nextAction: 'none',
+          evidence: ['PR #5 is merged.'],
+        });
+  };
+
+  const r = await pollPr(POLL_INPUT, pollDeps(collect, { reviewGracePolls: 1 }));
+
+  assert.equal(collects, 2, 'review grace observes the terminal merged snapshot');
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) {
+    assert.equal(r.verdict, 'merged');
+    assert.equal(r.headSha, 'merged-sha');
+    assert.ok(r.evidence.some((item) => item === 'pollPr verdict=merged'));
+  }
+});
+
+test('pollPr: externally closed during review grace returns closed, not review_changes', async () => {
+  let collects = 0;
+  const collect = async (): Promise<PollPrReadiness> => {
+    collects++;
+    return collects === 1
+      ? readiness({ headSha: 'open-clean-sha' })
+      : readiness({
+          headSha: 'closed-sha',
+          readinessVerdict: 'closed',
+          nextAction: 'human_decision',
+          evidence: ['pr_closed_externally: PR #5 was closed without merging - manual review needed'],
+        });
+  };
+
+  const r = await pollPr(POLL_INPUT, pollDeps(collect, { reviewGracePolls: 1 }));
+
+  assert.equal(collects, 2, 'review grace observes the terminal closed snapshot');
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) {
+    assert.equal(r.verdict, 'closed');
+    assert.equal(r.headSha, 'closed-sha');
+    assert.ok(r.evidence.some((item) => item.includes('pr_closed_externally')));
+    assert.ok(r.evidence.some((item) => item === 'pollPr verdict=closed'));
+  }
+});
+
+test('pollPr: no registered checks with clean mergeability → clean with advisory on first poll', async () => {
+  let calls = 0;
+  const collect = async (): Promise<PollPrReadiness> => {
+    calls++;
+    return readiness({
+      list: [],
+      evidence: ['checks: none registered'],
+      mergeStateStatus: 'CLEAN',
+      mergeable: 'MERGEABLE',
+    });
+  };
+
+  const r = await pollPr(POLL_INPUT, pollDeps(collect, { reviewGracePolls: 0, maxPolls: 3 }));
+
+  assert.equal(calls, 1, 'zero-CI readiness is detected on the first poll');
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) {
+    assert.equal(r.verdict, 'clean');
+    assert.ok(r.evidence.some((item) => item.includes('checks: none registered')));
+  }
+});
+
+test('pollPr: DRAFT merge state is classifiable so draft PR can be marked ready', async () => {
+  const ghCalls: string[][] = [];
+  let reads = 0;
+  const collect = async (): Promise<PollPrReadiness> => {
+    reads++;
+    return readiness({
+      evidence: [`read ${reads}`],
+      mergeStateStatus: reads === 1 ? 'DRAFT' : 'CLEAN',
+      mergeable: 'MERGEABLE',
+    });
+  };
+  const execGh: ExecGhFn = (args) => {
+    ghCalls.push(args);
+    return '';
+  };
+
+  const r = await pollPr(POLL_INPUT, pollDeps(collect, { execGh, reviewGracePolls: 1 }));
+
+  assert.equal(reads, 2, 'pollPr must keep going after seeing GitHub DRAFT merge state');
+  assert.ok(ghCalls.some((args) => args[0] === 'pr' && args[1] === 'ready'), 'draft PR is marked ready');
+  assert.ok(!('needsHuman' in r), 'DRAFT must not be treated as unclassifiable');
+  if (!('needsHuman' in r)) assert.equal(r.verdict, 'clean');
+});
+
+test('pollPr: unclassifiable check or mergeability state blocks for recovery classification', async () => {
+  const collect = async (): Promise<PollPrReadiness> =>
+    readiness({
+      fail: ['???'],
+      list: [{ name: '???', result: 'WAT' }],
+      mergeStateStatus: 'ALIEN',
+      mergeable: 'BANANA',
+    });
+
+  const r = await pollPr(POLL_INPUT, pollDeps(collect));
+
+  assert.ok('needsHuman' in r, 'unclassifiable poll state must enter the script-blocked recovery path');
+  if ('needsHuman' in r) {
+    assert.match(r.lesson, /unclassifiable readiness state/);
+    assert.match(r.lesson, /WAT/);
+    assert.match(r.lesson, /ALIEN/);
+    assert.match(r.lesson, /BANANA/);
+  }
+});
+
+test('pollPr: unclassifiable state during review grace blocks for recovery classification', async () => {
+  let reads = 0;
+  const collect = async (): Promise<PollPrReadiness> => {
+    reads++;
+    return reads === 1
+      ? readiness({ headSha: 'green-head' })
+      : readiness({
+          headSha: 'green-head',
+          list: [{ name: 'Required checks', result: 'WAT' }],
+          evidence: ['unexpected state after readying PR'],
+        });
+  };
+
+  const r = await pollPr(POLL_INPUT, pollDeps(collect, { reviewGracePolls: 1 }));
+
+  assert.equal(reads, 2, 'review grace observes the second readiness snapshot');
+  assert.ok('needsHuman' in r, 'unclassifiable final readiness must not return clean');
+  if ('needsHuman' in r) {
+    assert.match(r.lesson, /unexpected state after readying PR/);
+    assert.match(r.lesson, /check result WAT/);
+  }
 });
 
 test('pollPr: readiness human decision is not classified as clean', async () => {
@@ -2099,7 +2311,7 @@ test('pollPr: CI red does NOT ready the PR (no review of broken code) → ci_cha
   const ghCalls: string[][] = [];
   const collect = async (): Promise<PollPrReadiness> =>
     readiness({ fail: ['build'], list: [{ name: 'build', result: 'FAILURE' }] });
-  const deps = pollDeps(collect, { reviewGracePolls: 0 });
+  const deps = pollDeps(collect, { reviewGracePolls: 0, requiredChecks: () => new Set(['build']) });
   deps.execGh = (args) => { ghCalls.push(args); return ''; };
   const r = await pollPr(POLL_INPUT, deps);
   assert.ok(!('needsHuman' in r) && r.verdict === 'ci_changes');
@@ -2145,6 +2357,28 @@ test('pollPr: a provider check pending during review grace returns recheck inste
   assert.equal(r.verdict, 'recheck');
   assert.equal(r.headSha, 'green-head');
   assert.ok(r.evidence.some((item) => item.includes('pending checks: CodeRabbit')));
+});
+
+test('pollPr: EXPECTED status during review grace returns recheck instead of human block', async () => {
+  let calls = 0;
+  const collect = async (): Promise<PollPrReadiness> => {
+    calls++;
+    return calls === 1
+      ? readiness({ headSha: 'green-head' })
+      : readiness({
+          headSha: 'green-head',
+          pending: ['Required checks'],
+          list: [{ name: 'Required checks', result: 'EXPECTED' }],
+          evidence: ['pending checks: Required checks'],
+        });
+  };
+
+  const r = await pollPr(POLL_INPUT, pollDeps(collect, { reviewGracePolls: 1 }));
+
+  assert.ok(!('needsHuman' in r), 'EXPECTED status remains a recoverable readiness state');
+  assert.equal(r.verdict, 'recheck');
+  assert.equal(r.headSha, 'green-head');
+  assert.ok(r.evidence.some((item) => item.includes('pending checks: Required checks')));
 });
 
 test('pollPr: a required CI failure appearing during review grace routes to ci_changes', async () => {
