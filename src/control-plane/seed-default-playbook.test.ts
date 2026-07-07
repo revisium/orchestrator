@@ -120,12 +120,8 @@ function pipelineTemplate(id: string): { verdicts?: { domain?: unknown } } {
 
 /** Walk a template's nodes and collect every `<kind>:<id>` capability handle referenced. */
 function capabilityRoleIds(template: { nodes: Record<string, Record<string, unknown>> }): string[] {
-  // Built-in system scripts have no role of their own — they resolve to whichever binding runs the
-  // merge (the `integrator` required role): `script:integrator` (open PR), `script:confirmMerge`
-  // (verify/auto-merge, plan 0017), and the plan 0018 PR review-feedback scripts `script:pollPr`
-  // (observe/classify) + `script:respondThreads` (reply/resolve). Map them to `integrator` (runner-wins)
-  // so the coverage check is satisfied.
-  const BUILT_IN_SCRIPTS = new Set(['integrator', 'confirmMerge', 'pollPr', 'respondThreads']);
+  // Built-in system scripts share the integrator route binding instead of declaring separate roles.
+  const BUILT_IN_SCRIPTS = new Set(['integrator', 'confirmMerge', 'pollPr', 'overrideMerge', 'respondThreads']);
   // Engine-handled scripts that need no role binding at all — skip them from the coverage check.
   const ROLE_FREE_SCRIPTS = new Set(['cleanupWorktree']);
   const ids = new Set<string>();

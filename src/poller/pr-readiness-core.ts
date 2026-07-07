@@ -441,7 +441,7 @@ function isBot(user: { login: string; type?: string } | null | undefined): boole
   return user?.type === 'Bot';
 }
 
-const GITHUB_CHECK_ROLLUP_UNAVAILABLE = 'GitHub check rollup unavailable (re-polling for checks)';
+export const GITHUB_CHECK_ROLLUP_UNAVAILABLE = 'GitHub check rollup unavailable (re-polling for checks)';
 
 export function collectCiChecks(
   items: UnknownCheckNode[],
@@ -508,14 +508,16 @@ function requireGraphqlArray(value: unknown, context: string, path: string): unk
   return value;
 }
 
-function mapReviewThreads(raw: unknown): FetchedReviewThread[] {
+function mapReviewThreads(raw: unknown): { threads: FetchedReviewThread[]; hasNextPage: boolean } {
   const context = 'reviewThreads';
   const root = requireGraphqlRecord(unwrapGraphqlData(raw), context, 'root');
   const repository = requireGraphqlRecord(root['repository'], context, 'repository');
   const pullRequest = requireGraphqlRecord(repository['pullRequest'], context, 'repository.pullRequest');
   const reviewThreads = requireGraphqlRecord(pullRequest['reviewThreads'], context, 'repository.pullRequest.reviewThreads');
   const nodes = requireGraphqlArray(reviewThreads['nodes'], context, 'repository.pullRequest.reviewThreads.nodes');
-  return nodes.flatMap((node): FetchedReviewThread[] => {
+  const pageInfo = asRecord(reviewThreads['pageInfo']);
+  const hasNextPage = pageInfo?.['hasNextPage'] === true;
+  return { threads: nodes.flatMap((node): FetchedReviewThread[] => {
     const thread = asRecord(node);
     if (!thread) return [];
     const comments = asRecord(thread.comments);
@@ -552,7 +554,7 @@ function mapReviewThreads(raw: unknown): FetchedReviewThread[] {
         };
       }),
     }];
-  });
+  }), hasNextPage };
 }
 
 function splitRepo(repo: string): { owner: string; name: string } {
@@ -561,11 +563,11 @@ function splitRepo(repo: string): { owner: string; name: string } {
   return { owner, name };
 }
 
-function fetchReviewThreads(repo: string, prNumber: number, execGh: ExecGhFn): FetchedReviewThread[] {
+function fetchReviewThreads(repo: string, prNumber: number, execGh: ExecGhFn): { threads: FetchedReviewThread[]; hasNextPage: boolean } {
   const { owner, name } = splitRepo(repo);
   const raw = execGh([
     'api', 'graphql',
-    '-f', 'query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){nodes{id,isResolved,isOutdated,path,line,originalLine,comments(first:100){nodes{body,url,line,originalLine,author{login}}}}}}}}',
+    '-f', 'query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){reviewThreads(first:100){pageInfo{hasNextPage}nodes{id,isResolved,isOutdated,path,line,originalLine,comments(first:100){nodes{body,url,line,originalLine,author{login}}}}}}}}',
     '-f', `owner=${owner}`,
     '-f', `name=${name}`,
     '-F', `number=${prNumber}`,
@@ -579,7 +581,7 @@ function mapRequiredCheckNames(raw: unknown): Set<string> {
   const root = requireGraphqlRecord(unwrapGraphqlData(raw), context, 'root');
   const repository = requireGraphqlRecord(root['repository'], context, 'repository');
   const pullRequest = requireGraphqlRecord(repository['pullRequest'], context, 'repository.pullRequest');
-  if (pullRequest['statusCheckRollup'] === null) return new Set<string>();
+  if (pullRequest['statusCheckRollup'] === null) throw new Error(GITHUB_CHECK_ROLLUP_UNAVAILABLE);
   const rollup = requireGraphqlRecord(pullRequest['statusCheckRollup'], context, 'repository.pullRequest.statusCheckRollup');
   const contexts = requireGraphqlRecord(rollup['contexts'], context, 'repository.pullRequest.statusCheckRollup.contexts');
   const nodes = requireGraphqlArray(contexts['nodes'], context, 'repository.pullRequest.statusCheckRollup.contexts.nodes');
@@ -668,7 +670,10 @@ type ReviewThreadCollection = {
 };
 
 function collectReviewThreads(input: PrReadinessInput, prNumber: number, execGh: ExecGhFn): ReviewThreadCollection {
-  const threads = input.includeReviewThreads === false ? [] : fetchReviewThreads(input.repo, prNumber, execGh);
+  const fetched = input.includeReviewThreads === false
+    ? { threads: [], hasNextPage: false }
+    : fetchReviewThreads(input.repo, prNumber, execGh);
+  const threads = fetched.threads;
   const unresolved = threads
     .filter((thread) => !thread.item.isResolved && !thread.item.isOutdated)
     .map((thread) => thread.item);
@@ -676,7 +681,8 @@ function collectReviewThreads(input: PrReadinessInput, prNumber: number, execGh:
     reviewThreads: {
       included: input.includeReviewThreads !== false,
       unresolvedCount: unresolved.length,
-      items: unresolved.slice(0, 20),
+      items: unresolved,
+      ...(fetched.hasNextPage ? { truncated: true } : {}),
     },
     staleThreadEvidence: threads
       .filter((thread) => thread.item.isResolved || thread.item.isOutdated)
@@ -1087,6 +1093,7 @@ export type PrReadinessResult = {
     included: boolean;
     unresolvedCount: number;
     items: ReviewThread[];
+    truncated?: true;
   };
   providerState: ReturnType<typeof providerState>;
   sonar: {

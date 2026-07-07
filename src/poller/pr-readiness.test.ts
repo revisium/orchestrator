@@ -63,12 +63,13 @@ function makeFullResponses(
   return fn;
 }
 
-function reviewThreadsResponse(nodes: unknown[]) {
+function reviewThreadsResponse(nodes: unknown[], opts: { hasNextPage?: boolean } = {}) {
   return {
     data: {
       repository: {
         pullRequest: {
           reviewThreads: {
+            pageInfo: { hasNextPage: opts.hasNextPage === true },
             nodes,
           },
         },
@@ -1799,12 +1800,14 @@ test('fetchRequiredCheckNames: returns only isRequired contexts, mapping CheckRu
   assert.deepEqual([...required].sort(), ['Required checks', 'Verify']);
 });
 
-test('fetchRequiredCheckNames: empty/missing rollup → empty set (caller applies fail-safe)', () => {
+test('fetchRequiredCheckNames: empty complete rollup returns empty set', () => {
   const execGh: ExecGhFn = () => JSON.stringify(requiredChecksResponse([]));
   assert.equal(fetchRequiredCheckNames('owner/repo', 42, execGh).size, 0);
+});
 
+test('fetchRequiredCheckNames: null rollup throws so callers treat required-check data as unavailable', () => {
   const nullRollup: ExecGhFn = () => JSON.stringify({ data: { repository: { pullRequest: { statusCheckRollup: null } } } });
-  assert.equal(fetchRequiredCheckNames('owner/repo', 42, nullRollup).size, 0);
+  assert.throws(() => fetchRequiredCheckNames('owner/repo', 42, nullRollup), /GitHub check rollup unavailable/);
 });
 
 test('fetchRequiredCheckNames: non-JSON gh output throws so pollPr can classify the fetch failure', () => {
@@ -1840,6 +1843,42 @@ test('#233: collectPrReadiness correctly collects unresolved threads from data-w
     readiness.feedback.developerFixes.some((f) => f.source === 'review_thread'),
     'review_thread finding must appear in developerFixes',
   );
+});
+
+test('#279: collectPrReadiness carries all fetched unresolved threads beyond the old compact limit', async () => {
+  const terminalView = prViewResponse([checkRun('CI', 'COMPLETED', 'SUCCESS')], { number: 42, state: 'OPEN' });
+  const nodes = Array.from({ length: 21 }, (_, index) => reviewThreadNode({ id: `thread-${index + 1}` }));
+  const execGh = makeFullResponses(
+    terminalView,
+    [],
+    [],
+    [],
+    null,
+    reviewThreadsResponse(nodes),
+  );
+
+  const readiness = await collectPrReadiness({ repo: 'owner/repo', prNumber: 42, includeReviewThreads: true }, execGh);
+
+  assert.equal(readiness.reviewThreads.items.length, 21, 'override path must see every fetched unresolved thread');
+  assert.equal(readiness.reviewThreads.unresolvedCount, 21);
+  assert.equal(readiness.reviewThreads.truncated, undefined);
+});
+
+test('#279: collectPrReadiness marks paginated review thread data incomplete', async () => {
+  const terminalView = prViewResponse([checkRun('CI', 'COMPLETED', 'SUCCESS')], { number: 42, state: 'OPEN' });
+  const execGh = makeFullResponses(
+    terminalView,
+    [],
+    [],
+    [],
+    null,
+    reviewThreadsResponse([reviewThreadNode()], { hasNextPage: true }),
+  );
+
+  const readiness = await collectPrReadiness({ repo: 'owner/repo', prNumber: 42, includeReviewThreads: true }, execGh);
+
+  assert.equal(readiness.reviewThreads.items.length, 1);
+  assert.equal(readiness.reviewThreads.truncated, true, 'override path must hard-refuse incomplete thread pages');
 });
 
 test('#233: resolved and outdated threads are filtered out; only unresolved non-outdated count', async () => {

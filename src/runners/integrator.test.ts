@@ -13,6 +13,7 @@ import {
   stubIntegrate,
   preflightLive,
   pollPr,
+  overrideMerge,
   mergeSignal,
   respondThreads,
   triageForRespondThreads,
@@ -22,11 +23,12 @@ import {
   type IntegratorInput,
   type IntegratorDeps,
   type PollPrDeps,
+  type OverrideMergeDeps,
   type PollPrReadiness,
   type Triage,
   type ExecFn,
 } from './integrator.js';
-import type { ExecGhFn } from '../poller/pr-readiness.js';
+import { GITHUB_CHECK_ROLLUP_UNAVAILABLE, type ExecGhFn } from '../poller/pr-readiness.js';
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -1745,8 +1747,15 @@ const MERGE_INPUT: IntegratorInput = {
 
 // Mirrors REAL gh: no `merged` field — `state` (OPEN|MERGED|CLOSED) is the merged indicator. The
 // integrator opens PRs as drafts, so `isDraft` gates whether confirmMerge must `gh pr ready` first.
-function prView(state: string, mergeStateStatus: string, isDraft = false, number = 7, closingIssuesReferences?: unknown[]): string {
-  return JSON.stringify({ number, url: `https://gh/pr/${number}`, state, isDraft, mergeStateStatus, closingIssuesReferences });
+function prView(
+  state: string,
+  mergeStateStatus: string,
+  isDraft = false,
+  number = 7,
+  closingIssuesReferences?: unknown[],
+  mergeable = 'MERGEABLE',
+): string {
+  return JSON.stringify({ number, url: `https://gh/pr/${number}`, state, isDraft, mergeStateStatus, mergeable, closingIssuesReferences });
 }
 
 /** Deps for confirmMerge: a git that reports a github origin, plus the supplied scripted gh. */
@@ -1881,6 +1890,27 @@ test('confirmMerge: GitHub head guard failure blocks instead of merging a change
   assert.equal(calls.filter((a) => a[1] === 'view').length, 1, 'does not report success after a guarded merge failure');
 });
 
+test('confirmMerge: override-accepted advisory mergeability still uses the head guard', async () => {
+  const calls: string[][] = [];
+  let views = 0;
+  const gh: ExecGhFn = (a) => {
+    calls.push(a);
+    if (a[1] === 'view') {
+      views++;
+      return views === 1
+        ? prView('OPEN', 'UNSTABLE', false, 7, undefined, 'MERGEABLE')
+        : prView('MERGED', 'UNSTABLE', false, 7, undefined, 'MERGEABLE');
+    }
+    return '';
+  };
+
+  const r = await confirmMerge({ ...MERGE_INPUT, mergeReadiness: { headSha: 'override-head', override: { accepted: true } } }, confirmDeps(gh));
+
+  assert.equal('merged' in r && r.merged, true);
+  const mergeCall = calls.find((a) => a[1] === 'merge');
+  assert.deepEqual(mergeCall?.slice(-2), ['--match-head-commit', 'override-head']);
+});
+
 test('confirmMerge: OPEN but not CLEAN (red CI / conflicts) → blocked, no merge', async () => {
   const calls: string[][] = [];
   const gh: ExecGhFn = (a) => { calls.push(a); return prView('OPEN', 'BLOCKED'); };
@@ -1944,6 +1974,247 @@ function pollDeps(collect: PollPrDeps['collect'], extra: Partial<PollPrDeps> = {
     ...extra,
   };
 }
+
+const OVERRIDE_NOTE = 'operator accepts advisory blockers';
+const OVERRIDE_INPUT: IntegratorInput = {
+  ...POLL_INPUT,
+  gateResolution: {
+    outcome: 'override_merge',
+    note: OVERRIDE_NOTE,
+    resolvedBy: 'human',
+    inboxId: 'inbox-override',
+    trustedGateHeadSha: 'sha5',
+    mergeOverrideAudit: {
+      threadIds: ['T1'],
+      actor: 'human',
+      reason: 'advisory only',
+      risk: 'known review concern may remain',
+      verificationResponsibility: 'operator verified locally',
+      headSha: 'sha5',
+    },
+  },
+};
+
+function overrideDeps(collect: OverrideMergeDeps['collect'], calls: string[][] = [], extra: Partial<OverrideMergeDeps> = {}): OverrideMergeDeps {
+  const execGit: ExecFn = (args) => (args[0] === 'remote' && args[1] === 'get-url' ? 'git@github.com:e2e/repo.git\n' : '');
+  return {
+    execGit,
+    execGh: captureGh(calls),
+    resolveTaskCwd: makeResolveTaskCwd(),
+    resolveRunCwd: makeResolveRunCwd(),
+    collect,
+    ...extra,
+  };
+}
+
+test('overrideMerge: advisory review thread is replied, resolved, and carried as override evidence', async () => {
+  const calls: string[][] = [];
+  const collect = async (): Promise<PollPrReadiness> =>
+    readiness({
+      threads: [{ id: 'T1', isResolved: false, isOutdated: false, body: 'please revisit', path: 'a.ts', line: 3, author: 'reviewer' }],
+    });
+
+  const r = await overrideMerge(OVERRIDE_INPUT, overrideDeps(collect, calls));
+
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) {
+    assert.equal(r.verdict, 'clean');
+    assert.equal(r.override.accepted, true);
+    assert.equal(r.override.actor, 'human');
+    assert.equal(r.override.source.inboxId, 'inbox-override');
+    assert.deepEqual(r.override.facts.map((fact) => fact.kind), ['review_thread']);
+    assert.equal(r.override.replied, 1);
+    assert.equal(r.override.resolved, 1);
+    assert.ok(calls.some((call) => call.some((arg) => arg === `body=merged by operator override: ${OVERRIDE_NOTE}`)));
+    assert.ok(calls.some((call) => call.some((arg) => arg === 'id=T1') && call.some((arg) => arg.includes('resolveReviewThread'))));
+  }
+});
+
+test('overrideMerge: non-required failed check is advisory and allowed', async () => {
+  const collect = async (): Promise<PollPrReadiness> =>
+    readiness({
+      fail: ['SonarCloud'],
+      list: [{ name: 'Verify', result: 'SUCCESS' }, { name: 'SonarCloud', result: 'FAILURE' }],
+    });
+
+  const r = await overrideMerge(OVERRIDE_INPUT, overrideDeps(collect, [], { requiredChecks: () => new Set(['Verify']) }));
+
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) {
+    assert.equal(r.verdict, 'clean');
+    assert.equal(r.override.accepted, true);
+    assert.deepEqual(r.override.facts.map((fact) => fact.kind), ['non_required_check_failed']);
+  }
+});
+
+test('overrideMerge: required failed check refuses override without replying to threads', async () => {
+  const calls: string[][] = [];
+  const collect = async (): Promise<PollPrReadiness> =>
+    readiness({
+      fail: ['Verify'],
+      list: [{ name: 'Verify', result: 'FAILURE' }],
+      threads: [{ id: 'T1', isResolved: false, isOutdated: false, body: 'please revisit' }],
+    });
+
+  const r = await overrideMerge(OVERRIDE_INPUT, overrideDeps(collect, calls, { requiredChecks: () => new Set(['Verify']) }));
+
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) {
+    assert.equal(r.verdict, 'recheck');
+    assert.equal(r.override.accepted, false);
+    assert.deepEqual(r.override.facts.map((fact) => fact.kind), ['required_check_failed']);
+    assert.equal(calls.length, 0, 'hard blockers are refused before any thread mutation');
+  }
+});
+
+test('overrideMerge: failed check plus unavailable required-check lookup refuses without thread mutation', async () => {
+  const calls: string[][] = [];
+  const collect = async (): Promise<PollPrReadiness> =>
+    readiness({
+      fail: ['Verify'],
+      list: [{ name: 'Verify', result: 'FAILURE' }],
+      threads: [{ id: 'T1', isResolved: false, isOutdated: false, body: 'please revisit' }],
+    });
+
+  const r = await overrideMerge(
+    OVERRIDE_INPUT,
+    overrideDeps(collect, calls, { requiredChecks: () => { throw new Error(GITHUB_CHECK_ROLLUP_UNAVAILABLE); } }),
+  );
+
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) {
+    assert.equal(r.verdict, 'recheck');
+    assert.equal(r.override.accepted, false);
+    assert.deepEqual(r.override.facts.map((fact) => fact.kind), ['required_check_names_unavailable']);
+    assert.ok(r.override.facts.some((fact) => fact.evidence?.includes(GITHUB_CHECK_ROLLUP_UNAVAILABLE)));
+    assert.equal(calls.length, 0, 'required-check uncertainty is refused before thread mutation or merge calls');
+  }
+});
+
+test('overrideMerge: moved head refuses override', async () => {
+  const collect = async (): Promise<PollPrReadiness> => readiness({ headSha: 'new-head' });
+
+  const r = await overrideMerge(OVERRIDE_INPUT, overrideDeps(collect));
+
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) {
+    assert.equal(r.verdict, 'recheck');
+    assert.equal(r.override.accepted, false);
+    assert.deepEqual(r.override.facts.map((fact) => fact.kind), ['head_moved']);
+    assert.ok(r.evidence.some((item) => item.includes('approved head sha5 no longer matches fresh head new-head')));
+  }
+});
+
+test('overrideMerge: old trusted gate artifact refuses even when operator audit and fresh head match a newer head', async () => {
+  const calls: string[][] = [];
+  const input: IntegratorInput = {
+    ...OVERRIDE_INPUT,
+    gateResolution: {
+      ...(OVERRIDE_INPUT.gateResolution as Record<string, unknown>),
+      trustedGateHeadSha: 'old-head',
+      mergeOverrideAudit: {
+        ...((OVERRIDE_INPUT.gateResolution as Record<string, unknown>)['mergeOverrideAudit'] as Record<string, unknown>),
+        headSha: 'new-head',
+      },
+    },
+  };
+  const collect = async (): Promise<PollPrReadiness> => readiness({ headSha: 'new-head' });
+
+  const r = await overrideMerge(input, overrideDeps(collect, calls));
+
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) {
+    assert.equal(r.verdict, 'recheck');
+    assert.equal(r.override.accepted, false);
+    assert.deepEqual(r.override.facts.map((fact) => fact.kind), ['audit_head_mismatch', 'head_moved']);
+    assert.equal(calls.length, 0, 'refused override must not mutate review threads');
+  }
+});
+
+test('overrideMerge: unavailable check rollup is a hard refusal, not checks_none_registered', async () => {
+  const collect = async (): Promise<PollPrReadiness> =>
+    readiness({
+      pending: [GITHUB_CHECK_ROLLUP_UNAVAILABLE],
+      list: [],
+      evidence: [GITHUB_CHECK_ROLLUP_UNAVAILABLE],
+    });
+
+  const r = await overrideMerge(OVERRIDE_INPUT, overrideDeps(collect));
+
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) {
+    assert.equal(r.verdict, 'recheck');
+    assert.equal(r.override.accepted, false);
+    assert.deepEqual(r.override.facts.map((fact) => fact.kind), ['check_rollup_unavailable']);
+  }
+});
+
+test('overrideMerge: true no registered checks stays advisory', async () => {
+  const collect = async (): Promise<PollPrReadiness> =>
+    readiness({
+      pending: [],
+      list: [],
+      evidence: ['No check rollup entries are registered yet.'],
+    });
+
+  const r = await overrideMerge(OVERRIDE_INPUT, overrideDeps(collect));
+
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) {
+    assert.equal(r.verdict, 'clean');
+    assert.equal(r.override.accepted, true);
+    assert.deepEqual(r.override.facts.map((fact) => fact.kind), ['checks_none_registered']);
+  }
+});
+
+test('overrideMerge: incomplete review thread page refuses override', async () => {
+  const collect = async (): Promise<PollPrReadiness> => ({
+    ...readiness({
+      threads: [{ id: 'T1', isResolved: false, isOutdated: false, body: 'please revisit' }],
+    }),
+    reviewThreads: {
+      items: [{ id: 'T1', isResolved: false, isOutdated: false, body: 'please revisit' }],
+      unresolvedCount: 100,
+      truncated: true,
+    },
+  });
+
+  const r = await overrideMerge(OVERRIDE_INPUT, overrideDeps(collect));
+
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) {
+    assert.equal(r.verdict, 'recheck');
+    assert.equal(r.override.accepted, false);
+    assert.deepEqual(r.override.facts.map((fact) => fact.kind), ['review_threads_incomplete']);
+  }
+});
+
+test('overrideMerge: resolves every fetched unresolved review thread, including 21-thread payloads', async () => {
+  const calls: string[][] = [];
+  const threads = Array.from({ length: 21 }, (_, index) => ({
+    id: `T${index + 1}`,
+    isResolved: false,
+    isOutdated: false,
+    body: `thread ${index + 1}`,
+    path: 'a.ts',
+    line: index + 1,
+    author: 'reviewer',
+  }));
+  const collect = async (): Promise<PollPrReadiness> => readiness({ threads });
+
+  const r = await overrideMerge(OVERRIDE_INPUT, overrideDeps(collect, calls));
+
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) {
+    assert.equal(r.verdict, 'clean');
+    assert.equal(r.override.accepted, true);
+    assert.equal(r.override.resolved, 21);
+    const resolvedIds = calls
+      .filter((call) => call.some((arg) => arg.includes('resolveReviewThread')))
+      .map((call) => call.find((arg) => arg.startsWith('id='))?.slice('id='.length));
+    assert.deepEqual(resolvedIds, threads.map((thread) => thread.id));
+  }
+});
 
 test('pollPr: unresolved review threads win over CI failures → review_changes', async () => {
   const collect = async (): Promise<PollPrReadiness> =>

@@ -17,10 +17,13 @@ import type { ExecGhFn } from '../poller/pr-readiness.js';
 import {
   collectPrReadiness,
   fetchRequiredCheckNames,
+  GITHUB_CHECK_ROLLUP_UNAVAILABLE,
   type PrReadinessNextAction,
+  type PrReadinessResult,
   type PrReadinessVerdict,
   type ReviewThread,
 } from '../poller/pr-readiness-core.js';
+import type { MergeOverrideAudit } from '../control-plane/merge-override-audit.js';
 import { RunService } from '../revisium/run.service.js';
 import {
   hasClosingIssueReference,
@@ -87,7 +90,7 @@ export type IntegratorInput = {
   triage?: unknown;
   gateResolution?: unknown;
 
-  mergeReadiness?: { headSha: string };
+  mergeReadiness?: { headSha: string; override?: { accepted?: boolean } };
 };
 
 export type IntegratorOutput = {
@@ -153,6 +156,15 @@ function prAuthorLogin(author: PrListEntry['author']): string | undefined {
     return author.login.trim();
   }
   return undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  return value as Record<string, unknown>;
+}
+
+function nonBlank(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
 }
 
 function matchingOpenPr(
@@ -628,6 +640,7 @@ type PrMergeView = {
   state: string;
   isDraft: boolean;
   mergeStateStatus: string;
+  mergeable?: string;
   closingIssuesReferences?: unknown[];
 };
 
@@ -645,7 +658,7 @@ export async function confirmMerge(
   const issueAction = resolvedIssueAction(input.issueRef, input.issueAction);
 
   const view = (): PrMergeView => {
-    const raw = gh(['pr', 'view', branch, '--repo', ownerRepo, '--json', 'number,url,state,isDraft,mergeStateStatus,closingIssuesReferences']);
+    const raw = gh(['pr', 'view', branch, '--repo', ownerRepo, '--json', 'number,url,state,isDraft,mergeStateStatus,mergeable,closingIssuesReferences']);
     try {
       return JSON.parse(raw) as PrMergeView;
     } catch {
@@ -659,7 +672,10 @@ export async function confirmMerge(
   if (pr.state !== 'OPEN') {
     return { needsHuman: true, lesson: `PR #${pr.number} is ${pr.state} (not OPEN) and not merged — resolve manually` };
   }
-  if (pr.mergeStateStatus !== 'CLEAN') {
+  const overrideAccepted = input.mergeReadiness?.override?.accepted === true;
+  const mergeable = pr.mergeable ?? (pr.mergeStateStatus === 'CLEAN' ? 'MERGEABLE' : undefined);
+  const mergeability = overrideAccepted ? mergeSignal(pr.mergeStateStatus, mergeable) : pr.mergeStateStatus === 'CLEAN' ? 'clean' : 'blocked';
+  if (mergeability !== 'clean') {
     return {
       needsHuman: true,
       lesson:
@@ -748,12 +764,14 @@ export type PollPrDeps = IntegratorDeps & {
 export type PollPrReadiness = {
   pr: { number: number | null; headSha: string };
   checks: { pending: string[]; fail: string[]; list: Array<{ name: string; result: string }> };
-  reviewThreads: { items: ReviewThread[] };
+  reviewThreads: { items: ReviewThread[]; unresolvedCount?: number; truncated?: true };
   readinessVerdict?: PrReadinessVerdict;
   nextAction?: PrReadinessNextAction;
   evidence: string[];
   mergeStateStatus?: string;
   mergeable?: string;
+  draft?: boolean;
+  feedback?: PrReadinessResult['feedback'];
 };
 
 function defaultCollect(
@@ -768,12 +786,18 @@ function defaultCollect(
     (r): PollPrReadiness => ({
       pr: { number: r.pr.number, headSha: r.pr.headSha },
       checks: { pending: r.checks.pending, fail: r.checks.fail, list: r.checks.list },
-      reviewThreads: { items: r.reviewThreads.items },
+      reviewThreads: {
+        items: r.reviewThreads.items,
+        unresolvedCount: r.reviewThreads.unresolvedCount,
+        ...(r.reviewThreads.truncated ? { truncated: true } : {}),
+      },
       readinessVerdict: r.verdict,
       nextAction: r.nextAction,
       evidence: r.evidence,
       mergeStateStatus: r.pr.mergeState,
       mergeable: r.ciSummary.mergeable,
+      draft: r.pr.draft,
+      feedback: r.feedback,
     }),
   );
 }
@@ -843,6 +867,400 @@ export function mergeSignal(mergeStateStatus: string | undefined, mergeable: str
   if (mg === 'CONFLICTING' || ms === 'DIRTY' || ms === 'BLOCKED' || ms === 'BEHIND') return 'blocked';
   if (mg === 'MERGEABLE' && (ms === 'CLEAN' || ms === 'UNSTABLE' || ms === 'HAS_HOOKS')) return 'clean';
   return 'unknown';
+}
+
+export type MergeOverrideFact = {
+  kind: string;
+  severity: 'hard' | 'advisory';
+  summary: string;
+  evidence?: string;
+  name?: string;
+  threadId?: string;
+};
+
+export type MergeOverrideOutput = PrFeedback & {
+  override: {
+    accepted: boolean;
+    actor: string;
+    note: string;
+    audit?: {
+      reason: string;
+      risk: string;
+      verificationResponsibility: string;
+      headSha: string;
+    };
+    source: { gate: 'mergeGate'; inboxId: string };
+    facts: MergeOverrideFact[];
+    replied: number;
+    resolved: number;
+    reason?: string;
+  };
+};
+
+export type OverrideMergeDeps = IntegratorDeps & {
+  collect?: PollPrDeps['collect'];
+  requiredChecks?: PollPrDeps['requiredChecks'];
+};
+
+type MergeOverrideGate = {
+  note: string;
+  audit: MergeOverrideAudit;
+  actor: string;
+  trustedHeadSha?: string;
+  source: { gate: 'mergeGate'; inboxId: string };
+};
+
+function mergeOverrideGate(input: IntegratorInput): MergeOverrideGate | IntegratorBlocked {
+  const resolution = asRecord(input.gateResolution);
+  const audit = asRecord(resolution?.['mergeOverrideAudit']) as MergeOverrideAudit | undefined;
+  const note = nonBlank(resolution?.['note']);
+  if (!resolution || !note || !audit) {
+    return {
+      needsHuman: true,
+      lesson: 'override_merge requires a non-empty note and mergeOverrideAudit from the merge gate',
+    };
+  }
+  const actor = nonBlank(audit.actor) ?? nonBlank(resolution['resolvedBy']) ?? 'operator';
+  const trustedHeadSha = nonBlank(resolution['trustedGateHeadSha']);
+  return {
+    note,
+    audit,
+    actor,
+    ...(trustedHeadSha ? { trustedHeadSha } : {}),
+    source: { gate: 'mergeGate', inboxId: nonBlank(resolution['inboxId']) ?? '' },
+  };
+}
+
+function prReviewThreads(readiness: PollPrReadiness): PrReviewThread[] {
+  return readiness.reviewThreads.items.map((thread) => ({
+    threadId: thread.id,
+    path: thread.path,
+    line: thread.line,
+    author: thread.author,
+    body: thread.body,
+  }));
+}
+
+function checkFact(severity: MergeOverrideFact['severity'], kind: string, name: string, result: string): MergeOverrideFact {
+  return { severity, kind, name, summary: `${name}: ${result}`, evidence: result };
+}
+
+function reviewThreadFact(thread: ReviewThread): MergeOverrideFact {
+  return {
+    severity: 'advisory',
+    kind: 'review_thread',
+    threadId: thread.id,
+    summary: thread.body,
+    evidence: [thread.path, thread.line].filter((item) => item !== undefined).join(':') || thread.url || thread.id,
+  };
+}
+
+function feedbackEvidence(item: { evidence?: string; location?: string; author?: string; summary?: string }): string | undefined {
+  return item.evidence ?? item.location ?? item.author ?? item.summary;
+}
+
+function classifyFeedbackFacts(readiness: PollPrReadiness): { hard: MergeOverrideFact[]; advisory: MergeOverrideFact[] } {
+  const hard: MergeOverrideFact[] = [];
+  const advisory: MergeOverrideFact[] = [];
+  const feedback = readiness.feedback;
+  if (!feedback) return { hard, advisory };
+
+  for (const fix of feedback.developerFixes) {
+    if (fix.source === 'ci' || fix.source === 'review_thread') continue;
+    const fact: MergeOverrideFact = {
+      severity: 'advisory',
+      kind: fix.source,
+      summary: fix.summary,
+      evidence: feedbackEvidence(fix),
+    };
+    if (fix.source === 'human_review') hard.push({ ...fact, severity: 'hard' });
+    else advisory.push(fact);
+  }
+  for (const question of feedback.reviewerQuestions) {
+    hard.push({
+      severity: 'hard',
+      kind: 'reviewer_question',
+      summary: question.summary,
+      evidence: feedbackEvidence(question),
+    });
+  }
+  for (const decision of feedback.humanDecisions) {
+    hard.push({
+      severity: 'hard',
+      kind: decision.source,
+      summary: decision.summary,
+    });
+  }
+  for (const wait of feedback.providerWait) {
+    advisory.push({
+      severity: 'advisory',
+      kind: `provider_wait:${wait.provider}`,
+      summary: wait.evidence,
+      evidence: wait.reason,
+    });
+  }
+  return { hard, advisory };
+}
+
+function factsFromRequiredChecks(
+  readiness: PollPrReadiness,
+  required: ReadonlySet<string>,
+): { hard: MergeOverrideFact[]; advisory: MergeOverrideFact[] } {
+  const hard: MergeOverrideFact[] = [];
+  const advisory: MergeOverrideFact[] = [];
+  for (const check of readiness.checks.list) {
+    const isRequired = required.has(check.name);
+    if (readiness.checks.fail.includes(check.name)) {
+      (isRequired ? hard : advisory).push(checkFact(isRequired ? 'hard' : 'advisory', isRequired ? 'required_check_failed' : 'non_required_check_failed', check.name, check.result));
+    }
+    if (readiness.checks.pending.includes(check.name)) {
+      (isRequired ? hard : advisory).push(checkFact(isRequired ? 'hard' : 'advisory', isRequired ? 'required_check_pending' : 'non_required_check_pending', check.name, check.result));
+    }
+  }
+  if (readiness.checks.list.length === 0) {
+    advisory.push({
+      severity: 'advisory',
+      kind: 'checks_none_registered',
+      summary: 'No registered checks were reported for the PR.',
+      evidence: 'checks: none registered',
+    });
+  }
+  return { hard, advisory };
+}
+
+function checkRollupUnavailableFact(readiness: PollPrReadiness): MergeOverrideFact | undefined {
+  const unavailable = readiness.checks.pending.includes(GITHUB_CHECK_ROLLUP_UNAVAILABLE)
+    || readiness.evidence.some((item) => item.includes(GITHUB_CHECK_ROLLUP_UNAVAILABLE));
+  if (!unavailable) return undefined;
+  return {
+    severity: 'hard',
+    kind: 'check_rollup_unavailable',
+    summary: 'GitHub check rollup is unavailable; override cannot distinguish pending checks from no registered checks.',
+    evidence: GITHUB_CHECK_ROLLUP_UNAVAILABLE,
+  };
+}
+
+function reviewThreadsIncompleteFact(readiness: PollPrReadiness): MergeOverrideFact | undefined {
+  if (readiness.reviewThreads.truncated !== true) return undefined;
+  return {
+    severity: 'hard',
+    kind: 'review_threads_incomplete',
+    summary: 'Review thread data is incomplete; override cannot safely resolve every unresolved thread.',
+    evidence: `unresolvedCount=${readiness.reviewThreads.unresolvedCount ?? readiness.reviewThreads.items.length}`,
+  };
+}
+
+function mergeOverrideOutput(input: {
+  gate: MergeOverrideGate;
+  readiness?: PollPrReadiness;
+  verdict: PrFeedback['verdict'];
+  facts: MergeOverrideFact[];
+  accepted: boolean;
+  reason?: string;
+  response?: RespondThreadsOutput;
+  fallbackHeadSha?: string;
+}): MergeOverrideOutput {
+  const readiness = input.readiness;
+  const evidence = [
+    ...(readiness?.evidence ?? []),
+    ...(readiness ? readinessEvidence(readiness) : []),
+    ...input.facts.map((fact) => `${fact.severity} ${fact.kind}: ${fact.summary}`),
+    input.reason,
+    `PR headSha=${readiness?.pr.headSha ?? input.fallbackHeadSha ?? input.gate.audit.headSha}`,
+    `overrideMerge verdict=${input.verdict}`,
+  ].filter((item): item is string => typeof item === 'string' && item.length > 0);
+  return {
+    prNumber: readiness?.pr.number ?? null,
+    headSha: readiness?.pr.headSha ?? input.fallbackHeadSha ?? input.gate.audit.headSha,
+    evidence,
+    verdict: input.verdict,
+    ciFailures: readiness ? ciFailuresFrom(readiness) : [],
+    reviewThreads: readiness ? prReviewThreads(readiness) : [],
+    ...(readiness?.mergeStateStatus !== undefined ? { mergeStateStatus: readiness.mergeStateStatus } : {}),
+    ...(readiness?.mergeable !== undefined ? { mergeable: readiness.mergeable } : {}),
+    override: {
+      accepted: input.accepted,
+      actor: input.gate.actor,
+      note: input.gate.note,
+      audit: {
+        reason: input.gate.audit.reason,
+        risk: input.gate.audit.risk,
+        verificationResponsibility: input.gate.audit.verificationResponsibility,
+        headSha: input.gate.audit.headSha,
+      },
+      source: input.gate.source,
+      facts: input.facts,
+      replied: input.response?.replied ?? 0,
+      resolved: input.response?.resolved ?? 0,
+      ...(input.reason ? { reason: input.reason } : {}),
+    },
+  };
+}
+
+function hardMergeabilityFact(readiness: PollPrReadiness): MergeOverrideFact | undefined {
+  const signal = mergeSignal(readiness.mergeStateStatus, readiness.mergeable);
+  if (signal === 'clean') return undefined;
+  return {
+    severity: 'hard',
+    kind: signal === 'blocked' ? 'mergeability_blocked' : 'mergeability_unknown',
+    summary: `mergeStateStatus=${readiness.mergeStateStatus ?? ''} mergeable=${readiness.mergeable ?? ''}`,
+    evidence: `mergeStateStatus=${readiness.mergeStateStatus ?? ''}; mergeable=${readiness.mergeable ?? ''}`,
+  };
+}
+
+function movedHeadFact(readiness: PollPrReadiness, gate: MergeOverrideGate): MergeOverrideFact | undefined {
+  const approvedHeadSha = gate.trustedHeadSha;
+  if (!approvedHeadSha) {
+    return {
+      severity: 'hard',
+      kind: 'trusted_gate_head_unavailable',
+      summary: 'Trusted merge gate head is unavailable.',
+      evidence: `audit=${gate.audit.headSha}; fresh=${readiness.pr.headSha}`,
+    };
+  }
+  if (readiness.pr.headSha === approvedHeadSha) return undefined;
+  return {
+    severity: 'hard',
+    kind: 'head_moved',
+    summary: `approved head ${approvedHeadSha} no longer matches fresh head ${readiness.pr.headSha}`,
+    evidence: `approved=${approvedHeadSha}; audit=${gate.audit.headSha}; fresh=${readiness.pr.headSha}`,
+  };
+}
+
+function auditHeadMismatchFact(gate: MergeOverrideGate): MergeOverrideFact | undefined {
+  if (!gate.trustedHeadSha) return undefined;
+  if (gate.audit.headSha === gate.trustedHeadSha) return undefined;
+  return {
+    severity: 'hard',
+    kind: 'audit_head_mismatch',
+    summary: `audit head ${gate.audit.headSha} does not match trusted merge gate head ${gate.trustedHeadSha}`,
+    evidence: `audit=${gate.audit.headSha}; approved=${gate.trustedHeadSha}`,
+  };
+}
+
+async function classifyMergeOverrideFacts(
+  readiness: PollPrReadiness,
+  gate: MergeOverrideGate,
+  ownerRepo: string,
+  execGh: ExecGhFn,
+  requiredChecks: NonNullable<OverrideMergeDeps['requiredChecks']>,
+): Promise<{ hard: MergeOverrideFact[]; advisory: MergeOverrideFact[] }> {
+  const hard: MergeOverrideFact[] = [];
+  const advisory: MergeOverrideFact[] = [];
+
+  if (readiness.draft === true) hard.push({ severity: 'hard', kind: 'draft_pr', summary: 'PR is still draft.' });
+  const auditMismatch = auditHeadMismatchFact(gate);
+  if (auditMismatch) hard.push(auditMismatch);
+  const moved = movedHeadFact(readiness, gate);
+  if (moved) hard.push(moved);
+  const mergeability = hardMergeabilityFact(readiness);
+  if (mergeability) hard.push(mergeability);
+  const unavailableRollup = checkRollupUnavailableFact(readiness);
+  if (unavailableRollup) hard.push(unavailableRollup);
+  const incompleteThreads = reviewThreadsIncompleteFact(readiness);
+  if (incompleteThreads) hard.push(incompleteThreads);
+
+  if (!unavailableRollup && (readiness.checks.fail.length > 0 || readiness.checks.pending.length > 0)) {
+    if (readiness.pr.number === null) {
+      hard.push({ severity: 'hard', kind: 'pr_number_unavailable', summary: 'Cannot classify required checks without a PR number.' });
+    } else {
+      try {
+        const checkFacts = factsFromRequiredChecks(readiness, requiredChecks(ownerRepo, readiness.pr.number, execGh));
+        hard.push(...checkFacts.hard);
+        advisory.push(...checkFacts.advisory);
+      } catch (err) {
+        hard.push({
+          severity: 'hard',
+          kind: 'required_check_names_unavailable',
+          summary: 'Required check names are unavailable.',
+          evidence: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  } else if (!unavailableRollup && readiness.checks.list.length === 0) {
+    const checkFacts = factsFromRequiredChecks(readiness, new Set<string>());
+    advisory.push(...checkFacts.advisory);
+  }
+
+  advisory.push(...readiness.reviewThreads.items.map(reviewThreadFact));
+  const feedbackFacts = classifyFeedbackFacts(readiness);
+  hard.push(...feedbackFacts.hard);
+  advisory.push(...feedbackFacts.advisory);
+  return { hard, advisory };
+}
+
+function overrideThreadTriage(readiness: PollPrReadiness, note: string): Triage {
+  return {
+    items: readiness.reviewThreads.items.map((thread) => ({
+      threadId: thread.id,
+      decision: 'wontfix',
+      replyText: `merged by operator override: ${note}`,
+    })),
+  };
+}
+
+export async function overrideMerge(
+  input: IntegratorInput,
+  deps: OverrideMergeDeps,
+): Promise<MergeOverrideOutput | IntegratorBlocked> {
+  const gate = mergeOverrideGate(input);
+  if ('needsHuman' in gate) return gate;
+
+  const { execGit: git, execGh: gh, resolveRunCwd } = deps;
+  const cwd = await resolveRunCwd(input.runId, input.taskId);
+  const branch = branchName(input.taskId, input.title, input.issueRef);
+  const ownerRepoResult = resolveOwnerRepo(git, cwd);
+  if ('needsHuman' in ownerRepoResult) return ownerRepoResult;
+  const { ownerRepo } = ownerRepoResult;
+
+  let readiness: PollPrReadiness;
+  try {
+    readiness = await (deps.collect ?? defaultCollect)(ownerRepo, branch, input.base, gh, input.issueRef, input.issueAction);
+  } catch (err) {
+    const fact: MergeOverrideFact = {
+      severity: 'hard',
+      kind: 'readiness_transport_degraded',
+      summary: 'Fresh override reverify could not read PR readiness.',
+      evidence: err instanceof Error ? err.message : String(err),
+    };
+    return mergeOverrideOutput({
+      gate,
+      verdict: 'recheck',
+      facts: [fact],
+      accepted: false,
+      reason: fact.summary,
+    });
+  }
+
+  if (readiness.readinessVerdict === 'merged') {
+    return mergeOverrideOutput({ gate, readiness, verdict: 'merged', facts: [], accepted: false, reason: 'PR already merged externally.' });
+  }
+  if (readiness.readinessVerdict === 'closed') {
+    const fact: MergeOverrideFact = { severity: 'hard', kind: 'pr_closed_externally', summary: 'PR is closed without being merged.' };
+    return mergeOverrideOutput({ gate, readiness, verdict: 'closed', facts: [fact], accepted: false, reason: fact.summary });
+  }
+
+  const facts = await classifyMergeOverrideFacts(readiness, gate, ownerRepo, gh, deps.requiredChecks ?? fetchRequiredCheckNames);
+  if (facts.hard.length > 0) {
+    return mergeOverrideOutput({
+      gate,
+      readiness,
+      verdict: 'recheck',
+      facts: facts.hard,
+      accepted: false,
+      reason: 'override_merge refused because hard blockers remain',
+    });
+  }
+
+  const response = await respondThreads(overrideThreadTriage(readiness, gate.note), { execGh: gh });
+  return mergeOverrideOutput({
+    gate,
+    readiness,
+    verdict: 'clean',
+    facts: facts.advisory,
+    accepted: true,
+    response,
+  });
 }
 
 export async function pollPr(
@@ -1213,6 +1631,46 @@ export class IntegratorService {
 
   runPollStub = (_input: IntegratorInput): PrFeedback => {
     return { prNumber: null, headSha: 'stub', evidence: ['stub pollPr readiness: clean'], verdict: 'clean', ciFailures: [], reviewThreads: [] };
+  };
+
+  runOverrideMerge = (input: IntegratorInput): Promise<MergeOverrideOutput | IntegratorBlocked> => {
+    const pinned = resolvePinnedGh();
+    if ('needsHuman' in pinned) {
+      console.warn(`[override-merge] ${pinned.lesson}`);
+      return Promise.resolve(pinned);
+    }
+    return overrideMerge(input, { ...this.deps, execGh: pinned.execGh });
+  };
+
+  runOverrideStub = (input: IntegratorInput): MergeOverrideOutput => {
+    const gate = mergeOverrideGate(input);
+    if ('needsHuman' in gate) {
+      return {
+        prNumber: null,
+        headSha: 'stub',
+        evidence: [gate.lesson, 'overrideMerge verdict=recheck'],
+        verdict: 'recheck',
+        ciFailures: [],
+        reviewThreads: [],
+        override: {
+          accepted: false,
+          actor: 'stub',
+          note: '',
+          source: { gate: 'mergeGate', inboxId: '' },
+          facts: [{ severity: 'hard', kind: 'override_input_missing', summary: gate.lesson }],
+          replied: 0,
+          resolved: 0,
+          reason: gate.lesson,
+        },
+      };
+    }
+    return mergeOverrideOutput({
+      gate,
+      verdict: 'clean',
+      facts: [],
+      accepted: true,
+      fallbackHeadSha: gate.audit.headSha || 'stub',
+    });
   };
 
 

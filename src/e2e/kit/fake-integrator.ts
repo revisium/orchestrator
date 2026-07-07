@@ -3,6 +3,7 @@ import {
   confirmMerge,
   preflightLive,
   pollPr,
+  overrideMerge,
   respondThreads,
   captureProducedChange,
   triageForRespondThreads,
@@ -14,6 +15,7 @@ import {
   type IntegratorInput,
   type IntegratorOutput,
   type IntegratorService,
+  type MergeOverrideOutput,
   type PrFeedback,
   type RespondThreadsOutput,
 } from '../../runners/integrator.js';
@@ -57,6 +59,25 @@ export function createFakeIntegrator(runs: RunService, execGh: ExecGhFn): Integr
       ciFailures: [],
       reviewThreads: [],
     }),
+    runOverrideMerge: (input: IntegratorInput): Promise<MergeOverrideOutput | IntegratorBlocked> =>
+      overrideMerge(input, deps),
+    runOverrideStub: (_input: IntegratorInput): MergeOverrideOutput => ({
+      prNumber: null,
+      headSha: 'stub',
+      evidence: ['stub overrideMerge readiness: clean'],
+      verdict: 'clean',
+      ciFailures: [],
+      reviewThreads: [],
+      override: {
+        accepted: true,
+        actor: 'stub',
+        note: 'stub override',
+        source: { gate: 'mergeGate', inboxId: '' },
+        facts: [],
+        replied: 0,
+        resolved: 0,
+      },
+    }),
     runRespondThreads: (input: IntegratorInput): Promise<RespondThreadsOutput | IntegratorBlocked> =>
       respondThreads(triageForRespondThreads(input), deps),
     runRespondStub: (_input: IntegratorInput): RespondThreadsOutput => ({ replied: 0, resolved: 0 }),
@@ -91,6 +112,8 @@ export function routedIntegrator(
     runCaptureProducedChange: base.runCaptureProducedChange,
     runPollPr: base.runPollPr,
     runPollStub: base.runPollStub,
+    runOverrideMerge: base.runOverrideMerge,
+    runOverrideStub: base.runOverrideStub,
     runRespondThreads: base.runRespondThreads,
     runRespondStub: base.runRespondStub,
   } as unknown as IntegratorService;

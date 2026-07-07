@@ -13,6 +13,7 @@ export const DEFAULT_PLAYBOOK_POLICY_DIAGNOSTIC_CODES = [
   'DEFAULT_POLICY_RECOVERABLE_CATCH_TERMINAL',
   'DEFAULT_POLICY_CAP_EXHAUSTION_OFFRAMP_MISSING',
   'DEFAULT_POLICY_APPROVE_REVERIFY_MISSING',
+  'DEFAULT_POLICY_OVERRIDE_MERGE_ROUTE_MISSING',
   'DEFAULT_POLICY_MERGE_READINESS_FRESHNESS_MISSING',
   'DEFAULT_POLICY_CONFIRM_MERGE_FAILURE_TERMINAL',
   'DEFAULT_POLICY_POST_MERGE_CLEANUP_MISSING',
@@ -94,6 +95,7 @@ export function validateDefaultPlaybookPolicy(
   checkProducedChangeHandoff(template, sink);
   checkPrFreshnessWiring(template, sink);
   checkApproveReverifyBeforeMerge(template, sink);
+  checkOverrideMergeRouting(template, sink);
   checkMergeConsumesFreshReadiness(template, sink);
   checkMergeGateRecheckRouting(template, sink);
   checkReviewFeedbackLoop(template, sink);
@@ -310,6 +312,73 @@ function checkApproveReverifyBeforeMerge(template: Template, sink: PolicySink): 
   });
 }
 
+function checkOverrideMergeRouting(template: Template, sink: PolicySink): void {
+  expectRoute(template, sink, {
+    code: 'DEFAULT_POLICY_OVERRIDE_MERGE_ROUTE_MISSING',
+    nodeId: 'mergeGate',
+    verdict: 'override_merge',
+    target: 'overrideMerge',
+  });
+  expectScript(template, sink, {
+    code: 'DEFAULT_POLICY_OVERRIDE_MERGE_ROUTE_MISSING',
+    nodeId: 'overrideMerge',
+    scriptRef: 'script:overrideMerge',
+    next: 'overrideMergeRouter',
+    resultSchema: 'schema:prFeedback',
+    produces: 'prFeedback',
+  });
+  expectConsume(template, sink, {
+    code: 'DEFAULT_POLICY_OVERRIDE_MERGE_ROUTE_MISSING',
+    consumerId: 'overrideMerge',
+    producerId: 'mergeGate',
+    as: 'gateResolution',
+  });
+  expectRoute(template, sink, {
+    code: 'DEFAULT_POLICY_OVERRIDE_MERGE_ROUTE_MISSING',
+    nodeId: 'overrideMergeRouter',
+    verdict: 'clean',
+    target: 'overrideConfirmMerge',
+  });
+  expectRoute(template, sink, {
+    code: 'DEFAULT_POLICY_OVERRIDE_MERGE_ROUTE_MISSING',
+    nodeId: 'overrideMergeRouter',
+    verdict: 'merged',
+    target: 'cleanupWorktree',
+  });
+  expectRoute(template, sink, {
+    code: 'DEFAULT_POLICY_OVERRIDE_MERGE_ROUTE_MISSING',
+    nodeId: 'overrideMergeRouter',
+    verdict: 'closed',
+    target: 'recoveryGate',
+  });
+  expectDefaultRoute(template, sink, {
+    code: 'DEFAULT_POLICY_OVERRIDE_MERGE_ROUTE_MISSING',
+    nodeId: 'overrideMergeRouter',
+    target: 'classifyRecovery',
+  });
+  expectScript(template, sink, {
+    code: 'DEFAULT_POLICY_OVERRIDE_MERGE_ROUTE_MISSING',
+    nodeId: 'overrideConfirmMerge',
+    scriptRef: 'script:confirmMerge',
+    next: 'cleanupWorktree',
+    resultSchema: 'schema:integration',
+  });
+  expectConsume(template, sink, {
+    code: 'DEFAULT_POLICY_OVERRIDE_MERGE_ROUTE_MISSING',
+    consumerId: 'overrideConfirmMerge',
+    producerId: 'overrideMerge',
+    as: 'mergeReadiness',
+  });
+  expectConsume(template, sink, {
+    code: 'DEFAULT_POLICY_OVERRIDE_MERGE_ROUTE_MISSING',
+    consumerId: 'classifyRecovery',
+    producerId: 'overrideMerge',
+    as: 'overrideFeedback',
+    optional: true,
+    staleOk: true,
+  });
+}
+
 function checkMergeConsumesFreshReadiness(template: Template, sink: PolicySink): void {
   expectConsume(template, sink, {
     code: 'DEFAULT_POLICY_MERGE_READINESS_FRESHNESS_MISSING',
@@ -329,7 +398,7 @@ function checkMergeGateRecheckRouting(template: Template, sink: PolicySink): voi
     ['recheck', 'mergeRecheck'],
     ['address_review_threads', 'triage'],
     ['return_to_development', 'triage'],
-    ['override_merge', 'mergeApproveReverify'],
+    ['override_merge', 'overrideMerge'],
     ['cancel', 'cancelledEnd'],
   ]);
   expectScript(template, sink, {
@@ -627,6 +696,7 @@ function checkRecoverableCatches(template: Template, sink: PolicySink): void {
     'mergeReadiness',
     'mergeRecheck',
     'mergeApproveReverify',
+    'overrideMerge',
     'integrator',
     'reviewIntegrator',
     'questionReviewIntegrator',
@@ -657,6 +727,7 @@ function checkCapExhaustionOffRamp(template: Template, sink: PolicySink): void {
     'prRouter',
     'mergeReadinessRouter',
     'mergeRecheckRouter',
+    'overrideMergeRouter',
     'triageRouter',
     'recoveryRouter',
     'planReviewRouter',
@@ -685,29 +756,33 @@ function checkCapExhaustionOffRamp(template: Template, sink: PolicySink): void {
 }
 
 function checkConfirmMergeFailureRecoverable(template: Template, sink: PolicySink): void {
-  const node = effectNode(template, 'confirmMerge');
-  if (!node) return;
-  for (const entry of node.catch ?? []) {
-    if (isTerminalNode(template, entry.goto)) {
-      sink.error(
-        'DEFAULT_POLICY_CONFIRM_MERGE_FAILURE_TERMINAL',
-        `confirmMerge catch for ${entry.onError} must not route to a terminal`,
-        {
-          nodeId: 'confirmMerge',
-          expected: `${entry.onError} -> non-terminal`,
-          actual: `${entry.onError} -> ${entry.goto}`,
-        },
-      );
+  for (const nodeId of ['confirmMerge', 'overrideConfirmMerge']) {
+    const node = effectNode(template, nodeId);
+    if (!node) continue;
+    for (const entry of node.catch ?? []) {
+      if (isTerminalNode(template, entry.goto)) {
+        sink.error(
+          'DEFAULT_POLICY_CONFIRM_MERGE_FAILURE_TERMINAL',
+          `${nodeId} catch for ${entry.onError} must not route to a terminal`,
+          {
+            nodeId,
+            expected: `${entry.onError} -> non-terminal`,
+            actual: `${entry.onError} -> ${entry.goto}`,
+          },
+        );
+      }
     }
   }
 }
 
 function checkPostMergeCleanup(template: Template, sink: PolicySink): void {
-  expectNodeNext(template, sink, {
-    code: 'DEFAULT_POLICY_POST_MERGE_CLEANUP_MISSING',
-    nodeId: 'confirmMerge',
-    target: 'cleanupWorktree',
-  });
+  for (const nodeId of ['confirmMerge', 'overrideConfirmMerge']) {
+    expectNodeNext(template, sink, {
+      code: 'DEFAULT_POLICY_POST_MERGE_CLEANUP_MISSING',
+      nodeId,
+      target: 'cleanupWorktree',
+    });
+  }
   expectScript(template, sink, {
     code: 'DEFAULT_POLICY_POST_MERGE_CLEANUP_MISSING',
     nodeId: 'cleanupWorktree',

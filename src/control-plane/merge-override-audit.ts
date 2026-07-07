@@ -34,11 +34,11 @@ export function validateMergeOverrideAudit(input: unknown, item: InboxItem): Mer
   const normalized = normalizeAuditStringFields(record, REQUIRED_STRING_FIELDS, 'override_merge mergeOverrideAudit');
 
   const threadIds = record['threadIds'];
-  if (!Array.isArray(threadIds) || threadIds.length === 0) {
-    throw new ControlPlaneError('VALIDATION_FAILURE', 'override_merge mergeOverrideAudit.threadIds must be a non-empty array');
+  if (threadIds !== undefined && !Array.isArray(threadIds)) {
+    throw new ControlPlaneError('VALIDATION_FAILURE', 'override_merge mergeOverrideAudit.threadIds must be an array');
   }
-  const validThreadIds = threadIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0);
-  if (validThreadIds.length !== threadIds.length) {
+  const validThreadIds = (threadIds ?? []).filter((id): id is string => typeof id === 'string' && id.trim().length > 0);
+  if (threadIds !== undefined && validThreadIds.length !== threadIds.length) {
     throw new ControlPlaneError('VALIDATION_FAILURE', 'override_merge mergeOverrideAudit.threadIds must contain non-empty strings');
   }
 
