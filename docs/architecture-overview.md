@@ -3,6 +3,11 @@
 Read this before changing runtime behavior. It records the invariants that keep Revo understandable and
 recoverable.
 
+Storage note: this page describes the current high-level runtime model. The storage-v2 target for embedded
+PostgreSQL, Revo Prisma, DBOS placement, and embedded Revisium engine tables is defined by
+[ADR-0007](./adr/0007-revo-storage-foundation.md), [ADR-0008](./adr/0008-revo-projects-and-versioned-knowledge.md),
+and their linked specs.
+
 ## One paragraph
 
 Revo is a local NestJS host that runs software-development tasks through short-lived agents. DBOS owns durable

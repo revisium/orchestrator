@@ -3,6 +3,11 @@
 The control plane is one Revisium project used by Revo for meaning and runtime projections. The authoritative
 schema source is `control-plane/bootstrap.config.json`; this document is the human-readable ownership map.
 
+Storage note: this document describes the current control-plane table ownership map. Storage-v2 keeps the
+`control-plane` system project but moves the target storage foundation to embedded PostgreSQL, Revo Prisma, and the
+embedded Revisium engine contracts in [ADR-0007](./adr/0007-revo-storage-foundation.md) and
+[ADR-0008](./adr/0008-revo-projects-and-versioned-knowledge.md).
+
 ## Ownership classes
 
 | Table | Class | Revision behavior |
