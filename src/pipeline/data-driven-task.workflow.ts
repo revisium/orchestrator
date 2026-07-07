@@ -822,6 +822,25 @@ function integratorProgressEventType(result: IntegratorOutput): IntegratorProgre
   return result.foreignPr ? 'foreign_pr_adopted' : 'integrate_succeeded';
 }
 
+function mergeOverrideEventPayload(result: MergeOverrideOutput): Record<string, unknown> {
+  const audit = result.override.audit;
+  return {
+    actor: result.override.actor,
+    note: result.override.note,
+    reason: audit?.reason ?? result.override.reason ?? '',
+    risk: audit?.risk ?? '',
+    verificationResponsibility: audit?.verificationResponsibility ?? '',
+    headSha: audit?.headSha ?? result.headSha,
+    freshHeadSha: result.headSha,
+    prNumber: result.prNumber,
+    source: result.override.source,
+    overriddenFacts: result.override.facts,
+    replied: result.override.replied,
+    resolved: result.override.resolved,
+    ...(result.override.reason ? { refusalReason: result.override.reason } : {}),
+  };
+}
+
 export function buildSystemScriptRegistry(deps: ScriptRegistryDeps): Map<string, SystemScriptHandler> {
   const {
     appendEvent,
@@ -983,25 +1002,6 @@ export function buildSystemScriptRegistry(deps: ScriptRegistryDeps): Map<string,
       verdict: result.verdict,
     }),
   });
-
-  function mergeOverrideEventPayload(result: MergeOverrideOutput): Record<string, unknown> {
-    const audit = result.override.audit;
-    return {
-      actor: result.override.actor,
-      note: result.override.note,
-      reason: audit?.reason ?? result.override.reason ?? '',
-      risk: audit?.risk ?? '',
-      verificationResponsibility: audit?.verificationResponsibility ?? '',
-      headSha: audit?.headSha ?? result.headSha,
-      freshHeadSha: result.headSha,
-      prNumber: result.prNumber,
-      source: result.override.source,
-      overriddenFacts: result.override.facts,
-      replied: result.override.replied,
-      resolved: result.override.resolved,
-      ...(result.override.reason ? { refusalReason: result.override.reason } : {}),
-    };
-  }
 
   const overrideMergeScript: SystemScriptHandler = async ({ runId, decision, ctx, bindingByRef, stepKey, inputs }) => {
     const integratorInput = buildIntegratorInput(runId, ctx, inputs);

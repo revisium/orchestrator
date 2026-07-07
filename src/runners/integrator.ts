@@ -644,6 +644,15 @@ type PrMergeView = {
   closingIssuesReferences?: unknown[];
 };
 
+function mergeabilityForConfirmMerge(pr: PrMergeView, overrideAccepted: boolean): 'clean' | 'blocked' | 'unknown' {
+  if (!overrideAccepted) {
+    return pr.mergeStateStatus === 'CLEAN' ? 'clean' : 'blocked';
+  }
+
+  const mergeable = pr.mergeable ?? (pr.mergeStateStatus === 'CLEAN' ? 'MERGEABLE' : undefined);
+  return mergeSignal(pr.mergeStateStatus, mergeable);
+}
+
 export async function confirmMerge(
   input: IntegratorInput,
   deps: IntegratorDeps,
@@ -673,8 +682,7 @@ export async function confirmMerge(
     return { needsHuman: true, lesson: `PR #${pr.number} is ${pr.state} (not OPEN) and not merged — resolve manually` };
   }
   const overrideAccepted = input.mergeReadiness?.override?.accepted === true;
-  const mergeable = pr.mergeable ?? (pr.mergeStateStatus === 'CLEAN' ? 'MERGEABLE' : undefined);
-  const mergeability = overrideAccepted ? mergeSignal(pr.mergeStateStatus, mergeable) : pr.mergeStateStatus === 'CLEAN' ? 'clean' : 'blocked';
+  const mergeability = mergeabilityForConfirmMerge(pr, overrideAccepted);
   if (mergeability !== 'clean') {
     return {
       needsHuman: true,
@@ -749,7 +757,7 @@ function envInt(name: string, fallback: number): number {
 
 export type PollPrDeps = IntegratorDeps & {
 
-  collect?: (repo: string, branch: string, base: string, execGh: ExecGhFn, issueRef?: IssueRef, issueAction?: IssueAction) => Promise<PollPrReadiness>;
+  collect?: PollPrCollect;
 
   sleep?: (ms: number) => Promise<void>;
 
@@ -757,8 +765,11 @@ export type PollPrDeps = IntegratorDeps & {
 
   pollIntervalMs?: number;
   reviewGracePolls?: number;
-  requiredChecks?: (repo: string, prNumber: number, execGh: ExecGhFn) => Set<string>;
+  requiredChecks?: RequiredChecksFn;
 };
+
+type PollPrCollect = (repo: string, branch: string, base: string, execGh: ExecGhFn, issueRef?: IssueRef, issueAction?: IssueAction) => Promise<PollPrReadiness>;
+type RequiredChecksFn = (repo: string, prNumber: number, execGh: ExecGhFn) => Set<string>;
 
 
 export type PollPrReadiness = {
@@ -898,8 +909,8 @@ export type MergeOverrideOutput = PrFeedback & {
 };
 
 export type OverrideMergeDeps = IntegratorDeps & {
-  collect?: PollPrDeps['collect'];
-  requiredChecks?: PollPrDeps['requiredChecks'];
+  collect?: PollPrCollect;
+  requiredChecks?: RequiredChecksFn;
 };
 
 type MergeOverrideGate = {
@@ -945,6 +956,16 @@ function checkFact(severity: MergeOverrideFact['severity'], kind: string, name: 
   return { severity, kind, name, summary: `${name}: ${result}`, evidence: result };
 }
 
+type MergeOverrideFactBuckets = { hard: MergeOverrideFact[]; advisory: MergeOverrideFact[] };
+
+function emptyFactBuckets(): MergeOverrideFactBuckets {
+  return { hard: [], advisory: [] };
+}
+
+function pushFact(buckets: MergeOverrideFactBuckets, fact: MergeOverrideFact): void {
+  buckets[fact.severity].push(fact);
+}
+
 function reviewThreadFact(thread: ReviewThread): MergeOverrideFact {
   return {
     severity: 'advisory',
@@ -960,10 +981,9 @@ function feedbackEvidence(item: { evidence?: string; location?: string; author?:
 }
 
 function classifyFeedbackFacts(readiness: PollPrReadiness): { hard: MergeOverrideFact[]; advisory: MergeOverrideFact[] } {
-  const hard: MergeOverrideFact[] = [];
-  const advisory: MergeOverrideFact[] = [];
+  const facts = emptyFactBuckets();
   const feedback = readiness.feedback;
-  if (!feedback) return { hard, advisory };
+  if (!feedback) return facts;
 
   for (const fix of feedback.developerFixes) {
     if (fix.source === 'ci' || fix.source === 'review_thread') continue;
@@ -973,11 +993,10 @@ function classifyFeedbackFacts(readiness: PollPrReadiness): { hard: MergeOverrid
       summary: fix.summary,
       evidence: feedbackEvidence(fix),
     };
-    if (fix.source === 'human_review') hard.push({ ...fact, severity: 'hard' });
-    else advisory.push(fact);
+    pushFact(facts, fix.source === 'human_review' ? { ...fact, severity: 'hard' } : fact);
   }
   for (const question of feedback.reviewerQuestions) {
-    hard.push({
+    pushFact(facts, {
       severity: 'hard',
       kind: 'reviewer_question',
       summary: question.summary,
@@ -985,47 +1004,63 @@ function classifyFeedbackFacts(readiness: PollPrReadiness): { hard: MergeOverrid
     });
   }
   for (const decision of feedback.humanDecisions) {
-    hard.push({
+    pushFact(facts, {
       severity: 'hard',
       kind: decision.source,
       summary: decision.summary,
     });
   }
   for (const wait of feedback.providerWait) {
-    advisory.push({
+    pushFact(facts, {
       severity: 'advisory',
       kind: `provider_wait:${wait.provider}`,
       summary: wait.evidence,
       evidence: wait.reason,
     });
   }
-  return { hard, advisory };
+  return facts;
+}
+
+function checkStatusFact(
+  check: { name: string; result: string },
+  required: boolean,
+  status: 'failed' | 'pending',
+): MergeOverrideFact {
+  const severity = required ? 'hard' : 'advisory';
+  const kind = `${required ? 'required' : 'non_required'}_check_${status}`;
+  return checkFact(severity, kind, check.name, check.result);
+}
+
+function pushCheckStatusFact(
+  facts: MergeOverrideFactBuckets,
+  check: { name: string; result: string },
+  names: readonly string[],
+  required: boolean,
+  status: 'failed' | 'pending',
+): void {
+  if (!names.includes(check.name)) return;
+  pushFact(facts, checkStatusFact(check, required, status));
 }
 
 function factsFromRequiredChecks(
   readiness: PollPrReadiness,
   required: ReadonlySet<string>,
 ): { hard: MergeOverrideFact[]; advisory: MergeOverrideFact[] } {
-  const hard: MergeOverrideFact[] = [];
-  const advisory: MergeOverrideFact[] = [];
+  const facts = emptyFactBuckets();
   for (const check of readiness.checks.list) {
     const isRequired = required.has(check.name);
-    if (readiness.checks.fail.includes(check.name)) {
-      (isRequired ? hard : advisory).push(checkFact(isRequired ? 'hard' : 'advisory', isRequired ? 'required_check_failed' : 'non_required_check_failed', check.name, check.result));
-    }
-    if (readiness.checks.pending.includes(check.name)) {
-      (isRequired ? hard : advisory).push(checkFact(isRequired ? 'hard' : 'advisory', isRequired ? 'required_check_pending' : 'non_required_check_pending', check.name, check.result));
-    }
+    pushCheckStatusFact(facts, check, readiness.checks.fail, isRequired, 'failed');
+    pushCheckStatusFact(facts, check, readiness.checks.pending, isRequired, 'pending');
   }
   if (readiness.checks.list.length === 0) {
-    advisory.push({
+    pushFact(facts, {
       severity: 'advisory',
       kind: 'checks_none_registered',
       summary: 'No registered checks were reported for the PR.',
       evidence: 'checks: none registered',
     });
   }
-  return { hard, advisory };
+  return facts;
 }
 
 function checkRollupUnavailableFact(readiness: PollPrReadiness): MergeOverrideFact | undefined {
@@ -1138,55 +1173,83 @@ function auditHeadMismatchFact(gate: MergeOverrideGate): MergeOverrideFact | und
   };
 }
 
+function initialMergeOverrideHardFacts(
+  readiness: PollPrReadiness,
+  gate: MergeOverrideGate,
+  unavailableRollup: MergeOverrideFact | undefined,
+): MergeOverrideFact[] {
+  return [
+    readiness.draft === true ? { severity: 'hard', kind: 'draft_pr', summary: 'PR is still draft.' } : undefined,
+    auditHeadMismatchFact(gate),
+    movedHeadFact(readiness, gate),
+    hardMergeabilityFact(readiness),
+    unavailableRollup,
+    reviewThreadsIncompleteFact(readiness),
+  ].filter((fact): fact is MergeOverrideFact => fact !== undefined);
+}
+
+function appendFeedbackFacts(buckets: MergeOverrideFactBuckets, readiness: PollPrReadiness): void {
+  for (const thread of readiness.reviewThreads.items) {
+    buckets.advisory.push(reviewThreadFact(thread));
+  }
+  const feedbackFacts = classifyFeedbackFacts(readiness);
+  buckets.hard.push(...feedbackFacts.hard);
+  buckets.advisory.push(...feedbackFacts.advisory);
+}
+
+function classifyAvailableCheckFacts(
+  readiness: PollPrReadiness,
+  ownerRepo: string,
+  execGh: ExecGhFn,
+  requiredChecks: RequiredChecksFn,
+): MergeOverrideFactBuckets {
+  if (readiness.checks.fail.length === 0 && readiness.checks.pending.length === 0) {
+    return readiness.checks.list.length === 0 ? factsFromRequiredChecks(readiness, new Set<string>()) : emptyFactBuckets();
+  }
+
+  if (readiness.pr.number === null) {
+    return {
+      hard: [{ severity: 'hard', kind: 'pr_number_unavailable', summary: 'Cannot classify required checks without a PR number.' }],
+      advisory: [],
+    };
+  }
+
+  try {
+    return factsFromRequiredChecks(readiness, requiredChecks(ownerRepo, readiness.pr.number, execGh));
+  } catch (err) {
+    return {
+      hard: [{
+        severity: 'hard',
+        kind: 'required_check_names_unavailable',
+        summary: 'Required check names are unavailable.',
+        evidence: err instanceof Error ? err.message : String(err),
+      }],
+      advisory: [],
+    };
+  }
+}
+
 async function classifyMergeOverrideFacts(
   readiness: PollPrReadiness,
   gate: MergeOverrideGate,
   ownerRepo: string,
   execGh: ExecGhFn,
-  requiredChecks: NonNullable<OverrideMergeDeps['requiredChecks']>,
+  requiredChecks: RequiredChecksFn,
 ): Promise<{ hard: MergeOverrideFact[]; advisory: MergeOverrideFact[] }> {
-  const hard: MergeOverrideFact[] = [];
-  const advisory: MergeOverrideFact[] = [];
-
-  if (readiness.draft === true) hard.push({ severity: 'hard', kind: 'draft_pr', summary: 'PR is still draft.' });
-  const auditMismatch = auditHeadMismatchFact(gate);
-  if (auditMismatch) hard.push(auditMismatch);
-  const moved = movedHeadFact(readiness, gate);
-  if (moved) hard.push(moved);
-  const mergeability = hardMergeabilityFact(readiness);
-  if (mergeability) hard.push(mergeability);
   const unavailableRollup = checkRollupUnavailableFact(readiness);
-  if (unavailableRollup) hard.push(unavailableRollup);
-  const incompleteThreads = reviewThreadsIncompleteFact(readiness);
-  if (incompleteThreads) hard.push(incompleteThreads);
+  const facts: MergeOverrideFactBuckets = {
+    hard: initialMergeOverrideHardFacts(readiness, gate, unavailableRollup),
+    advisory: [],
+  };
 
-  if (!unavailableRollup && (readiness.checks.fail.length > 0 || readiness.checks.pending.length > 0)) {
-    if (readiness.pr.number === null) {
-      hard.push({ severity: 'hard', kind: 'pr_number_unavailable', summary: 'Cannot classify required checks without a PR number.' });
-    } else {
-      try {
-        const checkFacts = factsFromRequiredChecks(readiness, requiredChecks(ownerRepo, readiness.pr.number, execGh));
-        hard.push(...checkFacts.hard);
-        advisory.push(...checkFacts.advisory);
-      } catch (err) {
-        hard.push({
-          severity: 'hard',
-          kind: 'required_check_names_unavailable',
-          summary: 'Required check names are unavailable.',
-          evidence: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-  } else if (!unavailableRollup && readiness.checks.list.length === 0) {
-    const checkFacts = factsFromRequiredChecks(readiness, new Set<string>());
-    advisory.push(...checkFacts.advisory);
+  if (!unavailableRollup) {
+    const checkFacts = classifyAvailableCheckFacts(readiness, ownerRepo, execGh, requiredChecks);
+    facts.hard.push(...checkFacts.hard);
+    facts.advisory.push(...checkFacts.advisory);
   }
 
-  advisory.push(...readiness.reviewThreads.items.map(reviewThreadFact));
-  const feedbackFacts = classifyFeedbackFacts(readiness);
-  hard.push(...feedbackFacts.hard);
-  advisory.push(...feedbackFacts.advisory);
-  return { hard, advisory };
+  appendFeedbackFacts(facts, readiness);
+  return facts;
 }
 
 function overrideThreadTriage(readiness: PollPrReadiness, note: string): Triage {

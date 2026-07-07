@@ -333,29 +333,11 @@ function checkOverrideMergeRouting(template: Template, sink: PolicySink): void {
     producerId: 'mergeGate',
     as: 'gateResolution',
   });
-  expectRoute(template, sink, {
-    code: 'DEFAULT_POLICY_OVERRIDE_MERGE_ROUTE_MISSING',
-    nodeId: 'overrideMergeRouter',
-    verdict: 'clean',
-    target: 'overrideConfirmMerge',
-  });
-  expectRoute(template, sink, {
-    code: 'DEFAULT_POLICY_OVERRIDE_MERGE_ROUTE_MISSING',
-    nodeId: 'overrideMergeRouter',
-    verdict: 'merged',
-    target: 'cleanupWorktree',
-  });
-  expectRoute(template, sink, {
-    code: 'DEFAULT_POLICY_OVERRIDE_MERGE_ROUTE_MISSING',
-    nodeId: 'overrideMergeRouter',
-    verdict: 'closed',
-    target: 'recoveryGate',
-  });
-  expectDefaultRoute(template, sink, {
-    code: 'DEFAULT_POLICY_OVERRIDE_MERGE_ROUTE_MISSING',
-    nodeId: 'overrideMergeRouter',
-    target: 'classifyRecovery',
-  });
+  expectRoutesWithDefault(template, sink, 'DEFAULT_POLICY_OVERRIDE_MERGE_ROUTE_MISSING', 'overrideMergeRouter', [
+    ['clean', 'overrideConfirmMerge'],
+    ['merged', 'cleanupWorktree'],
+    ['closed', 'recoveryGate'],
+  ], 'classifyRecovery');
   expectScript(template, sink, {
     code: 'DEFAULT_POLICY_OVERRIDE_MERGE_ROUTE_MISSING',
     nodeId: 'overrideConfirmMerge',
@@ -514,29 +496,11 @@ function checkReviewFeedbackLoop(template: Template, sink: PolicySink): void {
     nodeId: 'questionGate',
     outcomes: ['fix', 'wontfix', 'cancel'],
   });
-  expectRoute(template, sink, {
-    code: 'DEFAULT_POLICY_REVIEW_CHANGES_ROUTE_MISSING',
-    nodeId: 'questionGate',
-    verdict: 'fix',
-    target: 'questionReviewRework',
-  });
-  expectRoute(template, sink, {
-    code: 'DEFAULT_POLICY_REVIEW_CHANGES_ROUTE_MISSING',
-    nodeId: 'questionGate',
-    verdict: 'wontfix',
-    target: 'respondThreads',
-  });
-  expectRoute(template, sink, {
-    code: 'DEFAULT_POLICY_REVIEW_CHANGES_ROUTE_MISSING',
-    nodeId: 'questionGate',
-    verdict: 'cancel',
-    target: 'cancelledEnd',
-  });
-  expectDefaultRoute(template, sink, {
-    code: 'DEFAULT_POLICY_REVIEW_CHANGES_ROUTE_MISSING',
-    nodeId: 'questionGate',
-    target: 'recoveryGate',
-  });
+  expectRoutesWithDefault(template, sink, 'DEFAULT_POLICY_REVIEW_CHANGES_ROUTE_MISSING', 'questionGate', [
+    ['fix', 'questionReviewRework'],
+    ['wontfix', 'respondThreads'],
+    ['cancel', 'cancelledEnd'],
+  ], 'recoveryGate');
   expectRoute(template, sink, {
     code: 'DEFAULT_POLICY_REVIEW_CHANGES_ROUTE_MISSING',
     nodeId: 'triageRouter',
@@ -872,6 +836,18 @@ function expectRoutes(
   for (const [verdict, target] of routes) {
     expectRoute(template, sink, { code, nodeId, verdict, target });
   }
+}
+
+function expectRoutesWithDefault(
+  template: Template,
+  sink: PolicySink,
+  code: DefaultPlaybookPolicyDiagnosticCode,
+  nodeId: string,
+  routes: readonly RouteExpectation[],
+  defaultTarget: string,
+): void {
+  expectRoutes(template, sink, code, nodeId, routes);
+  expectDefaultRoute(template, sink, { code, nodeId, target: defaultTarget });
 }
 
 function expectChangeProducer(template: Template, sink: PolicySink, nodeId: string): void {
