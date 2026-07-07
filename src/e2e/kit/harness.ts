@@ -16,7 +16,7 @@ import { RevisiumModule } from '../../revisium/revisium.module.js';
 import { RevoPrismaService } from '../../storage/revo-prisma.service.js';
 import { ensureStorage } from '../../storage/ensure-storage.js';
 import { PipelineService } from '../../pipeline/pipeline.service.js';
-import { WorktreeService } from '../../runners/worktree.service.js';
+import { WorktreeService, type WorktreeReleaseResult } from '../../runners/worktree.service.js';
 import { TaskControlPlaneApiService } from '../../task-control-plane/task-control-plane-api.service.js';
 import type { RunAgent } from '../../worker/runner.js';
 import type { IntegratorService } from '../../runners/integrator.js';
@@ -39,7 +39,11 @@ export type RunHarnessOptions = {
   /** Wrap the (fake) integrator — e.g. `routedIntegrator` for per-run mocked integrate outcomes. */
   integrator?: (base: IntegratorService) => IntegratorService;
   /** Test-only override for the cleanupWorktree release step. */
-  releaseWorktree?: (runId: string, taskId: string) => Promise<void>;
+  releaseWorktree?: (
+    runId: string,
+    taskId: string,
+    baseRelease: (runId: string, taskId: string) => Promise<WorktreeReleaseResult>,
+  ) => Promise<WorktreeReleaseResult>;
   /** Bootstrap an isolated Revisium project before using it. Suite default project is bootstrapped by scripts/e2e-setup.ts. */
   bootstrapControlPlane?: boolean;
 };
@@ -98,7 +102,10 @@ export async function createRunHarness(opts: RunHarnessOptions = {}): Promise<Ru
     : deterministicAgent(agentCalls, developerWrites);
 
   const worktrees = new WorktreeService(runs);
-  if (opts.releaseWorktree) worktrees.release = opts.releaseWorktree;
+  if (opts.releaseWorktree) {
+    const baseRelease = worktrees.release.bind(worktrees);
+    worktrees.release = (runId, taskId) => opts.releaseWorktree!(runId, taskId, baseRelease);
+  }
   const pipeline = new PipelineService(dbos, roles, runs, inbox, integrator, worktrees, agent);
   const observability = new AgentObservabilityService({
     artifactRoot: join(getConfig().dataDir, 'run-artifacts'),

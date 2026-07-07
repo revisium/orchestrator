@@ -296,7 +296,10 @@ function buildAdapter(opts: {
       rec.worktreeIssueRefs.push(issueRef);
       return { worktreePath: '/fake/worktree' };
     },
-    releaseWorktreeFn: async () => { rec.events.push('worktree_release:pipeline'); },
+    releaseWorktreeFn: async () => {
+      rec.events.push('worktree_release:pipeline');
+      return { released: true, worktreePath: '/fake/worktree' };
+    },
     // confirmMerge (plan 0017 follow-up): default fake reports merged; a test can override via opts.confirmMerge.
     confirmMergeFn: async (input: IntegratorInput) => {
       rec.confirmMergeCalls++;
@@ -2448,7 +2451,7 @@ function makeMinimalDeps(): DataDrivenTaskDeps {
     runStub: (input) => ({ prUrl: `stub://pr/${input.taskId}`, branch: 'feat/x', prNumber: 0 }),
     preflightFn: async () => ({ ok: true }),
     createWorktreeFn: async () => ({ worktreePath: '/fake/worktree' }),
-    releaseWorktreeFn: async () => {},
+    releaseWorktreeFn: async () => ({ released: true, worktreePath: '/fake/worktree' }),
     confirmMergeFn: async (input) => ({ merged: true as const, prNumber: 1, prUrl: `stub://pr/${input.taskId}` }),
     runConfirmStub: (input) => ({ merged: true as const, prNumber: 0, prUrl: `stub://pr/${input.taskId}` }),
     pollPrFn: async () => ({ prNumber: 1, headSha: 'sha', evidence: [], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] }),

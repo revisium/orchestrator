@@ -70,6 +70,7 @@ import {
   RUNNER_WALL_CLOCK_LIMIT_KIND,
   type RunnerTimeoutFailureKind,
 } from '../worker/process-executor.js';
+import type { WorktreeReleaseResult } from '../runners/worktree.service.js';
 
 
 export type DataDrivenResult = {
@@ -572,7 +573,7 @@ export type DataDrivenTaskDeps = {
 
 
   createWorktreeFn: (runId: string, taskId: string, title: string, base: string, issueRef?: IssueRef) => Promise<{ worktreePath: string }>;
-  releaseWorktreeFn: (runId: string, taskId: string) => Promise<void>;
+  releaseWorktreeFn: (runId: string, taskId: string) => Promise<WorktreeReleaseResult>;
 };
 
 function progressCursor(state: RunState, lastResult: LastResult | undefined): DataDrivenProgressCursor {
@@ -858,7 +859,37 @@ export function buildSystemScriptRegistry(deps: ScriptRegistryDeps): Map<string,
   }
 
   const cleanupWorktree: SystemScriptHandler = async ({ runId, decision, ctx, stepKey }) => {
-    try { await releaseWorktreeFn(runId, ctx.taskId); } catch { /* best-effort */ }
+    let releaseResult: WorktreeReleaseResult;
+    try {
+      releaseResult = await releaseWorktreeFn(runId, ctx.taskId);
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err);
+      await appendEvent({
+        runId,
+        taskId: ctx.taskId,
+        stepId: '',
+        stepKey,
+        type: 'cleanup_failed',
+        payload: { nodeId: decision.nodeId, error, released: false },
+      });
+      return { outcome: 'ok', pointer: { released: false, error } };
+    }
+    if (!releaseResult.released) {
+      const pointer = {
+        released: false,
+        reason: releaseResult.reason,
+        worktreePath: releaseResult.worktreePath,
+      };
+      await appendEvent({
+        runId,
+        taskId: ctx.taskId,
+        stepId: '',
+        stepKey,
+        type: 'cleanup_failed',
+        payload: { nodeId: decision.nodeId, ...pointer },
+      });
+      return { outcome: 'ok', pointer };
+    }
     await appendEvent({ runId, taskId: ctx.taskId, stepId: '', stepKey, type: 'worktree_released', payload: { nodeId: decision.nodeId } });
     return { outcome: 'ok', pointer: { released: true } };
   };

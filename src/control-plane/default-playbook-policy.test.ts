@@ -747,6 +747,22 @@ test('default playbook policy: confirmMerge cannot bypass cleanupWorktree by rem
   assert.match(diagnostic.expected ?? '', /script:cleanupWorktree/);
 });
 
+test('default playbook policy: cleanupWorktree failure catches must still reach mergedEnd', () => {
+  const diagnostic = assertDiagnostic(
+    mutateTemplate((template) => {
+      const catches = template.nodes['cleanupWorktree']['catch'] as Array<{ onError: string; goto: string }>;
+      const failed = catches.find((c) => c.onError === 'revo.ScriptFailed');
+      assert.ok(failed, 'cleanupWorktree revo.ScriptFailed catch exists');
+      failed.goto = 'blockedEnd';
+    }),
+    'DEFAULT_POLICY_POST_MERGE_CLEANUP_MISSING',
+  );
+
+  assert.equal(diagnostic.nodeId, 'cleanupWorktree');
+  assert.match(diagnostic.expected ?? '', /revo\.ScriptFailed -> mergedEnd/);
+  assert.match(diagnostic.actual ?? '', /revo\.ScriptFailed -> blockedEnd/);
+});
+
 test('default playbook policy: every declared gate outcome must have an explicit guarded branch', () => {
   const diagnostic = assertDiagnostic(
     mutateTemplate((template) => {
