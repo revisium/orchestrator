@@ -20,6 +20,7 @@ type GateStep =
       mergeOverrideAudit?: Record<string, unknown>;
       nodeId?: string;
       summaryIncludes?: string[];
+      artifactHeadSha?: string;
     };
 
 type EventPathItem = string | { type: string; payload?: Record<string, unknown> };
@@ -84,6 +85,7 @@ function normalizeGate(step: GateStep): {
   mergeOverrideAudit?: Record<string, unknown>;
   nodeId?: string;
   summaryIncludes?: string[];
+  artifactHeadSha?: string;
 } {
   if ('topic' in step) {
     return {
@@ -93,6 +95,7 @@ function normalizeGate(step: GateStep): {
       ...(step.mergeOverrideAudit ? { mergeOverrideAudit: step.mergeOverrideAudit } : {}),
       ...(step.nodeId ? { nodeId: step.nodeId } : {}),
       ...(step.summaryIncludes ? { summaryIncludes: step.summaryIncludes } : {}),
+      ...(step.artifactHeadSha ? { artifactHeadSha: step.artifactHeadSha } : {}),
     };
   }
   const [topic, outcome] = step;
@@ -110,6 +113,23 @@ function assertGateContext(gate: { topic: string; context: Record<string, unknow
     assert.ok(
       JSON.stringify(summaryRecord).includes(needle),
       `expected ${gate.topic} gate summary to include ${JSON.stringify(needle)}; got ${JSON.stringify(summaryRecord)}`,
+    );
+  }
+  if (expected.artifactHeadSha) {
+    const artifact = summaryRecord['gatedArtifact'];
+    assert.ok(
+      artifact !== null && typeof artifact === 'object' && !Array.isArray(artifact),
+      `${gate.topic} gate must include a gated artifact`,
+    );
+    const payload = (artifact as Record<string, unknown>)['payload'];
+    assert.ok(
+      payload !== null && typeof payload === 'object' && !Array.isArray(payload),
+      `${gate.topic} gate gated artifact must include an inline payload`,
+    );
+    assert.equal(
+      (payload as Record<string, unknown>)['headSha'],
+      expected.artifactHeadSha,
+      `expected ${gate.topic} gate artifact head ${expected.artifactHeadSha}`,
     );
   }
 }
