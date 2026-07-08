@@ -83,11 +83,16 @@ export function makeAwaitHuman(deps: AwaitHumanDeps) {
       ? cleanOptions(summary.outcomes.filter((item): item is string => typeof item === 'string'))
       : [];
     const explicitOptions = cleanOptions(options);
-    const gateOptions = explicitOptions.length > 0
-      ? explicitOptions
-      : outcomes.length > 0
-        ? outcomes
-        : kind === 'question' ? [] : ['approve', 'reject'];
+    let gateOptions: string[];
+    if (explicitOptions.length > 0) {
+      gateOptions = explicitOptions;
+    } else if (outcomes.length > 0) {
+      gateOptions = outcomes;
+    } else if (kind === 'question') {
+      gateOptions = [];
+    } else {
+      gateOptions = ['approve', 'reject'];
+    }
 
     await pushInbox(
       {
