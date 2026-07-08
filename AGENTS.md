@@ -52,6 +52,13 @@ git history for old task text.
 - Follow the comment policy in [VERIFICATION.md](./VERIFICATION.md) when editing `src/**/*.ts`. Run
   `pnpm verify` before every merge; the `local/no-dead-pointers` eslint rule (part of `lint:ci`) is part of that gate.
 
+## Test coverage rules
+
+Before changing default pipelines, run profiles, gates, GitHub readiness, recovery, consensus routing, or their tests,
+read [docs/specs/pipeline-test-coverage-v1.spec.md](./docs/specs/pipeline-test-coverage-v1.spec.md). Keep the layer
+boundary explicit: unit tests own decision internals, static policy tests own graph shape, declarative DSL e2e tests
+own workflow edges, and full integration e2e stays representative rather than exhaustive.
+
 ## e2e performance contract
 
 The e2e suite must stay **wait-bounded** (poll-based test waits), never **teardown-bounded**. Each
