@@ -652,12 +652,19 @@ function gateVerdict(decision: GateDecision, outcomes: string[]): string | undef
   return outcomes.length > 1 ? outcomes.at(-1) : undefined;
 }
 
-function gateResolutionOutput(
+type GateResolutionMetadata = {
+  note?: string;
+  resolvedBy: string;
+  resolvedAt: string;
+  inboxId?: string;
+  mergeOverrideAudit?: unknown;
+  adoptionAudit?: unknown;
+};
+
+function gateResolutionMetadata(
   decision: GateDecision,
-  verdict: string | undefined,
-  fallbackInboxId: string,
-  trustedGateHeadSha?: string | null,
-): Record<string, unknown> {
+  fallbackInboxId?: string,
+): GateResolutionMetadata {
   const decisionRecord: Record<string, unknown> = isRecord(decision) ? decision : {};
   const answer = isRecord(decision.answer) ? decision.answer : {};
   const note = decision.note ?? (typeof answer.note === 'string' ? answer.note : undefined);
@@ -667,14 +674,31 @@ function gateResolutionOutput(
   const mergeOverrideAudit = answer.mergeOverrideAudit ?? decisionRecord['mergeOverrideAudit'];
   const adoptionAudit = answer.adoptionAudit ?? decisionRecord['adoptionAudit'];
   return {
-    outcome: decision.outcome ?? verdict ?? decision.decision,
     ...(note !== undefined ? { note } : {}),
     resolvedBy,
     resolvedAt,
-    inboxId,
-    ...(trustedGateHeadSha !== undefined ? { trustedGateHeadSha } : {}),
+    ...(inboxId !== undefined ? { inboxId } : {}),
     ...(mergeOverrideAudit !== undefined ? { mergeOverrideAudit } : {}),
     ...(adoptionAudit !== undefined ? { adoptionAudit } : {}),
+  };
+}
+
+function gateResolutionOutput(
+  decision: GateDecision,
+  verdict: string | undefined,
+  fallbackInboxId: string,
+  trustedGateHeadSha?: string | null,
+): Record<string, unknown> {
+  const resolution = gateResolutionMetadata(decision, fallbackInboxId);
+  return {
+    outcome: decision.outcome ?? verdict ?? decision.decision,
+    ...(resolution.note !== undefined ? { note: resolution.note } : {}),
+    resolvedBy: resolution.resolvedBy,
+    resolvedAt: resolution.resolvedAt,
+    inboxId: resolution.inboxId ?? fallbackInboxId,
+    ...(trustedGateHeadSha !== undefined ? { trustedGateHeadSha } : {}),
+    ...(resolution.mergeOverrideAudit !== undefined ? { mergeOverrideAudit: resolution.mergeOverrideAudit } : {}),
+    ...(resolution.adoptionAudit !== undefined ? { adoptionAudit: resolution.adoptionAudit } : {}),
     ...(decision.decision ? { decision: decision.decision } : {}),
   };
 }
@@ -695,8 +719,10 @@ function agentQuestionRetryContext(
   nodeId: string,
   safeLesson: string,
 ): AgentQuestionRetryContext | undefined {
-  const inboxId = nonEmptyString(decision.inboxId);
-  const resolvedBy = nonEmptyString(decision.resolvedBy);
+  if (isSyntheticGateTimeoutFallback(decision)) return undefined;
+  const resolution = gateResolutionMetadata(decision);
+  const inboxId = nonEmptyString(resolution.inboxId);
+  const resolvedBy = nonEmptyString(resolution.resolvedBy);
   if (!inboxId || !resolvedBy) return undefined;
   return {
     kind: 'agent_question',

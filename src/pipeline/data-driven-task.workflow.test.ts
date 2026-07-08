@@ -1860,6 +1860,44 @@ test('DD5: a DELIBERATE agent needsHuman opens a question and retries with the a
   assert.ok(rec.events.includes('agent_question_resolved:developer'));
 });
 
+test('DD5: an agent question accepts resolution metadata nested in the answer', async () => {
+  const actualAnswer = { provider: 'oauth' };
+  const answer = { ...actualAnswer, resolvedBy: 'human', inboxId: 'inbox-question' };
+  const { run, rec } = buildAdapter({
+    template: singleDeveloperTemplate('agent-question-nested-resolution'),
+    results: {
+      developer: [
+        { output: { from: 'developer' }, verdict: 'blocker', nextSteps: [], costs: [], needsHuman: true, lesson: 'which provider?' },
+        { output: { from: 'developer', ok: true }, verdict: 'approved', nextSteps: [], costs: [], needsHuman: false },
+      ],
+    },
+    gate: (topic) => (topic === 'question'
+      ? { answer }
+      : { decision: 'approve' }),
+  });
+  const result = await run();
+
+  assert.equal(result.status, 'succeeded');
+  assert.deepEqual(rec.gates, ['question']);
+  assert.equal(rec.blocked.length, 0);
+  assert.equal(rec.failed.length, 0);
+  assert.deepEqual(
+    rec.runStepAttempts.filter((attempt) => baseStepKey(attempt.stepKey) === 'developer').map((attempt) => [attempt.stepKey, attempt.attemptNo]),
+    [['developer', 1], ['developer#2', 1]],
+  );
+  const developerInputs = rec.stepInputs.filter((item) => baseStepKey(item.stepKey) === 'developer');
+  assert.deepEqual((developerInputs[0]?.input as { retryContext?: unknown }).retryContext, undefined);
+  assert.deepEqual((developerInputs[1]?.input as { retryContext?: unknown }).retryContext, {
+    kind: 'agent_question',
+    nodeId: 'developer',
+    answer,
+    lesson: 'which provider?',
+    inboxId: 'inbox-question',
+    resolvedBy: 'human',
+  });
+  assert.ok(rec.events.includes('agent_question_resolved:developer'));
+});
+
 test('DD5: an unresolved agent question blocks without retryContext or resolved event', async () => {
   const { run, rec } = buildAdapter({
     template: singleDeveloperTemplate('agent-question-timeout'),
