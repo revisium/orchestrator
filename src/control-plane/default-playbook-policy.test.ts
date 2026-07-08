@@ -935,6 +935,14 @@ test('default playbook policy: recoveryGate rechecks polling, cancels as cancell
     ),
     'invalid recovery outcomes must block',
   );
+  assert.equal(
+    diagnostics.filter((diagnostic) =>
+      diagnostic.nodeId === 'recoveryGate' &&
+      /default -> blockedEnd/.test(diagnostic.expected ?? ''),
+    ).length,
+    1,
+    'recoveryGate default route must emit one diagnostic',
+  );
 });
 
 test('default playbook policy: seeded consensus run profile has zero policy violations', () => {

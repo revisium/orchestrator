@@ -3,10 +3,12 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { repoRoot } from '../config.js';
+import type { Template } from '../pipeline-core/types.js';
 import type { PipelineCoverageRegistry, PipelineCoverageTag } from './pipeline-coverage-registry.js';
 import {
   PIPELINE_COVERAGE_REGISTRY,
   coverageForScenario,
+  graphCoverageTagsForTemplate,
   routingSignatureForRunProfile,
   validatePipelineCoverageRegistry,
 } from './pipeline-coverage-registry.js';
@@ -167,6 +169,47 @@ test('pipeline coverage registry: rejects profile signatures with no DSL owner o
     diagnostic.code === 'PIPELINE_COVERAGE_SIGNATURE_WITHOUT_DSL' &&
     diagnostic.message.includes('single-review'),
   ));
+});
+
+test('pipeline coverage registry: negated verdict conditions do not claim positive outcome coverage', () => {
+  const template: Template = {
+    specVersion: 'test',
+    pipelineId: 'synthetic',
+    entry: 'router',
+    verdicts: { domain: ['approved', 'blocked', 'clean'] },
+    nodes: {
+      router: {
+        id: 'router',
+        kind: 'choice',
+        branches: [
+          {
+            when: { op: 'not', cond: { op: 'verdict.eq', value: 'approved' } },
+            goto: 'blockedEnd',
+          },
+          {
+            when: {
+              op: 'all',
+              of: [
+                { op: 'not', cond: { op: 'verdict.in', value: ['blocked'] } },
+                { op: 'verdict.eq', value: 'clean' },
+              ],
+            },
+            goto: 'cleanEnd',
+          },
+          { default: 'blockedEnd' },
+        ],
+      },
+      blockedEnd: { id: 'blockedEnd', kind: 'terminal', status: 'blocked' },
+      cleanEnd: { id: 'cleanEnd', kind: 'terminal', status: 'succeeded' },
+    },
+  };
+
+  const tags = graphCoverageTagsForTemplate(template);
+
+  assert.deepEqual(tags, [
+    'node:router:default',
+    'node:router:outcome:clean',
+  ]);
 });
 
 test('pipeline coverage registry: routing signatures include all topology stages in sorted order', () => {

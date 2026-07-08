@@ -670,7 +670,7 @@ function verdictsInCondition(condition: Condition): string[] {
     case 'any':
       return condition.of.flatMap((child) => verdictsInCondition(child));
     case 'not':
-      return verdictsInCondition(condition.cond);
+      return [];
   }
 }
 

@@ -806,7 +806,6 @@ function checkPostMergeCleanup(template: Template, sink: PolicySink): void {
 function checkGateOutcomesExplicit(template: Template, sink: PolicySink): void {
   const expectedDefaults: Record<string, string> = {
     mergeGate: 'blockedEnd',
-    recoveryGate: 'blockedEnd',
   };
 
   for (const [nodeId, node] of Object.entries(template.nodes)) {
