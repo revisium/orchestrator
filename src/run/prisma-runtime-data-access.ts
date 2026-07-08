@@ -305,7 +305,6 @@ function taskRunRow(item: RuntimeItem): ControlPlaneRow {
     pipeline_id: item.pipelineId,
     params: item.params,
     route_decision: item.routeDecision,
-    execution_profile: item.executionProfile,
     created_by: item.createdBy,
     created_at: item.createdAt.toISOString(),
     updated_at: item.updatedAt?.toISOString() ?? item.createdAt.toISOString(),
@@ -463,7 +462,6 @@ export function createPrismaRuntimeDataAccess(prisma: RevoPrismaService): Contro
           pipelineId: str(data.pipeline_id),
           params: json(data.params, {}),
           routeDecision: json(data.route_decision, {}),
-          executionProfile: json(data.execution_profile, {}),
           createdBy: str(data.created_by),
           createdAt: dateValue(data.created_at),
           updatedAt: dateValue(data.updated_at),
@@ -590,7 +588,6 @@ export function createPrismaRuntimeDataAccess(prisma: RevoPrismaService): Contro
         pipelineId: str(merged.pipeline_id),
         params: json(merged.params, {}),
         routeDecision: json(merged.route_decision, {}),
-        executionProfile: json(merged.execution_profile, {}),
         createdBy: str(merged.created_by),
         updatedAt: dateValue(merged.updated_at),
       } });

@@ -118,7 +118,7 @@ Revo is in active development. The public roadmap lives in GitHub Milestones and
 | --- | --- |
 | Default playbook stabilization | [Milestone #1](https://github.com/revisium/orchestrator/milestone/1), [umbrella #146](https://github.com/revisium/orchestrator/issues/146) |
 | GraphQL admin API v1 migration | [Milestone #4](https://github.com/revisium/orchestrator/milestone/4), [umbrella #167](https://github.com/revisium/orchestrator/issues/167) |
-| Execution profiles and runner/model binding | [Milestone #5](https://github.com/revisium/orchestrator/milestone/5), [umbrella #168](https://github.com/revisium/orchestrator/issues/168) |
+| Run profiles and runner/model binding | [Milestone #5](https://github.com/revisium/orchestrator/milestone/5), [umbrella #168](https://github.com/revisium/orchestrator/issues/168) |
 | Loop engineering layer | [Milestone #2](https://github.com/revisium/orchestrator/milestone/2), [umbrella #148](https://github.com/revisium/orchestrator/issues/148) |
 | Role and pipeline authoring | [Milestone #3](https://github.com/revisium/orchestrator/milestone/3), [umbrella #157](https://github.com/revisium/orchestrator/issues/157) |
 

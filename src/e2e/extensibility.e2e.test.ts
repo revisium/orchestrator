@@ -16,6 +16,7 @@ import {
   assertBlocked,
   assertRoleStepAfterEvent,
   executedRoles,
+  stubFixtureIntegratorProfile,
 } from './kit/index.js';
 
 // Group K — pipeline extensibility: which role fills each phase comes from the installed playbook,
@@ -25,7 +26,6 @@ import {
 
 const PIPELINE = 'feature-pr-watch';
 const PIPELINE_POLL = 'feature-pr-poll'; // mirrors feature-pr-watch with an UNKNOWN-id pr-poller
-const STUB_INTEGRATOR = { runnerOverrides: { 'revo-integrator': 'stub-agent' } }; // integrate without git/gh
 
 let h: RunHarness;
 let target: TargetRepo;
@@ -52,7 +52,7 @@ async function startRun(pipelineId: string, spec?: AgentSpec): Promise<{ runId: 
     scope: 'extensibility e2e',
     playbookId: PLAYBOOK_ID,
     pipelineId,
-    executionProfile: STUB_INTEGRATOR,
+    profile: stubFixtureIntegratorProfile(),
     start: false,
   });
   if (spec) specs.set(created.runId, spec);
@@ -62,7 +62,12 @@ async function startRun(pipelineId: string, spec?: AgentSpec): Promise<{ runId: 
 
 /** Run `simulateRoute` and narrow to the routing projection the extensibility assertions need. */
 async function route(pipelineId: string) {
-  return (await h.api.simulateRoute({ title: 'route', playbookId: PLAYBOOK_ID, pipeline: pipelineId })) as unknown as {
+  return (await h.api.simulateRoute({
+    title: 'route',
+    playbookId: PLAYBOOK_ID,
+    pipeline: pipelineId,
+    profile: stubFixtureIntegratorProfile(),
+  })) as unknown as {
     pipelineId: string;
     roles: string[];
     roleBindings: Array<{ roleId: string } & Record<string, unknown>>;

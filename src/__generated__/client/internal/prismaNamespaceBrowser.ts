@@ -113,7 +113,6 @@ export const TaskRunScalarFieldEnum = {
   pipelineId: 'pipelineId',
   params: 'params',
   routeDecision: 'routeDecision',
-  executionProfile: 'executionProfile',
   createdBy: 'createdBy'
 } as const
 

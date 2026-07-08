@@ -11,11 +11,9 @@ import {
   pipelineScenario,
   type PipelineScenario,
   type RunCase,
+  stubDefaultFullProfile,
 } from './kit/index.js';
 import { coverageForScenario, type PipelineScenarioCoverage } from '../control-plane/pipeline-coverage-registry.js';
-
-const STUB_AGENT = { runnerOverrides: { 'claude-code': 'stub-agent' } };
-const STUB_FULL = { runnerOverrides: { 'claude-code': 'stub-agent', 'revo-integrator': 'stub-agent' } };
 
 let h: RunHarness;
 let target: TargetRepo;
@@ -44,19 +42,19 @@ function recoveryScenario(
 }
 
 recoveryScenario('RG-A: mergeGate approve -> mergeApproveReverify(stub:clean) -> confirmMerge -> completed', coverageForScenario('RG-A-merge-approved'), {
-  executionProfile: STUB_FULL,
+  profile: stubDefaultFullProfile(),
   gates: [['plan', 'approved'], { topic: 'merge', outcome: 'approved', nodeId: 'mergeGate' }],
   expect: { terminal: 'completed', path: ['merge_confirmed'] },
 });
 
 recoveryScenario('RG-B: mergeGate cancel -> cancelledEnd -> cancelled', coverageForScenario('RG-B-merge-cancel'), {
-  executionProfile: STUB_FULL,
+  profile: stubDefaultFullProfile(),
   gates: [['plan', 'approved'], { topic: 'merge', outcome: 'cancel', nodeId: 'mergeGate' }],
   expect: { terminal: 'cancelled' },
 });
 
 recoveryScenario('RG-C: mergeGate override_merge -> mergeApproveReverify(stub:clean) -> confirmMerge -> completed', coverageForScenario('RG-C-merge-override'), {
-  executionProfile: STUB_FULL,
+  profile: stubDefaultFullProfile(),
   gates: [
     ['plan', 'approved'],
     {
@@ -85,7 +83,7 @@ test('RG-D: mergeGate recheck -> mergeRecheck(stub:clean) -> mergeGate cancel ->
     playbook: 'default',
     repo: target,
     coverage: coverageForScenario('RG-D-merge-recheck-clean'),
-    executionProfile: STUB_FULL,
+    profile: stubDefaultFullProfile(),
     gates: [
       ['plan', 'approved'],
       { topic: 'merge', outcome: 'recheck', nodeId: 'mergeGate' },
@@ -106,7 +104,6 @@ test('RG-E: always-ci-red -> ciLoop exhaustion -> recoveryGate(merge-recovery) -
       playbook: 'default',
       repo: targetE,
       coverage: coverageForScenario('RG-E-ci-loop-recovery'),
-      executionProfile: STUB_AGENT,
       gh: 'always-ci-red',
       gates: [['plan', 'approved'], { topic: 'merge', outcome: 'cancel', nodeId: 'recoveryGate' }],
       expect: {
@@ -128,7 +125,6 @@ test('RG-F: merge-unknown-then-clean -> bounded UNKNOWN recheck -> merge gate ->
       playbook: 'default',
       repo: targetF,
       coverage: coverageForScenario('RG-F-unknown-then-clean'),
-      executionProfile: STUB_AGENT,
       gh: 'merge-unknown-then-clean',
       gates: [['plan', 'approved'], { topic: 'merge', outcome: 'approved', nodeId: 'mergeGate' }],
       expect: {
@@ -149,7 +145,6 @@ test('RG-G: merge-stale-at-reverify -> mergeGate approved -> recoveryGate -> can
       playbook: 'default',
       repo: targetG,
       coverage: coverageForScenario('RG-G-stale-reverify-recovery'),
-      executionProfile: STUB_AGENT,
       gh: 'merge-stale-at-reverify',
       gates: [
         ['plan', 'approved'],

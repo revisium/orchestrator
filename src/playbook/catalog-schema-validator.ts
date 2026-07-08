@@ -380,6 +380,49 @@ const stageSchema: JsonSchema = {
   ],
 };
 
+const runProfileTopologySchema = (minProperties: number): JsonSchema => ({
+  type: 'object',
+  required: ['stages'],
+  properties: {
+    stages: {
+      type: 'object',
+      minProperties,
+      additionalProperties: stageSchema,
+    },
+  },
+  additionalProperties: false,
+});
+
+const runProfileSlotBindingSchema: JsonSchema = {
+  type: 'object',
+  properties: {
+    runnerId: NON_EMPTY_STRING,
+    modelLevel: { enum: VALID_MODEL_LEVELS },
+    timeoutMs: { type: 'integer', minimum: 1 },
+    permissionMode: NON_EMPTY_STRING,
+  },
+  additionalProperties: false,
+  anyOf: [
+    { required: ['runnerId'] },
+    { required: ['modelLevel'] },
+    { required: ['timeoutMs'] },
+    { required: ['permissionMode'] },
+  ],
+};
+
+const runProfileBindingsSchema = (minProperties: number): JsonSchema => ({
+  type: 'object',
+  required: ['slots'],
+  properties: {
+    slots: {
+      type: 'object',
+      minProperties,
+      additionalProperties: runProfileSlotBindingSchema,
+    },
+  },
+  additionalProperties: false,
+});
+
 const runProfileCatalogRecordSchema: JsonSchema = {
   type: 'object',
   required: [
@@ -400,52 +443,31 @@ const runProfileCatalogRecordSchema: JsonSchema = {
     version: NON_EMPTY_STRING,
     displayName: NON_EMPTY_STRING,
     summary: NON_EMPTY_STRING,
-    topology: {
-      type: 'object',
-      required: ['stages'],
-      properties: {
-        stages: {
-          type: 'object',
-          minProperties: 1,
-          additionalProperties: stageSchema,
-        },
-      },
-      additionalProperties: false,
-    },
-    bindings: {
-      type: 'object',
-      required: ['slots'],
-      properties: {
-        slots: {
-          type: 'object',
-          minProperties: 1,
-          additionalProperties: {
-            type: 'object',
-            properties: {
-              runnerId: NON_EMPTY_STRING,
-              modelLevel: { enum: VALID_MODEL_LEVELS },
-              timeoutMs: { type: 'integer', minimum: 1 },
-              permissionMode: NON_EMPTY_STRING,
-            },
-            additionalProperties: false,
-            anyOf: [
-              { required: ['runnerId'] },
-              { required: ['modelLevel'] },
-              { required: ['timeoutMs'] },
-              { required: ['permissionMode'] },
-            ],
-          },
-        },
-      },
-      additionalProperties: false,
-    },
+    topology: runProfileTopologySchema(1),
+    bindings: runProfileBindingsSchema(1),
     status: { enum: ['active', 'deprecated'] },
+  },
+  additionalProperties: false,
+};
+
+const runProfileInlineSchema: JsonSchema = {
+  type: 'object',
+  required: [
+    'schemaVersion',
+    'topology',
+    'bindings',
+  ],
+  properties: {
+    schemaVersion: { const: 'run-profile/v1' },
+    topology: runProfileTopologySchema(0),
+    bindings: runProfileBindingsSchema(0),
   },
   additionalProperties: false,
 };
 
 const validatePipelineExecutionPolicy = ajv.compile(pipelineExecutionPolicySchema);
 const validateRunProfileCatalogRecord = ajv.compile(runProfileCatalogRecordSchema);
+const validateInlineRunProfile = ajv.compile(runProfileInlineSchema);
 
 function assertValid(validate: ValidateFunction, value: unknown, context: string, schemaName: string): void {
   if (validate(value)) return;
@@ -461,4 +483,8 @@ export function assertValidPipelineExecutionPolicy(value: unknown, context: stri
 
 export function assertValidRunProfileCatalogRecord(value: unknown, context: string): void {
   assertValid(validateRunProfileCatalogRecord, value, context, 'run-profile/v1');
+}
+
+export function assertValidInlineRunProfile(value: unknown, context: string): void {
+  assertValid(validateInlineRunProfile, value, context, 'run-profile/v1');
 }

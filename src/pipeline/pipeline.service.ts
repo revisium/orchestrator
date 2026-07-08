@@ -54,7 +54,6 @@ import {
 } from './data-driven-task.workflow.js';
 import {
   dispatchRunnerId,
-  type ExecutionProfile,
   type LaunchOverrides,
 } from './route-contract.js';
 
@@ -419,7 +418,6 @@ export function makeRunStep(deps: RunStepDeps) {
     stepKey: string,
     stepInput: unknown,
     resolvedRunnerId?: string,
-    executionProfile?: ExecutionProfile,
     physicalAttempt?: RunStepPhysicalAttempt,
     acceptedVerdicts?: readonly string[],
     launchOverrides?: LaunchOverrides,
@@ -464,7 +462,7 @@ export function makeRunStep(deps: RunStepDeps) {
     }
 
     const effectiveRunner = dispatchRunnerId(
-      launchOverrides?.runnerId ?? resolveStepRunner(loadedRole.runner, resolvedRunnerId, executionProfile),
+      launchOverrides?.runnerId ?? resolveStepRunner(loadedRole.runner, resolvedRunnerId),
     );
     const dispatchRole = {
       ...loadedRole,
@@ -527,12 +525,10 @@ export function makeRunStep(deps: RunStepDeps) {
 function resolveStepRunner(
   roleRunner: string,
   resolvedRunnerId?: string,
-  executionProfile?: ExecutionProfile,
 ): string {
   if (resolvedRunnerId && resolvedRunnerId !== 'live') return resolvedRunnerId;
   if (resolvedRunnerId === 'script') return 'script';
-  const profileResolved = executionProfile?.runnerOverrides[roleRunner];
-  return profileResolved || roleRunner;
+  return roleRunner;
 }
 
 @Injectable()
@@ -544,7 +540,6 @@ export class PipelineService {
     stepKey: string,
     stepInput: unknown,
     resolvedRunnerId?: string,
-    executionProfile?: ExecutionProfile,
     physicalAttempt?: RunStepPhysicalAttempt,
     acceptedVerdicts?: readonly string[],
     launchOverrides?: LaunchOverrides,

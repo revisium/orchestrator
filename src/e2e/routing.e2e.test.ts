@@ -2,16 +2,18 @@ import { before, after, test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   RUN_REAL_E2E,
+  DEFAULT_PLAYBOOK_ID,
   e2eSkip,
   createRunHarness,
   type RunHarness,
   givenInstalledPlaybook,
+  stubDefaultAgentProfile,
 } from './kit/index.js';
 
-// Group I — ROUTING. resolveRouteDecision maps a task to a pipeline + roles + gates + execution
-// profile. It is deterministic and read-only, so these tests assert the route contract directly via
-// simulate_route (no workflow runs): explicit vs deterministic selection, role bindings, the
-// param-safety invariant, errors, and that simulate_route matches what a created run is bound to.
+// Group I — ROUTING. resolveRouteDecision maps a task to an explicit pipeline + run profile.
+// It is deterministic and read-only, so these tests assert the route contract directly via
+// simulate_route (no workflow runs): profile selection, role bindings, param isolation, errors,
+// and that simulate_route matches what a created run is bound to.
 
 type Pipeline = { pipelineId: string; requiredRoles: string[]; triggers: string[]; routeGates: string[] };
 type Binding = { roleId: string; runnerId: string; resolvedRunnerId: string; runnerSource: string; modelLevel: string };
@@ -20,7 +22,7 @@ type Route = {
   source: string;
   roles: string[];
   routeGates: string[];
-  executionProfile: { runnerOverrides: Record<string, string> };
+  launchBindings: unknown[];
   roleBindings: Binding[];
   params: Record<string, unknown>;
 };
@@ -31,7 +33,15 @@ const byId = (id: string) => pipelines.find((p) => p.pipelineId === id);
 const hasCode = (code: string) => (err: unknown) => (err as { code?: string }).code === code;
 
 /** simulate_route returns an untyped JSON projection — narrow once to the routing contract. */
-const route = (input: { title: string; pipeline?: string; params?: Record<string, unknown>; repo?: string }) =>
+function emptyProfile() {
+  return {
+    schemaVersion: 'run-profile/v1',
+    topology: { stages: {} },
+    bindings: { slots: {} },
+  };
+}
+
+const route = (input: { title: string; pipeline: string; params?: Record<string, unknown>; repo?: string; profile?: unknown }) =>
   h.api.simulateRoute(input) as Promise<Route>;
 
 before(async () => {
@@ -46,14 +56,14 @@ after(async () => {
 });
 
 test('I1: explicit pipeline selection returns that pipeline, its required roles, and its gates', { skip: e2eSkip }, async () => {
-  const lc = await route({ title: 'explicit', pipeline: 'local-change' });
+  const lc = await route({ title: 'explicit', pipeline: 'local-change', profile: emptyProfile() });
   assert.equal(lc.pipelineId, 'local-change');
   assert.equal(lc.source, 'explicit');
   assert.deepEqual(lc.roles, ['orchestrator', 'developer'], 'local-change is orchestrator + developer only (no integrator)');
   // No plan gate → a developer-only run completes autonomously; a merge gate is inert without an integrator.
   assert.ok(!lc.routeGates.includes('plan'), 'local-change does not park at a plan gate');
 
-  const fd = await route({ title: 'explicit', pipeline: 'feature-development' });
+  const fd = await route({ title: 'explicit', pipeline: 'feature-development', profile: emptyProfile() });
   assert.equal(fd.pipelineId, 'feature-development');
   assert.equal(fd.source, 'explicit');
   for (const role of byId('feature-development')?.requiredRoles ?? []) {
@@ -62,27 +72,15 @@ test('I1: explicit pipeline selection returns that pipeline, its required roles,
   assert.ok(fd.routeGates.includes('plan') && fd.routeGates.includes('merge'), 'feature-development gates normalize to plan + merge');
 });
 
-test('I2: deterministic auto-selection picks a pipeline reproducibly from task text', { skip: e2eSkip }, async () => {
-  // A pipeline's own triggers score highest for it, so feeding them as the task text selects it.
-  const target = byId('feature-development')?.triggers.length ? byId('feature-development')! : pipelines.find((p) => p.triggers.length > 0)!;
-  assert.ok(target, 'at least one pipeline has triggers');
-  const title = target.triggers.join(' ');
-  const r1 = await route({ title });
-  const r2 = await route({ title });
-  assert.equal(r1.source, 'deterministic-installed-playbook');
-  assert.equal(r1.pipelineId, r2.pipelineId, 'auto-selection is reproducible for the same task text');
-  assert.equal(r1.pipelineId, target.pipelineId, "task text from a pipeline's triggers selects that pipeline");
-});
-
-test('I2b: a task matching no trigger is rejected (fail-closed, no silent fallback)', { skip: e2eSkip }, async () => {
+test('I2: missing pipeline is rejected (fail-closed, no silent fallback)', { skip: e2eSkip }, async () => {
   await assert.rejects(
-    () => h.api.simulateRoute({ title: 'zzqq xyzzy frobnicate wibblewobble' }),
+    () => h.api.simulateRoute({ title: 'zzqq xyzzy frobnicate wibblewobble', profile: emptyProfile() }),
     hasCode('VALIDATION_FAILURE'),
   );
 });
 
 test('I3: every required role binds a runner + model level (default: resolved from the playbook)', { skip: e2eSkip }, async () => {
-  const r = await route({ title: 'bindings', pipeline: 'feature-development' });
+  const r = await route({ title: 'bindings', pipeline: 'feature-development', profile: emptyProfile() });
   for (const roleId of byId('feature-development')?.requiredRoles ?? []) {
     const b = r.roleBindings.find((x) => x.roleId === roleId);
     assert.ok(b, `binding present for ${roleId}`);
@@ -94,52 +92,65 @@ test('I3: every required role binds a runner + model level (default: resolved fr
   if (integrator) assert.equal(integrator.runnerId, 'revo-integrator', 'integrator binds the real integrator runner');
 });
 
-test('I4: public params cannot smuggle runner overrides (stripped from params + execution profile)', { skip: e2eSkip }, async () => {
+test('I4: public params cannot smuggle launch bindings', { skip: e2eSkip }, async () => {
   const r = await route({
     title: 'safety',
     pipeline: 'local-change',
+    profile: stubDefaultAgentProfile(),
     params: {
-      executionProfile: { runnerOverrides: { 'claude-code': 'must-not-leak' } },
-      runnerOverrides: { 'claude-code': 'must-not-leak' },
+      profileLike: { runner: 'must-not-leak' },
+      runnerSelectionDraft: { runner: 'must-not-leak' },
       ticket: 'OK-1',
     },
   });
-  assert.deepEqual(r.executionProfile.runnerOverrides, {}, 'no overrides leak into the route');
-  assert.ok(!('executionProfile' in r.params), 'executionProfile stripped from public params');
-  assert.ok(!('runnerOverrides' in r.params), 'runnerOverrides stripped from public params');
+  assert.ok(r.roleBindings.every((binding) => binding.resolvedRunnerId !== 'must-not-leak'), 'params cannot change route bindings');
+  assert.equal((r.params.profileLike as Record<string, unknown>).runner, 'must-not-leak', 'business params are inert data');
+  assert.equal((r.params.runnerSelectionDraft as Record<string, unknown>).runner, 'must-not-leak', 'business params survive');
   assert.equal(r.params.ticket, 'OK-1', 'genuine public params survive');
 });
 
-test('I5: an execution-profile override resolves the runner from the profile, not the playbook', { skip: e2eSkip }, async () => {
-  // executionProfile is a private service seam (not public params); createRun accepts it, start:false skips execution.
+test('I5: inline run profile resolves the runner from the profile, not the playbook', { skip: e2eSkip }, async () => {
   const created = (await h.api.createRun({
     title: 'override',
     repo: process.cwd(),
     pipelineId: 'feature-development',
-    executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent' } },
+    profile: stubDefaultAgentProfile(),
     start: false,
   })) as { route: Route };
-  const overridden = created.route.roleBindings.filter((b) => b.runnerId === 'claude-code');
+  const overridden = created.route.roleBindings.filter((b) => b.roleId !== 'integrator');
   assert.ok(overridden.length > 0, 'feature-development has claude-code roles to override');
   for (const b of overridden) {
     assert.equal(b.resolvedRunnerId, 'stub-agent', `${b.roleId} resolves to the override`);
-    assert.equal(b.runnerSource, 'execution-profile', `${b.roleId} override is sourced from the profile`);
+    assert.equal(b.runnerSource, 'profile', `${b.roleId} override is sourced from the profile`);
   }
   const integrator = created.route.roleBindings.find((b) => b.roleId === 'integrator');
   if (integrator) assert.equal(integrator.runnerSource, 'playbook', 'a non-overridden role stays bound from the playbook');
 });
 
 test('I6: unknown pipeline and unknown playbook are rejected with ROW_NOT_FOUND', { skip: e2eSkip }, async () => {
-  await assert.rejects(() => h.api.simulateRoute({ title: 'x', pipeline: 'no-such-pipeline' }), hasCode('ROW_NOT_FOUND'));
-  await assert.rejects(() => h.api.simulateRoute({ title: 'x', playbookId: 'no-such-playbook' }), hasCode('ROW_NOT_FOUND'));
+  await assert.rejects(
+    () => h.api.simulateRoute({ title: 'x', pipeline: 'no-such-pipeline', profile: emptyProfile() }),
+    hasCode('ROW_NOT_FOUND'),
+  );
+  await assert.rejects(
+    () => h.api.simulateRoute({
+      title: 'x',
+      pipeline: 'feature-development',
+      playbookId: 'no-such-playbook',
+      profile: emptyProfile(),
+    }),
+    hasCode('ROW_NOT_FOUND'),
+  );
 });
 
 test('I7: simulate_route matches the route a created run is actually bound to', { skip: e2eSkip }, async () => {
-  const sim = await route({ title: 'consistency', repo: process.cwd(), pipeline: 'feature-development' });
+  const profile = stubDefaultAgentProfile();
+  const sim = await route({ title: 'consistency', repo: process.cwd(), pipeline: 'feature-development', profile });
   const created = (await h.api.createRun({
     title: 'consistency',
     repo: process.cwd(),
     pipelineId: 'feature-development',
+    profile,
     start: false,
   })) as { route: Route };
   assert.equal(created.route.pipelineId, sim.pipelineId);
@@ -152,7 +163,7 @@ test('I7: simulate_route matches the route a created run is actually bound to', 
   );
 });
 
-// Group I — bindingOverrides (typed launch profile)
+// Group I — run-profile bindings
 
 type FullBinding = Binding & {
   resolvedModelLevel?: string;
@@ -164,24 +175,29 @@ type FullBinding = Binding & {
 };
 type FullRoute = Omit<Route, 'roleBindings'> & { roleBindings: FullBinding[] };
 
-test('I8: bindingOverrides by roleId records per-axis provenance on resolved bindings', { skip: e2eSkip }, async () => {
+test('I8: profile bindings by roleId records per-axis provenance on resolved bindings', { skip: e2eSkip }, async () => {
   // developer defaults: standard model, claude-code runner — override all three overridable axes.
   const r = (await h.api.simulateRoute({
     title: 'provenance',
     pipeline: 'feature-development',
-    executionProfile: {
-      bindingOverrides: [{ match: { roleId: 'developer' }, modelLevel: 'deep', timeoutMs: 60000, permissionMode: 'acceptEdits' }],
+    profile: {
+      ...emptyProfile(),
+      bindings: {
+        slots: {
+          'role:developer': { modelLevel: 'deep', timeoutMs: 60000, permissionMode: 'acceptEdits' },
+        },
+      },
     },
   })) as FullRoute;
 
   const dev = r.roleBindings.find((b) => b.roleId === 'developer');
   assert.ok(dev, 'developer binding present');
   assert.equal(dev.resolvedModelLevel, 'deep', 'modelLevel override applied');
-  assert.equal(dev.modelSource, 'execution-profile', 'model sourced from execution-profile');
+  assert.equal(dev.modelSource, 'profile', 'model sourced from profile');
   assert.equal(dev.resolvedTimeoutMs, 60000, 'timeoutMs override applied');
-  assert.equal(dev.timeoutSource, 'execution-profile', 'timeout sourced from execution-profile');
+  assert.equal(dev.timeoutSource, 'profile', 'timeout sourced from profile');
   assert.equal(dev.resolvedPermissionMode, 'acceptEdits', 'permissionMode override applied');
-  assert.equal(dev.permissionSource, 'execution-profile', 'permission sourced from execution-profile');
+  assert.equal(dev.permissionSource, 'profile', 'permission sourced from profile');
 
   // non-overridden roles retain playbook-sourced model
   const others = r.roleBindings.filter((b) => b.roleId !== 'developer');
@@ -192,14 +208,15 @@ test('I8: bindingOverrides by roleId records per-axis provenance on resolved bin
   }
 });
 
-test('I9: bindingOverrides unknown runnerId is rejected with VALIDATION_FAILURE before run starts', { skip: e2eSkip }, async () => {
+test('I9: profile binding with unknown runnerId is rejected with VALIDATION_FAILURE before run starts', { skip: e2eSkip }, async () => {
   await assert.rejects(
     () =>
       h.api.simulateRoute({
         title: 'bad-runner',
         pipeline: 'feature-development',
-        executionProfile: {
-          bindingOverrides: [{ match: { roleId: 'developer' }, runnerId: 'no-such-runner' }],
+        profile: {
+          ...emptyProfile(),
+          bindings: { slots: { 'role:developer': { runnerId: 'no-such-runner', modelLevel: 'standard' } } },
         },
       }),
     (err: unknown) => {
@@ -210,15 +227,16 @@ test('I9: bindingOverrides unknown runnerId is rejected with VALIDATION_FAILURE 
   );
 });
 
-test('I9b: node-only bindingOverride with unknown runnerId fails closed-schema validation (no role match required)', { skip: e2eSkip }, async () => {
+test('I9b: node-only profile binding with unknown runnerId fails closed-schema validation', { skip: e2eSkip }, async () => {
   // Phase A validates EVERY override entry regardless of whether it matches a selected role.
   await assert.rejects(
     () =>
       h.api.simulateRoute({
         title: 'node-bad-runner',
         pipeline: 'feature-development',
-        executionProfile: {
-          bindingOverrides: [{ match: { nodeId: 'step-1' }, runnerId: 'no-such-runner' }],
+        profile: {
+          ...emptyProfile(),
+          bindings: { slots: { 'node:developer': { runnerId: 'no-such-runner', modelLevel: 'standard' } } },
         },
       }),
     (err: unknown) => {
@@ -229,15 +247,16 @@ test('I9b: node-only bindingOverride with unknown runnerId fails closed-schema v
   );
 });
 
-test('I10: bindingOverrides permissionMode mismatched for runner is rejected (PROFILE_SCHEMA_CLOSED)', { skip: e2eSkip }, async () => {
+test('I10: profile permissionMode mismatched for runner is rejected (PROFILE_SCHEMA_CLOSED)', { skip: e2eSkip }, async () => {
   // developer is claude-code; workspace-write is codex-only — must fail closed.
   await assert.rejects(
     () =>
       h.api.simulateRoute({
         title: 'bad-permission',
         pipeline: 'feature-development',
-        executionProfile: {
-          bindingOverrides: [{ match: { roleId: 'developer' }, permissionMode: 'workspace-write' }],
+        profile: {
+          ...emptyProfile(),
+          bindings: { slots: { 'role:developer': { permissionMode: 'workspace-write' } } },
         },
       }),
     (err: unknown) => {
@@ -263,6 +282,7 @@ test('I11: feature-development profile routes through stored run profile and sta
   const r = (await h.api.simulateRoute({
     title: 'profile routing test',
     pipeline: 'feature-development',
+    playbookId: DEFAULT_PLAYBOOK_ID,
     profileId: 'codex-primary-claude-review-consensus',
   })) as ProvenanceRoute;
 
@@ -283,6 +303,7 @@ test('I11: feature-development profile routes through stored run profile and sta
     title: 'profile routing test',
     repo: process.cwd(),
     pipelineId: 'feature-development',
+    playbookId: DEFAULT_PLAYBOOK_ID,
     profileId: 'codex-primary-claude-review-consensus',
     start: false,
   })) as { route: ProvenanceRoute };

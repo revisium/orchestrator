@@ -216,8 +216,8 @@ export function routedRunCaseAgent(runCases: Map<string, RunCase>, sink: AgentSi
  * process artifact. When the logical role is `developer` and a worktree is registered for the run,
  * it writes a file so the real integrator has a diff to commit.
  *
- * This is the default agent used by `createRunHarness()`; it replaces `claude-code` via
- * `executionProfile.runnerOverrides`, so no real `claude` process is ever spawned in e2e.
+ * This is the default agent used by `createRunHarness()`; e2e run profiles route agent roles to
+ * `stub-agent`, so no real `claude` process is ever spawned in e2e.
  */
 export function deterministicAgent(
   agentCalls: AgentCall[],

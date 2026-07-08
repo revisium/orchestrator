@@ -22,7 +22,7 @@ durable route pinning.
 
 This spec does not define the physical `.revo` worktree layout. That is owned by
 [revo-playbook-materialization-v1.spec.md](./revo-playbook-materialization-v1.spec.md). It also does not define runner
-selection, provider model names, or execution-profile override policy.
+selection, provider model names, or run-profile binding policy.
 
 The key words MUST, MUST NOT, SHOULD, SHOULD NOT, MAY are to be interpreted as in RFC 2119 / BCP 14.
 

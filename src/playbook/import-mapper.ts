@@ -5,6 +5,7 @@ import { PlaybookError } from './errors.js';
 import type { ResolvedPlaybookSource } from './source-resolver.js';
 import { composeRolePrompt } from './prompt-composer.js';
 import { normalizeRouteGates } from '../pipeline/route-contract.js';
+import { runProfileHash } from '../control-plane/run-profiles.js';
 
 export type VersionedRow = {
   table: 'playbooks' | 'roles' | 'pipelines' | 'run_profiles';
@@ -102,7 +103,7 @@ function mapRole(root: string, playbookId: string, role: RoleCatalogRecord, now:
   if (role.runnerId === 'stub-agent') {
     throw new PlaybookError(
       'PLAYBOOK_INVALID_CATALOG',
-      `Production playbook role ${role.id} must not bind runner_id stub-agent; use an execution profile override for test stubs`,
+      `Production playbook role ${role.id} must not bind runner_id stub-agent; use a run profile binding for test stubs`,
     );
   }
   const requiredPrompt = !role.runnerId.startsWith('revo-');
@@ -172,17 +173,14 @@ function mapRunProfile(
 ): VersionedRow {
   const importedProfileId = scopedImportRowId(playbookId, profile.id);
   const profileJson = {
-    id: profile.id,
-    pipelineId: profile.pipelineId,
     schemaVersion: profile.schemaVersion,
-    version: profile.version,
-    displayName: profile.displayName,
-    summary: profile.summary,
     topology: profile.topology,
     bindings: profile.bindings,
-    status: profile.status,
   };
-  const profileHash = hash(profileJson);
+  const profileHash = runProfileHash(profileJson, {
+    pipelineId: profile.pipelineId,
+    schemaVersion: profile.schemaVersion,
+  });
   return {
     table: 'run_profiles',
     rowId: importedProfileId,

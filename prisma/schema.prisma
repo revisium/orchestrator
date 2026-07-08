@@ -39,23 +39,22 @@ model RevoProject {
 }
 
 model TaskRun {
-  id               String       @id
-  createdAt        DateTime     @default(now())
-  updatedAt        DateTime     @updatedAt
-  projectId        String?
-  project          RevoProject? @relation(fields: [projectId], references: [id], onDelete: Restrict)
-  title            String
-  description      String       @default("")
-  status           String
-  repos            String[]
-  scope            String       @default("")
-  priority         Int          @default(0)
-  playbookId       String       @default("")
-  pipelineId       String       @default("")
-  params           Json         @default("{}")
-  routeDecision    Json         @default("{}")
-  executionProfile Json         @default("{}")
-  createdBy        String       @default("")
+  id            String       @id
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  projectId     String?
+  project       RevoProject? @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  title         String
+  description   String       @default("")
+  status        String
+  repos         String[]
+  scope         String       @default("")
+  priority      Int          @default(0)
+  playbookId    String       @default("")
+  pipelineId    String       @default("")
+  params        Json         @default("{}")
+  routeDecision Json         @default("{}")
+  createdBy     String       @default("")
 
   tasks     RunTask[]
   events    RunEvent[]

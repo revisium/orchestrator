@@ -14,7 +14,6 @@ CREATE TABLE "TaskRun" (
     "pipelineId" TEXT NOT NULL DEFAULT '',
     "params" JSONB NOT NULL DEFAULT '{}',
     "routeDecision" JSONB NOT NULL DEFAULT '{}',
-    "executionProfile" JSONB NOT NULL DEFAULT '{}',
     "createdBy" TEXT NOT NULL DEFAULT '',
 
     CONSTRAINT "TaskRun_pkey" PRIMARY KEY ("id")

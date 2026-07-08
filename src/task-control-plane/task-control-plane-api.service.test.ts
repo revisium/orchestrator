@@ -11,12 +11,12 @@ import { AgentObservabilityError, AgentObservabilityService } from '../observabi
 import type { PipelineService } from '../pipeline/pipeline.service.js';
 import type { RouteDecision } from '../pipeline/route-contract.js';
 import type { InboxService } from '../revisium/inbox.service.js';
-import type { PlaybooksService } from '../revisium/playbooks.service.js';
+import type { PlaybooksService, RunProfileSummary } from '../revisium/playbooks.service.js';
 import type { RolesService } from '../revisium/roles.service.js';
 import type { RunService } from '../revisium/run.service.js';
 import { CreateRunWorkflowError, previewCreateRunIds } from '../run/create-run.js';
 import { hasWorkflowProgress, TaskControlPlaneApiService } from './task-control-plane-api.service.js';
-import { topologyProfileFromRunProfile } from '../control-plane/run-profiles.js';
+import { runProfileHash, topologyProfileFromRunProfile } from '../control-plane/run-profiles.js';
 import { materializeTemplate, MATERIALIZER_VERSION } from '../pipeline-core/materialize.js';
 import { POLICY_VERSION } from '../control-plane/default-playbook-policy.js';
 import { templateFromExecutionPolicy } from '../pipeline/data-driven-template.js';
@@ -39,6 +39,45 @@ const LOCAL_CHANGE_TEMPLATE = {
   },
 };
 const LOCAL_CHANGE_POLICY = { template_json: LOCAL_CHANGE_TEMPLATE };
+const LOCAL_CHANGE_PROFILE = {
+  schemaVersion: 'run-profile/v1',
+  topology: { stages: { developer: { mode: 'single' } } },
+  bindings: {
+    slots: {
+      developer: { runnerId: 'stub-agent', modelLevel: 'standard' },
+    },
+  },
+};
+function inlineProfileFor(slots: Record<string, Record<string, unknown>> = {}): Record<string, unknown> {
+  return {
+    schemaVersion: 'run-profile/v1',
+    topology: { stages: { developer: { mode: 'single' } } },
+    bindings: { slots: Object.keys(slots).length ? slots : { 'node:doneEnd': { modelLevel: 'standard' } } },
+  };
+}
+
+function emptyInlineProfile(): Record<string, unknown> {
+  return {
+    schemaVersion: 'run-profile/v1',
+    topology: { stages: {} },
+    bindings: { slots: {} },
+  };
+}
+
+function policyFor(pipelineId: string): Record<string, unknown> {
+  return {
+    template_json: {
+      specVersion: '1.0',
+      pipelineId,
+      entry: 'doneEnd',
+      verdicts: { domain: ['approved'] },
+      nodes: {
+        doneEnd: { id: 'doneEnd', kind: 'terminal', status: 'succeeded' },
+      },
+    },
+  };
+}
+
 const LOCAL_CHANGE_ROUTE: RouteDecision = {
   playbookId: 'pb',
   pipelineId: 'local-change',
@@ -49,7 +88,7 @@ const LOCAL_CHANGE_ROUTE: RouteDecision = {
   optionalRoles: [],
   routeGates: [],
   executionPolicy: LOCAL_CHANGE_POLICY,
-  executionProfile: { id: 'test', runnerOverrides: { 'claude-code': 'stub-agent' } },
+  launchBindings: [{ match: { roleId: 'developer' }, runnerId: 'stub-agent', modelLevel: 'standard' }],
   roleBindings: [
     {
       roleId: 'developer',
@@ -57,9 +96,20 @@ const LOCAL_CHANGE_ROUTE: RouteDecision = {
       modelLevel: 'standard',
       runnerId: 'claude-code',
       resolvedRunnerId: 'stub-agent',
-      runnerSource: 'execution-profile',
+      runnerSource: 'profile',
+      resolvedModelLevel: 'standard',
+      modelSource: 'profile',
     },
   ],
+  profileSource: 'inline',
+  profileHash: 'test-profile-hash',
+  profileSnapshot: LOCAL_CHANGE_PROFILE,
+  requestedPipelineId: 'local-change',
+  basePipelineId: 'local-change',
+  materializedTemplateHash: 'test-template-hash',
+  materializedTemplate: LOCAL_CHANGE_TEMPLATE,
+  materializerVersion: MATERIALIZER_VERSION,
+  policyVersion: POLICY_VERSION,
   params: { ticket: 'T-1' },
 };
 
@@ -155,6 +205,16 @@ function makeApi(overrides: {
         },
       ];
     },
+    async loadModelProfile(level: string) {
+      return {
+        level: level as 'standard',
+        provider: 'anthropic',
+        modelId: 'claude-sonnet',
+        params: {},
+        costPerInput: 3,
+        costPerOutput: 15,
+      };
+    },
     ...overrides.rolesService,
   };
   const playbooksService: Partial<PlaybooksService> = {
@@ -200,6 +260,21 @@ function makeApi(overrides: {
     },
     async getPipeline() {
       return null;
+    },
+    async resolveRunProfile() {
+      return {
+        id: 'pb-local-change-stub',
+        playbookId: 'pb',
+        pipelineId: 'local-change',
+        profileId: 'local-change-stub',
+        schemaVersion: 'run-profile/v1',
+        version: '1',
+        displayName: 'Local change stub',
+        summary: 'Test stub profile',
+        profile: LOCAL_CHANGE_PROFILE,
+        profileHash: 'local-change-stub-hash',
+        status: 'active' as const,
+      };
     },
     ...overrides.playbooksService,
   };
@@ -405,7 +480,7 @@ test('TaskControlPlaneApiService.getRunWorkflow returns UI projection through se
               optionalRoles: [],
               routeGates: [],
               executionPolicy: LOCAL_CHANGE_POLICY,
-              executionProfile: { id: 'default', runnerOverrides: {} },
+              launchBindings: [],
               roleBindings: [{
                 roleId: 'developer',
                 rowId: 'pb-developer',
@@ -1338,7 +1413,7 @@ test('TaskControlPlaneApiService.createRun can immediately start the workflow', 
         starts.push({
           runId,
           pipelineId: opts.route.pipelineId,
-          override: opts.route.executionProfile.runnerOverrides['claude-code'],
+          override: opts.route.launchBindings.find((binding) => binding.match.roleId === 'developer')?.runnerId,
         });
         return { workflowID: runId } as Awaited<ReturnType<PipelineService['startDataDrivenTask']>>;
       },
@@ -1349,7 +1424,7 @@ test('TaskControlPlaneApiService.createRun can immediately start the workflow', 
     title: 'MCP task',
     repo: '.',
     pipelineId: 'local-change',
-    executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent' } },
+    profile: LOCAL_CHANGE_PROFILE,
     start: true,
   });
 
@@ -1436,7 +1511,6 @@ test('TaskControlPlaneApiService.resumeRun creates and reuses a preflight recove
     pipeline_id: 'local-change',
     params: { ticket: 'T-1' },
     route_decision: LOCAL_CHANGE_ROUTE,
-    execution_profile: LOCAL_CHANGE_ROUTE.executionProfile,
   };
   const childRows = new Map<string, Record<string, unknown>>();
   const events = new Map<string, Array<{
@@ -1522,7 +1596,6 @@ test('TaskControlPlaneApiService.resumeRun creates and reuses a preflight recove
           pipeline_id: input.pipelineId ?? '',
           params: input.params ?? {},
           route_decision: input.routeDecision ?? {},
-          execution_profile: input.executionProfile ?? {},
           created_at: input.now?.toISOString() ?? '',
         });
         return { runId, taskId: `task-${runId}`, eventId: 'event-recovery-created', status: 'ready' };
@@ -1601,7 +1674,6 @@ test('TaskControlPlaneApiService.resumeRun creates and reuses a preflight recove
   assert.equal(copied.playbookId, parentData.playbook_id);
   assert.equal(copied.pipelineId, parentData.pipeline_id);
   assert.deepEqual(copied.routeDecision, parentData.route_decision);
-  assert.deepEqual(copied.executionProfile, parentData.execution_profile);
   assert.deepEqual(copied.params, { ticket: 'T-1' }, 'recovery metadata must not be stored in public params');
   assert.deepEqual((copied.now as Date).toISOString(), '2026-06-27T10:00:00.000Z');
   assert.equal(typeof copied.idSuffix, 'string');
@@ -1702,7 +1774,6 @@ test('TaskControlPlaneApiService.resumeRun rejects preflight recovery when the p
             title: 'Recover dirty preflight',
             status: 'paused',
             route_decision: LOCAL_CHANGE_ROUTE,
-            execution_profile: LOCAL_CHANGE_ROUTE.executionProfile,
           },
         };
       },
@@ -1777,7 +1848,6 @@ function pausedRecoveryParentData(overrides: Record<string, unknown> = {}): Reco
     status: 'paused',
     repos: [process.cwd()],
     route_decision: LOCAL_CHANGE_ROUTE,
-    execution_profile: LOCAL_CHANGE_ROUTE.executionProfile,
     ...overrides,
   };
 }
@@ -2051,42 +2121,6 @@ test('TaskControlPlaneApiService.resumeRun rejects recovery when route_decision 
   );
 });
 
-test('TaskControlPlaneApiService.resumeRun rejects recovery when execution_profile is not a record', async () => {
-  const parentData = pausedRecoveryParentData({
-    title: 'Recover invalid execution profile',
-    execution_profile: 1,
-  });
-  const api = makeApi({
-    runService: {
-      async getRun() {
-        return { rowId: 'run-parent', data: parentData };
-      },
-      async showRun() {
-        return recoveryRunDetail('run-parent', String(parentData.title));
-      },
-      async listRunEvents() {
-        return [preflightBlockedEvent({ payload: { reason: 'preflight', lesson: 'bad execution profile' } })];
-      },
-      async createRun() {
-        assert.fail('recovery with invalid execution_profile must not create a child run');
-      },
-    },
-    dbosService: {
-      async getWorkflowStatus() {
-        return recoveryWorkflowStatus();
-      },
-    },
-  });
-
-  await assert.rejects(
-    () => api.resumeRun({ runId: 'run-parent' }),
-    (error: unknown) =>
-      error instanceof ControlPlaneError &&
-      error.code === 'VALIDATION_FAILURE' &&
-      error.message.includes('parent execution_profile is not a record'),
-  );
-});
-
 test('TaskControlPlaneApiService.resumeRun ignores lineage for another blocked event and creates a fresh child', async () => {
   const parentData = pausedRecoveryParentData({ title: 'Recover current block' });
   const childRows = new Map<string, Record<string, unknown>>();
@@ -2146,7 +2180,6 @@ test('TaskControlPlaneApiService.resumeRun ignores lineage for another blocked e
           status: 'ready',
           repos: [input.repo],
           route_decision: input.routeDecision ?? {},
-          execution_profile: input.executionProfile ?? {},
         });
         return { runId, taskId: 'task-current-recovery', eventId: 'event-current-recovery', status: 'ready' };
       },
@@ -2202,7 +2235,6 @@ test('TaskControlPlaneApiService.resumeRun reuses the expected recovery run afte
     playbook_id: 'pb',
     pipeline_id: 'local-change',
     route_decision: LOCAL_CHANGE_ROUTE,
-    execution_profile: LOCAL_CHANGE_ROUTE.executionProfile,
   };
   const childRows = new Map<string, Record<string, unknown>>();
   const events = new Map<string, Array<{
@@ -2282,7 +2314,6 @@ test('TaskControlPlaneApiService.resumeRun reuses the expected recovery run afte
           status: 'ready',
           repos: [input.repo],
           route_decision: input.routeDecision ?? {},
-          execution_profile: input.executionProfile ?? {},
           created_at: input.now?.toISOString() ?? '',
         });
         throw new CreateRunWorkflowError('partial create', { runId: expected.runId }, new Error('row conflict'));
@@ -2358,7 +2389,6 @@ test('TaskControlPlaneApiService.resumeRun rethrows partial create conflicts whe
     status: 'paused',
     repos: [process.cwd()],
     route_decision: LOCAL_CHANGE_ROUTE,
-    execution_profile: LOCAL_CHANGE_ROUTE.executionProfile,
   };
 
   const api = makeApi({
@@ -2469,6 +2499,7 @@ test('TaskControlPlaneApiService.createRun persists canonical pipeline id', asyn
     title: 'MCP task',
     repo: '.',
     pipelineId: 'local-change',
+    profile: LOCAL_CHANGE_PROFILE,
   });
 
   assert.equal(persistedPipelineId, 'local-change');
@@ -2494,6 +2525,7 @@ test('TaskControlPlaneApiService.createRun normalizes issueRef into public param
     title: 'MCP task',
     repo: '.',
     pipelineId: 'local-change',
+    profile: LOCAL_CHANGE_PROFILE,
     params: { ticket: 'RV-147' },
     issueRef,
   });
@@ -2527,7 +2559,7 @@ test('TaskControlPlaneApiService.createRun ignores public params for runner prof
     pipelineService: {
       async startDataDrivenTask(runId, opts) {
         starts.push({
-          override: opts.route.executionProfile.runnerOverrides['claude-code'],
+          override: opts.route.launchBindings.find((binding) => binding.match.roleId === 'developer')?.runnerId,
           params: opts.route.params ?? {},
         });
         return { workflowID: runId } as Awaited<ReturnType<PipelineService['startDataDrivenTask']>>;
@@ -2539,11 +2571,16 @@ test('TaskControlPlaneApiService.createRun ignores public params for runner prof
     title: 'MCP task',
     repo: '.',
     pipelineId: 'local-change',
-    params: { executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent' } }, ticket: 'ABC-1' },
+    profile: {
+      schemaVersion: 'run-profile/v1',
+      topology: { stages: { developer: { mode: 'single' } } },
+      bindings: { slots: { developer: { runnerId: 'claude-code', modelLevel: 'standard' } } },
+    },
+    params: { profileLike: { runner: 'stub-agent' }, ticket: 'ABC-1' },
     start: true,
   });
 
-  assert.deepEqual(starts, [{ override: undefined, params: { ticket: 'ABC-1' } }]);
+  assert.deepEqual(starts, [{ override: 'claude-code', params: { profileLike: { runner: 'stub-agent' }, ticket: 'ABC-1' } }]);
 });
 
 test('TaskControlPlaneApiService.resolveRunState exposes issueRef from run params', async () => {
@@ -3038,10 +3075,14 @@ test('TaskControlPlaneApiService.simulateRoute rejects ambiguous positive auto-r
   );
 });
 
-test('TaskControlPlaneApiService.simulateRoute allows a positive confident installed route decision', async () => {
+test('TaskControlPlaneApiService.simulateRoute allows explicit route decision with inline profile', async () => {
   const api = makeApi();
 
-  const route = await api.simulateRoute({ title: 'small local edit' });
+  const route = await api.simulateRoute({
+    title: 'small local edit',
+    pipeline: 'local-change',
+    profile: LOCAL_CHANGE_PROFILE,
+  });
 
   assert.equal(route.pipelineId, 'local-change');
   assert.deepEqual(route.roles, ['developer']);
@@ -3068,7 +3109,7 @@ test('TaskControlPlaneApiService rejects stub-agent from production playbook rol
   });
 
   await assert.rejects(
-    () => api.simulateRoute({ title: 'small local edit' }),
+    () => api.simulateRoute({ title: 'small local edit', pipeline: 'local-change', profile: inlineProfileFor() }),
     (error: unknown) =>
       error instanceof ControlPlaneError &&
       error.code === 'VALIDATION_FAILURE' &&
@@ -3126,13 +3167,17 @@ test('TaskControlPlaneApiService.simulateRoute binds every required playbook rol
           alternativeRoles: [],
           optionalRoles: [],
           routeGates: [],
-          executionPolicy: {},
+          executionPolicy: policyFor('analysis-only'),
         };
       },
     },
   });
 
-  const route = await api.simulateRoute({ title: 'Analyze this', pipeline: 'analysis-only' });
+  const route = await api.simulateRoute({
+    title: 'Analyze this',
+    pipeline: 'analysis-only',
+    profile: emptyInlineProfile(),
+  });
 
   assert.deepEqual(route.requiredRoles, ['architect', 'analyst', 'watcher']);
   assert.deepEqual(route.roleBindings.map((item) => item.roleId), ['architect', 'analyst', 'watcher']);
@@ -3179,13 +3224,13 @@ test('TaskControlPlaneApiService.simulateRoute binds an unknown-id role purely f
           alternativeRoles: [],
           optionalRoles: [],
           routeGates: [],
-          executionPolicy: {},
+          executionPolicy: policyFor('poll'),
         };
       },
     },
   });
 
-  const route = await api.simulateRoute({ title: 'route poll', pipeline: 'poll' });
+  const route = await api.simulateRoute({ title: 'route poll', pipeline: 'poll', profile: emptyInlineProfile() });
 
   // The binding resolves the unknown-id role by id alone; the route carries NO role `kind` (the
   // role-kind machinery was removed in slice 4 — the data-driven engine reads no `kind`).
@@ -3274,13 +3319,17 @@ test('TaskControlPlaneApiService.simulateRoute binds canonical feature-developme
           alternativeRoles: [],
           optionalRoles: [],
           routeGates: ['task spec approval', 'merge approval'],
-          executionPolicy: {},
+          executionPolicy: policyFor('feature-development'),
         };
       },
     },
   });
 
-  const route = await api.simulateRoute({ title: 'Build feature', pipeline: 'feature-development' });
+  const route = await api.simulateRoute({
+    title: 'Build feature',
+    pipeline: 'feature-development',
+    profile: emptyInlineProfile(),
+  });
 
   assert.deepEqual(route.requiredRoles, ['orchestrator', 'analyst', 'reviewer', 'developer', 'integrator', 'watcher']);
   assert.deepEqual(route.roleBindings.map((item) => item.roleId), [
@@ -3369,13 +3418,13 @@ test('TaskControlPlaneApiService.simulateRoute binds the bugfix defect-analysis 
           alternativeRoles: [{ group_id: 'defect-analysis', roles: ['analyst', 'reviewer'], resolution: 'at_least_one' }],
           optionalRoles: [],
           routeGates: ['merge'],
-          executionPolicy: {},
+          executionPolicy: policyFor('bugfix'),
         };
       },
     },
   });
 
-  const route = await api.simulateRoute({ title: 'Fix bug', pipeline: 'bugfix' });
+  const route = await api.simulateRoute({ title: 'Fix bug', pipeline: 'bugfix', profile: emptyInlineProfile() });
 
   assert.deepEqual(route.requiredRoles, ['orchestrator', 'developer', 'integrator', 'watcher']);
   // analyst (the resolved defect-analysis alternative) is appended after the required roles; the
@@ -3708,15 +3757,21 @@ function makeApiForProfileTests(loadModelProfileResult?: 'ok' | 'notfound') {
   });
 }
 
+function inlineLocalProfile(slot: Record<string, unknown>): Record<string, unknown> {
+  return {
+    schemaVersion: 'run-profile/v1',
+    topology: { stages: { developer: { mode: 'single' } } },
+    bindings: { slots: { developer: slot } },
+  };
+}
+
 test('PROFILE_SCHEMA_CLOSED: rejects bindingOverride with unknown runner (not in BUILTIN_RUNNERS)', async () => {
   const api = makeApiForProfileTests();
   await assert.rejects(
     () => api.simulateRoute({
       title: 'test',
       pipeline: 'local-change',
-      executionProfile: {
-        bindingOverrides: [{ match: { roleId: 'developer' }, runnerId: 'unknown-runner-xyz' }],
-      },
+      profile: inlineLocalProfile({ runnerId: 'unknown-runner-xyz', modelLevel: 'standard' }),
     }),
     (err: ControlPlaneError) => {
       assert.ok(err.message.includes('PROFILE_SCHEMA_CLOSED'), `expected PROFILE_SCHEMA_CLOSED in: ${err.message}`);
@@ -3732,13 +3787,71 @@ test('PROFILE_SCHEMA_CLOSED: rejects node-only override with unknown runner (reg
     () => api.simulateRoute({
       title: 'test',
       pipeline: 'local-change',
-      executionProfile: {
-        bindingOverrides: [{ match: { nodeId: 'n1' }, runnerId: 'ghost-runner' }],
+      profile: {
+        ...inlineLocalProfile({ runnerId: 'claude-code', modelLevel: 'standard' }),
+        bindings: { slots: { 'node:developer': { runnerId: 'ghost-runner', modelLevel: 'standard' } } },
       },
     }),
     (err: ControlPlaneError) => {
       assert.ok(err.message.includes('PROFILE_SCHEMA_CLOSED'), `expected PROFILE_SCHEMA_CLOSED in: ${err.message}`);
       assert.ok(err.message.includes('ghost-runner'), `expected runnerId in: ${err.message}`);
+      return true;
+    },
+  );
+});
+
+test('PROFILE_SCHEMA_CLOSED: rejects unknown role slot instead of silently ignoring it', async () => {
+  const api = makeApiForProfileTests();
+  await assert.rejects(
+    () => api.simulateRoute({
+      title: 'test',
+      pipeline: 'local-change',
+      profile: {
+        ...inlineLocalProfile({ runnerId: 'claude-code', modelLevel: 'standard' }),
+        bindings: { slots: { 'role:developr': { runnerId: 'claude-code', modelLevel: 'standard' } } },
+      },
+    }),
+    (err: ControlPlaneError) => {
+      assert.ok(err.message.includes('PROFILE_SCHEMA_CLOSED'), `expected PROFILE_SCHEMA_CLOSED in: ${err.message}`);
+      assert.ok(err.message.includes('roleId "developr"'), `expected roleId in: ${err.message}`);
+      return true;
+    },
+  );
+});
+
+test('PROFILE_SCHEMA_CLOSED: rejects unknown node slot instead of silently ignoring it', async () => {
+  const api = makeApiForProfileTests();
+  await assert.rejects(
+    () => api.simulateRoute({
+      title: 'test',
+      pipeline: 'local-change',
+      profile: {
+        ...inlineLocalProfile({ runnerId: 'claude-code', modelLevel: 'standard' }),
+        bindings: { slots: { developr: { runnerId: 'claude-code', modelLevel: 'standard' } } },
+      },
+    }),
+    (err: ControlPlaneError) => {
+      assert.ok(err.message.includes('PROFILE_SCHEMA_CLOSED'), `expected PROFILE_SCHEMA_CLOSED in: ${err.message}`);
+      assert.ok(err.message.includes('nodeId "developr"'), `expected nodeId in: ${err.message}`);
+      return true;
+    },
+  );
+});
+
+test('PROFILE_SCHEMA_CLOSED: rejects unknown topology stage instead of silently ignoring it', async () => {
+  const api = makeApiForProfileTests();
+  await assert.rejects(
+    () => api.simulateRoute({
+      title: 'test',
+      pipeline: 'local-change',
+      profile: {
+        ...inlineLocalProfile({ runnerId: 'claude-code', modelLevel: 'standard' }),
+        topology: { stages: { developr: { mode: 'single' } } },
+      },
+    }),
+    (err: ControlPlaneError) => {
+      assert.ok(err.message.includes('PROFILE_SCHEMA_CLOSED'), `expected PROFILE_SCHEMA_CLOSED in: ${err.message}`);
+      assert.ok(err.message.includes('topology stage "developr"'), `expected topology stage in: ${err.message}`);
       return true;
     },
   );
@@ -3750,9 +3863,7 @@ test('PROFILE_SCHEMA_CLOSED: rejects a typo in match.runnerId instead of silentl
     () => api.simulateRoute({
       title: 'test',
       pipeline: 'local-change',
-      executionProfile: {
-        bindingOverrides: [{ match: { runnerId: 'cladue-code' }, modelLevel: 'deep' }],
-      },
+      profile: inlineLocalProfile({ runnerId: 'cladue-code', modelLevel: 'deep' }),
     }),
     (err: ControlPlaneError) => {
       assert.ok(err.message.includes('PROFILE_SCHEMA_CLOSED'), `expected PROFILE_SCHEMA_CLOSED in: ${err.message}`);
@@ -3768,31 +3879,63 @@ test('PROFILE_SCHEMA_CLOSED: rejects an invalid bindingOverride timeoutMs instea
     () => api.simulateRoute({
       title: 'test',
       pipeline: 'local-change',
-      executionProfile: {
-        bindingOverrides: [{ match: { roleId: 'developer' }, timeoutMs: -5 }],
-      },
+      profile: inlineLocalProfile({ runnerId: 'claude-code', modelLevel: 'standard', timeoutMs: -5 }),
     }),
     (err: ControlPlaneError) => {
-      assert.ok(err.message.includes('PROFILE_SCHEMA_CLOSED'), `expected PROFILE_SCHEMA_CLOSED in: ${err.message}`);
+      assert.ok(err.message.includes('run-profile/v1'), `expected run-profile/v1 in: ${err.message}`);
       assert.ok(err.message.includes('timeoutMs'), `expected timeoutMs named in: ${err.message}`);
       return true;
     },
   );
 });
 
-test('PROFILE_SCHEMA_CLOSED: rejects bindingOverride with empty match', async () => {
+test('PROFILE_SCHEMA_CLOSED: accepts no-op inline profile overlays', async () => {
+  const api = makeApiForProfileTests();
+  const route = await api.simulateRoute({
+    title: 'test',
+    pipeline: 'local-change',
+    profile: {
+      schemaVersion: 'run-profile/v1',
+      topology: { stages: {} },
+      bindings: { slots: {} },
+    },
+  });
+
+  assert.deepEqual(route.launchBindings, []);
+  assert.equal(route.roleBindings[0]?.runnerSource, 'playbook');
+});
+
+test('PROFILE_SCHEMA_CLOSED: rejects catalog-only lifecycle fields in inline profile overlays', async () => {
   const api = makeApiForProfileTests();
   await assert.rejects(
     () => api.simulateRoute({
       title: 'test',
       pipeline: 'local-change',
-      executionProfile: {
-        bindingOverrides: [{ match: {}, modelLevel: 'deep' }],
+      profile: {
+        schemaVersion: 'run-profile/v1',
+        topology: { stages: {} },
+        bindings: { slots: {} },
+        status: 'deprecated',
       },
     }),
     (err: ControlPlaneError) => {
-      assert.ok(err.message.includes('PROFILE_SCHEMA_CLOSED'), `expected PROFILE_SCHEMA_CLOSED in: ${err.message}`);
-      assert.ok(err.message.includes('at least one of'), `expected 'at least one of' in: ${err.message}`);
+      assert.ok(err.message.includes('run-profile/v1'), `expected run-profile/v1 in: ${err.message}`);
+      assert.ok(err.message.includes('additional properties'), `expected additional properties in: ${err.message}`);
+      return true;
+    },
+  );
+});
+
+test('PROFILE_SCHEMA_CLOSED: rejects empty slot binding object', async () => {
+  const api = makeApiForProfileTests();
+  await assert.rejects(
+    () => api.simulateRoute({
+      title: 'test',
+      pipeline: 'local-change',
+      profile: { ...inlineLocalProfile({ runnerId: 'claude-code', modelLevel: 'deep' }), bindings: { slots: { developer: {} } } },
+    }),
+    (err: ControlPlaneError) => {
+      assert.ok(err.message.includes('run-profile/v1'), `expected run-profile/v1 in: ${err.message}`);
       return true;
     },
   );
@@ -3804,9 +3947,7 @@ test('PROFILE_SCHEMA_CLOSED: rejects modelLevel unavailable (ROW_NOT_FOUND from 
     () => api.simulateRoute({
       title: 'test',
       pipeline: 'local-change',
-      executionProfile: {
-        bindingOverrides: [{ match: { roleId: 'developer' }, modelLevel: 'deep' }],
-      },
+      profile: inlineLocalProfile({ runnerId: 'claude-code', modelLevel: 'deep' }),
     }),
     (err: ControlPlaneError) => {
       assert.ok(err.message.includes('PROFILE_SCHEMA_CLOSED'), `expected PROFILE_SCHEMA_CLOSED in: ${err.message}`);
@@ -3822,12 +3963,10 @@ test('PROFILE_SCHEMA_CLOSED: rejects timeoutMs: 0 instead of silently stripping 
     () => api.simulateRoute({
       title: 'test',
       pipeline: 'local-change',
-      executionProfile: {
-        bindingOverrides: [{ match: { roleId: 'developer' }, timeoutMs: 0 }],
-      },
+      profile: inlineLocalProfile({ runnerId: 'claude-code', modelLevel: 'standard', timeoutMs: 0 }),
     }),
     (err: ControlPlaneError) => {
-      assert.ok(err.message.includes('PROFILE_SCHEMA_CLOSED'), `expected PROFILE_SCHEMA_CLOSED in: ${err.message}`);
+      assert.ok(err.message.includes('run-profile/v1'), `expected run-profile/v1 in: ${err.message}`);
       assert.ok(err.message.includes('timeoutMs'), `expected timeoutMs named in: ${err.message}`);
       return true;
     },
@@ -3840,9 +3979,7 @@ test('PROFILE_SCHEMA_CLOSED: rejects timeoutMs > 86400000', async () => {
     () => api.simulateRoute({
       title: 'test',
       pipeline: 'local-change',
-      executionProfile: {
-        bindingOverrides: [{ match: { roleId: 'developer' }, timeoutMs: 86_400_001 }],
-      },
+      profile: inlineLocalProfile({ runnerId: 'claude-code', modelLevel: 'standard', timeoutMs: 86_400_001 }),
     }),
     (err: ControlPlaneError) => {
       assert.ok(err.message.includes('PROFILE_SCHEMA_CLOSED'), `expected PROFILE_SCHEMA_CLOSED in: ${err.message}`);
@@ -3857,8 +3994,9 @@ test('PROFILE_SCHEMA_CLOSED: rejects bypassPermissions on codex runner', async (
     () => api.simulateRoute({
       title: 'test',
       pipeline: 'local-change',
-      executionProfile: {
-        bindingOverrides: [{ match: { roleId: 'reviewer' }, permissionMode: 'bypassPermissions' }],
+      profile: {
+        ...inlineLocalProfile({ runnerId: 'claude-code', modelLevel: 'standard' }),
+        bindings: { slots: { reviewer: { runnerId: 'codex', modelLevel: 'codex-standard', permissionMode: 'bypassPermissions' } } },
       },
     }),
     (err: ControlPlaneError) => {
@@ -3875,9 +4013,7 @@ test('PROFILE_SCHEMA_CLOSED: rejects workspace-write on claude-code runner', asy
     () => api.simulateRoute({
       title: 'test',
       pipeline: 'local-change',
-      executionProfile: {
-        bindingOverrides: [{ match: { roleId: 'developer' }, permissionMode: 'workspace-write' }],
-      },
+      profile: inlineLocalProfile({ runnerId: 'claude-code', modelLevel: 'standard', permissionMode: 'workspace-write' }),
     }),
     (err: ControlPlaneError) => {
       assert.ok(err.message.includes('PROFILE_SCHEMA_CLOSED'), `expected PROFILE_SCHEMA_CLOSED in: ${err.message}`);
@@ -3892,9 +4028,7 @@ test('PROFILE_SCHEMA_CLOSED: accepts workspace-write on codex runner', async () 
   const result = await api.simulateRoute({
     title: 'test',
     pipeline: 'local-change',
-    executionProfile: {
-      bindingOverrides: [{ match: { roleId: 'reviewer' }, permissionMode: 'workspace-write' }],
-    },
+    profile: inlineLocalProfile({ runnerId: 'codex', modelLevel: 'codex-standard', permissionMode: 'workspace-write' }),
   });
   assert.ok(result);
 });
@@ -3905,8 +4039,9 @@ test('PROFILE_SCHEMA_CLOSED: rejects permissionMode when runner undeterminable (
     () => api.simulateRoute({
       title: 'test',
       pipeline: 'local-change',
-      executionProfile: {
-        bindingOverrides: [{ match: { nodeId: 'n1' }, permissionMode: 'default' }],
+      profile: {
+        ...inlineLocalProfile({ runnerId: 'claude-code', modelLevel: 'standard' }),
+        bindings: { slots: { 'node:developer': { permissionMode: 'default' } } },
       },
     }),
     (err: ControlPlaneError) => {
@@ -3956,8 +4091,10 @@ test('PROFILE_SCHEMA_CLOSED: rejects permissionMode on script runner (not suppor
     () => api.simulateRoute({
       title: 'test',
       pipeline: 'local-change',
-      executionProfile: {
-        bindingOverrides: [{ match: { roleId: 'script-role' }, runnerId: 'script', permissionMode: 'default' }],
+      profile: {
+        schemaVersion: 'run-profile/v1',
+        topology: { stages: { developer: { mode: 'single' } } },
+        bindings: { slots: { 'role:script-role': { runnerId: 'script', modelLevel: 'standard', permissionMode: 'default' } } },
       },
     }),
     (err: ControlPlaneError) => {
@@ -3968,7 +4105,7 @@ test('PROFILE_SCHEMA_CLOSED: rejects permissionMode on script runner (not suppor
   );
 });
 
-test('PROFILE_SCHEMA_CLOSED: Phase-A uses POST-runnerOverrides runner for permissionMode validation', async () => {
+test('PROFILE_SCHEMA_CLOSED: validates permissionMode against profile-selected runner', async () => {
   const api = makeApi({
     rolesService: {
       async listRoles() {
@@ -3992,10 +4129,7 @@ test('PROFILE_SCHEMA_CLOSED: Phase-A uses POST-runnerOverrides runner for permis
     () => api.simulateRoute({
       title: 'test',
       pipeline: 'local-change',
-      executionProfile: {
-        runnerOverrides: { 'claude-code': 'codex' },
-        bindingOverrides: [{ match: { roleId: 'developer' }, permissionMode: 'bypassPermissions' }],
-      },
+      profile: inlineLocalProfile({ runnerId: 'codex', modelLevel: 'codex-standard', permissionMode: 'bypassPermissions' }),
     }),
     (err: ControlPlaneError) => {
       assert.ok(err.message.includes('PROFILE_SCHEMA_CLOSED'), `expected PROFILE_SCHEMA_CLOSED in: ${err.message}`);
@@ -4010,41 +4144,41 @@ test('Phase B: resolveRouteRoles records provenance for modelLevel override', as
   const result = await api.simulateRoute({
     title: 'test',
     pipeline: 'local-change',
-    executionProfile: {
-      bindingOverrides: [{ match: { roleId: 'developer' }, modelLevel: 'deep' }],
-    },
+    profile: inlineLocalProfile({ runnerId: 'claude-code', modelLevel: 'deep' }),
   });
   const binding = result.roleBindings[0];
   assert.equal(binding?.resolvedModelLevel, 'deep');
-  assert.equal(binding?.modelSource, 'execution-profile');
+  assert.equal(binding?.modelSource, 'profile');
   assert.equal(binding?.modelLevel, 'standard');
 });
 
-test('Phase B: resolveRouteRoles records playbook provenance when no override', async () => {
+test('simulateRoute requires exactly one profile source', async () => {
   const api = makeApiForProfileTests();
-  const result = await api.simulateRoute({
-    title: 'test',
-    pipeline: 'local-change',
-    executionProfile: {},
-  });
-  const binding = result.roleBindings[0];
-  assert.equal(binding?.resolvedModelLevel, 'standard');
-  assert.equal(binding?.modelSource, 'playbook');
+  await assert.rejects(
+    () => api.simulateRoute({ title: 'test', pipeline: 'local-change' }),
+    /exactly one of profileId or profile is required/,
+  );
 });
 
-test('PROFILE_BINDING_ONLY_NO_GRAPH_CHANGE: bindingOverrides do not change graph-shaping fields', async () => {
+test('simulateRoute rejects blank profileId', async () => {
+  const api = makeApiForProfileTests();
+  await assert.rejects(
+    () => api.simulateRoute({ title: 'test', pipeline: 'local-change', profileId: '  ' }),
+    /profileId must be a non-empty string/,
+  );
+});
+
+test('PROFILE_BINDING_ONLY_NO_GRAPH_CHANGE: inline profile bindings do not change graph-shaping fields', async () => {
   const api = makeApiForProfileTests();
   const withProfile = await api.simulateRoute({
     title: 'test',
     pipeline: 'local-change',
-    executionProfile: {
-      bindingOverrides: [{ match: { roleId: 'developer' }, modelLevel: 'deep', timeoutMs: 120000 }],
-    },
+    profile: inlineLocalProfile({ runnerId: 'claude-code', modelLevel: 'deep', timeoutMs: 120000 }),
   });
   const withoutProfile = await api.simulateRoute({
     title: 'test',
     pipeline: 'local-change',
-    executionProfile: {},
+    profile: inlineLocalProfile({ runnerId: 'claude-code', modelLevel: 'standard' }),
   });
   assert.deepEqual(withProfile.roles, withoutProfile.roles);
   assert.deepEqual(withProfile.requiredRoles, withoutProfile.requiredRoles);
@@ -4053,18 +4187,18 @@ test('PROFILE_BINDING_ONLY_NO_GRAPH_CHANGE: bindingOverrides do not change graph
   assert.equal(withProfile.pipelineId, withoutProfile.pipelineId);
 });
 
-test('simulateRoute forwards executionProfile', async () => {
+test('simulateRoute pins inline profile snapshot and hash', async () => {
   const api = makeApiForProfileTests();
+  const profile = inlineLocalProfile({ runnerId: 'claude-code', modelLevel: 'standard', timeoutMs: 60000 });
   const result = await api.simulateRoute({
     title: 'test',
     pipeline: 'local-change',
-    executionProfile: {
-      id: 'test-profile',
-      bindingOverrides: [{ match: { roleId: 'developer' }, timeoutMs: 60000 }],
-    },
+    profile,
   });
-  assert.equal(result.executionProfile.id, 'test-profile');
-  assert.equal(result.executionProfile.bindingOverrides?.length, 1);
+  assert.equal(result.profileSource, 'inline');
+  assert.equal(result.profileSnapshot, profile);
+  assert.ok(typeof result.profileHash === 'string' && result.profileHash.length === 64);
+  assert.equal(result.launchBindings.length, 1);
 });
 
 // Stored run profile resolution + provenance.
@@ -4084,14 +4218,8 @@ const FEATURE_DEV_TEMPLATE = {
 };
 const FEATURE_DEV_POLICY = { template_json: FEATURE_DEV_TEMPLATE };
 const STORED_PROFILE_ID = 'codex-primary-claude-review-consensus';
-const STORED_PROFILE_HASH = 'stored-profile-hash-1';
 const STORED_PROFILE = {
-  id: STORED_PROFILE_ID,
-  pipelineId: 'feature-development',
   schemaVersion: 'run-profile/v1',
-  version: '1',
-  displayName: 'Codex primary, Claude review consensus',
-  summary: 'Codex development with parallel Codex plus Claude consensus for plan and code review.',
   topology: {
     stages: {
       planReviewer: { mode: 'consensus', branches: 2 },
@@ -4100,8 +4228,10 @@ const STORED_PROFILE = {
   },
   bindings: {
     slots: {
+      orchestrator: { runnerId: 'codex', modelLevel: 'codex-deep' },
       analyst: { runnerId: 'codex', modelLevel: 'codex-deep', permissionMode: 'workspace-write' },
       developer: { runnerId: 'codex', modelLevel: 'codex-standard', permissionMode: 'workspace-write' },
+      integrator: { runnerId: 'revo-integrator', modelLevel: 'standard' },
       triager: { runnerId: 'codex', modelLevel: 'codex-deep' },
       watcher: { runnerId: 'codex', modelLevel: 'codex-standard' },
       planReviewPrimary: { runnerId: 'codex', modelLevel: 'codex-deep' },
@@ -4110,8 +4240,11 @@ const STORED_PROFILE = {
       codeReviewSecondary: { runnerId: 'claude-code', modelLevel: 'deep' },
     },
   },
-  status: 'active',
 };
+const STORED_PROFILE_HASH = runProfileHash(STORED_PROFILE, {
+  pipelineId: 'feature-development',
+  schemaVersion: 'run-profile/v1',
+});
 const STORED_PROFILE_SUMMARY = {
   id: `pb-${STORED_PROFILE_ID}`,
   playbookId: 'pb',
@@ -4124,7 +4257,7 @@ const STORED_PROFILE_SUMMARY = {
   profile: STORED_PROFILE,
   profileHash: STORED_PROFILE_HASH,
   status: 'active' as const,
-};
+} as const;
 
 const CANONICAL_ROLES = [
   { id: 'pb-orchestrator', name: 'orchestrator', modelLevel: 'deep', runner: 'claude-code', surface: 'any', rights: 'write-working-tree', playbookId: 'pb', playbookRoleId: 'orchestrator' },
@@ -4136,7 +4269,7 @@ const CANONICAL_ROLES = [
   { id: 'pb-watcher', name: 'watcher', modelLevel: 'cheap', runner: 'claude-code', surface: 'any', rights: 'read-only', playbookId: 'pb', playbookRoleId: 'watcher' },
 ];
 
-function makeApiForStoredProfileTests() {
+function makeApiForStoredProfileTests(profileSummary: RunProfileSummary = STORED_PROFILE_SUMMARY) {
   return makeApi({
     rolesService: {
       async listRoles() { return CANONICAL_ROLES as never; },
@@ -4181,10 +4314,10 @@ function makeApiForStoredProfileTests() {
         if (pipelineId !== 'feature-development' || profileId !== STORED_PROFILE_ID) {
           throw new ControlPlaneError('ROW_NOT_FOUND', `run profile not found: ${profileId}`);
         }
-        return STORED_PROFILE_SUMMARY as never;
+        return profileSummary as never;
       },
       async listRunProfiles() {
-        return [STORED_PROFILE_SUMMARY] as never;
+        return [profileSummary] as never;
       },
       async getPipeline() { return null; },
     },
@@ -4220,6 +4353,44 @@ test('resolveRouteDecision: stored run profile materializes template and stamps 
   assert.ok('codeReviewFanout' in (template?.nodes ?? {}), 'materialized template has codeReviewFanout');
 });
 
+test('resolveRouteDecision: stored run profile hash must match profile payload', async () => {
+  const api = makeApiForStoredProfileTests({
+    ...STORED_PROFILE_SUMMARY,
+    profileHash: '0'.repeat(64),
+  });
+  await assert.rejects(
+    () => api.simulateRoute({
+      title: 'test',
+      pipeline: 'feature-development',
+      profileId: STORED_PROFILE_ID,
+    }),
+    /stored run profile codex-primary-claude-review-consensus hash mismatch/,
+  );
+});
+
+test('resolveRouteDecision: stored run profile payload is schema-validated at launch', async () => {
+  const malformedProfile = {
+    ...STORED_PROFILE,
+    bindings: { slots: { developer: {} } },
+  };
+  const api = makeApiForStoredProfileTests({
+    ...STORED_PROFILE_SUMMARY,
+    profile: malformedProfile,
+    profileHash: runProfileHash(malformedProfile, {
+      pipelineId: 'feature-development',
+      schemaVersion: 'run-profile/v1',
+    }),
+  });
+  await assert.rejects(
+    () => api.simulateRoute({
+      title: 'test',
+      pipeline: 'feature-development',
+      profileId: STORED_PROFILE_ID,
+    }),
+    /run-profile\/v1/,
+  );
+});
+
 test('resolveRouteDecision: stored run profile role and node bindings affect launch configuration', async () => {
   const api = makeApiForStoredProfileTests();
   const route = await api.simulateRoute({
@@ -4233,15 +4404,15 @@ test('resolveRouteDecision: stored run profile role and node bindings affect lau
     const binding = byRole.get(roleId);
     assert.ok(binding, `${roleId} must have a binding`);
     assert.equal(binding.resolvedRunnerId, 'codex', `${roleId} resolves to codex runner`);
-    assert.equal(binding.runnerSource, 'execution-profile', `${roleId} runnerSource is execution-profile`);
+    assert.equal(binding.runnerSource, 'profile', `${roleId} runnerSource is profile`);
   }
   assert.equal(byRole.get('developer')?.resolvedModelLevel, 'codex-standard');
-  assert.equal(byRole.get('developer')?.modelSource, 'execution-profile');
+  assert.equal(byRole.get('developer')?.modelSource, 'profile');
   assert.equal(byRole.get('reviewer')?.resolvedRunnerId, 'claude-code', 'reviewer role stays generic; branch nodes carry runner overrides');
   assert.equal(byRole.get('integrator')?.resolvedRunnerId, 'revo-integrator', 'integrator stays on revo-integrator');
 
   const byNodeOverride = new Map(
-    (route.executionProfile.bindingOverrides ?? [])
+    route.launchBindings
       .filter((override) => override.match.nodeId)
       .map((override) => [override.match.nodeId, override]),
   );
@@ -4250,20 +4421,17 @@ test('resolveRouteDecision: stored run profile role and node bindings affect lau
   assert.equal(byNodeOverride.get('codeReviewPrimary')?.modelLevel, 'codex-deep');
 });
 
-test('resolveRouteDecision: caller binding override wins over stored profile binding override', async () => {
+test('resolveRouteDecision: profileId and inline profile are mutually exclusive', async () => {
   const api = makeApiForStoredProfileTests();
-  const route = await api.simulateRoute({
-    title: 'test',
-    pipeline: 'feature-development',
-    profileId: STORED_PROFILE_ID,
-    executionProfile: {
-      bindingOverrides: [{ match: { roleId: 'developer' }, runnerId: 'stub-agent', modelLevel: 'standard' }],
-    },
-  });
-
-  const developer = route.roleBindings.find((binding) => binding.roleId === 'developer');
-  assert.equal(developer?.resolvedRunnerId, 'stub-agent');
-  assert.equal(developer?.resolvedModelLevel, 'standard');
+  await assert.rejects(
+    () => api.simulateRoute({
+      title: 'test',
+      pipeline: 'feature-development',
+      profileId: STORED_PROFILE_ID,
+      profile: STORED_PROFILE,
+    }),
+    /exactly one of profileId or profile is required/,
+  );
 });
 
 test('listProfiles delegates to storage-backed playbook profiles', async () => {
@@ -4283,7 +4451,10 @@ function makePinnedMaterializedProfileRoute(): RouteDecision {
   assert.ok(pipeline, 'bundled feature-development pipeline must exist');
   const base = templateFromExecutionPolicy(pipeline.execution_policy);
   assert.ok(base, 'bundled feature-development must carry a valid template_json');
-  const topologyProfile = topologyProfileFromRunProfile(STORED_PROFILE);
+  const topologyProfile = topologyProfileFromRunProfile(STORED_PROFILE, {
+    pipelineId: 'feature-development',
+    profileId: STORED_PROFILE_ID,
+  });
   const { template: materializedTemplate, materializedTemplateHash } = materializeTemplate(
     base,
     topologyProfile,
@@ -4300,7 +4471,7 @@ function makePinnedMaterializedProfileRoute(): RouteDecision {
     optionalRoles: [],
     routeGates: ['plan', 'merge'],
     executionPolicy: { template_json: materializedTemplate },
-    executionProfile: { id: STORED_PROFILE_ID, runnerOverrides: {}, bindingOverrides: [] },
+    launchBindings: [],
     roleBindings: roles.map((roleId) =>
       roleId === 'integrator'
         ? { roleId, rowId: roleId, modelLevel: 'standard', runnerId: 'revo-integrator', resolvedRunnerId: 'revo-integrator', runnerSource: 'playbook' as const }
@@ -4309,6 +4480,7 @@ function makePinnedMaterializedProfileRoute(): RouteDecision {
     params: {},
     requestedPipelineId: 'feature-development',
     basePipelineId: 'feature-development',
+    profileSource: 'stored',
     profileId: STORED_PROFILE_ID,
     profileVersion: '1',
     profileHash: STORED_PROFILE_HASH,

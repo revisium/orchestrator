@@ -22,6 +22,7 @@ import {
   assertUsage,
   executedRoles,
   assertPrOpened,
+  stubFixtureAgentProfile,
 } from './kit/index.js';
 
 // One real DBOS/Revisium host for the whole file; tests are isolated by unique runIds.
@@ -37,20 +38,24 @@ after(async () => {
   if (h) await h.close();
 });
 
-test('route: public params cannot smuggle runner overrides', { skip: e2eSkip }, async () => {
+test('route: public params cannot smuggle launch bindings', { skip: e2eSkip }, async () => {
   const route = await h.api.simulateRoute({
     repo: process.cwd(),
     title: 'E2E local-change deterministic agent',
     playbookId: PLAYBOOK_ID,
     pipeline: 'local-change',
+    profile: stubFixtureAgentProfile(),
     params: {
-      executionProfile: { runnerOverrides: { 'claude-code': 'must-not-leak' } },
-      runnerOverrides: { 'claude-code': 'must-not-leak' },
+      profileLike: { runner: 'must-not-leak' },
+      runnerSelectionDraft: { runner: 'must-not-leak' },
     },
   });
   assert.equal(route.pipelineId, 'local-change');
   assert.deepEqual(route.roles, ['orchestrator', 'developer']);
-  assert.deepEqual(route.executionProfile.runnerOverrides, {}, 'public params must not smuggle runner overrides');
+  assert.ok(
+    route.roleBindings.every((binding) => binding.resolvedRunnerId !== 'must-not-leak'),
+    'public params must not leak into roleBindings',
+  );
 });
 
 test('local-change: developer-only run completes and reattaches', { skip: e2eSkip }, async () => {
@@ -81,6 +86,7 @@ test('feature-development: plan→merge approve completes and opens a PR', { ski
     title: 'E2E feature-development deterministic agent',
     playbookId: PLAYBOOK_ID,
     pipeline: 'feature-development',
+    profile: stubFixtureAgentProfile(),
   });
   // plan 0018 adds the `triager` role (it runs only on the review-feedback path, not this happy path).
   assert.deepEqual(featureRoute.roles, ['orchestrator', 'analyst', 'reviewer', 'triager', 'developer', 'integrator', 'watcher']);

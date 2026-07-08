@@ -115,29 +115,15 @@ input AnswerQuestionInput {
   resolvedBy: String
 }
 
-input BindingOverrideInput {
-  match: BindingOverrideMatchInput!
-  modelLevel: String
-  permissionMode: String
-  runnerId: String
-  timeoutMs: Int
-}
-
-input BindingOverrideMatchInput {
-  nodeId: String
-  roleId: String
-  runnerId: String
-}
-
 input CreateRunInput {
   description: String
-  executionProfile: ExecutionProfileInput
   issueAction: IssueAction
   issueRef: IssueRefInput
   params: JSON
-  pipelineId: String
+  pipelineId: String!
   playbookId: String
   priority: Int
+  profile: JSON
   profileId: String
   repo: String!
   scope: String
@@ -173,12 +159,6 @@ type DoctorResultModel {
   issues: [String!]!
   ok: Boolean!
   status: SystemStatusModel!
-}
-
-input ExecutionProfileInput {
-  availableRunners: [String!]
-  bindingOverrides: [BindingOverrideInput!]
-  runnerOverrides: JSON
 }
 
 input GateDecisionInput {
@@ -800,10 +780,10 @@ type RunWorkflowPipelineModel {
 }
 
 input SimulateRouteInput {
-  executionProfile: ExecutionProfileInput
   params: JSON
-  pipeline: String
+  pipeline: String!
   playbookId: String
+  profile: JSON
   profileId: String
   repo: String
   title: String!

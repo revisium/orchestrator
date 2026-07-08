@@ -10,6 +10,7 @@ import {
   type TargetRepo,
   waitState,
   PLAYBOOK_ID,
+  stubFixtureAgentProfile,
 } from './kit/index.js';
 import { AGENT_OUTPUT_STREAM_KEY, type AgentOutputEvent } from '../observability/types.js';
 import type { RunAgent } from '../worker/runner.js';
@@ -62,7 +63,7 @@ test('agent-output stream: a run persists the agent reporter events for later re
     description: 'slice 128 — reporter events must reach the agent-output stream',
     playbookId: PLAYBOOK_ID,
     pipelineId: 'local-change',
-    executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent' } },
+    profile: stubFixtureAgentProfile(),
     start: false,
   });
   await h.api.startRun({ runId: created.runId });

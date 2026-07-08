@@ -17,8 +17,6 @@ import {
   type RunCase,
 } from './kit/index.js';
 
-const LIVE_AGENT_STUB = { runnerOverrides: { 'claude-code': 'stub-agent' } };
-
 let h: RunHarness;
 const runCases = new Map<string, RunCase>();
 
@@ -92,7 +90,6 @@ test('RG234-A: exhausted transient developer failure -> retry gate -> retry comp
       title: 'RG234-A: retry transient developer failure',
       playbook: 'default',
       repo: target,
-      executionProfile: LIVE_AGENT_STUB,
       agent: developerFailsThenPasses('scripted developer crash: transport disconnected'),
       gates: [
         ['plan', 'approved'],
@@ -147,7 +144,6 @@ test('RG234-B: exhausted transient developer failure -> retry gate -> give_up pr
       title: 'RG234-B: give up transient developer failure',
       playbook: 'default',
       repo: target,
-      executionProfile: LIVE_AGENT_STUB,
       agent: developerFails('scripted developer crash: transport disconnected'),
       gates: [
         ['plan', 'approved'],
@@ -177,7 +173,6 @@ test('RG234-C: 529 Overloaded is transient enough to reach the manual retry gate
       title: 'RG234-C: 529 overloaded reaches retry gate',
       playbook: 'default',
       repo: target,
-      executionProfile: LIVE_AGENT_STUB,
       agent: developerFails('provider 529 Overloaded; please retry later'),
       gates: [
         ['plan', 'approved'],
@@ -209,7 +204,6 @@ test('RG234-D: agent needsHuman question -> answer resumes the same run and reac
       playbook: 'default',
       repo: target,
       coverage: coverageForScenario('RG234-D-agent-question-resume'),
-      executionProfile: LIVE_AGENT_STUB,
       agent: analystAsksTwiceThenPasses(
         'which auth provider should the feature use?',
         'which region should the feature use?',
