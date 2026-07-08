@@ -9,6 +9,7 @@ import type { RunHarness } from './harness.js';
 import { assertEventsPresent } from './assertions.js';
 import { waitForGate, waitState } from './drive.js';
 import { DEFAULT_PLAYBOOK_ID, PLAYBOOK_ID } from './scenarios.js';
+import type { PipelineScenarioCoverage } from '../../control-plane/pipeline-coverage-registry.js';
 
 type GateTopic = 'plan' | 'merge' | 'question';
 type GateStep =
@@ -45,6 +46,7 @@ export type RunCase = {
   runId: string;
   taskId: string;
   title: string;
+  coverage?: PipelineScenarioCoverage;
   gh?: GhScenario;
   integrator?: IntegratorOutcome;
   agent?: AgentSpec;
@@ -67,6 +69,7 @@ export type PipelineScenario = {
   developerWrite?: boolean;
   cleanup?: { releaseWorktreeFails?: boolean; dirtyWorktreeBeforeRelease?: boolean };
   gates?: GateStep[];
+  coverage?: PipelineScenarioCoverage;
   expect: ScenarioExpect;
 };
 
@@ -211,6 +214,7 @@ export async function pipelineScenario(
     runId: created.runId,
     taskId: created.taskId,
     title: scenario.title,
+    ...(scenario.coverage ? { coverage: scenario.coverage } : {}),
     ...(scenario.gh ? { gh: scenario.gh } : {}),
     ...(scenario.integrator ? { integrator: scenario.integrator } : {}),
     ...(scenario.agent ? { agent: scenario.agent } : {}),

@@ -19,6 +19,16 @@ type RunProfileCatalogEntry = {
   status: string;
 };
 
+const ROLE_SLOTS = new Set([
+  'orchestrator',
+  'analyst',
+  'reviewer',
+  'developer',
+  'integrator',
+  'watcher',
+  'triager',
+]);
+
 const pipelines = JSON.parse(
   readFileSync(new URL('../../control-plane/default-playbook/catalog/pipelines.json', import.meta.url), 'utf8'),
 ) as PipelineCatalogEntry[];
@@ -41,6 +51,20 @@ function profile(id: string): RunProfileCatalogEntry {
   return found;
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function slotKey(slot: string): string {
+  if (slot.startsWith('role:') || slot.startsWith('node:')) return slot;
+  return ROLE_SLOTS.has(slot) ? `role:${slot}` : `node:${slot}`;
+}
+
+function overrideKey(override: BindingOverride): string {
+  if ('roleId' in override.match) return `role:${override.match.roleId}`;
+  return `node:${override.match.nodeId}`;
+}
+
 test('run profiles: catalog consensus profile materializes plan and code review fanout', () => {
   const { template, diagnostics } = materializeTemplate(
     featureDevelopmentTemplate(),
@@ -52,6 +76,29 @@ test('run profiles: catalog consensus profile materializes plan and code review 
   assert.ok(template.nodes.planReviewFanout, 'plan review fanout is materialized');
   assert.ok(template.nodes.codeReviewFanout, 'code review fanout is materialized');
 });
+
+for (const candidate of runProfiles) {
+  test(`run profiles: catalog bindings for ${candidate.id} become launch overrides`, () => {
+    const execution = executionProfileFromRunProfile(
+      candidate as never,
+      { id: 'caller', runnerOverrides: {}, bindingOverrides: [] },
+    );
+    const overrides = execution.bindingOverrides ?? [];
+    const bySlot = new Map(overrides.map((override) => [overrideKey(override), override]));
+    const slots = asRecord(asRecord(candidate.bindings).slots);
+
+    assert.equal(overrides.length, Object.keys(slots).length);
+    for (const [slot, rawBinding] of Object.entries(slots)) {
+      const binding = asRecord(rawBinding);
+      const actual = bySlot.get(slotKey(slot));
+      assert.ok(actual, `${candidate.id} binding ${slot} must produce an override`);
+      assert.equal(actual.runnerId, binding.runnerId);
+      assert.equal(actual.modelLevel, binding.modelLevel);
+      assert.equal(actual.timeoutMs, binding.timeoutMs);
+      assert.equal(actual.permissionMode, binding.permissionMode);
+    }
+  });
+}
 
 test('run profiles: catalog bindings become role and node launch overrides', () => {
   const execution = executionProfileFromRunProfile(

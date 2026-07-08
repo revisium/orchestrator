@@ -12,7 +12,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { join, dirname } from 'node:path';
+import { join, dirname, isAbsolute, relative } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -87,6 +87,11 @@ function collectFiles(rootDir: string, include: (entry: string) => boolean): str
   return results;
 }
 
+function isInsideDir(parent: string, child: string): boolean {
+  const path = relative(parent, child);
+  return path !== '' && !path.startsWith('..') && !isAbsolute(path);
+}
+
 /**
  * Collect all *.ts files under rootDir, excluding *.test.ts files.
  * Uses readFileSync — no shell involved, no silent errors.
@@ -143,10 +148,11 @@ test('RevisiumModule: package manifest depends only on approved @revisium packag
 
 test('RevisiumModule: packaged agent guidance references only current top-level revo commands', () => {
   const currentCommands = new Set(['start', 'stop', 'status', 'restart', 'doctor', 'logs', 'mcp']);
+  const agentRunArtifacts = join(REPO_ROOT, '.agents', 'runs');
   const files = [
     ...collectFiles(join(REPO_ROOT, '.agents'), (entry) => entry.endsWith('.md')),
     join(REPO_ROOT, 'control-plane', 'default-playbook', 'package.json'),
-  ];
+  ].filter((file) => !isInsideDir(agentRunArtifacts, file));
   const violations: string[] = [];
   const commandRegex = /`revo\s+([a-z][a-z0-9_-]*)\b[^`]*`/gi;
   for (const file of files) {
