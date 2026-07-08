@@ -159,6 +159,12 @@ type AgentQuestionRetryContext = {
   resolvedBy: string;
 };
 
+type UnresolvedAgentQuestion = {
+  unresolved: true;
+  reason: string;
+  lesson: string;
+};
+
 type RetryRoleResult = {
   action: 'retry';
 };
@@ -671,6 +677,46 @@ function gateResolutionOutput(
     ...(adoptionAudit !== undefined ? { adoptionAudit } : {}),
     ...(decision.decision ? { decision: decision.decision } : {}),
   };
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function isSyntheticGateTimeoutFallback(decision: GateDecision): boolean {
+  const answer = isRecord(decision.answer) ? decision.answer : {};
+  return decision.decision === 'reject' && answer.reason === 'gate-timeout';
+}
+
+function agentQuestionRetryContext(
+  decision: GateDecision,
+  nodeId: string,
+  safeLesson: string,
+): AgentQuestionRetryContext | undefined {
+  const inboxId = nonEmptyString(decision.inboxId);
+  const resolvedBy = nonEmptyString(decision.resolvedBy);
+  if (!inboxId || !resolvedBy) return undefined;
+  return {
+    kind: 'agent_question',
+    nodeId,
+    answer: decision.answer,
+    lesson: safeLesson,
+    inboxId,
+    resolvedBy,
+  };
+}
+
+function unresolvedAgentQuestionLesson(
+  nodeId: string,
+  safeLesson: string,
+  decision: GateDecision,
+): string {
+  const reason = isSyntheticGateTimeoutFallback(decision)
+    ? 'agent question timed out'
+    : 'agent question resolution is missing inboxId or resolvedBy';
+  return `${reason} for ${nodeId}; original question: ${safeLesson}`;
 }
 
 
@@ -1826,8 +1872,16 @@ export function makeDataDrivenTask(
       }
       const transient = transientRunnerFailure(result);
       if (transient === undefined) {
-        const retryContext = await awaitAgentQuestion({ ...input, safeLesson, physicalAttempt });
-        return { question: true, retryContext, attemptsMade: physicalAttempt.attemptNo };
+        const question = await awaitAgentQuestion({ ...input, safeLesson, physicalAttempt });
+        if ('unresolved' in question) {
+          return {
+            blocked: true,
+            reason: question.reason,
+            lesson: question.lesson,
+            attemptsMade: physicalAttempt.attemptNo,
+          };
+        }
+        return { question: true, retryContext: question, attemptsMade: physicalAttempt.attemptNo };
       }
       return handleTransientRoleResult({ ...input, transient });
     }
@@ -1840,7 +1894,7 @@ export function makeDataDrivenTask(
       physicalAttempt: PhysicalRunStepAttempt;
       safeLesson: string;
     },
-  ): Promise<AgentQuestionRetryContext> {
+  ): Promise<AgentQuestionRetryContext | UnresolvedAgentQuestion> {
     const { runId, node, ctx, stepKey, binding, physicalAttempt, safeLesson } = input;
     const question = await awaitHuman(
       runId,
@@ -1861,6 +1915,14 @@ export function makeDataDrivenTask(
       undefined,
       'question',
     );
+    const retryContext = agentQuestionRetryContext(question, node.id, safeLesson);
+    if (retryContext === undefined) {
+      return {
+        unresolved: true,
+        reason: 'agent-question-unresolved',
+        lesson: unresolvedAgentQuestionLesson(node.id, safeLesson, question),
+      };
+    }
     await appendEvent({
       runId,
       taskId: ctx.taskId,
@@ -1870,18 +1932,11 @@ export function makeDataDrivenTask(
       idempotencyKey: `${physicalAttempt.attemptId}:question`,
       payload: {
         nodeId: node.id,
-        inboxId: question.inboxId ?? '',
-        resolvedBy: question.resolvedBy ?? '',
+        inboxId: retryContext.inboxId,
+        resolvedBy: retryContext.resolvedBy,
       },
     });
-    return {
-      kind: 'agent_question',
-      nodeId: node.id,
-      answer: question.answer,
-      lesson: safeLesson,
-      inboxId: question.inboxId ?? '',
-      resolvedBy: question.resolvedBy ?? '',
-    };
+    return retryContext;
   }
 
   async function handleTransientRoleResult(

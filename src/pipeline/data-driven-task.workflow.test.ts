@@ -1860,6 +1860,37 @@ test('DD5: a DELIBERATE agent needsHuman opens a question and retries with the a
   assert.ok(rec.events.includes('agent_question_resolved:developer'));
 });
 
+test('DD5: an unresolved agent question blocks without retryContext or resolved event', async () => {
+  const { run, rec } = buildAdapter({
+    template: singleDeveloperTemplate('agent-question-timeout'),
+    results: {
+      developer: [
+        { output: { from: 'developer' }, verdict: 'blocker', nextSteps: [], costs: [], needsHuman: true, lesson: 'which provider?' },
+        { output: { from: 'developer', ok: true }, verdict: 'approved', nextSteps: [], costs: [], needsHuman: false },
+      ],
+    },
+    gate: (topic) => (topic === 'question'
+      ? { decision: 'reject', answer: { reason: 'gate-timeout' }, inboxId: 'inbox-question-timeout' }
+      : { decision: 'approve' }),
+  });
+  const result = await run();
+
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(rec.gates, ['question']);
+  assert.equal(rec.blocked.length, 1);
+  assert.equal(rec.blocked[0]?.reason, 'agent-question-unresolved');
+  assert.equal(rec.failed.length, 0);
+  assert.deepEqual(
+    rec.runStepAttempts.filter((attempt) => baseStepKey(attempt.stepKey) === 'developer').map((attempt) => [attempt.stepKey, attempt.attemptNo]),
+    [['developer', 1]],
+  );
+  const developerInputs = rec.stepInputs.filter((item) => baseStepKey(item.stepKey) === 'developer');
+  assert.equal(developerInputs.length, 1);
+  assert.deepEqual((developerInputs[0]?.input as { retryContext?: unknown }).retryContext, undefined);
+  assert.equal(rec.events.includes('agent_question_resolved:developer'), false);
+  assert.equal(rec.outputs.length, 0);
+});
+
 test('DD5: an answered agent question retries even when transient maxAttempts is 1', async () => {
   const answer = { provider: 'oauth' };
   const { run, rec } = buildAdapter({
