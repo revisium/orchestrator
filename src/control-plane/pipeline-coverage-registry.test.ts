@@ -139,15 +139,19 @@ test('pipeline coverage registry: rejects incomplete waivers', () => {
   ));
 });
 
-test('pipeline coverage registry: #234 agent-question resume waiver is explicit and not counted as coverage', () => {
-  const waiver = PIPELINE_COVERAGE_REGISTRY.waivers.find((candidate) =>
-    candidate.id === 'waive-agent-question-resume-234',
+test('pipeline coverage registry: #234 agent-question resume is executable DSL coverage, not a waiver', () => {
+  const scenario = PIPELINE_COVERAGE_REGISTRY.scenarios.find((candidate) =>
+    candidate.id === 'RG234-D-agent-question-resume',
   );
 
-  assert.ok(waiver, '#234 waiver must remain registered');
-  assert.match(waiver.reason, /#234/);
-  assert.equal(waiver.ownerSurface, 'src/e2e/agent-failures.e2e.test.ts');
-  assert.deepEqual(waiver.tags ?? [], [], '#234 waiver must not count any coverage tags');
+  assert.ok(scenario, '#234 scenario must be registered');
+  assert.equal(scenario.ownerSurface, 'src/e2e/runner-retry-gate.e2e.test.ts');
+  assert.deepEqual(scenario.tags, []);
+  assert.equal(
+    PIPELINE_COVERAGE_REGISTRY.waivers.some((candidate) => candidate.id.includes('234')),
+    false,
+    '#234 must not remain covered by a waiver',
+  );
 });
 
 test('pipeline coverage registry: rejects profile signatures with no DSL owner or waiver', () => {

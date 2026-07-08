@@ -1288,6 +1288,48 @@ test('TaskControlPlaneApiService.answerQuestion resolves non-gate questions with
   assert.equal(signaled, false);
 });
 
+test('TaskControlPlaneApiService.answerQuestion signals workflow-owned agent questions', async () => {
+  const signals: Array<{ workflowId: string; topic: string; payload: unknown; key?: string }> = [];
+  const answer = { provider: 'oauth' };
+  const api = makeApi({
+    inboxService: {
+      async getInbox() {
+        return makeInboxItem({
+          kind: 'question',
+          context: {
+            topic: 'question',
+            signalTopic: 'question:agent-analyst',
+            summary: { kind: 'agent_question', nodeId: 'analyst' },
+          },
+          runId: 'run-1',
+        });
+      },
+      async resolveInbox(_id, value, resolvedBy) {
+        assert.equal(resolvedBy, 'human');
+        return { status: 'pending' as const, answer: value };
+      },
+    },
+    dbosService: {
+      async signal(workflowId, topic, payload, key) {
+        signals.push({ workflowId, topic, payload, key });
+      },
+    },
+  });
+
+  const result = await api.answerQuestion({ inboxId: 'inbox-1', answer, resolvedBy: 'human' });
+
+  assert.equal(result.signaled, true);
+  assert.equal(result.topic, 'question');
+  assert.deepEqual(signals, [
+    {
+      workflowId: 'run-1',
+      topic: 'question:agent-analyst',
+      payload: { answer, resolvedBy: 'human', inboxId: 'inbox-1' },
+      key: 'inbox-1',
+    },
+  ]);
+});
+
 test('TaskControlPlaneApiService.createRun can immediately start the workflow', async () => {
   const starts: Array<{ runId: string; pipelineId?: string; override?: string }> = [];
   const api = makeApi({
