@@ -15,6 +15,11 @@ type GateTopic = 'plan' | 'merge' | 'question' | 'retry';
 type GateStep =
   | readonly [GateTopic, string]
   | {
+      topic: 'question';
+      answer: unknown;
+      summaryIncludes?: string[];
+    }
+  | {
       topic: GateTopic;
       outcome: string;
       reconcile?: 'keep';
@@ -86,7 +91,8 @@ function playbookId(scenario: PipelineScenario): string {
 
 function normalizeGate(step: GateStep): {
   topic: GateTopic;
-  outcome: string;
+  outcome?: string;
+  answer?: unknown;
   reconcile?: 'keep';
   note?: string;
   mergeOverrideAudit?: Record<string, unknown>;
@@ -95,6 +101,13 @@ function normalizeGate(step: GateStep): {
   artifactHeadSha?: string;
 } {
   if ('topic' in step) {
+    if ('answer' in step) {
+      return {
+        topic: step.topic,
+        answer: step.answer,
+        ...(step.summaryIncludes ? { summaryIncludes: step.summaryIncludes } : {}),
+      };
+    }
     return {
       topic: step.topic,
       outcome: step.outcome,
@@ -110,6 +123,18 @@ function normalizeGate(step: GateStep): {
   return { topic, outcome };
 }
 
+function assertSummaryIncludes(topic: string, context: Record<string, unknown>, needles: string[] | undefined): void {
+  if (!needles || needles.length === 0) return;
+  const summary = context['summary'];
+  assert.ok(summary !== null && typeof summary === 'object' && !Array.isArray(summary), `${topic} must include a summary`);
+  for (const needle of needles) {
+    assert.ok(
+      JSON.stringify(summary).includes(needle),
+      `expected ${topic} summary to include ${JSON.stringify(needle)}; got ${JSON.stringify(summary)}`,
+    );
+  }
+}
+
 function assertGateContext(gate: { topic: string; context: Record<string, unknown> }, expected: ReturnType<typeof normalizeGate>): void {
   const summary = gate.context['summary'];
   assert.ok(summary !== null && typeof summary === 'object' && !Array.isArray(summary), `${gate.topic} gate must include a summary`);
@@ -117,12 +142,7 @@ function assertGateContext(gate: { topic: string; context: Record<string, unknow
   if (expected.nodeId) {
     assert.equal(summaryRecord['nodeId'], expected.nodeId, `expected ${gate.topic} gate node ${expected.nodeId}`);
   }
-  for (const needle of expected.summaryIncludes ?? []) {
-    assert.ok(
-      JSON.stringify(summaryRecord).includes(needle),
-      `expected ${gate.topic} gate summary to include ${JSON.stringify(needle)}; got ${JSON.stringify(summaryRecord)}`,
-    );
-  }
+  assertSummaryIncludes(`${gate.topic} gate`, gate.context, expected.summaryIncludes);
   if (expected.artifactHeadSha) {
     const artifact = summaryRecord['gatedArtifact'];
     assert.ok(
@@ -140,6 +160,19 @@ function assertGateContext(gate: { topic: string; context: Record<string, unknow
       `expected ${gate.topic} gate artifact head ${expected.artifactHeadSha}`,
     );
   }
+}
+
+async function waitForQuestion(
+  api: TaskControlPlaneApiService,
+  runId: string,
+): Promise<{ inboxId: string; context: Record<string, unknown> }> {
+  const state = await waitState(api, runId);
+  assert.equal(state.state, 'question', `expected question, got ${state.state}`);
+  const inbox = state.inbox;
+  assert.ok(inbox, 'question must include the inbox item to resolve');
+  const context = inbox.context;
+  assert.ok(context !== null && typeof context === 'object' && !Array.isArray(context));
+  return { inboxId: inbox.id, context: context as Record<string, unknown> };
 }
 
 function eventMatches(event: { type: string; payload: unknown }, expected: EventPathItem): boolean {
@@ -231,14 +264,28 @@ export async function pipelineScenario(
 
   for (const step of scenario.gates ?? []) {
     const gateStep = normalizeGate(step);
+    if (gateStep.topic === 'question' && gateStep.answer !== undefined) {
+      const question = await waitForQuestion(h.api, created.runId);
+      assertSummaryIncludes('question', question.context, gateStep.summaryIncludes);
+      await h.api.answerQuestion({
+        inboxId: question.inboxId,
+        answer: gateStep.answer,
+        resolvedBy: 'e2e',
+      });
+      continue;
+    }
     const gate = await waitForGate(h.api, created.runId, gateStep.topic);
     assertGateContext(gate, gateStep);
-    if (gateStep.outcome === 'override_merge' && runCase.gh === 'force-advisory-thread') {
+    const outcome = gateStep.outcome;
+    if (typeof outcome !== 'string') {
+      throw new Error(`${gateStep.topic} gate step must declare an outcome`);
+    }
+    if (outcome === 'override_merge' && runCase.gh === 'force-advisory-thread') {
       runCase.forceAdvisoryThreadVisible = true;
     }
     await h.api.resolveGate({
       inboxId: gate.inboxId,
-      outcome: gateStep.outcome,
+      outcome,
       resolvedBy: 'e2e',
       ...(gateStep.reconcile ? { reconcile: gateStep.reconcile } : {}),
       ...(gateStep.note ? { note: gateStep.note } : {}),

@@ -147,6 +147,33 @@ test('retry gates keep public topic but wait on a unique signal topic per gateKe
   assert.equal((pushInboxCalls[1]?.item.context as Record<string, unknown>).signalTopic, secondSignalTopic);
 });
 
+test('agent questions write question inbox rows and wait on a unique signal topic', async () => {
+  const answer = { provider: 'oauth' };
+  const { deps, pushInboxCalls, appendEventCalls, awaitDecisionTopics } = makeDeps({
+    decision: { answer, resolvedBy: 'human', inboxId: 'inbox-question' },
+  });
+  const awaitHuman = makeAwaitHuman(deps);
+
+  const result = await awaitHuman(
+    'run-ah-agent-question',
+    'question',
+    'agentQuestion:analyst',
+    'Analyst question',
+    { nodeId: 'analyst', lesson: 'which provider?' },
+    undefined,
+    'question',
+  );
+
+  assert.deepEqual(result.answer, answer);
+  assert.equal(pushInboxCalls[0]?.item.kind, 'question');
+  assert.deepEqual(pushInboxCalls[0]?.item.options, []);
+  assert.equal((pushInboxCalls[0]?.item.context as Record<string, unknown>).topic, 'question');
+  const signalTopic = (pushInboxCalls[0]?.item.context as Record<string, unknown>).signalTopic;
+  assert.equal(typeof signalTopic, 'string');
+  assert.deepEqual(awaitDecisionTopics, [signalTopic]);
+  assert.equal(appendEventCalls[0]?.type, 'agent_question_opened');
+});
+
 test('A1 (merge gate): awaitHuman works for merge topic too', async () => {
   const runId = 'run-ah-a1m';
   const topic = 'merge' as const;

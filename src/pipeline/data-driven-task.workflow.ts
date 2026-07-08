@@ -150,6 +150,31 @@ type InvokeRoleBlockedResult = {
   attemptsMade: number;
 };
 
+type AgentQuestionRetryContext = {
+  kind: 'agent_question';
+  nodeId: string;
+  answer: unknown;
+  lesson: string;
+  inboxId: string;
+  resolvedBy: string;
+};
+
+type UnresolvedAgentQuestion = {
+  unresolved: true;
+  reason: string;
+  lesson: string;
+};
+
+type RetryRoleResult = {
+  action: 'retry';
+};
+
+type InvokeRoleQuestionResult = {
+  question: true;
+  retryContext: AgentQuestionRetryContext;
+  attemptsMade: number;
+};
+
 type InvokeRoleSucceededResult = {
   failed: false;
   verdict?: string;
@@ -158,7 +183,11 @@ type InvokeRoleSucceededResult = {
   attemptsMade: number;
 };
 
-type InvokeRoleResult = InvokeRoleFailedResult | InvokeRoleBlockedResult | InvokeRoleSucceededResult;
+type InvokeRoleResult =
+  | InvokeRoleFailedResult
+  | InvokeRoleBlockedResult
+  | InvokeRoleQuestionResult
+  | InvokeRoleSucceededResult;
 
 type VerificationEnvironmentRecovery = {
   classification: 'verification_environment';
@@ -227,11 +256,13 @@ function stepInputForAttempt(
   nodeId: string,
   inputs: Record<string, unknown>,
   attempt: PhysicalRunStepAttempt,
+  retryContext?: AgentQuestionRetryContext,
 ): Record<string, unknown> {
   return {
     nodeId,
     attempt: { attemptNo: attempt.attemptNo, attemptId: attempt.attemptId },
     ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
+    ...(retryContext ? { retryContext } : {}),
   };
 }
 
@@ -548,6 +579,7 @@ export type DataDrivenTaskDeps = {
     title: string,
     summary: unknown,
     options?: string[],
+    kind?: 'approval' | 'question',
   ) => Promise<GateDecision>;
   completeRun: (
     runId: string,
@@ -620,12 +652,19 @@ function gateVerdict(decision: GateDecision, outcomes: string[]): string | undef
   return outcomes.length > 1 ? outcomes.at(-1) : undefined;
 }
 
-function gateResolutionOutput(
+type GateResolutionMetadata = {
+  note?: string;
+  resolvedBy: string;
+  resolvedAt: string;
+  inboxId?: string;
+  mergeOverrideAudit?: unknown;
+  adoptionAudit?: unknown;
+};
+
+function gateResolutionMetadata(
   decision: GateDecision,
-  verdict: string | undefined,
-  fallbackInboxId: string,
-  trustedGateHeadSha?: string | null,
-): Record<string, unknown> {
+  fallbackInboxId?: string,
+): GateResolutionMetadata {
   const decisionRecord: Record<string, unknown> = isRecord(decision) ? decision : {};
   const answer = isRecord(decision.answer) ? decision.answer : {};
   const note = decision.note ?? (typeof answer.note === 'string' ? answer.note : undefined);
@@ -635,16 +674,75 @@ function gateResolutionOutput(
   const mergeOverrideAudit = answer.mergeOverrideAudit ?? decisionRecord['mergeOverrideAudit'];
   const adoptionAudit = answer.adoptionAudit ?? decisionRecord['adoptionAudit'];
   return {
-    outcome: decision.outcome ?? verdict ?? decision.decision,
     ...(note !== undefined ? { note } : {}),
     resolvedBy,
     resolvedAt,
-    inboxId,
-    ...(trustedGateHeadSha !== undefined ? { trustedGateHeadSha } : {}),
+    ...(inboxId !== undefined ? { inboxId } : {}),
     ...(mergeOverrideAudit !== undefined ? { mergeOverrideAudit } : {}),
     ...(adoptionAudit !== undefined ? { adoptionAudit } : {}),
+  };
+}
+
+function gateResolutionOutput(
+  decision: GateDecision,
+  verdict: string | undefined,
+  fallbackInboxId: string,
+  trustedGateHeadSha?: string | null,
+): Record<string, unknown> {
+  const resolution = gateResolutionMetadata(decision, fallbackInboxId);
+  return {
+    outcome: decision.outcome ?? verdict ?? decision.decision,
+    ...(resolution.note !== undefined ? { note: resolution.note } : {}),
+    resolvedBy: resolution.resolvedBy,
+    resolvedAt: resolution.resolvedAt,
+    inboxId: resolution.inboxId ?? fallbackInboxId,
+    ...(trustedGateHeadSha !== undefined ? { trustedGateHeadSha } : {}),
+    ...(resolution.mergeOverrideAudit !== undefined ? { mergeOverrideAudit: resolution.mergeOverrideAudit } : {}),
+    ...(resolution.adoptionAudit !== undefined ? { adoptionAudit: resolution.adoptionAudit } : {}),
     ...(decision.decision ? { decision: decision.decision } : {}),
   };
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function isSyntheticGateTimeoutFallback(decision: GateDecision): boolean {
+  const answer = isRecord(decision.answer) ? decision.answer : {};
+  return decision.decision === 'reject' && answer.reason === 'gate-timeout';
+}
+
+function agentQuestionRetryContext(
+  decision: GateDecision,
+  nodeId: string,
+  safeLesson: string,
+): AgentQuestionRetryContext | undefined {
+  if (isSyntheticGateTimeoutFallback(decision)) return undefined;
+  const resolution = gateResolutionMetadata(decision);
+  const inboxId = nonEmptyString(resolution.inboxId);
+  const resolvedBy = nonEmptyString(resolution.resolvedBy);
+  if (!inboxId || !resolvedBy) return undefined;
+  return {
+    kind: 'agent_question',
+    nodeId,
+    answer: decision.answer,
+    lesson: safeLesson,
+    inboxId,
+    resolvedBy,
+  };
+}
+
+function unresolvedAgentQuestionLesson(
+  nodeId: string,
+  safeLesson: string,
+  decision: GateDecision,
+): string {
+  const reason = isSyntheticGateTimeoutFallback(decision)
+    ? 'agent question timed out'
+    : 'agent question resolution is missing inboxId or resolvedBy';
+  return `${reason} for ${nodeId}; original question: ${safeLesson}`;
 }
 
 
@@ -1238,6 +1336,7 @@ export function makeDataDrivenTask(
     let stepCount = 0;
     const effectOrdinalByNode = new Map<string, number>();
     const outputsByNode = new Map<string, RunOutputRow[]>();
+    const agentQuestionRetryContextByNode = new Map<string, AgentQuestionRetryContext>();
 
     for (let i = 0; i < MAX_STEPS; i++) {
       const { state: nextState, decision } = coreStep(template, state, lastResult);
@@ -1250,7 +1349,7 @@ export function makeDataDrivenTask(
 
       const eff = await applyDecision(decision, {
         runId, template, state, bindingByRef, executionProfile, taskId, title, base, issueRef, issueAction,
-        effectOrdinalByNode, outputsByNode, runnerRetryPolicy,
+        effectOrdinalByNode, outputsByNode, runnerRetryPolicy, agentQuestionRetryContextByNode,
         live,
         lastVerdict,
         lastProducedOutput,
@@ -1320,6 +1419,7 @@ export function makeDataDrivenTask(
     effectOrdinalByNode: Map<string, number>;
     outputsByNode: Map<string, RunOutputRow[]>;
     runnerRetryPolicy: RunnerTransientRetryPolicy;
+    agentQuestionRetryContextByNode: Map<string, AgentQuestionRetryContext>;
     lastVerdict: string;
     lastProducedOutput?: RunOutputRow;
     approvedMergeGateHeadSha?: string;
@@ -1338,8 +1438,9 @@ export function makeDataDrivenTask(
     inputs: Record<string, unknown>;
     stepKey: string;
     binding: RouteRoleBinding;
+    retryContext?: AgentQuestionRetryContext;
   };
-  type NeedsHumanRoleResult = 'retry' | InvokeRoleBlockedResult | undefined;
+  type NeedsHumanRoleResult = RetryRoleResult | InvokeRoleBlockedResult | InvokeRoleQuestionResult | undefined;
 
   function branchTemplateForJoin(template: Template, joinId: string): Template {
     const join = resolveNode(template, joinId);
@@ -1467,8 +1568,17 @@ export function makeDataDrivenTask(
           return { lastResult: { outcome: 'failed', errorCode: REVO_INPUT_MISSING }, lastVerdict: 'failed', failureReason: reason, stepDelta: 1 };
         }
         const result = await invokeRole(runId, decision, node, ctx, resolved.inputs, stepKey);
+        if ('question' in result) {
+          ctx.agentQuestionRetryContextByNode.set(node.id, result.retryContext);
+          return {
+            lastResult: undefined,
+            stateOverride: reopenNodeState(ctx.state, node.id),
+            stepDelta: result.attemptsMade,
+          };
+        }
         if ('blocked' in result) {
           if (result.recovery) {
+            ctx.agentQuestionRetryContextByNode.delete(node.id);
             const recovery = await awaitVerificationRecoveryGate(runId, ctx, result.recovery);
             return {
               lastResult: undefined,
@@ -1495,6 +1605,7 @@ export function makeDataDrivenTask(
               };
             }
           }
+          ctx.agentQuestionRetryContextByNode.delete(node.id);
           return {
             lastResult: undefined,
             terminal: {
@@ -1507,6 +1618,7 @@ export function makeDataDrivenTask(
           };
         }
         if (result.failed) {
+          ctx.agentQuestionRetryContextByNode.delete(node.id);
           await appendEvent({
             runId, taskId, stepId: '', stepKey, type: 'step_failed',
             idempotencyKey: result.attemptId,
@@ -1514,6 +1626,7 @@ export function makeDataDrivenTask(
           });
           return { lastResult: { outcome: 'failed', errorCode: result.errorCode }, lastVerdict: 'failed', failureReason: result.reason, stepDelta: result.attemptsMade };
         }
+        ctx.agentQuestionRetryContextByNode.delete(node.id);
         const producedOutput = await recordOutput(runId, node, ordinal, result.attemptId, result.output, ctx.outputsByNode);
         const verdict = result.verdict;
         return {
@@ -1658,7 +1771,16 @@ export function makeDataDrivenTask(
     stepKey: string,
   ): Promise<InvokeRoleResult> {
     const binding = resolveRoleBinding(ctx, decision);
-    return invokeRoleAttempts({ runId, decision, node, ctx, inputs, stepKey, binding });
+    return invokeRoleAttempts({
+      runId,
+      decision,
+      node,
+      ctx,
+      inputs,
+      stepKey,
+      binding,
+      retryContext: ctx.agentQuestionRetryContextByNode.get(node.id),
+    });
   }
 
   function resolveRoleBinding(
@@ -1675,6 +1797,7 @@ export function makeDataDrivenTask(
   async function invokeRoleAttempts(input: InvokeRoleAttemptInput): Promise<InvokeRoleResult> {
     const { runId, decision, node, ctx, inputs, stepKey, binding } = input;
     const attemptIds: string[] = [];
+    const retryContext = input.retryContext;
 
     for (let attemptNo = 1; attemptNo <= ctx.runnerRetryPolicy.maxAttempts; attemptNo++) {
       const physicalAttempt = physicalAttemptFor(runId, stepKey, attemptNo);
@@ -1684,7 +1807,7 @@ export function makeDataDrivenTask(
         runId,
         binding.rowId,
         stepKey,
-        stepInputForAttempt(decision.nodeId, inputs, physicalAttempt),
+        stepInputForAttempt(decision.nodeId, inputs, physicalAttempt, retryContext),
         binding.resolvedRunnerId,
         ctx.executionProfile,
         physicalAttempt,
@@ -1698,8 +1821,12 @@ export function makeDataDrivenTask(
         physicalAttempt,
         result,
       });
-      if (needsHuman === 'retry') continue;
-      if (needsHuman) return needsHuman;
+      if (needsHuman) {
+        if ('action' in needsHuman) {
+          continue;
+        }
+        return needsHuman;
+      }
 
       const failed = roleValidationFailure(ctx.template, node, result, physicalAttempt);
       if (failed) return failed;
@@ -1771,17 +1898,71 @@ export function makeDataDrivenTask(
       }
       const transient = transientRunnerFailure(result);
       if (transient === undefined) {
-        return {
-          blocked: true,
-          reason: 'agent-needs-human',
-          lesson: safeLesson,
-          attemptsMade: physicalAttempt.attemptNo,
-        };
+        const question = await awaitAgentQuestion({ ...input, safeLesson, physicalAttempt });
+        if ('unresolved' in question) {
+          return {
+            blocked: true,
+            reason: question.reason,
+            lesson: question.lesson,
+            attemptsMade: physicalAttempt.attemptNo,
+          };
+        }
+        return { question: true, retryContext: question, attemptsMade: physicalAttempt.attemptNo };
       }
       return handleTransientRoleResult({ ...input, transient });
     }
 
     return undefined;
+  }
+
+  async function awaitAgentQuestion(
+    input: InvokeRoleAttemptInput & {
+      physicalAttempt: PhysicalRunStepAttempt;
+      safeLesson: string;
+    },
+  ): Promise<AgentQuestionRetryContext | UnresolvedAgentQuestion> {
+    const { runId, node, ctx, stepKey, binding, physicalAttempt, safeLesson } = input;
+    const question = await awaitHuman(
+      runId,
+      'question',
+      `agentQuestion:${stepKey}:attempt${physicalAttempt.attemptNo}`,
+      `${node.id} question`,
+      {
+        kind: 'agent_question',
+        runId,
+        taskId: ctx.taskId,
+        nodeId: node.id,
+        step: stepKey,
+        role: binding.rowId,
+        runner: binding.resolvedRunnerId,
+        lesson: safeLesson,
+        attemptId: physicalAttempt.attemptId,
+      },
+      undefined,
+      'question',
+    );
+    const retryContext = agentQuestionRetryContext(question, node.id, safeLesson);
+    if (retryContext === undefined) {
+      return {
+        unresolved: true,
+        reason: 'agent-question-unresolved',
+        lesson: unresolvedAgentQuestionLesson(node.id, safeLesson, question),
+      };
+    }
+    await appendEvent({
+      runId,
+      taskId: ctx.taskId,
+      stepId: '',
+      stepKey,
+      type: 'agent_question_resolved',
+      idempotencyKey: `${physicalAttempt.attemptId}:question`,
+      payload: {
+        nodeId: node.id,
+        inboxId: retryContext.inboxId,
+        resolvedBy: retryContext.resolvedBy,
+      },
+    });
+    return retryContext;
   }
 
   async function handleTransientRoleResult(
@@ -1790,7 +1971,7 @@ export function makeDataDrivenTask(
       physicalAttempt: PhysicalRunStepAttempt;
       transient: TransientRunnerFailure;
     },
-  ): Promise<'retry' | InvokeRoleBlockedResult> {
+  ): Promise<RetryRoleResult | InvokeRoleBlockedResult> {
     const { runId, node, ctx, stepKey, attemptIds, physicalAttempt, transient } = input;
     const policy = ctx.runnerRetryPolicy;
     if (shouldRetryTransient(transient, physicalAttempt, policy)) {
@@ -1806,7 +1987,7 @@ export function makeDataDrivenTask(
         transient,
       });
       if (policy.backoffMs > 0) await deps.sleep(policy.backoffMs);
-      return 'retry';
+      return { action: 'retry' };
     }
 
     const retry = runnerRetryBlockPayload({
