@@ -174,6 +174,16 @@ const CONSENSUS_PROFILE_TAGS = [
   profileSignature('claude-primary-codex-review-consensus', 'dual-consensus-review'),
 ] as const;
 
+const LOCAL_CHANGE_PROFILE_TAGS = [
+  profileSignature('local-change-claude-standard', 'developer-single'),
+  profileSignature('local-change-codex-standard', 'developer-single'),
+] as const;
+
+const ANALYSIS_ONLY_PROFILE_TAGS = [
+  profileSignature('analysis-only-claude-standard', 'analyst-single'),
+  profileSignature('analysis-only-codex-standard', 'analyst-single'),
+] as const;
+
 export const PIPELINE_DSL_COVERAGE_SCENARIOS = [
   recoveryGraphScenario(
     'RG-A-merge-approved',
@@ -334,6 +344,18 @@ export const PIPELINE_DSL_COVERAGE_SCENARIOS = [
       nodeOutcome('mergeGate', 'approved'),
     ],
   ),
+  seedDefaultPlaybookScenario(
+    'M2-profile-local-change',
+    [
+      profileSignature('local-change-codex-standard', 'developer-single'),
+    ],
+  ),
+  seedDefaultPlaybookScenario(
+    'M3-profile-analysis-only',
+    [
+      profileSignature('analysis-only-codex-standard', 'analyst-single'),
+    ],
+  ),
 ] as const;
 
 export type PipelineCoverageScenarioId = (typeof PIPELINE_DSL_COVERAGE_SCENARIOS)[number]['id'];
@@ -420,10 +442,14 @@ export const PIPELINE_COVERAGE_OWNERSHIP: readonly PipelineCoverageOwnership[] =
   unit('src/control-plane/run-profiles.test.ts', [
     ...SINGLE_REVIEW_PROFILE_TAGS,
     ...CONSENSUS_PROFILE_TAGS,
+    ...LOCAL_CHANGE_PROFILE_TAGS,
+    ...ANALYSIS_ONLY_PROFILE_TAGS,
   ]),
   unit('src/control-plane/seed-default-playbook.test.ts', [
     ...SINGLE_REVIEW_PROFILE_TAGS,
     ...CONSENSUS_PROFILE_TAGS,
+    ...LOCAL_CHANGE_PROFILE_TAGS,
+    ...ANALYSIS_ONLY_PROFILE_TAGS,
   ]),
   unit('src/pipeline-core/interpret.test.ts', [
     nodeOutcome('recoveryRouter', 'fix'),

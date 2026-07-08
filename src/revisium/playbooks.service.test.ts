@@ -191,7 +191,7 @@ test('PlaybooksService.listRunProfiles filters profiles by playbook and pipeline
       version: '1',
       display_name: 'Codex standard',
       summary: 'Codex launch profile.',
-      profile_json: JSON.stringify({ id: 'codex-standard', pipelineId: 'feature-development' }),
+      profile_json: JSON.stringify({ schemaVersion: 'run-profile/v1', topology: { stages: {} }, bindings: { slots: {} } }),
       profile_hash: 'hash-1',
       status: 'active',
     }),
@@ -203,7 +203,7 @@ test('PlaybooksService.listRunProfiles filters profiles by playbook and pipeline
       version: '1',
       display_name: 'Local',
       summary: 'Local profile.',
-      profile_json: JSON.stringify({ id: 'local', pipelineId: 'local-change' }),
+      profile_json: JSON.stringify({ schemaVersion: 'run-profile/v1', topology: { stages: {} }, bindings: { slots: {} } }),
       profile_hash: 'hash-2',
       status: 'active',
     }),
@@ -215,7 +215,7 @@ test('PlaybooksService.listRunProfiles filters profiles by playbook and pipeline
       version: '1',
       display_name: 'Removed',
       summary: 'Removed profile.',
-      profile_json: JSON.stringify({ id: 'removed-profile', pipelineId: 'feature-development' }),
+      profile_json: JSON.stringify({ schemaVersion: 'run-profile/v1', topology: { stages: {} }, bindings: { slots: {} } }),
       profile_hash: 'hash-3',
       status: 'removed',
     }),
@@ -226,7 +226,7 @@ test('PlaybooksService.listRunProfiles filters profiles by playbook and pipeline
 
   assert.equal(profiles.length, 1);
   assert.equal(profiles[0]?.profileId, 'codex-standard');
-  assert.deepEqual(profiles[0]?.profile, { id: 'codex-standard', pipelineId: 'feature-development' });
+  assert.deepEqual(profiles[0]?.profile, { schemaVersion: 'run-profile/v1', topology: { stages: {} }, bindings: { slots: {} } });
   assert.deepEqual(head.listCalls, [{
     table: 'run_profiles',
     options: {
@@ -261,7 +261,7 @@ test('PlaybooksService.resolveRunProfile rejects scoped row ids as profileId', a
       version: '1',
       display_name: 'Codex standard',
       summary: 'Codex launch profile.',
-      profile_json: JSON.stringify({ id: 'codex-standard', pipelineId: 'feature-development' }),
+      profile_json: JSON.stringify({ schemaVersion: 'run-profile/v1', topology: { stages: {} }, bindings: { slots: {} } }),
       profile_hash: 'hash-1',
       status: 'active',
     }),
@@ -295,7 +295,7 @@ test('PlaybooksService.resolveRunProfile rejects profiles outside the selected p
       version: '1',
       display_name: 'Local',
       summary: 'Local profile.',
-      profile_json: JSON.stringify({ id: 'local', pipelineId: 'local-change' }),
+      profile_json: JSON.stringify({ schemaVersion: 'run-profile/v1', topology: { stages: {} }, bindings: { slots: {} } }),
       profile_hash: 'hash-2',
       status: 'active',
     }),

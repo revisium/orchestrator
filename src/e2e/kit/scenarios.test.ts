@@ -8,6 +8,7 @@ import {
   startDefaultFeatureRun,
   startDefaultLocalChangeRun,
 } from './scenarios.js';
+import { stubDefaultAgentProfile, stubDefaultFullProfile } from './run-profiles.js';
 
 function fakeHarness(api: Record<string, unknown>): RunHarness {
   return { api } as unknown as RunHarness;
@@ -33,7 +34,7 @@ test('default playbook run helpers create runs against the shipped default playb
       scope: 'seeded-default e2e',
       playbookId: DEFAULT_PLAYBOOK_ID,
       pipelineId: 'feature-development',
-      executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent', 'revo-integrator': 'stub-agent' } },
+      profile: stubDefaultFullProfile(),
       start: true,
     },
     {
@@ -43,7 +44,7 @@ test('default playbook run helpers create runs against the shipped default playb
       scope: 'seeded-default e2e',
       playbookId: DEFAULT_PLAYBOOK_ID,
       pipelineId: 'local-change',
-      executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent' } },
+      profile: stubDefaultAgentProfile(),
       start: true,
     },
   ]);

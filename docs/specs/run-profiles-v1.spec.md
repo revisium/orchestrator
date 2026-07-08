@@ -24,13 +24,13 @@ It covers:
 - Revisium `run_profiles` row shape;
 - runtime route resolution;
 - Prisma route pins;
-- MCP profile discovery and profile-design capabilities;
-- non-secret GitHub publishing identity selection.
+- MCP profile discovery and profile-design capabilities.
 
 It does not define:
 
 - visual profile editing UI layout;
 - remote provider pricing;
+- GitHub publishing identity selection;
 - arbitrary post-join synthesis beyond the current materializer substrate.
 
 ## Terms
@@ -45,7 +45,6 @@ It does not define:
 | Route pin | Immutable route decision stored on the Prisma run row. |
 | Seeded profile | Profile imported from a playbook catalog during bootstrap/import. After import it is editable profile data. |
 | Inline profile | Unsaved `run-profile/v1` payload supplied to route simulation or run creation. |
-| Publishing identity | Non-secret GitHub account/login selected for integrator/merger publication. |
 
 ## Storage Boundary
 
@@ -54,8 +53,8 @@ Revisium engine stores run profiles as versioned meaning. Prisma stores runtime 
 Runtime models MUST NOT be represented as Revisium tables. In particular, `TaskRun.routeDecision` in Prisma is the run's
 immutable route pin; Revisium `run_profiles` is only the versioned source for new route resolution.
 
-Profiles MAY carry account aliases for publication, but MUST NOT carry credentials. GitHub tokens remain host-local
-runtime secrets.
+Run profiles MUST NOT carry credentials or publication account aliases in v1. GitHub identity selection remains a
+separate host/runtime concern until a dedicated publishing contract is designed.
 
 ## Default Catalog
 
@@ -112,11 +111,6 @@ profile-backed launches.
       "developer": { "runnerId": "codex", "modelLevel": "codex-standard", "permissionMode": "workspace-write" }
     }
   },
-  "publishing": {
-    "github": {
-      "account": "my-gh-login"
-    }
-  },
   "status": "active"
 }
 ```
@@ -133,19 +127,16 @@ Required catalog fields:
 | `summary` | Short description for MCP/UI listing. |
 | `topology` | Profile topology overlay. |
 | `bindings` | Slot/node/runner launch bindings. |
-| `publishing` | Optional non-secret publication preferences. |
 | `status` | `active` or `deprecated`; import may mark unchanged removed seeded rows as `removed`. |
 
 The importer MUST reject duplicate profile ids and profiles referencing unknown pipeline ids.
 
-`publishing.github.account`, when present, is a GitHub login/account alias. It MUST NOT contain a token, URL, or shell
-snippet. Implementations SHOULD reject values that match known GitHub token prefixes such as `gho_` or
-`github_pat_`. Bundled default profiles SHOULD normally omit this field so local runs default to the user's active
-GitHub account.
+`publishing` is not part of the current `run-profile/v1` catalog shape. Importers MUST reject it as an additional
+property until a separate publishing identity contract exists.
 
-Stored catalog rows MUST include `id` and `version`. Inline `create_run.profile` and `simulate_route.profile` inputs use
-the same launch payload shape but MAY omit persisted identity fields (`id`, `version`) because they are not stored
-profiles.
+Stored catalog rows MUST include `id`, `pipelineId`, and `version` as catalog/storage metadata. Inline
+`create_run.profile` and `simulate_route.profile` inputs MUST NOT include persisted identity, pipeline, display, or
+lifecycle fields; the launch request's top-level `pipelineId` is the only pipeline selector.
 
 ## Catalog Validation
 
@@ -156,9 +147,10 @@ Catalog import MUST validate stored JSON payloads before writing Revisium rows.
 - Semantic graph validation, such as unresolved edges or invalid capability references, remains the responsibility of the
   pipeline-core validators.
 
-The Revisium `run_profiles.profile_json` and `pipelines.execution_policy_json` fields are serialized storage fields.
-Serialization MUST happen only after AJV validation succeeds. A failed validation aborts import/bootstrap and no invalid
-profile or pipeline config should be written as control-plane meaning.
+The Revisium `run_profiles.profile_json` field stores only the launch payload: `schemaVersion`, `topology`, and
+`bindings`. Catalog/storage metadata lives in row columns such as `pipeline_id`, `profile_id`, `version`,
+`display_name`, and `status`. Serialization MUST happen only after AJV validation succeeds. A failed validation aborts
+import/bootstrap and no invalid profile or pipeline config should be written as control-plane meaning.
 
 ## Revisium Row Shape
 
@@ -176,8 +168,8 @@ Fields:
 | `version` | Immutable profile version. |
 | `display_name` | Listing label. |
 | `summary` | Listing summary. |
-| `profile_json` | Normalized full profile JSON. |
-| `profile_hash` | Stable content hash of `profile_json`. |
+| `profile_json` | Normalized launch payload JSON. |
+| `profile_hash` | Stable launch hash of `profile_json` plus selected/storage pipeline context. |
 | `status` | `active`, `deprecated`, or import tombstone `removed`. |
 | `retired_at` | Import timestamp when a previously seeded row was removed from the catalog. |
 | `source_path` | Catalog path, usually `catalog/run-profiles.json`. |
@@ -197,8 +189,8 @@ update or removal conflict instead of replacing it.
 
 `profile_hash` and `source_hash` use the same canonical profile normalization:
 
-- include launch-affecting fields: `pipelineId`, `schemaVersion`, `topology`, `bindings`, `publishing`, and any future
-  launch policy fields;
+- include launch-affecting fields: selected/storage `pipelineId`, `schemaVersion`, `topology`, `bindings`, and any
+  future launch policy fields;
 - exclude row metadata and lifecycle/provenance fields: `displayName`, `summary`, `status`, `source_path`,
   `source_hash`, `retired_at`, `updated_at`, clone provenance, and authorship fields;
 - normalize object key order and omit undefined values before hashing.
@@ -276,7 +268,7 @@ Mutation rules:
 - existing runs remain replayable from their Prisma route pin, not from the latest profile row;
 - playbook catalog reconciliation MUST preserve edited profiles and may update or retire only catalog-clean seeded rows;
 - profile mutation MUST reject unknown pipeline ids, unknown topology stages, unknown slots, unsupported runners, invalid
-  model levels, invalid permission modes, invalid timeouts, and secret-looking publishing values.
+  model levels, invalid permission modes, invalid timeouts, and unsupported additional properties.
 
 ## Profile Designer Discovery
 
@@ -295,54 +287,20 @@ Required discovery fields:
 | `runners` | Supported runner ids and capabilities. |
 | `modelLevels` | Model levels valid for each runner or globally. |
 | `permissionModes` | Permission modes valid for each runner. |
-| `publishing` | Supported publishing providers and account-selection fields. |
 | `suggestions` | Suggested profile ids or templates for authoring only. |
 
 The discovery document is advisory UI/API metadata. The server remains authoritative and MUST re-run validation during
 profile create/update, route simulation, and run creation. Discovery suggestions MUST NOT fill missing runner/model
 launch values during route resolution; route resolution consumes a normalized profile.
 
-## Publishing Identity
+## Deferred Publishing Identity
 
-Run profiles may include:
+GitHub publishing identity is not part of `run-profile/v1`. The schema MUST reject `publishing` fields in stored and
+inline profiles so account aliases cannot become dead launch data.
 
-```json
-{
-  "publishing": {
-    "github": {
-      "account": "my-gh-login"
-    }
-  }
-}
-```
-
-The account is a login alias only. Tokens are resolved at runtime and are never persisted in Revisium or Prisma route
-pins.
-
-The publishing account is launch configuration and belongs to the stored or inline profile. Effective GitHub account
-resolution order:
-
-1. inline `profile.publishing.github.account`;
-2. stored `profile_json.publishing.github.account`;
-3. Revo project setting, once project settings exist;
-4. explicit host override `REVO_GH_ACCOUNT`;
-5. active GitHub CLI account from `gh auth status --active --hostname github.com --json hosts`.
-
-The existing hardcoded `DEFAULT_GH_ACCOUNT = 'revisium-io'` behavior MUST be removed. `revisium-io` can still be
-selected explicitly through profile, project, or host configuration.
-
-Account selection is non-secret. Token lookup SHOULD happen in write-capable GitHub scripts, not in `validate_profile`
-or ordinary route simulation. If no account is found, or if the selected account has no token when a write-capable
-GitHub script runs, integrator/merger scripts MUST return a human-blocking result. They MUST NOT fall back to a
-hardcoded account or to a different ambient account. Read-only PR polling MAY use the selected account when available,
-but it MUST NOT require a write-token preflight unless it is about to perform a write.
-
-Token resolution order for a selected account:
-
-1. `GH_TOKEN_<NORMALIZED_ACCOUNT>`;
-2. `gh auth token --user <account>`.
-
-The resolved account SHOULD be recorded as route/integrator provenance. The token MUST NOT be recorded.
+A future publishing contract must define account-selection precedence, token lookup, failure behavior, and route
+provenance before profile JSON accepts GitHub account preferences. Until then, publication paths use the existing host
+authentication behavior and profiles do not influence the GitHub account.
 
 ## Runtime Resolution
 
@@ -359,22 +317,19 @@ If `profileId` is present:
 4. require a matching active `profile_id`;
 5. materialize the template from `profile_json.topology`;
 6. convert `profile_json.bindings` into launch bindings;
-7. resolve publishing identity from profile/project/active `gh`;
-8. validate the effective launch profile against the selected pipeline;
-9. return/create a route with profile provenance pins.
+7. validate the effective launch profile against the selected pipeline;
+8. return/create a route with profile provenance pins.
 
 If inline `profile` is present:
 
 1. require that `profileId` is absent;
 2. validate the inline profile against `run-profile/v1`;
-3. require that the inline profile `pipelineId` matches the selected pipeline;
-4. run the same semantic validation as for a stored profile;
+3. reject persisted identity, pipeline, display, lifecycle, and unknown fields in the inline body;
+4. run the same semantic validation as for a stored profile in the selected pipeline context;
 5. materialize topology and bindings from the inline profile;
-6. resolve publishing identity from inline profile/project/active `gh`;
-7. compute a stable inline profile hash;
-8. return/create a route with profile provenance pins.
+6. compute a stable inline profile hash using the selected pipeline as hash context;
+7. return/create a route with profile provenance pins.
 
-The service MUST reject a profile that belongs to another pipeline.
 The service MUST reject storage row ids such as `revisium-default-codex-standard` as `profileId`; callers use the
 catalog `profile_id` only.
 
@@ -382,9 +337,8 @@ Inline `profile` is not persisted to `run_profiles`, is not returned by `list_pr
 Internal test harnesses may still map runner implementations outside the public API, but those mappings must not be
 modeled as a second user-facing profile object.
 
-`executionProfile` is removed from the target contract. Implementations MUST remove it from MCP inputs, GraphQL inputs,
-route resolution, and Prisma `TaskRun` storage. New runs MUST NOT read or write `executionProfile`; every replay-needed
-launch field is stored in `routeDecision`.
+MCP inputs, GraphQL inputs, route resolution, and Prisma `TaskRun` storage MUST NOT expose a second profile-like launch
+object. New runs store every replay-needed launch field in `routeDecision`.
 
 ## Route Pins
 
@@ -394,22 +348,21 @@ truth for the run, even when the run was created from `profileId`.
 - `requestedPipelineId`;
 - `basePipelineId`;
 - `profileSource`, one of `stored` or `inline`;
-- `publishing`, including the resolved non-secret GitHub account when applicable;
 - `materializedTemplateHash`;
 - `materializedTemplate`;
 - `materializerVersion`;
 - `policyVersion`;
-- `resolvedModelProfiles`, including each selected model level, model profile id/version/hash, and concrete model id used
-  by the run;
 - resolved role/node launch bindings.
+
+Future route pins may add resolved publishing identity and resolved model-profile provenance once those contracts are
+versioned and implemented.
 
 For `profileSource=stored`, the route pin MUST also include `profileId`, `profileVersion`, `profileHash`, and
 `profileSnapshot`.
 
-For `profileSource=inline`, the route pin MUST include `profileHash` and `profileSnapshot`. If the inline payload carries
-`id` or `version`, those values are audit labels only and MUST NOT be treated as storage lookup keys. Stored-profile
-identity fields (`profileId`, `profileVersion`) SHOULD be omitted or null for inline launches. The inline profile hash is
-the replay identity.
+For `profileSource=inline`, the route pin MUST include `profileHash` and `profileSnapshot`. Stored-profile identity
+fields (`profileId`, `profileVersion`) SHOULD be omitted or null for inline launches. The inline profile hash is the
+replay identity.
 
 `routeDecision.source` remains the route-selection source, such as explicit or inferred pipeline selection. It is
 distinct from `profileSource`, which records whether the launch configuration came from stored control-plane profile data
@@ -466,17 +419,13 @@ Required automated coverage:
 - playbook re-import preserves edited profiles and updates/retires only catalog-clean seeded profiles;
 - update_profile rejects stale base version/hash preconditions;
 - deprecated profiles are listed only when requested and are rejected for new v1 launches;
-- `describe_profile_capabilities` exposes editable topology stages, binding slots, runner/model/permission choices, and
-  publishing account fields;
+- `describe_profile_capabilities` exposes editable topology stages, binding slots, and runner/model/permission choices;
 - inline `profile` validates and materializes without writing `run_profiles`;
 - inline route pins use `profileSource=inline`, carry a profile hash/snapshot, and do not require a Revisium row id;
 - create_run and simulate_route require exactly one of `profileId` or inline `profile`;
 - default playbook provides profiles for every pipeline that remains launchable under the strict profile contract;
-- route pins include resolved model profile ids/version/hash and concrete model ids needed by replay/resume;
-- `executionProfile` is removed from MCP inputs, GraphQL inputs, route resolution, and Prisma `TaskRun` storage;
-- GitHub publishing identity resolution honors profile/project/host/active-CLI precedence and never falls back to a
-  hardcoded account;
-- the current `DEFAULT_GH_ACCOUNT = 'revisium-io'` behavior is removed from the write path;
-- write-capable GitHub scripts human-block when the selected account token is unavailable;
-- GitHub token env-key normalization cannot accidentally use one account's token for a different normalized account;
+- no separate profile-like launch object is exposed by MCP inputs, GraphQL inputs, route resolution, or Prisma
+  `TaskRun` storage;
+- `publishing` fields are rejected in stored and inline `run-profile/v1` payloads until a dedicated publishing identity
+  contract exists;
 - GitHub tokens are never stored in `profile_json`, inline `profile`, or `routeDecision`.

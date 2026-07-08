@@ -208,7 +208,7 @@ test('loadPlaybookCatalogs: rejects stub-agent as a production role runner', () 
 
   assert.throws(
     () => loadPlaybookCatalogs(root, manifest),
-    /execution profile override/,
+    /run profile binding/,
   );
 });
 
@@ -281,5 +281,37 @@ test('loadPlaybookCatalogs: rejects invalid run profile JSON before import', () 
   assert.throws(
     () => loadPlaybookCatalogs(root, manifestWithProfiles),
     /runProfiles\[0\] violates run-profile\/v1 schema: .*\/topology\/stages\/codeReview\/branches/,
+  );
+});
+
+test('loadPlaybookCatalogs: rejects deferred publishing fields in run profiles', () => {
+  const { root, manifest } = makeRoot();
+  const manifestWithProfiles: PlaybookManifest = {
+    ...manifest,
+    catalogs: { ...manifest.catalogs, runProfiles: 'catalog/run-profiles.json' },
+  };
+  writeValidRoleCatalog(root);
+  writeValidPipelineCatalog(root);
+  writeFileSync(
+    join(root, 'catalog', 'run-profiles.json'),
+    JSON.stringify([
+      {
+        id: 'codex-standard',
+        pipelineId: 'feature-development',
+        schemaVersion: 'run-profile/v1',
+        version: '1',
+        displayName: 'Codex standard',
+        summary: 'Publishing identity is not part of this profile schema version.',
+        topology: { stages: { codeReview: { mode: 'single' } } },
+        bindings: { slots: { developer: { runnerId: 'codex', modelLevel: 'codex-standard' } } },
+        publishing: { github: { account: 'revisium-io' } },
+        status: 'active',
+      },
+    ]),
+  );
+
+  assert.throws(
+    () => loadPlaybookCatalogs(root, manifestWithProfiles),
+    /runProfiles\[0\] violates run-profile\/v1 schema: .*additional properties/,
   );
 });

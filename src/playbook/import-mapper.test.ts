@@ -103,10 +103,11 @@ test('mapPlaybookRows: maps roles and pipelines into versioned rows', () => {
   assert.equal(rows.runProfiles[0]?.data.pipeline_id, 'feature-development');
   assert.equal(rows.runProfiles[0]?.data.source_path, 'catalog/run-profiles.json');
   assert.ok(typeof rows.runProfiles[0]?.data.profile_hash === 'string');
-  assert.equal(
-    (JSON.parse(String(rows.runProfiles[0]?.data.profile_json)) as { bindings?: unknown }).bindings !== undefined,
-    true,
-  );
+  const storedProfileJson = JSON.parse(String(rows.runProfiles[0]?.data.profile_json)) as Record<string, unknown>;
+  assert.equal(storedProfileJson.bindings !== undefined, true);
+  assert.equal(storedProfileJson.pipelineId, undefined);
+  assert.equal(storedProfileJson.id, undefined);
+  assert.equal(storedProfileJson.version, undefined);
   assert.equal(rows.catalogHash.length, 64);
 });
 

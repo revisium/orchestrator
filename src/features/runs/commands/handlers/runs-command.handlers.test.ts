@@ -7,11 +7,11 @@ import { CreateRunHandler } from './runs-command.handlers.js';
 test('runs command handlers delegate through TaskControlPlaneApiService', async () => {
   const api = {
     async createRun(input: unknown) {
-      assert.deepEqual(input, { title: 'Build', repo: '.', start: false });
+      assert.deepEqual(input, { title: 'Build', repo: '.', pipelineId: 'local-change', start: false });
       return { runId: 'run_1', taskId: 'task_1', eventId: 'event_1', status: 'ready', started: false };
     },
   } as unknown as TaskControlPlaneApiService;
 
-  const result = await new CreateRunHandler(api).execute(new CreateRunCommand({ title: 'Build', repo: '.', start: false }));
+  const result = await new CreateRunHandler(api).execute(new CreateRunCommand({ title: 'Build', repo: '.', pipelineId: 'local-change', start: false }));
   assert.equal(result.runId, 'run_1');
 });

@@ -1,7 +1,9 @@
 export type SimulateRouteQueryData = {
   title: string;
   repo?: string;
-  pipeline?: string;
+  pipeline: string;
+  profileId?: string;
+  profile?: unknown;
   playbookId?: string;
   params?: unknown;
 };

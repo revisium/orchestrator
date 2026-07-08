@@ -30,6 +30,8 @@ import {
   assertGhNotCalled,
   assertEventsPresent,
   git,
+  stubFixtureAgentProfile,
+  stubFixtureFullProfile,
 } from './kit/index.js';
 
 // Group D — integrator / git / gh failure modes, exercised through the REAL integrator + real git on
@@ -64,7 +66,7 @@ async function startFeature(
     scope: 'Only mutate the temporary e2e target repository.',
     playbookId: PLAYBOOK_ID,
     pipelineId: 'feature-development',
-    executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent' } },
+    profile: stubFixtureAgentProfile(),
     start: false,
   });
   const runCase: RunCase = {
@@ -316,7 +318,7 @@ test('D16: a stub (script-mode) integrator completes with no git/gh', { skip: e2
       scope: 'Only mutate the temporary e2e target repository.',
       playbookId: PLAYBOOK_ID,
       pipelineId: 'feature-development',
-      executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent', 'revo-integrator': 'stub-agent' } },
+      profile: stubFixtureFullProfile(),
       start: false,
     });
     h.developerWrites.set(created.runId, target.worktree);

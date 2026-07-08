@@ -12,6 +12,7 @@ import {
   type AgentSpec,
   waitState,
   assertEventsPresent,
+  stubFixtureAgentProfile,
 } from './kit/index.js';
 
 // Group N — DATA-DRIVEN PARALLEL CONSENSUS.
@@ -67,7 +68,7 @@ test('N1: parallel consensus review returns two reviewer results before the all-
     scope: 'parallel consensus e2e',
     playbookId: PLAYBOOK_ID,
     pipelineId: PIPELINE_ID,
-    executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent' } },
+    profile: stubFixtureAgentProfile(),
     start: false,
   });
   specs.set(created.runId, {
@@ -120,7 +121,7 @@ test('N2: parallel consensus blocks when exactly one reviewer is non-approved', 
     scope: 'parallel consensus negative e2e',
     playbookId: PLAYBOOK_ID,
     pipelineId: PIPELINE_ID,
-    executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent' } },
+    profile: stubFixtureAgentProfile(),
     start: false,
   });
   specs.set(created.runId, {
@@ -156,7 +157,7 @@ test('N3: parallel consensus blocks when both reviewers are non-approved', { ski
     scope: 'parallel consensus rejected e2e',
     playbookId: PLAYBOOK_ID,
     pipelineId: PIPELINE_ID,
-    executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent' } },
+    profile: stubFixtureAgentProfile(),
     start: false,
   });
   specs.set(created.runId, {
@@ -187,7 +188,7 @@ test('N4: parallel consensus passes when reviewers return approved plus clean', 
     scope: 'parallel consensus approved clean e2e',
     playbookId: PLAYBOOK_ID,
     pipelineId: PIPELINE_ID,
-    executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent' } },
+    profile: stubFixtureAgentProfile(),
     start: false,
   });
   specs.set(created.runId, {

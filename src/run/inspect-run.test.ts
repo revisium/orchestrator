@@ -14,7 +14,7 @@ import {
   compactEventPayload,
 } from './inspect-run.js';
 
-test('compactEventPayload: run_created strips the graph (route_decision + execution_profile) + truncates description', () => {
+test('compactEventPayload: run_created strips the graph and truncates description', () => {
   const big = 'x'.repeat(500);
   const out = compactEventPayload('run_created', {
     title: 'My run',
@@ -22,10 +22,8 @@ test('compactEventPayload: run_created strips the graph (route_decision + execut
     pipeline_id: 'feature-development',
     description: big,
     route_decision: { executionPolicy: { template_json: { nodes: { a: 1, b: 2 } } } },
-    execution_profile: { id: 'default' },
   }) as Record<string, unknown>;
   assert.equal(out['route_decision'], undefined, 'graph stripped');
-  assert.equal(out['execution_profile'], undefined, 'execution_profile stripped');
   assert.equal(out['title'], 'My run', 'human-facing fields kept');
   assert.equal(out['pipeline_id'], 'feature-development');
   assert.ok(typeof out['description'] === 'string' && (out['description'] as string).length <= 281, 'description truncated');
@@ -709,7 +707,6 @@ const FULL_PAYLOAD = {
   title: 'My run',
   playbook_id: 'pb',
   route_decision: { executionPolicy: { template_json: { nodes: { a: 1 } } } },
-  execution_profile: { id: 'default' },
   description: 'a short desc',
 };
 
@@ -722,7 +719,6 @@ test('listRunEvents default (no expand) strips run_created graph payload', async
 
   const payload = events[0]?.payload as Record<string, unknown>;
   assert.equal(payload['route_decision'], undefined, 'route_decision stripped by default');
-  assert.equal(payload['execution_profile'], undefined, 'execution_profile stripped by default');
   assert.equal(payload['title'], 'My run', 'title kept');
 });
 

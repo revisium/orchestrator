@@ -95,7 +95,7 @@ Profile mutation APIs must validate both JSON shape and semantic compatibility b
 - topology stages are known materialization points for that pipeline;
 - binding slots resolve to allowed role/node slots;
 - runner ids, model levels, permission modes, and timeouts are valid for the target runner;
-- publishing account fields contain account names only, never tokens or secret values.
+- the payload contains only fields supported by the current `run-profile/v1` schema.
 
 Playbook catalog reconciliation must not silently overwrite operator edits. Import may create missing seeded profiles and
 may update a previously seeded profile only when its current profile hash still matches the last applied normalized
@@ -105,44 +105,27 @@ catalog-seeded rows as `removed`; customized rows remain launchable until a user
 
 ### Inline Profiles
 
-`RunProfile` is the only public launch configuration shape. `executionProfile` is not a separate public run contract.
-The implementation must remove `executionProfile` from MCP/GraphQL inputs, runtime route resolution, and Prisma
-`TaskRun` storage. Test runner adapters must be represented outside the public launch contract and must not create a
-second profile-like object that competes with `RunProfile`.
+`RunProfile` is the only public launch configuration shape. MCP/GraphQL inputs, runtime route resolution, and Prisma
+`TaskRun` storage must not expose a second profile-like launch object. Test runner adapters must be represented outside
+the public launch contract and must not create a second object that competes with `RunProfile`.
 
 For one-off design and experimentation, `simulate_route` and `create_run` accept an inline `profile`: an unsaved profile
-launch payload with the same topology, binding, and publishing shape as stored profiles. Stored profiles have persistent
-`profile_id` and `version`; inline payloads may omit those identity fields. The inline profile is validated through the
-same semantic checks as a stored profile, materialized the same way, and pinned into Prisma route provenance with its
+launch payload with the same topology and binding shape as stored profiles. Stored profiles have persistent
+`profile_id`, `pipeline_id`, and `version` metadata; inline payloads must omit those storage fields and use the launch
+request's top-level `pipelineId` as the selected pipeline context. The inline profile is validated through the same
+semantic checks as a stored profile, materialized the same way, and pinned into Prisma route provenance with its
 hash/snapshot. It is not written to `run_profiles` and does not appear in `list_profiles`.
 
 Stored `profileId` and inline `profile` are mutually exclusive in one launch request.
 
 ### Publishing Identity
 
-Run profiles may include non-secret publishing preferences, such as `publishing.github.account`. This value is an
-account/login alias, not a token. It controls the intended account for write-capable GitHub operations performed by
-the deterministic integrator/merger path.
+Publishing identity is deliberately out of scope for the current `run-profile/v1` implementation. The profile schema
+rejects `publishing` fields so account selection cannot be hashed or pinned without runtime support.
 
-There must be no hardcoded default GitHub account such as an organization bot name. The publishing account is launch
-configuration and belongs to the stored or inline profile. The resolution order is:
-
-1. inline `profile.publishing.github.account`;
-2. stored profile `publishing.github.account`;
-3. Revo project setting, once project-level settings exist;
-4. explicit host override `REVO_GH_ACCOUNT`;
-5. active GitHub CLI account from `gh auth status --active --hostname github.com --json hosts`.
-
-Token resolution is host-local and secret-bearing:
-
-1. `GH_TOKEN_<NORMALIZED_ACCOUNT>`;
-2. `gh auth token --user <account>`.
-
-If the account or token cannot be resolved, write-capable GitHub scripts must park on a human-blocking result. They must
-not silently fall back to another ambient account.
-
-The existing hardcoded `DEFAULT_GH_ACCOUNT = 'revisium-io'` behavior must be removed from the write path. `revisium-io`
-can still be selected explicitly through profile, project, or host configuration.
+A later ADR/spec must define GitHub account selection, token lookup, host/project precedence, and route provenance before
+profile JSON accepts publishing preferences. Until then, write-capable GitHub behavior must use the existing host auth
+path and must not treat run profiles as the source of publishing identity.
 
 ### Runtime Resolution
 
@@ -173,20 +156,21 @@ The pinned route decision records:
 - profile source, such as stored or inline;
 - profile id and version when the profile came from storage;
 - profile hash and normalized profile snapshot for every run;
-- resolved publishing account when GitHub publication is part of the route;
+- selected pipeline id as separate requested/base pipeline provenance;
 - materialized template hash and materializer version;
 - policy version;
-- resolved model profile ids, versions/hashes, and concrete model ids needed by the run;
 - resolved role/node launch bindings.
+
+Future route pins may add resolved publishing identity and model-profile provenance once those contracts are explicitly
+designed and implemented.
 
 ## Alternatives
 
 - **Keep provider variants as pipeline ids.** Rejected. It duplicates workflow policy and makes route behavior drift.
 - **Keep profiles in TypeScript constants.** Rejected. It makes seeded defaults invisible to control-plane
   import/versioning and prevents operator discovery through MCP.
-- **Expose both `RunProfile` and `executionProfile` as public launch configuration.** Rejected. It creates two competing
-  objects for runner/model/binding selection. Public launches use a stored profile or an inline profile body, and
-  `executionProfile` is removed rather than kept as compatibility state.
+- **Expose two public launch configuration objects.** Rejected. It creates competing sources for runner/model/binding
+  selection. Public launches use a stored profile or an inline profile body only.
 - **Store runtime run state in Revisium.** Rejected. Runtime state is Prisma-owned; Revisium engine is reserved for
   versioned meaning/config.
 - **Store only `profileId` in the run.** Rejected. Replay would change when a profile row changes.
@@ -208,7 +192,7 @@ The pinned route decision records:
 
 Implementation PRs should verify:
 
-- default playbook import writes four `run_profiles` rows;
+- default playbook import writes `run_profiles` rows for each launchable seeded pipeline;
 - invalid run profile JSON Schema payloads and invalid pipeline template shapes fail during import before Revisium write;
 - `list_profiles` returns storage-backed profiles by selected playbook/pipeline;
 - `simulate_route` and `create_run` with `profileId` materialize the graph and stamp route provenance;
@@ -217,6 +201,5 @@ Implementation PRs should verify:
 - seeded profiles are editable through profile mutation APIs;
 - inline `profile` validates/materializes/pins without being listed as a stored profile;
 - catalog re-import preserves edited profiles and only updates or retires unchanged catalog-seeded rows;
-- GitHub account resolution uses profile/project/host account or active `gh` account, never a hardcoded product default,
-  removes the current `DEFAULT_GH_ACCOUNT` behavior, and refuses to publish when the selected account token is
-  unavailable.
+- write-capable GitHub behavior uses the existing host auth path; profiles reject publishing fields and are not a source
+  of publishing identity in `run-profile/v1`.

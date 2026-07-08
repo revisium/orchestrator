@@ -29,8 +29,8 @@ test('GraphQL facade services wrap query-bus requests', async () => {
   await new RunsApiService(queryBus, commandBus).getAgentLog({ runId: 'run_1', stream: 'stdout' });
   await new RunsApiService(queryBus, commandBus).getRunProgress({ runId: 'run_1' });
   await new RunsApiService(queryBus, commandBus).getRunDigest({ runId: 'run_1' });
-  await new RunsApiService(queryBus, commandBus).simulateRoute({ title: 'Build' });
-  await new RunsApiService(queryBus, commandBus).createRun({ title: 'Build', repo: '.' });
+  await new RunsApiService(queryBus, commandBus).simulateRoute({ title: 'Build', pipeline: 'local-change' });
+  await new RunsApiService(queryBus, commandBus).createRun({ title: 'Build', repo: '.', pipelineId: 'local-change' });
   await new InboxApiService(queryBus, commandBus).listInbox({});
   await new InboxApiService(queryBus, commandBus).getInboxItem({ inboxId: 'inbox_1' });
   await new InboxApiService(queryBus, commandBus).pendingDecisions({});

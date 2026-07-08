@@ -5,7 +5,9 @@ export type CreateRunCommandData = {
   scope?: string;
   priority?: number;
   playbookId?: string;
-  pipelineId?: string;
+  pipelineId: string;
+  profileId?: string;
+  profile?: unknown;
   params?: unknown;
   issueRef?: unknown;
   issueAction?: unknown;

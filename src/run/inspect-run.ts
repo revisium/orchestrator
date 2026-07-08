@@ -113,7 +113,7 @@ const EVENT_DESCRIPTION_MAX = 280;
 
 export function compactEventPayload(type: string, payload: unknown): unknown {
   if (type !== 'run_created' || payload === null || typeof payload !== 'object') return payload ?? null;
-  const { route_decision: _rd, execution_profile: _ep, description, ...rest } = payload as Record<string, unknown>;
+  const { route_decision: _rd, description, ...rest } = payload as Record<string, unknown>;
   const desc =
     typeof description === 'string' && description.length > EVENT_DESCRIPTION_MAX
       ? `${description.slice(0, EVENT_DESCRIPTION_MAX)}…`

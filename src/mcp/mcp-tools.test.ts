@@ -115,6 +115,84 @@ test('create_run schema accepts both omitted and explicit pipelineId', async () 
   assert.equal(schema.safeParse({ title: 'Task', repo: '.', pipelineId: '' }).success, false, 'empty pipelineId rejected by min(1)');
 });
 
+test('create_run schema rejects duplicated pipelineId inside inline profile', async () => {
+  const { z } = await import('zod');
+  const { server, tools } = makeServer();
+  registerRevoMcpTools(server as never, {} as McpFacadeService);
+  const tool = tools.find((registered) => registered.name === 'create_run');
+  assert.ok(tool);
+  const schema = z.object(tool.config.inputSchema as Record<string, never>);
+  const base = {
+    title: 'Task',
+    repo: '.',
+    pipelineId: 'local-change',
+    profile: {
+      schemaVersion: 'run-profile/v1',
+      topology: { stages: {} },
+      bindings: { slots: {} },
+    },
+  };
+
+  assert.equal(schema.safeParse(base).success, true, 'inline profile without nested pipelineId accepted');
+  assert.equal(
+    schema.safeParse({ ...base, profile: { ...base.profile, pipelineId: 'local-change' } }).success,
+    false,
+    'nested profile.pipelineId rejected',
+  );
+});
+
+test('create_run schema rejects malformed inline run profile stages and bindings', async () => {
+  const { z } = await import('zod');
+  const { server, tools } = makeServer();
+  registerRevoMcpTools(server as never, {} as McpFacadeService);
+  const tool = tools.find((registered) => registered.name === 'create_run');
+  assert.ok(tool);
+  const schema = z.object(tool.config.inputSchema as Record<string, never>);
+  const base = {
+    title: 'Task',
+    repo: '.',
+    pipelineId: 'local-change',
+    profile: {
+      schemaVersion: 'run-profile/v1',
+      topology: { stages: {} },
+      bindings: { slots: {} },
+    },
+  };
+
+  assert.equal(
+    schema.safeParse({
+      ...base,
+      profile: { ...base.profile, topology: { stages: { developer: { mode: 'single', branches: 2 } } } },
+    }).success,
+    false,
+    'single stage must not accept branches',
+  );
+  assert.equal(
+    schema.safeParse({
+      ...base,
+      profile: { ...base.profile, topology: { stages: { reviewer: { mode: 'consensus' } } } },
+    }).success,
+    false,
+    'consensus stage requires branches',
+  );
+  assert.equal(
+    schema.safeParse({
+      ...base,
+      profile: { ...base.profile, bindings: { slots: { developer: {} } } },
+    }).success,
+    false,
+    'slot binding must contain at least one launch field',
+  );
+  assert.equal(
+    schema.safeParse({
+      ...base,
+      profile: { ...base.profile, bindings: { slots: { developer: { modelLevel: 'unknown' } } } },
+    }).success,
+    false,
+    'slot binding must constrain modelLevel',
+  );
+});
+
 test('pipeline MCP tools expose compact defaults with explicit detail opt-in', async () => {
   const { z } = await import('zod');
   const { server, tools } = makeServer();
@@ -425,7 +503,7 @@ test('get_run_events: handler forwards expand to facade', async () => {
   assert.deepEqual((received as Record<string, unknown>)['expand'], ['graph']);
 });
 
-test('create_run schema accepts executionProfile with bindingOverrides', async () => {
+test('create_run schema accepts inline run profile', async () => {
   const { server, tools } = makeServer();
   let received: unknown;
   const facade = {
@@ -440,8 +518,8 @@ test('create_run schema accepts executionProfile with bindingOverrides', async (
           template_json: { specVersion: '1.0', pipelineId: 'local-change', entry: 'developer', verdicts: { domain: ['approved'] },
             nodes: { developer: { id: 'developer', kind: 'agent', roleRef: 'role:developer', next: 'done', onFailure: 'abort' }, done: { id: 'done', kind: 'terminal', status: 'succeeded' } } },
         },
-        executionProfile: { id: 'ep', runnerOverrides: {} },
-        roleBindings: [{ roleId: 'developer', rowId: 'pb-developer', modelLevel: 'standard', runnerId: 'claude-code', resolvedRunnerId: 'stub-agent', runnerSource: 'execution-profile' }],
+        launchBindings: [{ match: { roleId: 'developer' }, modelLevel: 'deep' }],
+        roleBindings: [{ roleId: 'developer', rowId: 'pb-developer', modelLevel: 'standard', runnerId: 'claude-code', resolvedRunnerId: 'claude-code', runnerSource: 'profile' }],
         requiredRoles: ['developer'], optionalRoles: [], params: {}, pipelineRowId: 'pb-local-change',
       };
     },
@@ -459,18 +537,24 @@ test('create_run schema accepts executionProfile with bindingOverrides', async (
     pipelineId: 'local-change',
     repo: '.',
     start: true,
-    executionProfile: {
-      bindingOverrides: [{ match: { roleId: 'developer' }, modelLevel: 'deep', timeoutMs: 60000 }],
+    profile: {
+      schemaVersion: 'run-profile/v1',
+      topology: { stages: { developer: { mode: 'single' } } },
+      bindings: {
+        slots: { developer: { runnerId: 'claude-code', modelLevel: 'deep' } },
+      },
     },
   } as never);
 
   const input = received as Record<string, unknown>;
-  const ep = input.executionProfile as Record<string, unknown>;
-  assert.ok(ep !== undefined, 'executionProfile forwarded by create_run handler');
-  assert.ok(Array.isArray(ep.bindingOverrides), 'bindingOverrides present');
+  const profile = input.profile as Record<string, unknown>;
+  assert.ok(profile !== undefined, 'inline profile forwarded by create_run handler');
+  assert.equal(profile.schemaVersion, 'run-profile/v1');
+  assert.deepEqual(profile.topology, { stages: { developer: { mode: 'single' } } });
+  assert.deepEqual(profile.bindings, { slots: { developer: { runnerId: 'claude-code', modelLevel: 'deep' } } });
 });
 
-test('simulate_route schema accepts executionProfile with bindingOverrides', async () => {
+test('simulate_route schema accepts inline run profile', async () => {
   const { server, tools } = makeServer();
   let received: unknown;
   const facade = {
@@ -479,7 +563,7 @@ test('simulate_route schema accepts executionProfile with bindingOverrides', asy
       return {
         playbookId: 'pb', pipelineId: 'feature-development', source: 'explicit',
         routeGates: [], roles: [], executionPolicy: {},
-        executionProfile: { id: 'ep', runnerOverrides: {} },
+        launchBindings: [{ match: { roleId: 'developer' }, modelLevel: 'deep' }],
         roleBindings: [], params: {},
       };
     },
@@ -492,14 +576,19 @@ test('simulate_route schema accepts executionProfile with bindingOverrides', asy
   await tool.handler({
     title: 'Test',
     pipeline: 'feature-development',
-    executionProfile: {
-      id: 'my-profile',
-      bindingOverrides: [{ match: { runnerId: 'claude-code' }, permissionMode: 'plan' }],
+    profile: {
+      schemaVersion: 'run-profile/v1',
+      topology: { stages: { planReviewer: { mode: 'single' } } },
+      bindings: {
+        slots: { developer: { runnerId: 'claude-code', modelLevel: 'deep' } },
+      },
     },
   } as never);
 
   const input = received as Record<string, unknown>;
-  const ep = input.executionProfile as Record<string, unknown>;
-  assert.ok(ep !== undefined, 'executionProfile forwarded by simulate_route handler');
-  assert.equal(ep.id, 'my-profile');
+  const profile = input.profile as Record<string, unknown>;
+  assert.ok(profile !== undefined, 'inline profile forwarded by simulate_route handler');
+  assert.equal(profile.schemaVersion, 'run-profile/v1');
+  assert.deepEqual(profile.topology, { stages: { planReviewer: { mode: 'single' } } });
+  assert.deepEqual(profile.bindings, { slots: { developer: { runnerId: 'claude-code', modelLevel: 'deep' } } });
 });

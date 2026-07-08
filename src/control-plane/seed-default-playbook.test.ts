@@ -62,7 +62,7 @@ function fakeAccess() {
 // ---------------------------------------------------------------------------
 // 1. The default playbook installs cleanly with the expected shape.
 // ---------------------------------------------------------------------------
-test('default playbook: installs as revisium-default with feature-development/local-change and seeded run profiles', async () => {
+test('default playbook: installs as revisium-default with launchable pipelines and seeded run profiles', async () => {
   const fake = fakeAccess();
   const installer = new PlaybookInstaller({ access: fake.access });
   const result = await installer.install({
@@ -74,8 +74,8 @@ test('default playbook: installs as revisium-default with feature-development/lo
   assert.equal(result.playbookId, DEFAULT_PLAYBOOK_ID);
   assert.equal(result.committed, true);
   assert.equal(result.roles, 13, `expected exactly 13 default roles (got ${result.roles})`);
-  assert.equal(result.pipelines, 2, 'feature-development + local-change');
-  assert.equal(result.runProfiles, 4, 'four built-in feature-development run profiles');
+  assert.equal(result.pipelines, 3, 'feature-development + local-change + analysis-only');
+  assert.equal(result.runProfiles, 8, 'built-in run profiles for all launchable pipelines');
 
   const pipelineRowIds = fake.rows.filter((r) => r.table === 'pipelines').map((r) => r.rowId);
   assert.ok(
@@ -86,13 +86,21 @@ test('default playbook: installs as revisium-default with feature-development/lo
     pipelineRowIds.includes('revisium-default-local-change'),
     'local-change pipeline row is written (scoped by playbook id)',
   );
+  assert.ok(
+    pipelineRowIds.includes('revisium-default-analysis-only'),
+    'analysis-only pipeline row is written (scoped by playbook id)',
+  );
 
   const profileRowIds = fake.rows.filter((r) => r.table === 'run_profiles').map((r) => r.rowId);
   assert.deepEqual(profileRowIds.sort(), [
+    'revisium-default-analysis-only-claude-standard',
+    'revisium-default-analysis-only-codex-standard',
     'revisium-default-claude-primary-codex-review-consensus',
     'revisium-default-claude-standard',
     'revisium-default-codex-primary-claude-review-consensus',
     'revisium-default-codex-standard',
+    'revisium-default-local-change-claude-standard',
+    'revisium-default-local-change-codex-standard',
   ]);
 });
 
@@ -163,13 +171,27 @@ test('default playbook: consensus launch shapes are catalog data, not pipeline r
     'consensus launch shapes are not public pipeline rows',
   );
   assert.deepEqual(runProfiles.map((profile) => profile.id).sort(), [
+    'analysis-only-claude-standard',
+    'analysis-only-codex-standard',
     'claude-primary-codex-review-consensus',
     'claude-standard',
     'codex-primary-claude-review-consensus',
     'codex-standard',
+    'local-change-claude-standard',
+    'local-change-codex-standard',
+  ]);
+  const expectedPipelineByProfile = new Map([
+    ['analysis-only-claude-standard', 'analysis-only'],
+    ['analysis-only-codex-standard', 'analysis-only'],
+    ['claude-primary-codex-review-consensus', 'feature-development'],
+    ['claude-standard', 'feature-development'],
+    ['codex-primary-claude-review-consensus', 'feature-development'],
+    ['codex-standard', 'feature-development'],
+    ['local-change-claude-standard', 'local-change'],
+    ['local-change-codex-standard', 'local-change'],
   ]);
   for (const profile of runProfiles) {
-    assert.equal(profile.pipelineId, 'feature-development', `${profile.id} is scoped to feature-development`);
+    assert.equal(profile.pipelineId, expectedPipelineByProfile.get(profile.id), `${profile.id} is scoped to its pipeline`);
     assert.equal(profile.status, 'active', `${profile.id} is active`);
   }
 });
@@ -328,8 +350,8 @@ const STUB_RESULT: PlaybookInstallResult = {
   version: '0.1.0',
   source: 'local:default',
   roles: 13,
-  pipelines: 2,
-  runProfiles: 4,
+  pipelines: 3,
+  runProfiles: 8,
   operations: [],
   committed: true,
   dryRun: false,

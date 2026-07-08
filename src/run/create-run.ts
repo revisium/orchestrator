@@ -18,7 +18,6 @@ export type CreateRunInput = {
   issueRef?: unknown;
   issueAction?: unknown;
   routeDecision?: Record<string, unknown>;
-  executionProfile?: Record<string, unknown>;
   now?: Date;
   idSuffix?: string;
 };
@@ -48,7 +47,6 @@ type NormalizedInput = {
   pipelineId: string;
   params: Record<string, unknown>;
   routeDecision: Record<string, unknown>;
-  executionProfile: Record<string, unknown>;
   now: Date;
   idSuffix: string;
 };
@@ -164,7 +162,6 @@ function normalizeInput(input: CreateRunInput): NormalizedInput {
     pipelineId: input.pipelineId?.trim() ?? '',
     params: normalizeIssueRefIntoParams(input.params ?? {}, input.issueRef, input.issueAction),
     routeDecision: input.routeDecision ?? {},
-    executionProfile: input.executionProfile ?? {},
     now: input.now ?? new Date(),
     idSuffix: input.idSuffix ?? randomUUID().replaceAll('-', '').slice(0, 8),
   };
@@ -216,7 +213,6 @@ export async function createRunWorkflow(
       pipeline_id: normalized.pipelineId,
       params: normalized.params,
       route_decision: normalized.routeDecision,
-      execution_profile: normalized.executionProfile,
       created_by: 'cli',
       created_at: nowIso,
       updated_at: nowIso,
@@ -254,7 +250,6 @@ export async function createRunWorkflow(
         playbook_id: normalized.playbookId,
         pipeline_id: normalized.pipelineId,
         route_decision: normalized.routeDecision,
-        execution_profile: normalized.executionProfile,
         ids: { run_id: ids.runId, task_id: ids.taskId },
       },
       actor: 'cli',

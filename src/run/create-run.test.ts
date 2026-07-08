@@ -111,7 +111,6 @@ test('writes the exact ready skeleton fields without stringifying JSON-ish value
     playbook_id: '',
     pipeline_id: '',
     route_decision: {},
-    execution_profile: {},
     ids: { run_id: result.runId, task_id: result.taskId },
   });
 });

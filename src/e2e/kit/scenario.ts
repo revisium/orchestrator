@@ -9,6 +9,7 @@ import type { RunHarness } from './harness.js';
 import { assertEventsPresent } from './assertions.js';
 import { waitForGate, waitState } from './drive.js';
 import { DEFAULT_PLAYBOOK_ID, PLAYBOOK_ID } from './scenarios.js';
+import { stubDefaultAgentProfile, stubFixtureAgentProfile, type E2eRunProfile } from './run-profiles.js';
 import type { PipelineScenarioCoverage } from '../../control-plane/pipeline-coverage-registry.js';
 
 type GateTopic = 'plan' | 'merge' | 'question' | 'retry';
@@ -68,7 +69,7 @@ export type PipelineScenario = {
   repo: ScenarioRepo;
   playbook?: 'fixture' | 'default';
   pipelineId?: string;
-  executionProfile?: { runnerOverrides?: Record<string, string> };
+  profile?: E2eRunProfile;
   gh?: GhScenario;
   integrator?: IntegratorOutcome;
   agent?: AgentSpec;
@@ -243,7 +244,11 @@ export async function pipelineScenario(
     scope: scenario.scope ?? scenario.title,
     playbookId: playbookId(scenario),
     pipelineId: scenario.pipelineId ?? 'feature-development',
-    executionProfile: scenario.executionProfile ?? { runnerOverrides: { 'claude-code': 'stub-agent' } },
+    profile: scenario.profile ?? (
+      scenario.playbook === 'default'
+        ? stubDefaultAgentProfile()
+        : stubFixtureAgentProfile()
+    ),
     start: false,
   });
   const runCase: RunCase = {

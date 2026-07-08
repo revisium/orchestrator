@@ -79,7 +79,6 @@ export type TaskRunCountAggregateOutputType = {
   pipelineId: number
   params: number
   routeDecision: number
-  executionProfile: number
   createdBy: number
   _all: number
 }
@@ -138,7 +137,6 @@ export type TaskRunCountAggregateInputType = {
   pipelineId?: true
   params?: true
   routeDecision?: true
-  executionProfile?: true
   createdBy?: true
   _all?: true
 }
@@ -244,7 +242,6 @@ export type TaskRunGroupByOutputType = {
   pipelineId: string
   params: runtime.JsonValue
   routeDecision: runtime.JsonValue
-  executionProfile: runtime.JsonValue
   createdBy: string
   _count: TaskRunCountAggregateOutputType | null
   _avg: TaskRunAvgAggregateOutputType | null
@@ -286,7 +283,6 @@ export type TaskRunWhereInput = {
   pipelineId?: Prisma.StringFilter<"TaskRun"> | string
   params?: Prisma.JsonFilter<"TaskRun">
   routeDecision?: Prisma.JsonFilter<"TaskRun">
-  executionProfile?: Prisma.JsonFilter<"TaskRun">
   createdBy?: Prisma.StringFilter<"TaskRun"> | string
   project?: Prisma.XOR<Prisma.RevoProjectNullableScalarRelationFilter, Prisma.RevoProjectWhereInput> | null
   tasks?: Prisma.RunTaskListRelationFilter
@@ -312,7 +308,6 @@ export type TaskRunOrderByWithRelationInput = {
   pipelineId?: Prisma.SortOrder
   params?: Prisma.SortOrder
   routeDecision?: Prisma.SortOrder
-  executionProfile?: Prisma.SortOrder
   createdBy?: Prisma.SortOrder
   project?: Prisma.RevoProjectOrderByWithRelationInput
   tasks?: Prisma.RunTaskOrderByRelationAggregateInput
@@ -342,7 +337,6 @@ export type TaskRunWhereUniqueInput = Prisma.AtLeast<{
   pipelineId?: Prisma.StringFilter<"TaskRun"> | string
   params?: Prisma.JsonFilter<"TaskRun">
   routeDecision?: Prisma.JsonFilter<"TaskRun">
-  executionProfile?: Prisma.JsonFilter<"TaskRun">
   createdBy?: Prisma.StringFilter<"TaskRun"> | string
   project?: Prisma.XOR<Prisma.RevoProjectNullableScalarRelationFilter, Prisma.RevoProjectWhereInput> | null
   tasks?: Prisma.RunTaskListRelationFilter
@@ -368,7 +362,6 @@ export type TaskRunOrderByWithAggregationInput = {
   pipelineId?: Prisma.SortOrder
   params?: Prisma.SortOrder
   routeDecision?: Prisma.SortOrder
-  executionProfile?: Prisma.SortOrder
   createdBy?: Prisma.SortOrder
   _count?: Prisma.TaskRunCountOrderByAggregateInput
   _avg?: Prisma.TaskRunAvgOrderByAggregateInput
@@ -395,7 +388,6 @@ export type TaskRunScalarWhereWithAggregatesInput = {
   pipelineId?: Prisma.StringWithAggregatesFilter<"TaskRun"> | string
   params?: Prisma.JsonWithAggregatesFilter<"TaskRun">
   routeDecision?: Prisma.JsonWithAggregatesFilter<"TaskRun">
-  executionProfile?: Prisma.JsonWithAggregatesFilter<"TaskRun">
   createdBy?: Prisma.StringWithAggregatesFilter<"TaskRun"> | string
 }
 
@@ -413,7 +405,6 @@ export type TaskRunCreateInput = {
   pipelineId?: string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: string
   project?: Prisma.RevoProjectCreateNestedOneWithoutTaskRunsInput
   tasks?: Prisma.RunTaskCreateNestedManyWithoutRunInput
@@ -439,7 +430,6 @@ export type TaskRunUncheckedCreateInput = {
   pipelineId?: string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: string
   tasks?: Prisma.RunTaskUncheckedCreateNestedManyWithoutRunInput
   events?: Prisma.RunEventUncheckedCreateNestedManyWithoutRunInput
@@ -463,7 +453,6 @@ export type TaskRunUpdateInput = {
   pipelineId?: Prisma.StringFieldUpdateOperationsInput | string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: Prisma.StringFieldUpdateOperationsInput | string
   project?: Prisma.RevoProjectUpdateOneWithoutTaskRunsNestedInput
   tasks?: Prisma.RunTaskUpdateManyWithoutRunNestedInput
@@ -489,7 +478,6 @@ export type TaskRunUncheckedUpdateInput = {
   pipelineId?: Prisma.StringFieldUpdateOperationsInput | string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: Prisma.StringFieldUpdateOperationsInput | string
   tasks?: Prisma.RunTaskUncheckedUpdateManyWithoutRunNestedInput
   events?: Prisma.RunEventUncheckedUpdateManyWithoutRunNestedInput
@@ -514,7 +502,6 @@ export type TaskRunCreateManyInput = {
   pipelineId?: string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: string
 }
 
@@ -532,7 +519,6 @@ export type TaskRunUpdateManyMutationInput = {
   pipelineId?: Prisma.StringFieldUpdateOperationsInput | string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: Prisma.StringFieldUpdateOperationsInput | string
 }
 
@@ -551,7 +537,6 @@ export type TaskRunUncheckedUpdateManyInput = {
   pipelineId?: Prisma.StringFieldUpdateOperationsInput | string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: Prisma.StringFieldUpdateOperationsInput | string
 }
 
@@ -594,7 +579,6 @@ export type TaskRunCountOrderByAggregateInput = {
   pipelineId?: Prisma.SortOrder
   params?: Prisma.SortOrder
   routeDecision?: Prisma.SortOrder
-  executionProfile?: Prisma.SortOrder
   createdBy?: Prisma.SortOrder
 }
 
@@ -809,7 +793,6 @@ export type TaskRunCreateWithoutProjectInput = {
   pipelineId?: string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: string
   tasks?: Prisma.RunTaskCreateNestedManyWithoutRunInput
   events?: Prisma.RunEventCreateNestedManyWithoutRunInput
@@ -833,7 +816,6 @@ export type TaskRunUncheckedCreateWithoutProjectInput = {
   pipelineId?: string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: string
   tasks?: Prisma.RunTaskUncheckedCreateNestedManyWithoutRunInput
   events?: Prisma.RunEventUncheckedCreateNestedManyWithoutRunInput
@@ -887,7 +869,6 @@ export type TaskRunScalarWhereInput = {
   pipelineId?: Prisma.StringFilter<"TaskRun"> | string
   params?: Prisma.JsonFilter<"TaskRun">
   routeDecision?: Prisma.JsonFilter<"TaskRun">
-  executionProfile?: Prisma.JsonFilter<"TaskRun">
   createdBy?: Prisma.StringFilter<"TaskRun"> | string
 }
 
@@ -905,7 +886,6 @@ export type TaskRunCreateWithoutTasksInput = {
   pipelineId?: string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: string
   project?: Prisma.RevoProjectCreateNestedOneWithoutTaskRunsInput
   events?: Prisma.RunEventCreateNestedManyWithoutRunInput
@@ -930,7 +910,6 @@ export type TaskRunUncheckedCreateWithoutTasksInput = {
   pipelineId?: string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: string
   events?: Prisma.RunEventUncheckedCreateNestedManyWithoutRunInput
   attempts?: Prisma.RunAttemptUncheckedCreateNestedManyWithoutRunInput
@@ -969,7 +948,6 @@ export type TaskRunUpdateWithoutTasksInput = {
   pipelineId?: Prisma.StringFieldUpdateOperationsInput | string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: Prisma.StringFieldUpdateOperationsInput | string
   project?: Prisma.RevoProjectUpdateOneWithoutTaskRunsNestedInput
   events?: Prisma.RunEventUpdateManyWithoutRunNestedInput
@@ -994,7 +972,6 @@ export type TaskRunUncheckedUpdateWithoutTasksInput = {
   pipelineId?: Prisma.StringFieldUpdateOperationsInput | string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: Prisma.StringFieldUpdateOperationsInput | string
   events?: Prisma.RunEventUncheckedUpdateManyWithoutRunNestedInput
   attempts?: Prisma.RunAttemptUncheckedUpdateManyWithoutRunNestedInput
@@ -1017,7 +994,6 @@ export type TaskRunCreateWithoutEventsInput = {
   pipelineId?: string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: string
   project?: Prisma.RevoProjectCreateNestedOneWithoutTaskRunsInput
   tasks?: Prisma.RunTaskCreateNestedManyWithoutRunInput
@@ -1042,7 +1018,6 @@ export type TaskRunUncheckedCreateWithoutEventsInput = {
   pipelineId?: string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: string
   tasks?: Prisma.RunTaskUncheckedCreateNestedManyWithoutRunInput
   attempts?: Prisma.RunAttemptUncheckedCreateNestedManyWithoutRunInput
@@ -1081,7 +1056,6 @@ export type TaskRunUpdateWithoutEventsInput = {
   pipelineId?: Prisma.StringFieldUpdateOperationsInput | string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: Prisma.StringFieldUpdateOperationsInput | string
   project?: Prisma.RevoProjectUpdateOneWithoutTaskRunsNestedInput
   tasks?: Prisma.RunTaskUpdateManyWithoutRunNestedInput
@@ -1106,7 +1080,6 @@ export type TaskRunUncheckedUpdateWithoutEventsInput = {
   pipelineId?: Prisma.StringFieldUpdateOperationsInput | string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: Prisma.StringFieldUpdateOperationsInput | string
   tasks?: Prisma.RunTaskUncheckedUpdateManyWithoutRunNestedInput
   attempts?: Prisma.RunAttemptUncheckedUpdateManyWithoutRunNestedInput
@@ -1129,7 +1102,6 @@ export type TaskRunCreateWithoutAttemptsInput = {
   pipelineId?: string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: string
   project?: Prisma.RevoProjectCreateNestedOneWithoutTaskRunsInput
   tasks?: Prisma.RunTaskCreateNestedManyWithoutRunInput
@@ -1154,7 +1126,6 @@ export type TaskRunUncheckedCreateWithoutAttemptsInput = {
   pipelineId?: string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: string
   tasks?: Prisma.RunTaskUncheckedCreateNestedManyWithoutRunInput
   events?: Prisma.RunEventUncheckedCreateNestedManyWithoutRunInput
@@ -1193,7 +1164,6 @@ export type TaskRunUpdateWithoutAttemptsInput = {
   pipelineId?: Prisma.StringFieldUpdateOperationsInput | string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: Prisma.StringFieldUpdateOperationsInput | string
   project?: Prisma.RevoProjectUpdateOneWithoutTaskRunsNestedInput
   tasks?: Prisma.RunTaskUpdateManyWithoutRunNestedInput
@@ -1218,7 +1188,6 @@ export type TaskRunUncheckedUpdateWithoutAttemptsInput = {
   pipelineId?: Prisma.StringFieldUpdateOperationsInput | string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: Prisma.StringFieldUpdateOperationsInput | string
   tasks?: Prisma.RunTaskUncheckedUpdateManyWithoutRunNestedInput
   events?: Prisma.RunEventUncheckedUpdateManyWithoutRunNestedInput
@@ -1241,7 +1210,6 @@ export type TaskRunCreateWithoutInboxInput = {
   pipelineId?: string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: string
   project?: Prisma.RevoProjectCreateNestedOneWithoutTaskRunsInput
   tasks?: Prisma.RunTaskCreateNestedManyWithoutRunInput
@@ -1266,7 +1234,6 @@ export type TaskRunUncheckedCreateWithoutInboxInput = {
   pipelineId?: string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: string
   tasks?: Prisma.RunTaskUncheckedCreateNestedManyWithoutRunInput
   events?: Prisma.RunEventUncheckedCreateNestedManyWithoutRunInput
@@ -1305,7 +1272,6 @@ export type TaskRunUpdateWithoutInboxInput = {
   pipelineId?: Prisma.StringFieldUpdateOperationsInput | string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: Prisma.StringFieldUpdateOperationsInput | string
   project?: Prisma.RevoProjectUpdateOneWithoutTaskRunsNestedInput
   tasks?: Prisma.RunTaskUpdateManyWithoutRunNestedInput
@@ -1330,7 +1296,6 @@ export type TaskRunUncheckedUpdateWithoutInboxInput = {
   pipelineId?: Prisma.StringFieldUpdateOperationsInput | string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: Prisma.StringFieldUpdateOperationsInput | string
   tasks?: Prisma.RunTaskUncheckedUpdateManyWithoutRunNestedInput
   events?: Prisma.RunEventUncheckedUpdateManyWithoutRunNestedInput
@@ -1353,7 +1318,6 @@ export type TaskRunCreateWithoutOutputsInput = {
   pipelineId?: string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: string
   project?: Prisma.RevoProjectCreateNestedOneWithoutTaskRunsInput
   tasks?: Prisma.RunTaskCreateNestedManyWithoutRunInput
@@ -1378,7 +1342,6 @@ export type TaskRunUncheckedCreateWithoutOutputsInput = {
   pipelineId?: string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: string
   tasks?: Prisma.RunTaskUncheckedCreateNestedManyWithoutRunInput
   events?: Prisma.RunEventUncheckedCreateNestedManyWithoutRunInput
@@ -1417,7 +1380,6 @@ export type TaskRunUpdateWithoutOutputsInput = {
   pipelineId?: Prisma.StringFieldUpdateOperationsInput | string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: Prisma.StringFieldUpdateOperationsInput | string
   project?: Prisma.RevoProjectUpdateOneWithoutTaskRunsNestedInput
   tasks?: Prisma.RunTaskUpdateManyWithoutRunNestedInput
@@ -1442,7 +1404,6 @@ export type TaskRunUncheckedUpdateWithoutOutputsInput = {
   pipelineId?: Prisma.StringFieldUpdateOperationsInput | string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: Prisma.StringFieldUpdateOperationsInput | string
   tasks?: Prisma.RunTaskUncheckedUpdateManyWithoutRunNestedInput
   events?: Prisma.RunEventUncheckedUpdateManyWithoutRunNestedInput
@@ -1465,7 +1426,6 @@ export type TaskRunCreateWithoutCostItemsInput = {
   pipelineId?: string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: string
   project?: Prisma.RevoProjectCreateNestedOneWithoutTaskRunsInput
   tasks?: Prisma.RunTaskCreateNestedManyWithoutRunInput
@@ -1490,7 +1450,6 @@ export type TaskRunUncheckedCreateWithoutCostItemsInput = {
   pipelineId?: string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: string
   tasks?: Prisma.RunTaskUncheckedCreateNestedManyWithoutRunInput
   events?: Prisma.RunEventUncheckedCreateNestedManyWithoutRunInput
@@ -1529,7 +1488,6 @@ export type TaskRunUpdateWithoutCostItemsInput = {
   pipelineId?: Prisma.StringFieldUpdateOperationsInput | string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: Prisma.StringFieldUpdateOperationsInput | string
   project?: Prisma.RevoProjectUpdateOneWithoutTaskRunsNestedInput
   tasks?: Prisma.RunTaskUpdateManyWithoutRunNestedInput
@@ -1554,7 +1512,6 @@ export type TaskRunUncheckedUpdateWithoutCostItemsInput = {
   pipelineId?: Prisma.StringFieldUpdateOperationsInput | string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: Prisma.StringFieldUpdateOperationsInput | string
   tasks?: Prisma.RunTaskUncheckedUpdateManyWithoutRunNestedInput
   events?: Prisma.RunEventUncheckedUpdateManyWithoutRunNestedInput
@@ -1577,7 +1534,6 @@ export type TaskRunCreateManyProjectInput = {
   pipelineId?: string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: string
 }
 
@@ -1595,7 +1551,6 @@ export type TaskRunUpdateWithoutProjectInput = {
   pipelineId?: Prisma.StringFieldUpdateOperationsInput | string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: Prisma.StringFieldUpdateOperationsInput | string
   tasks?: Prisma.RunTaskUpdateManyWithoutRunNestedInput
   events?: Prisma.RunEventUpdateManyWithoutRunNestedInput
@@ -1619,7 +1574,6 @@ export type TaskRunUncheckedUpdateWithoutProjectInput = {
   pipelineId?: Prisma.StringFieldUpdateOperationsInput | string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: Prisma.StringFieldUpdateOperationsInput | string
   tasks?: Prisma.RunTaskUncheckedUpdateManyWithoutRunNestedInput
   events?: Prisma.RunEventUncheckedUpdateManyWithoutRunNestedInput
@@ -1643,7 +1597,6 @@ export type TaskRunUncheckedUpdateManyWithoutProjectInput = {
   pipelineId?: Prisma.StringFieldUpdateOperationsInput | string
   params?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   routeDecision?: Prisma.JsonNullValueInput | runtime.InputJsonValue
-  executionProfile?: Prisma.JsonNullValueInput | runtime.InputJsonValue
   createdBy?: Prisma.StringFieldUpdateOperationsInput | string
 }
 
@@ -1738,7 +1691,6 @@ export type TaskRunSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs 
   pipelineId?: boolean
   params?: boolean
   routeDecision?: boolean
-  executionProfile?: boolean
   createdBy?: boolean
   project?: boolean | Prisma.TaskRun$projectArgs<ExtArgs>
   tasks?: boolean | Prisma.TaskRun$tasksArgs<ExtArgs>
@@ -1765,7 +1717,6 @@ export type TaskRunSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Exten
   pipelineId?: boolean
   params?: boolean
   routeDecision?: boolean
-  executionProfile?: boolean
   createdBy?: boolean
   project?: boolean | Prisma.TaskRun$projectArgs<ExtArgs>
 }, ExtArgs["result"]["taskRun"]>
@@ -1785,7 +1736,6 @@ export type TaskRunSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Exten
   pipelineId?: boolean
   params?: boolean
   routeDecision?: boolean
-  executionProfile?: boolean
   createdBy?: boolean
   project?: boolean | Prisma.TaskRun$projectArgs<ExtArgs>
 }, ExtArgs["result"]["taskRun"]>
@@ -1805,11 +1755,10 @@ export type TaskRunSelectScalar = {
   pipelineId?: boolean
   params?: boolean
   routeDecision?: boolean
-  executionProfile?: boolean
   createdBy?: boolean
 }
 
-export type TaskRunOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "createdAt" | "updatedAt" | "projectId" | "title" | "description" | "status" | "repos" | "scope" | "priority" | "playbookId" | "pipelineId" | "params" | "routeDecision" | "executionProfile" | "createdBy", ExtArgs["result"]["taskRun"]>
+export type TaskRunOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "createdAt" | "updatedAt" | "projectId" | "title" | "description" | "status" | "repos" | "scope" | "priority" | "playbookId" | "pipelineId" | "params" | "routeDecision" | "createdBy", ExtArgs["result"]["taskRun"]>
 export type TaskRunInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   project?: boolean | Prisma.TaskRun$projectArgs<ExtArgs>
   tasks?: boolean | Prisma.TaskRun$tasksArgs<ExtArgs>
@@ -1853,7 +1802,6 @@ export type $TaskRunPayload<ExtArgs extends runtime.Types.Extensions.InternalArg
     pipelineId: string
     params: runtime.JsonValue
     routeDecision: runtime.JsonValue
-    executionProfile: runtime.JsonValue
     createdBy: string
   }, ExtArgs["result"]["taskRun"]>
   composites: {}
@@ -2299,7 +2247,6 @@ export interface TaskRunFieldRefs {
   readonly pipelineId: Prisma.FieldRef<"TaskRun", 'String'>
   readonly params: Prisma.FieldRef<"TaskRun", 'Json'>
   readonly routeDecision: Prisma.FieldRef<"TaskRun", 'Json'>
-  readonly executionProfile: Prisma.FieldRef<"TaskRun", 'Json'>
   readonly createdBy: Prisma.FieldRef<"TaskRun", 'String'>
 }
     
