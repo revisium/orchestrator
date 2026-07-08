@@ -82,13 +82,23 @@ Fields: `id, playbook_id, pipeline_id, profile_id, schema_version, version, disp
 profile_hash, status, retired_at, source_path, source_hash, updated_at`.
 
 `profile_json` stores the normalized run profile. `profile_hash` is pinned into Prisma `TaskRun.routeDecision` when a run
-is created. Updating a built-in profile means changing `control-plane/default-playbook/catalog/run-profiles.json` and
-importing a new version/hash.
-Catalog run profiles must pass the `run-profile/v1` JSON Schema before they are serialized into `profile_json`.
+is created. Catalog run profiles must pass the `run-profile/v1` JSON Schema before they are serialized into
+`profile_json`. Seeded profiles are editable after import; profile updates write a new Revisium revision and a new
+`profile_hash`.
+
+`source_path` and `source_hash` record the last applied catalog source when a row came from default playbook import.
+`source_hash` is the last applied normalized catalog profile hash, computed with the same normalization as
+`profile_hash`. The normalized launch hash includes launch-affecting fields such as topology, bindings, publishing, and
+future launch policy fields; it excludes display/lifecycle/provenance row metadata. Catalog reconciliation must not
+silently overwrite edits: import may update or retire only rows whose current `profile_hash` still matches
+`source_hash`. Edited rows are preserved and reported as catalog update or removal conflicts.
 
 The public pipeline/profile identifiers are `pipeline_id` and `profile_id`. The storage row `id` is an internal scoped
-row id and is not accepted as a launch alias. When a built-in catalog removes a row, import marks the previous row
+row id and is not accepted as a launch alias. When a catalog removes a profile, import may mark unchanged seeded rows
 `status=removed`; runtime listing/resolution ignores removed rows.
+
+Profiles may include non-secret publishing preferences such as `publishing.github.account`. Tokens are never stored in
+Revisium rows.
 
 ### `model_profiles`
 
@@ -112,11 +122,17 @@ Fields: `id, rule, model_level, requires_human, updated_at`.
 Runtime run record.
 
 Important fields: `id, projectId, title, description, status, repos, scope, priority, playbookId, pipelineId, params,
-routeDecision, executionProfile, createdBy, createdAt, updatedAt`.
+routeDecision, createdBy, createdAt, updatedAt`.
 
-`routeDecision` pins `requestedPipelineId`, `basePipelineId`, `profileId`, `profileVersion`, `profileHash`,
-`profileSnapshot`, `materializedTemplateHash`, `materializedTemplate`, `materializerVersion`, and `policyVersion` when a
-stored profile is applied. Replay uses this pin, not the latest Revisium profile row.
+`routeDecision` pins `requestedPipelineId`, `basePipelineId`, `profileSource`, `profileHash`, `profileSnapshot`,
+`publishing`, `materializedTemplateHash`, `materializedTemplate`, `materializerVersion`, `policyVersion`,
+`resolvedModelProfiles`, and resolved launch bindings. Stored-profile launches also pin `profileId` and
+`profileVersion`; inline-profile launches omit or null stored-profile identity fields and use `profileHash` as replay
+identity. Public launches are created from either a stored `profileId` or an inline profile body, and Prisma stores the
+resolved normalized profile snapshot in both cases. Replay uses this pin, not the latest Revisium profile row.
+
+`executionProfile` is removed from the target `TaskRun` model. Launch configuration is stored in
+`routeDecision.profileSnapshot`, resolved launch bindings, and resolved model profile pins.
 
 `params.issueRef` is the canonical issue traceability location for issue-bound runs. Shape:
 `{ repo: string, number: positive integer, url: string }`. `params.issueAction` controls delivery linkage and is one of
