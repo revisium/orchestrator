@@ -487,6 +487,7 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
         inboxId: inboxIdSchema,
         outcome: z.string().min(1),
         note: z.string().optional(),
+        reconcile: z.literal('keep').optional(),
         resolvedBy: z.string().optional(),
         adoptionAudit: manualAdoptionAuditSchema.optional(),
         mergeOverrideAudit: mergeOverrideAuditSchema.optional(),

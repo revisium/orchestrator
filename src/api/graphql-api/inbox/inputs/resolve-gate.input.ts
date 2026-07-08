@@ -2,6 +2,10 @@ import { Field, ID, InputType } from '@nestjs/graphql';
 import type { ManualAdoptionAuditInput as DomainManualAdoptionAuditInput } from '../../../../control-plane/manual-adoption-audit.js';
 import type { MergeOverrideAuditInput as DomainMergeOverrideAuditInput } from '../../../../control-plane/merge-override-audit.js';
 
+export enum GateReconcileInput {
+  keep = 'keep',
+}
+
 @InputType()
 export class ManualAdoptionAuditInput implements DomainManualAdoptionAuditInput {
   @Field(() => String)
@@ -72,6 +76,9 @@ export class ResolveGateInput {
 
   @Field(() => String, { nullable: true })
   note?: string;
+
+  @Field(() => GateReconcileInput, { nullable: true })
+  reconcile?: GateReconcileInput;
 
   @Field(() => String, { nullable: true })
   resolvedBy?: string;

@@ -5,6 +5,7 @@ export type ResolveGateCommandData = {
   inboxId: string;
   outcome: string;
   note?: string;
+  reconcile?: 'keep';
   resolvedBy?: string;
   adoptionAudit?: ManualAdoptionAuditInput;
   mergeOverrideAudit?: MergeOverrideAuditInput;

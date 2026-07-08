@@ -20,7 +20,7 @@ import type { Template } from '../pipeline-core/index.js';
 import type { AttemptResult } from '../worker/runner.js';
 import type { AppendEventInput } from '../run/append-event.js';
 import type { RouteDecision, RouteRoleBinding, LaunchOverrides } from './route-contract.js';
-import type { Decision as GateDecision } from './await-human.js';
+import type { Decision as GateDecision, GateTopic } from './await-human.js';
 import type {
   IntegratorInput,
   IntegratorOutput,
@@ -164,6 +164,7 @@ type Recorder = {
   acceptedVerdictsByStep: Record<string, readonly string[] | undefined>;
   retrySleeps: number[];
   progress: DataDrivenProgressCursor[];
+  gateKeys: string[];
 };
 
 /**
@@ -172,7 +173,7 @@ type Recorder = {
  */
 function buildAdapter(opts: {
   verdicts?: Record<string, string | string[]>;
-  gate?: (topic: 'plan' | 'merge' | 'question', gateKey: string, summary: GateSummary) => GateDecision;
+  gate?: (topic: GateTopic, gateKey: string, summary: GateSummary) => GateDecision;
   needsHumanNodes?: Set<string>;
   template?: Template;
   /** Override the integrator result (default: success). Lets a test drive needsHuman / throw. */
@@ -220,6 +221,7 @@ function buildAdapter(opts: {
     acceptedVerdictsByStep: {},
     retrySleeps: [],
     progress: [],
+    gateKeys: [],
   };
   const visits = new Map<string, number>();
 
@@ -276,6 +278,7 @@ function buildAdapter(opts: {
     },
     awaitHuman: async (_runId, topic, _gateKey, _title, summary): Promise<GateDecision> => {
       rec.gates.push(topic);
+      rec.gateKeys.push(_gateKey);
       rec.gateSummaries.push(summary as GateSummary);
       return (opts.gate ?? (() => ({ decision: 'approve' })))(topic, _gateKey, summary as GateSummary);
     },
@@ -1914,6 +1917,127 @@ test('DD5-retry: retryable transient runner failure retries once and stores outp
   assert.equal(rec.blocked.length, 0);
 });
 
+test('DD5-retry-gate: exhausted transient runner failure can be retried by a human gate in the same run', async () => {
+  const tmpl = singleDeveloperTemplate('manual-retry-success');
+  const { run, rec } = buildAdapter({
+    template: tmpl,
+    gate: (topic) => (topic === 'retry' ? { outcome: 'retry', answer: { outcome: 'retry', reconcile: 'keep' } } : { decision: 'approve' }),
+    results: {
+      developer: [
+        runnerFailedResult('runner process timed out'),
+        runnerFailedResult('runner process timed out'),
+        {
+          output: { from: 'developer', ok: true },
+          verdict: 'approved',
+          nextSteps: [],
+          costs: [],
+          needsHuman: false,
+        },
+      ],
+    },
+  });
+
+  const result = await run();
+  const attempts = rec.runStepAttempts.filter((a) => baseStepKey(a.stepKey) === 'developer');
+  const retrySummary = rec.gateSummaries.find((summary) => (summary as Record<string, unknown>).kind === 'transient_retry') as Record<string, unknown> | undefined;
+
+  assert.equal(result.status, 'succeeded');
+  assert.deepEqual(rec.gates, ['retry']);
+  assert.equal(retrySummary?.nodeId, 'developer');
+  assert.equal(retrySummary?.reason, 'runner-transient-failure:timeout');
+  assert.deepEqual(
+    attempts.map((a) => ({ stepKey: a.stepKey, attemptNo: a.attemptNo })),
+    [
+      { stepKey: 'developer', attemptNo: 1 },
+      { stepKey: 'developer', attemptNo: 2 },
+      { stepKey: 'developer#2', attemptNo: 1 },
+    ],
+  );
+  assert.equal(rec.outputs[0]?.attemptId, attempts[2]?.attemptId, 'the post-gate retry stores the winning fresh attempt');
+  assert.equal(rec.blocked.length, 0);
+  assert.ok(rec.events.includes('runner_retry_exhausted:developer'), 'the exhausted path is durable before the gate opens');
+});
+
+test('DD5-retry-gate: give_up preserves the terminal blocked behavior after exhausted transient retries', async () => {
+  const { run, rec } = buildAdapter({
+    template: singleDeveloperTemplate('manual-retry-give-up'),
+    gate: (topic) => (topic === 'retry' ? { outcome: 'give_up', answer: { outcome: 'give_up', note: 'stop here' } } : { decision: 'approve' }),
+    results: {
+      developer: runnerFailedResult('runner process timed out'),
+    },
+  });
+
+  const result = await run();
+
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(rec.gates, ['retry']);
+  assert.equal(rec.blocked[0]?.reason, 'runner-transient-failure:timeout');
+  assert.deepEqual(
+    rec.runStepAttempts.filter((a) => a.stepKey === 'developer').map((a) => a.attemptNo),
+    [1, 2],
+  );
+  assert.equal(rec.events.includes('runner_retry_exhausted:developer'), true);
+});
+
+test('DD5-retry-gate: retry after exhaustion can exhaust again into a distinct second retry gate', async () => {
+  let retryGateCount = 0;
+  const { run, rec } = buildAdapter({
+    template: singleDeveloperTemplate('manual-retry-second-exhaustion'),
+    gate: (topic) => {
+      if (topic !== 'retry') return { decision: 'approve' };
+      retryGateCount++;
+      return retryGateCount === 1
+        ? { outcome: 'retry', answer: { outcome: 'retry', reconcile: 'keep' } }
+        : { outcome: 'give_up', answer: { outcome: 'give_up' } };
+    },
+    results: {
+      developer: [
+        runnerFailedResult('runner process timed out'),
+        runnerFailedResult('runner process timed out'),
+        runnerFailedResult('runner process timed out'),
+        runnerFailedResult('runner process timed out'),
+      ],
+    },
+  });
+
+  const result = await run();
+  const attempts = rec.runStepAttempts.filter((a) => baseStepKey(a.stepKey) === 'developer');
+
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(rec.gates, ['retry', 'retry']);
+  assert.deepEqual(rec.gateKeys, ['transientRetry:developer', 'transientRetry:developer#2']);
+  assert.deepEqual(
+    attempts.map((a) => ({ stepKey: a.stepKey, attemptNo: a.attemptNo })),
+    [
+      { stepKey: 'developer', attemptNo: 1 },
+      { stepKey: 'developer', attemptNo: 2 },
+      { stepKey: 'developer#2', attemptNo: 1 },
+      { stepKey: 'developer#2', attemptNo: 2 },
+    ],
+  );
+  assert.ok(rec.events.includes('runner_retry_exhausted:developer'));
+  assert.ok(rec.events.includes('runner_retry_exhausted:developer#2'));
+});
+
+test('DD5-transient-classifier: provider 529 / Overloaded failures exhaust into the retry gate', async () => {
+  const { run, rec } = buildAdapter({
+    template: singleDeveloperTemplate('manual-retry-529'),
+    gate: (topic) => (topic === 'retry' ? { outcome: 'give_up', answer: { outcome: 'give_up' } } : { decision: 'approve' }),
+    results: {
+      developer: runnerFailedResult('provider 529 Overloaded; please retry later'),
+    },
+  });
+
+  const result = await run();
+  const retrySummary = rec.gateSummaries.find((summary) => (summary as Record<string, unknown>).kind === 'transient_retry') as Record<string, unknown> | undefined;
+
+  assert.equal(result.status, 'blocked');
+  assert.deepEqual(rec.gates, ['retry']);
+  assert.equal(rec.blocked[0]?.reason, 'runner-transient-failure:overloaded');
+  assert.equal(retrySummary?.transientKind, 'overloaded');
+  assert.equal(retrySummary?.reason, 'runner-transient-failure:overloaded');
+});
+
 test('DD5-retry-policy-pin: changed env during recovery/between attempts does not change pinned policy', async () => {
   const oldMaxAttempts = process.env['REVO_RUNNER_TRANSIENT_MAX_ATTEMPTS'];
   const oldBackoff = process.env['REVO_RUNNER_TRANSIENT_RETRY_BACKOFF_MS'];
@@ -2454,6 +2578,7 @@ test('DD-DF4: a missing required input fails the run (revo.InputMissing) WITHOUT
   const { run, rec } = buildAdapter({ template: tmpl });
   const result = await run();
   assert.equal(result.status, 'failed', 'a missing required input fails the run');
+  assert.deepEqual(rec.gates, [], 'revo.InputMissing is terminal and does not open a retry gate');
   assert.ok(
     rec.events.some((e) => e.startsWith('step_failed:')),
     'a dedicated step_failed event is emitted for the missing input',

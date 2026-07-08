@@ -45,7 +45,7 @@ export async function waitState(
 export async function waitForGate(
   api: TaskControlPlaneApiService,
   runId: string,
-  expectedTopic?: 'plan' | 'merge' | 'question',
+  expectedTopic?: 'plan' | 'merge' | 'question' | 'retry',
 ): Promise<{ inboxId: string; topic: string; context: Record<string, unknown> }> {
   const state = await waitState(api, runId);
   assert.equal(state.state, 'pending_gate', `expected pending_gate, got ${state.state}`);

@@ -61,7 +61,7 @@ import { redactSecrets } from '../control-plane/inbox.js';
 import { fnv1a64Hex } from '../control-plane/steps.js';
 import type { RunOutputRow } from '../run/run-outputs.js';
 import { normalizeIssueAction, normalizeIssueRef, type IssueAction, type IssueRef } from '../run/issue-ref.js';
-import type { Decision as GateDecision } from './await-human.js';
+import type { Decision as GateDecision, GateTopic } from './await-human.js';
 import type { CompleteRunResult } from '../run/complete-run.js';
 import type { FailRunResult } from '../run/fail-run.js';
 import type { BlockRunResult } from '../run/block-run.js';
@@ -129,6 +129,9 @@ type RunnerRetryBlockPayload = {
   transientKind?: TransientRunnerFailure['transientKind'];
   timing?: unknown;
 };
+
+const TRANSIENT_RETRY_GATE_OUTCOMES = ['retry', 'give_up'] as const;
+type TransientRetryGateOutcome = typeof TRANSIENT_RETRY_GATE_OUTCOMES[number];
 
 type InvokeRoleFailedResult = {
   failed: true;
@@ -303,6 +306,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+function transientRetryGateOutcome(decision: GateDecision): TransientRetryGateOutcome {
+  const answer = isRecord(decision.answer) ? decision.answer : {};
+  let outcome = '';
+  if (typeof decision.outcome === 'string') {
+    outcome = decision.outcome;
+  } else if (typeof answer.outcome === 'string') {
+    outcome = answer.outcome;
+  }
+  if (outcome === 'retry') return 'retry';
+  return 'give_up';
+}
+
 function producedChangeArtifact(value: unknown): ProducedChangeArtifact | undefined {
   if (!isRecord(value)) return undefined;
   const candidate = isRecord(value.change) ? value.change : value;
@@ -411,7 +426,7 @@ function artifactRefFromResult(result: AttemptResult): string | undefined {
 
 type TransientRunnerFailure = {
   reason: string;
-  transientKind: 'timeout' | 'rate_limit' | 'crash' | 'unknown';
+  transientKind: 'timeout' | 'rate_limit' | 'overloaded' | 'crash' | 'unknown';
   retryable: boolean;
   retryableCandidate: boolean;
   failureKind?: RunnerTimeoutFailureKind;
@@ -447,6 +462,7 @@ function transientRunnerFailure(result: AttemptResult): TransientRunnerFailure |
 function transientKind(reason: string): TransientRunnerFailure['transientKind'] {
   if (/exceeded\s*\d+\s*ms|timed?\s*out|\btimeout\b/i.test(reason)) return 'timeout';
   if (/\b429\b|rate.?limit|session limit/i.test(reason)) return 'rate_limit';
+  if (/\b529\b|overloaded/i.test(reason)) return 'overloaded';
   if (isLegacyRetryableCrashReason(reason)) return 'crash';
   return 'unknown';
 }
@@ -527,7 +543,7 @@ export type DataDrivenTaskDeps = {
 
   awaitHuman: (
     runId: string,
-    topic: 'plan' | 'merge' | 'question',
+    topic: GateTopic,
     gateKey: string,
     title: string,
     summary: unknown,
@@ -1464,6 +1480,21 @@ export function makeDataDrivenTask(
               stepDelta: result.attemptsMade,
             };
           }
+          if (result.retry?.attemptsExhausted) {
+            const retryOutcome = await awaitTransientRetryGate(runId, ctx, {
+              node,
+              stepKey,
+              binding: resolveRoleBinding(ctx, decision),
+              retry: result.retry,
+            });
+            if (retryOutcome === 'retry') {
+              return {
+                lastResult: undefined,
+                stateOverride: reopenNodeState(ctx.state, node.id),
+                stepDelta: result.attemptsMade,
+              };
+            }
+          }
           return {
             lastResult: undefined,
             terminal: {
@@ -1576,7 +1607,47 @@ export function makeDataDrivenTask(
     }
   }
 
-
+  async function awaitTransientRetryGate(
+    runId: string,
+    ctx: EffectCtx,
+    input: {
+      node: Node;
+      stepKey: string;
+      binding: RouteRoleBinding;
+      retry: RunnerRetryBlockPayload;
+    },
+  ): Promise<TransientRetryGateOutcome> {
+    const outcomes = [...TRANSIENT_RETRY_GATE_OUTCOMES];
+    const decision = await awaitHuman(
+      runId,
+      'retry',
+      `transientRetry:${input.stepKey}`,
+      `Retry ${input.node.id} after transient runner failure`,
+      {
+        kind: 'transient_retry',
+        runId,
+        taskId: ctx.taskId,
+        nodeId: input.node.id,
+        step: input.stepKey,
+        role: input.binding.rowId,
+        runner: input.binding.resolvedRunnerId,
+        reason: input.retry.reason,
+        lesson: input.retry.lesson,
+        attemptsExhausted: input.retry.attemptsExhausted,
+        attemptsMade: input.retry.attemptsMade,
+        maxAttempts: input.retry.maxAttempts,
+        attemptIds: input.retry.attemptIds,
+        lastAttemptId: input.retry.lastAttemptId,
+        ...(input.retry.failureKind ? { failureKind: input.retry.failureKind } : {}),
+        ...(input.retry.transientKind ? { transientKind: input.retry.transientKind } : {}),
+        ...(input.retry.timing !== undefined ? { timing: input.retry.timing } : {}),
+        reconcile: { default: 'keep', supported: ['keep'] },
+        outcomes,
+      },
+      outcomes,
+    );
+    return transientRetryGateOutcome(decision);
+  }
 
   async function invokeRole(
     runId: string,
