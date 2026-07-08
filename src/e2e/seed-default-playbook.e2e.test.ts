@@ -15,8 +15,12 @@ import {
   assertEventsPresent,
   assertCompleted,
   executedRoles,
+  routedRunCaseAgent,
+  type AgentSpec,
+  type RunCase,
 } from './kit/index.js';
 import { validateTemplate } from '../pipeline-core/index.js';
+import { coverageForScenario, type PipelineScenarioCoverage } from '../control-plane/pipeline-coverage-registry.js';
 
 // Group M — the BUILT-IN DEFAULT playbook seeded by host bootstrap (slice 5, plan 0015).
 //
@@ -33,16 +37,46 @@ import { validateTemplate } from '../pipeline-core/index.js';
 // routers, so the deterministic agent drives plan->merge to completion.
 
 let h: RunHarness;
+const runCases = new Map<string, RunCase>();
 
 before(async () => {
   if (!RUN_REAL_E2E) return;
-  h = await createRunHarness();
+  h = await createRunHarness({ agent: (sink) => routedRunCaseAgent(runCases, sink) });
   await givenSeededDefaultPlaybook(h);
 });
 
 after(async () => {
   if (h) await h.close();
 });
+
+async function startDefaultProfileRun(input: {
+  title: string;
+  profileId: string;
+  coverage: PipelineScenarioCoverage;
+  agent?: AgentSpec;
+}) {
+  const created = await h.api.createRun({
+    repo: process.cwd(),
+    title: input.title,
+    description: 'Group M — default run profile coverage on the shipped feature pipeline.',
+    scope: 'seeded-default run profile e2e',
+    playbookId: DEFAULT_PLAYBOOK_ID,
+    pipelineId: 'feature-development',
+    profileId: input.profileId,
+    executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent', codex: 'stub-agent', 'revo-integrator': 'stub-agent' } },
+    start: false,
+  });
+  runCases.set(created.runId, {
+    runId: created.runId,
+    taskId: created.taskId,
+    title: input.title,
+    coverage: input.coverage,
+    ...(input.agent ? { agent: input.agent } : {}),
+  });
+  const workflow = await h.api.startRun({ runId: created.runId });
+  assert.equal((workflow as { engine?: string }).engine, 'data-driven', `${input.profileId} routes to the data-driven engine`);
+  return { ...created, workflow };
+}
 
 test('M0: the bootstrap-seeded default playbook + pipelines are present and validate', { skip: e2eSkip }, async () => {
   // The default playbook is a distinct, installed record (NOT the e2e fixture).
@@ -109,20 +143,24 @@ test('M1: a seeded feature-development run drives plan→merge to completed on r
   }
 });
 
-test('M1b: a seeded Codex consensus run executes both plan and code reviewer branches', { skip: e2eSkip }, async () => {
-  const run = await h.api.createRun({
-    repo: process.cwd(),
-    title: 'E2E seeded default Codex consensus run',
-    description: 'Group M — Codex-bound default feature pipeline with plan + code consensus.',
-    scope: 'seeded-default codex consensus e2e',
-    playbookId: DEFAULT_PLAYBOOK_ID,
-    pipelineId: 'feature-development',
+test('M1b: a seeded Codex consensus disagreement reworks and then completes', { skip: e2eSkip }, async () => {
+  const run = await startDefaultProfileRun({
+    title: 'E2E seeded default Codex consensus disagreement run',
     profileId: 'codex-primary-claude-review-consensus',
-    executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent', codex: 'stub-agent', 'revo-integrator': 'stub-agent' } },
-    start: true,
+    coverage: coverageForScenario('M1b-profile-consensus-rework'),
+    agent: {
+      byRole: {
+        reviewer: [
+          { kind: 'verdict', verdict: 'changes_requested' },
+          { kind: 'pass' },
+          { kind: 'pass' },
+          { kind: 'pass' },
+          { kind: 'pass' },
+          { kind: 'pass' },
+        ],
+      },
+    },
   });
-  if (!('workflow' in run)) throw new Error('start:true must return workflow metadata');
-  assert.equal((run.workflow as { engine?: string }).engine, 'data-driven', 'the Codex seeded pipeline routes to the data-driven engine');
 
   const terminal = await approveUntilTerminal(h.api, run.runId);
   assert.equal(terminal.state, 'completed');
@@ -130,10 +168,26 @@ test('M1b: a seeded Codex consensus run executes both plan and code reviewer bra
   await assertEventsPresent(h.api, run.runId, ['pipeline_fork', 'run_completed']);
 
   const roles = executedRoles(h, run.runId).map(([role]) => role);
-  assert.equal(roles.filter((role) => role === 'reviewer').length, 4, 'two plan reviewers + two code reviewers executed');
+  assert.equal(roles.filter((role) => role === 'analyst').length, 2, 'plan consensus disagreement routes back to analyst once');
+  assert.equal(roles.filter((role) => role === 'reviewer').length, 6, 'two failed plan reviewers + two passing plan reviewers + two code reviewers executed');
   for (const roleId of ['analyst', 'developer', 'reviewer']) {
     assert.ok(roles.includes(roleId), `${roleId} executed via the Codex-bound route binding`);
   }
+});
+
+test('M1c: a seeded Codex standard profile completes the single-review signature', { skip: e2eSkip }, async () => {
+  const run = await startDefaultProfileRun({
+    title: 'E2E seeded default Codex standard profile run',
+    profileId: 'codex-standard',
+    coverage: coverageForScenario('M1-profile-single'),
+  });
+
+  const terminal = await approveUntilTerminal(h.api, run.runId);
+  assert.equal(terminal.state, 'completed');
+  assert.deepEqual(terminal.approvedTopics, ['plan', 'merge'], 'both seeded humanGate nodes opened in order');
+
+  const roles = executedRoles(h, run.runId).map(([role]) => role);
+  assert.equal(roles.filter((role) => role === 'reviewer').length, 2, 'single-review profile executes one plan and one code reviewer');
 });
 
 test('M2: a seeded local-change run completes (developer-only, no gate)', { skip: e2eSkip }, async () => {

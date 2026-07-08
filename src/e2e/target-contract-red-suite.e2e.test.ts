@@ -16,6 +16,7 @@ import {
   type RunCase,
   type RunHarness,
 } from './kit/index.js';
+import { coverageForScenario, type PipelineScenarioCoverage } from '../control-plane/pipeline-coverage-registry.js';
 
 const STUB_AGENT = { runnerOverrides: { 'claude-code': 'stub-agent' } };
 let sharedHarness: RunHarness | undefined;
@@ -47,13 +48,17 @@ async function targetHarness(): Promise<RunHarness> {
   return sharedHarness;
 }
 
-async function runTargetScenario(title: string, scenario: Omit<PipelineScenario, 'title' | 'playbook' | 'repo'>): Promise<string[][]> {
+async function runTargetScenario(
+  title: string,
+  coverage: PipelineScenarioCoverage,
+  scenario: Omit<PipelineScenario, 'title' | 'playbook' | 'repo' | 'coverage'>,
+): Promise<string[][]> {
   const target = createTargetRepo();
   const runCases = sharedRunCases;
   const h = await targetHarness();
   try {
     const ghCallStart = h.ghCalls.length;
-    await pipelineScenario(h, runCases, { title, playbook: 'default', repo: target, ...scenario });
+    await pipelineScenario(h, runCases, { title, playbook: 'default', repo: target, coverage, ...scenario });
     return h.ghCalls.slice(ghCallStart);
   } finally {
     target.cleanup();
@@ -71,7 +76,7 @@ function assertReviewReplyIncludes(calls: string[][], expected: string): void {
 }
 
 test('#272: no registered checks are advisory and still reach mergeGate', { skip: e2eSkip }, async () => {
-  await runTargetScenario('#272: no registered checks are advisory and still reach mergeGate', {
+  await runTargetScenario('#272: no registered checks are advisory and still reach mergeGate', coverageForScenario('TC-272-no-checks-clean'), {
     executionProfile: STUB_AGENT,
     gh: 'no-checks-registered',
     gates: [
@@ -88,7 +93,7 @@ test('#272: no registered checks are advisory and still reach mergeGate', { skip
 });
 
 test('#272: never-settling checks route to recoveryGate instead of spinning to MAX_STEPS', { skip: e2eSkip }, async () => {
-  await runTargetScenario('#272: never-settling checks route to recoveryGate instead of spinning to MAX_STEPS', {
+  await runTargetScenario('#272: never-settling checks route to recoveryGate instead of spinning to MAX_STEPS', coverageForScenario('TC-272-never-settling-recovery'), {
     executionProfile: STUB_AGENT,
     gh: 'checks-never-settle',
     gates: [
@@ -105,7 +110,7 @@ test('#272: never-settling checks route to recoveryGate instead of spinning to M
 });
 
 test('#272: unclassifiable poll state routes through classifyRecovery to recoveryGate', { skip: e2eSkip }, async () => {
-  await runTargetScenario('#272: unclassifiable poll state routes through classifyRecovery to recoveryGate', {
+  await runTargetScenario('#272: unclassifiable poll state routes through classifyRecovery to recoveryGate', coverageForScenario('TC-272-unclassifiable-recovery'), {
     executionProfile: STUB_AGENT,
     gh: 'nonsense-poll-state',
     gates: [
@@ -122,7 +127,7 @@ test('#272: unclassifiable poll state routes through classifyRecovery to recover
 });
 
 test('#273: externally merged PR completes through cleanup without recovery or merge attempt', { skip: e2eSkip }, async () => {
-  await runTargetScenario('#273: externally merged PR completes through cleanup without recovery or merge attempt', {
+  await runTargetScenario('#273: externally merged PR completes through cleanup without recovery or merge attempt', coverageForScenario('TC-273-externally-merged'), {
     executionProfile: STUB_AGENT,
     gh: 'merged-externally',
     gates: [['plan', 'approved']],
@@ -141,7 +146,7 @@ test('#273: externally merged PR completes through cleanup without recovery or m
 });
 
 test('#273: externally closed unmerged PR reaches recoveryGate immediately with closed reason', { skip: e2eSkip }, async () => {
-  await runTargetScenario('#273: externally closed unmerged PR reaches recoveryGate immediately with closed reason', {
+  await runTargetScenario('#273: externally closed unmerged PR reaches recoveryGate immediately with closed reason', coverageForScenario('TC-273-externally-closed'), {
     executionProfile: STUB_AGENT,
     gh: 'closed-externally',
     gates: [
@@ -162,7 +167,7 @@ test('#273: externally closed unmerged PR reaches recoveryGate immediately with 
 });
 
 test('#274: head moved after merge approval re-presents mergeGate with fresh artifact', { skip: e2eSkip }, async () => {
-  await runTargetScenario('#274: head moved after merge approval re-presents mergeGate with fresh artifact', {
+  await runTargetScenario('#274: head moved after merge approval re-presents mergeGate with fresh artifact', coverageForScenario('TC-274-head-moved-reopens-merge-gate'), {
     executionProfile: STUB_AGENT,
     gh: 'head-moved-after-approve',
     gates: [
@@ -179,7 +184,7 @@ test('#274: head moved after merge approval re-presents mergeGate with fresh art
 });
 
 test('#275: GraphQL partial outage routes to recovery instead of clean readiness', { skip: e2eSkip }, async () => {
-  await runTargetScenario('#275: GraphQL partial outage is never treated as clean readiness', {
+  await runTargetScenario('#275: GraphQL partial outage is never treated as clean readiness', coverageForScenario('TC-275-graphql-outage-recovery'), {
     executionProfile: STUB_AGENT,
     gh: 'empty-graphql-data',
     gates: [
@@ -200,18 +205,19 @@ test('#276: questionGate fix routes to review rework and resolves threads with t
   skip: e2eSkip,
 }, async () => {
   const note = 'human chose fix because the review catches a real defect';
-  const calls = await runTargetScenario('#276: questionGate fix routes to review rework and resolves threads with the human reason', {
+  const calls = await runTargetScenario('#276: questionGate fix routes to review rework and resolves threads with the human reason', coverageForScenario('TC-276-question-fix'), {
     executionProfile: STUB_AGENT,
     gh: 'review-comment',
     agent: { byRole: { triager: { kind: 'triage', decisions: ['question'] } } },
     gates: [
       ['plan', 'approved'],
-      { topic: 'question', outcome: 'fix', note },
+      { topic: 'question', outcome: 'fix', note, nodeId: 'questionGate' },
       ['merge', 'approved'],
     ],
     expect: {
       terminal: 'completed',
       events: ['threads_responded', 'merge_confirmed'],
+      path: [{ type: 'pr_polled', payload: { verdict: 'review_changes' } }, 'threads_responded'],
     },
   });
   assertReviewReplyIncludes(calls, note);
@@ -221,29 +227,30 @@ test('#276: questionGate wontfix routes directly to respondThreads with the huma
   skip: e2eSkip,
 }, async () => {
   const note = 'human chose wontfix because the requested change is out of scope';
-  const calls = await runTargetScenario('#276: questionGate wontfix routes directly to respondThreads with the human reason', {
+  const calls = await runTargetScenario('#276: questionGate wontfix routes directly to respondThreads with the human reason', coverageForScenario('TC-276-question-wontfix'), {
     executionProfile: STUB_AGENT,
     gh: 'review-comment',
     agent: { byRole: { triager: { kind: 'triage', decisions: ['question'] } } },
     gates: [
       ['plan', 'approved'],
-      { topic: 'question', outcome: 'wontfix', note },
+      { topic: 'question', outcome: 'wontfix', note, nodeId: 'questionGate' },
       ['merge', 'approved'],
     ],
     expect: {
       terminal: 'completed',
       events: ['threads_responded', 'merge_confirmed'],
+      path: [{ type: 'pr_polled', payload: { verdict: 'review_changes' } }, 'threads_responded'],
     },
   });
   assertReviewReplyIncludes(calls, note);
 });
 
 test('#277: cleanupWorktree dirty preserve after successful merge completes with cleanup_failed event', { skip: e2eSkip }, async () => {
-  await runTargetScenario('#277: cleanupWorktree dirty preserve after successful merge completes with cleanup_failed event', {
+  await runTargetScenario('#277: cleanupWorktree dirty preserve after successful merge completes with cleanup_failed event', coverageForScenario('TC-277-cleanup-dirty-preserve'), {
     executionProfile: STUB_AGENT,
     gh: 'happy',
     cleanup: { dirtyWorktreeBeforeRelease: true },
-    gates: [['plan', 'approved'], ['merge', 'approved']],
+    gates: [['plan', 'approved'], { topic: 'merge', outcome: 'approved', nodeId: 'mergeGate' }],
     expect: {
       terminal: 'completed',
       path: [
@@ -262,7 +269,7 @@ test('#279: override_merge over advisory review threads replies, resolves, audit
   const note = 'force merge target contract: advisory review thread accepted';
   const risk = 'synthetic e2e target contract';
   const verificationResponsibility = 'e2e';
-  const calls = await runTargetScenario('#279: override_merge over advisory review threads replies, resolves, audits, and merges', {
+  const calls = await runTargetScenario('#279: override_merge over advisory review threads replies, resolves, audits, and merges', coverageForScenario('TC-279-override-advisory-thread'), {
     executionProfile: STUB_AGENT,
     gh: 'force-advisory-thread',
     gates: [
@@ -270,6 +277,7 @@ test('#279: override_merge over advisory review threads replies, resolves, audit
       {
         topic: 'merge',
         outcome: 'override_merge',
+        nodeId: 'mergeGate',
         note,
         mergeOverrideAudit: {
           threadIds: ['PRRT_T1'],
