@@ -25,7 +25,7 @@
     "platform_invocation": "canonical-only",
     "execution_policy": {
       "raw": [
-        "Built-in default (slice 5, plan 0015): the pipeline graph is DATA \u2014 see template_json.",
+        "Built-in default (slice 5, plan 0015): the pipeline graph is DATA — see template_json.",
         "analyst -> reviewer[plan gate] -> developer -> reviewer[code] (bounded rework, cap 3) -> integrator(script) -> watcher[post-integrator] -> merge gate."
       ],
       "template_json": {
@@ -1398,7 +1398,7 @@
             }
           }
         },
-        "title": "Feature development \u2014 plan + merge gates, bounded code-review rework, and a PR review-feedback loop (plan 0018)",
+        "title": "Feature development — plan + merge gates, bounded code-review rework, and a PR review-feedback loop (plan 0018)",
         "policy": {
           "conflicts": [
             [
@@ -1446,41 +1446,6 @@
     }
   },
   {
-    "id": "feature-development-codex-consensus",
-    "path": "prompts/orchestrator.md",
-    "triggers": [
-      "codex feature",
-      "codex consensus feature",
-      "codex task-to-PR work"
-    ],
-    "required_roles": [
-      "orchestrator-codex",
-      "analyst-codex",
-      "reviewer-codex",
-      "triager-codex",
-      "developer-codex",
-      "integrator",
-      "watcher-codex"
-    ],
-    "alternative_roles": [],
-    "optional_roles": [],
-    "route_gates": [
-      "task spec approval",
-      "merge approval"
-    ],
-    "platform_invocation": "canonical-only",
-    "execution_policy": {
-      "raw": [
-        "Built-in Codex default: same feature-development control flow, but Codex-bound plan/development roles and parallel reviewer consensus for plan + code review.",
-        "analyst-codex -> reviewer-codex[plan fanout x2] -> developer-codex -> reviewer-codex[code fanout x2] (bounded rework, cap 3) -> integrator(script) -> watcher-codex[post-integrator] -> merge gate."
-      ],
-      "alias": {
-        "basePipelineId": "feature-development",
-        "profileId": "codex-consensus"
-      }
-    }
-  },
-  {
     "id": "local-change",
     "path": "prompts/orchestrator.md",
     "triggers": [
@@ -1498,7 +1463,7 @@
     "platform_invocation": "canonical-only",
     "execution_policy": {
       "raw": [
-        "Built-in default (slice 5, plan 0015): the pipeline graph is DATA \u2014 see template_json.",
+        "Built-in default (slice 5, plan 0015): the pipeline graph is DATA — see template_json.",
         "orchestrator routes; the graph runs developer -> done with no gate."
       ],
       "template_json": {
@@ -1525,7 +1490,7 @@
             "status": "succeeded"
           }
         },
-        "title": "Local change \u2014 developer only, no gate"
+        "title": "Local change — developer only, no gate"
       }
     }
   }

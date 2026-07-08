@@ -19,6 +19,7 @@ export type PlaybookInstallResult = {
   source: string;
   roles: number;
   pipelines: number;
+  runProfiles: number;
   operations: VersionedMeaningOperation[];
   committed: boolean;
   dryRun: boolean;
@@ -46,13 +47,28 @@ export class PlaybookInstaller {
       versionOverride: options.version,
     });
 
-    const allRows: VersionedRow[] = [rows.playbook, ...rows.roles, ...rows.pipelines];
+    const allRows: VersionedRow[] = [rows.playbook, ...rows.roles, ...rows.pipelines, ...rows.runProfiles];
+    const updatedAt = typeof rows.playbook.data.updated_at === 'string'
+      ? rows.playbook.data.updated_at
+      : new Date().toISOString();
     const operations: VersionedMeaningOperation[] = options.dryRun
       ? allRows.map((row) => ({ action: 'dry-run', table: row.table, rowId: row.rowId }))
       : [];
     if (!options.dryRun) {
       for (const row of allRows) {
         operations.push(await this.deps.access.upsertRow(row));
+      }
+      for (const group of [
+        { table: 'roles' as const, current: rows.roles },
+        { table: 'pipelines' as const, current: rows.pipelines },
+        { table: 'run_profiles' as const, current: rows.runProfiles },
+      ]) {
+        operations.push(...await this.deps.access.retireMissingRows({
+          table: group.table,
+          playbookId: rows.playbookId,
+          keepRowIds: group.current.map((row) => row.rowId),
+          retiredAt: updatedAt,
+        }));
       }
     }
 
@@ -70,6 +86,7 @@ export class PlaybookInstaller {
       source: source.source,
       roles: rows.roles.length,
       pipelines: rows.pipelines.length,
+      runProfiles: rows.runProfiles.length,
       operations,
       committed: Boolean(options.commit && !options.dryRun),
       dryRun: Boolean(options.dryRun),

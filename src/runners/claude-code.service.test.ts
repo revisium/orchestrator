@@ -1,48 +1,21 @@
-/**
- * claude-code.service.test.ts — M2: inject fake ProcessExecutor, assert no real spawn.
- *
- * Tests ClaudeCodeService wiring: fake PROCESS_EXECUTOR injected, resolveCwd reads from
- * RunService (via a fake transport), runner dispatches correctly.
- */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ClaudeCodeService } from './claude-code.service.js';
 import { RunService } from '../revisium/run.service.js';
 import type { ProcessExecutor, ExecResult } from '../worker/process-executor.js';
-import type { ControlPlaneTransport, TransportRow } from '../control-plane/data-access.js';
+import { createInMemoryRuntimeDataAccess } from '../testing/runtime-data-access.js';
 
-// ─── helpers ──────────────────────────────────────────────────────────────────
-
-function makeFakeRow(id: string, data: Record<string, unknown>): TransportRow {
-  return { id, data, createdAt: '2026-06-08T00:00:00.000Z', updatedAt: '2026-06-08T00:00:00.000Z' };
+function makeRunService(repoRef = '/tmp'): RunService {
+  return new RunService(createInMemoryRuntimeDataAccess({
+    task_runs: {
+      'run-1': { id: 'run-1', title: 'Run', status: 'ready', repos: [repoRef] },
+    },
+    tasks: {
+      'task-1': { id: 'task-1', run_id: 'run-1', title: 'Task', status: 'ready', repo_ref: repoRef },
+    },
+  }).access);
 }
 
-function makeDraftTransport(repoRef = '/tmp'): ControlPlaneTransport {
-  return {
-    mode: 'draft' as const,
-    async assertReady() {},
-    async listRows(table): Promise<{ edges: Array<{ node: TransportRow }> }> {
-      if (table === 'task_runs') {
-        return { edges: [{ node: makeFakeRow('run-1', { repos: [repoRef] }) }] };
-      }
-      if (table === 'tasks') {
-        return { edges: [{ node: makeFakeRow('task-1', { run_id: 'run-1', repo_ref: repoRef }) }] };
-      }
-      return { edges: [] };
-    },
-    async getRow(table, rowId): Promise<TransportRow> {
-      if (table === 'tasks') return makeFakeRow(rowId, { repo_ref: repoRef });
-      return makeFakeRow(rowId, {});
-    },
-    async createRow(table, rowId, data): Promise<TransportRow> {
-      return makeFakeRow(rowId, data as Record<string, unknown>);
-    },
-    async updateRow(table, rowId): Promise<TransportRow> { return makeFakeRow(rowId, {}); },
-    async patchRow(table, rowId): Promise<TransportRow> { return makeFakeRow(rowId, {}); },
-  };
-}
-
-/** Minimal valid structured_output transport for the claude runner to accept. */
 function makeClaudeOutput(output: Record<string, unknown>): string {
   const envelope = {
     type: 'result',
@@ -55,8 +28,6 @@ function makeClaudeOutput(output: Record<string, unknown>): string {
   };
   return JSON.stringify(envelope);
 }
-
-// ─── M2: inject fake ProcessExecutor ──────────────────────────────────────────
 
 test('M2: ClaudeCodeService uses injected fake ProcessExecutor — no real spawn', async () => {
   let spawnCalled = false;
@@ -73,7 +44,7 @@ test('M2: ClaudeCodeService uses injected fake ProcessExecutor — no real spawn
     };
   };
 
-  const runService = new RunService(makeDraftTransport('/tmp'));
+  const runService = makeRunService('/tmp');
   const svc = new ClaudeCodeService(fakeExecutor, runService);
 
   // Build minimal RunAgent args
@@ -132,7 +103,7 @@ test('M2: ClaudeCodeService uses injected fake ProcessExecutor — no real spawn
 
 test('M2: ClaudeCodeService.run is an arrow property — safe to pass unbound', () => {
   const fakeExecutor: ProcessExecutor = async (_req) => ({ code: 0, stdout: '', stderr: '', timedOut: false });
-  const runService = new RunService(makeDraftTransport());
+  const runService = makeRunService();
   const svc = new ClaudeCodeService(fakeExecutor, runService);
 
   // Destructure (simulate passing unbound) — must not throw "Cannot read properties of undefined"

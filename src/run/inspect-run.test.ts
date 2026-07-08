@@ -2,7 +2,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { ControlPlaneDataAccess, ControlPlaneRow, ListRowsOptions, PatchOperation } from '../control-plane/index.js';
 import type { RuntimeTable } from '../control-plane/tables.js';
-import { listRuns, showRun, listRunEvents, formatRunList, formatRunDetail, formatEventList, compactEventPayload } from './inspect-run.js';
+import {
+  listRuns,
+  showRun,
+  listRunEvents,
+  listRunAttempts,
+  getRunFailure,
+  formatRunList,
+  formatRunDetail,
+  formatEventList,
+  compactEventPayload,
+} from './inspect-run.js';
 
 test('compactEventPayload: run_created strips the graph (route_decision + execution_profile) + truncates description', () => {
   const big = 'x'.repeat(500);
@@ -35,6 +45,43 @@ test('compactEventPayload: tolerates null / short description', () => {
 
 function makeRow(rowId: string, data: Record<string, unknown>): ControlPlaneRow {
   return { rowId, data, createdAt: data.created_at as string | undefined };
+}
+
+function valueAtPath(data: Record<string, unknown>, path: string): unknown {
+  return path.split('.').reduce<unknown>((current, key) => {
+    if (!current || typeof current !== 'object' || Array.isArray(current)) return undefined;
+    return (current as Record<string, unknown>)[key];
+  }, data);
+}
+
+function matchesWhere(row: ControlPlaneRow, where: ListRowsOptions['where']): boolean {
+  if (!where) return true;
+  if (where.id?.equals !== undefined && row.rowId !== where.id.equals) return false;
+  if (where.id?.in !== undefined && !where.id.in.includes(row.rowId)) return false;
+  if (where.data?.path !== undefined && where.data.equals !== undefined && valueAtPath(row.data, where.data.path) !== where.data.equals) return false;
+  if (where.data?.path !== undefined && where.data.in !== undefined && !where.data.in.includes(valueAtPath(row.data, where.data.path))) return false;
+  if (where.AND?.some((item) => !matchesWhere(row, item))) return false;
+  if (where.OR && !where.OR.some((item) => matchesWhere(row, item))) return false;
+  const not = where.NOT;
+  if (Array.isArray(not) && not.some((item) => matchesWhere(row, item))) return false;
+  if (not && !Array.isArray(not) && matchesWhere(row, not)) return false;
+  return true;
+}
+
+type TestOrderBy = NonNullable<ListRowsOptions['orderBy']>[number];
+
+function compareRows(orderBy: TestOrderBy, a: ControlPlaneRow, b: ControlPlaneRow): number {
+  const field = orderBy.field;
+  if (field === 'id') return a.rowId.localeCompare(b.rowId);
+  if (field === 'sequence' || field === 'ordinal') {
+    const diff = Number(a.data[field] ?? 0) - Number(b.data[field] ?? 0);
+    if (diff !== 0) return diff;
+  }
+  if (field === 'producedAt') return String(a.data.produced_at ?? '').localeCompare(String(b.data.produced_at ?? ''));
+  if (field === 'updatedAt') return String(a.data.updated_at ?? a.updatedAt ?? '').localeCompare(String(b.data.updated_at ?? b.updatedAt ?? ''));
+  const ta = (typeof a.data.created_at === 'string' ? a.data.created_at : a.createdAt) ?? '';
+  const tb = (typeof b.data.created_at === 'string' ? b.data.created_at : b.createdAt) ?? '';
+  return ta.localeCompare(tb);
 }
 
 type TableStore = {
@@ -77,27 +124,14 @@ function createFakeDataAccess(
     async listRows(table: RuntimeTable, listOptions?: ListRowsOptions) {
       options.calls?.push(`listRows:${table}`);
       options.listRowsArgs?.push([table, listOptions]);
-      let rows = tables[table] ?? [];
+      let rows = (tables[table] ?? []).filter((row) => matchesWhere(row, listOptions?.where));
 
-      // Apply where: { data: { path, equals } } filter (mirrors Prisma JSON path equality)
-      const whereData = listOptions?.where?.data;
-      if (whereData?.path !== undefined && whereData.equals !== undefined) {
-        const path = whereData.path as string;
-        const equals = whereData.equals;
-        rows = rows.filter((r) => r.data[path] === equals);
+      for (const orderBy of [...(listOptions?.orderBy ?? [])].reverse()) {
+        const direction = orderBy.direction === 'desc' ? -1 : 1;
+        rows = [...rows].sort((a, b) => compareRows(orderBy, a, b) * direction);
       }
 
-      const orderBy = listOptions?.orderBy?.[0];
-      if (orderBy?.field !== 'createdAt') {
-        return rows.slice(0, listOptions?.first ?? rows.length);
-      }
-      const sorted = [...rows].sort((a, b) => {
-        const ta = (typeof a.data.created_at === 'string' ? a.data.created_at : a.createdAt) ?? '';
-        const tb = (typeof b.data.created_at === 'string' ? b.data.created_at : b.createdAt) ?? '';
-        return orderBy.direction === 'desc' ? tb.localeCompare(ta) : ta.localeCompare(tb);
-      });
-      const first = listOptions?.first ?? sorted.length;
-      return sorted.slice(0, first);
+      return rows.slice(0, listOptions?.first ?? rows.length);
     },
 
     async getRow(table: RuntimeTable, rowId: string) {
@@ -149,9 +183,9 @@ const TASK_A = makeRow('task-a', { id: 'task-a', run_id: 'run-a', title: 'Task A
 const TASK_B = makeRow('task-b', { id: 'task-b', run_id: 'run-b', title: 'Task B', status: 'running', role_hint: 'developer', created_at: T2, updated_at: T2 });
 
 
-const EVENT_A1 = makeRow('event-a1', { id: 'event-a1', run_id: 'run-a', task_id: 'task-a', step_id: 'step-a', type: 'run_created', actor: 'cli', created_at: T1 });
-const EVENT_A2 = makeRow('event-a2', { id: 'event-a2', run_id: 'run-a', task_id: 'task-a', step_id: 'step-a', type: 'step_claimed', actor: 'worker-1', created_at: T2 });
-const EVENT_B = makeRow('event-b', { id: 'event-b', run_id: 'run-b', task_id: 'task-b', step_id: 'step-b', type: 'run_created', actor: 'cli', created_at: T2 });
+const EVENT_A1 = makeRow('event-a1', { id: 'event-a1', run_id: 'run-a', task_id: 'task-a', step_id: 'step-a', type: 'run_created', actor: 'cli', created_at: T1, sequence: 1 });
+const EVENT_A2 = makeRow('event-a2', { id: 'event-a2', run_id: 'run-a', task_id: 'task-a', step_id: 'step-a', type: 'step_claimed', actor: 'worker-1', created_at: T2, sequence: 2 });
+const EVENT_B = makeRow('event-b', { id: 'event-b', run_id: 'run-b', task_id: 'task-b', step_id: 'step-b', type: 'run_created', actor: 'cli', created_at: T2, sequence: 1 });
 
 // ─────────────────────── listRuns ───────────────────────
 
@@ -173,6 +207,22 @@ test('listRuns filters by status', async () => {
 
   assert.equal(runs.length, 2);
   assert.ok(runs.every((r) => r.status === 'ready'));
+});
+
+test('listRuns pushes status and limit into listRows before pagination', async () => {
+  const listRowsArgs: Array<[RuntimeTable, ListRowsOptions | undefined]> = [];
+  const da = createFakeDataAccess({ task_runs: [RUN_A, RUN_B, RUN_C] }, { listRowsArgs });
+
+  await listRuns(da, { status: 'ready', limit: 2 });
+
+  assert.deepEqual(listRowsArgs, [[
+    'task_runs',
+    {
+      first: 2,
+      orderBy: [{ field: 'createdAt', direction: 'desc' }],
+      where: { data: { path: 'status', in: ['ready'] } },
+    },
+  ]]);
 });
 
 test('listRuns honors limit after sort and status filter', async () => {
@@ -282,6 +332,16 @@ test('listRunEvents returns events for the run oldest-first', async () => {
   assert.equal(events[1]?.eventId, 'event-a2');
 });
 
+test('listRunEvents uses sequence when event timestamps are tied', async () => {
+  const later = makeRow('event-seq-2', { id: 'event-seq-2', run_id: 'run-a', type: 'step_claimed', actor: 'worker', created_at: T1, sequence: 2 });
+  const earlier = makeRow('event-seq-1', { id: 'event-seq-1', run_id: 'run-a', type: 'run_created', actor: 'cli', created_at: T1, sequence: 1 });
+  const da = createFakeDataAccess({ events: [later, earlier] });
+
+  const events = await listRunEvents(da, 'run-a');
+
+  assert.deepEqual(events.map((event) => event.eventId), ['event-seq-1', 'event-seq-2']);
+});
+
 test('listRunEvents filters by type', async () => {
   const da = createFakeDataAccess({ events: [EVENT_A1, EVENT_A2, EVENT_B] });
 
@@ -291,6 +351,27 @@ test('listRunEvents filters by type', async () => {
   assert.equal(events[0]?.type, 'step_claimed');
 });
 
+test('listRunEvents pushes run/type filters and limit into listRows', async () => {
+  const listRowsArgs: Array<[RuntimeTable, ListRowsOptions | undefined]> = [];
+  const da = createFakeDataAccess({ events: [EVENT_A1, EVENT_A2, EVENT_B] }, { listRowsArgs });
+
+  await listRunEvents(da, 'run-a', { type: 'step_claimed', limit: 1 });
+
+  assert.deepEqual(listRowsArgs, [[
+    'events',
+    {
+      first: 1,
+      orderBy: [{ field: 'sequence', direction: 'asc' }],
+      where: {
+        AND: [
+          { data: { path: 'run_id', equals: 'run-a' } },
+          { data: { path: 'type', equals: 'step_claimed' } },
+        ],
+      },
+    },
+  ]]);
+});
+
 test('listRunEvents honors limit', async () => {
   const da = createFakeDataAccess({ events: [EVENT_A1, EVENT_A2] });
 
@@ -298,6 +379,53 @@ test('listRunEvents honors limit', async () => {
 
   assert.equal(events.length, 1);
   assert.equal(events[0]?.eventId, 'event-a1');
+});
+
+test('listRunAttempts pushes limit into listRows before mapping', async () => {
+  const listRowsArgs: Array<[RuntimeTable, ListRowsOptions | undefined]> = [];
+  const attempt = makeRow('attempt-a1', { id: 'attempt-a1', run_id: 'run-a', step_id: 'developer', status: 'succeeded', created_at: T1 });
+  const da = createFakeDataAccess({ attempts: [attempt] }, { listRowsArgs });
+
+  await listRunAttempts(da, 'run-a', { limit: 1 });
+
+  assert.deepEqual(listRowsArgs, [[
+    'attempts',
+    {
+      first: 1,
+      orderBy: [{ field: 'createdAt', direction: 'asc' }],
+      where: { data: { path: 'run_id', equals: 'run-a' } },
+    },
+  ]]);
+});
+
+test('getRunFailure reads only the latest run_failed event through listRows filters', async () => {
+  const listRowsArgs: Array<[RuntimeTable, ListRowsOptions | undefined]> = [];
+  const failed = makeRow('event-failed', {
+    id: 'event-failed',
+    run_id: 'run-a',
+    type: 'run_failed',
+    sequence: 3,
+    payload: { reason: 'boom' },
+    created_at: T2,
+  });
+  const da = createFakeDataAccess({ task_runs: [RUN_A], events: [EVENT_A1, failed] }, { listRowsArgs });
+
+  const result = await getRunFailure(da, 'run-a');
+
+  assert.equal(result?.reason, 'boom');
+  assert.deepEqual(listRowsArgs, [[
+    'events',
+    {
+      first: 1,
+      orderBy: [{ field: 'sequence', direction: 'desc' }],
+      where: {
+        AND: [
+          { data: { path: 'run_id', equals: 'run-a' } },
+          { data: { path: 'type', equals: 'run_failed' } },
+        ],
+      },
+    },
+  ]]);
 });
 
 test('listRunEvents returns empty for unknown run', async () => {

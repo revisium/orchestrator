@@ -23,14 +23,8 @@ import { validateManualAdoptionAudit, type ManualAdoptionAuditInput } from '../c
 import { validateMergeOverrideAudit, type MergeOverrideAuditInput } from '../control-plane/merge-override-audit.js';
 import { fnv1a64Hex } from '../control-plane/steps.js';
 import { POLICY_VERSION } from '../control-plane/default-playbook-policy.js';
-import {
-  CODEX_CONSENSUS_BINDINGS,
-  CODEX_CONSENSUS_PROFILE,
-  CODEX_CONSENSUS_PROFILE_VERSION,
-  CONSENSUS_TOGGLE_ALLOWLIST,
-  resolvePipelineProfile,
-} from '../control-plane/topology-profiles.js';
-import { hashProfile, materializeTemplate, MATERIALIZER_VERSION } from '../pipeline-core/materialize.js';
+import { executionProfileFromRunProfile, topologyProfileFromRunProfile } from '../control-plane/run-profiles.js';
+import { materializeTemplate, MATERIALIZER_VERSION } from '../pipeline-core/materialize.js';
 import { DbosService } from '../engine/dbos.service.js';
 import { PipelineService, type RunnerMode } from '../pipeline/pipeline.service.js';
 import { INTEGRATOR_PROGRESS_EVENT_TYPES, RUN_PROGRESS_EVENT_KEY, type DataDrivenProgressCursor } from '../pipeline/data-driven-task.workflow.js';
@@ -40,7 +34,7 @@ import {
   normalizeParams,
   normalizeRouteGates,
   resolveBindingForRole,
-  resolveRunnerForProfile,
+  resolveRunnerForRole,
   RUNNER_PERMISSION_MODES,
   type ExecutionProfile,
   type RouteDecision,
@@ -927,7 +921,7 @@ export class TaskControlPlaneApiService {
     return result;
   }
 
-  listRuns(filter?: { status?: string; limit?: number }) {
+  listRuns(filter?: { status?: string; statuses?: string[]; limit?: number }) {
     return this.runs.listRuns(filter);
   }
 
@@ -1500,6 +1494,10 @@ export class TaskControlPlaneApiService {
     return this.playbooks.listPipelines();
   }
 
+  listProfiles(input: { playbookId?: string; pipelineId?: string; includeDeprecated?: boolean } = {}) {
+    return this.playbooks.listRunProfiles(input);
+  }
+
   async getPipeline(pipelineId: string) {
     const result = await this.playbooks.getPipeline(pipelineId);
     if (!result) throw new ControlPlaneError('ROW_NOT_FOUND', `pipeline not found: ${pipelineId}`);
@@ -1578,66 +1576,50 @@ export class TaskControlPlaneApiService {
     const requestedPipelineId = input.pipelineId
       ?? (await this.resolveAutoPipeline(playbook.id, [input.title, input.description, input.scope].join(' '))).pipelineId;
 
-    let profileResolution: ReturnType<typeof resolvePipelineProfile>;
-    try {
-      profileResolution = resolvePipelineProfile(requestedPipelineId, input.profileId);
-    } catch (err) {
-      throw new ControlPlaneError('VALIDATION_FAILURE', err instanceof Error ? err.message : String(err));
-    }
-
-    const { basePipelineId, profileId } = profileResolution;
-
-    const pipeline = await this.playbooks.resolvePipeline({ playbookId: playbook.id, pipelineId: basePipelineId });
+    const pipeline = await this.playbooks.resolvePipeline({ playbookId: playbook.id, pipelineId: requestedPipelineId });
 
     let executionPolicy = pipeline.executionPolicy;
     let executionProfile = callerProfile;
     const provenanceFields: Partial<RouteDecision> = {};
 
-    if (profileId !== undefined) {
-      const profileEntry = profileId === CODEX_CONSENSUS_PROFILE.profileId ? CODEX_CONSENSUS_PROFILE : undefined;
-      if (!profileEntry) {
-        throw new ControlPlaneError('VALIDATION_FAILURE', `unknown profileId "${profileId}"`);
-      }
-
-      const allowlist = CONSENSUS_TOGGLE_ALLOWLIST[basePipelineId];
-      if (!allowlist) {
-        throw new ControlPlaneError('VALIDATION_FAILURE', `no toggle allowlist for pipeline "${basePipelineId}"`);
-      }
-
+    if (input.profileId !== undefined) {
+      const storedProfile = await this.playbooks.resolveRunProfile({
+        playbookId: playbook.id,
+        pipelineId: pipeline.pipelineId,
+        profileId: input.profileId,
+      });
+      const topologyProfile = topologyProfileFromRunProfile(storedProfile.profile);
       const baseTemplate = (pipeline.executionPolicy as { template_json?: unknown }).template_json;
       if (!baseTemplate) {
-        throw new ControlPlaneError('VALIDATION_FAILURE', `pipeline "${basePipelineId}" carries no template_json`);
+        throw new ControlPlaneError('VALIDATION_FAILURE', `pipeline "${pipeline.pipelineId}" carries no template_json`);
       }
 
-      const { template: materializedTemplate, materializedTemplateHash } = materializeTemplate(
+      const { template: materializedTemplate, materializedTemplateHash, diagnostics } = materializeTemplate(
         baseTemplate as Parameters<typeof materializeTemplate>[0],
-        profileEntry,
-        { allowlist },
+        topologyProfile,
+        { allowlist: topologyProfile.toggles.map((toggle) => toggle.target) },
       );
+      if (diagnostics.length > 0) {
+        throw new ControlPlaneError(
+          'VALIDATION_FAILURE',
+          `run profile ${storedProfile.profileId} cannot be materialized: ${diagnostics.map((item) => item.message).join('; ')}`,
+          { details: { diagnostics } },
+        );
+      }
 
       executionPolicy = { template_json: materializedTemplate };
-
-      const derivedBindings = CODEX_CONSENSUS_BINDINGS;
-      executionProfile = {
-        ...callerProfile,
-        runnerOverrides: { ...derivedBindings.runnerOverrides, ...callerProfile.runnerOverrides },
-        bindingOverrides: [
-          ...(callerProfile.bindingOverrides ?? []),
-          ...derivedBindings.bindingOverrides,
-        ],
-      };
+      executionProfile = executionProfileFromRunProfile(storedProfile.profile, callerProfile);
 
       provenanceFields.requestedPipelineId = requestedPipelineId;
-      provenanceFields.basePipelineId = basePipelineId;
-      provenanceFields.profileId = profileId;
-      provenanceFields.profileVersion = CODEX_CONSENSUS_PROFILE_VERSION;
-      provenanceFields.profileHash = hashProfile(profileEntry);
+      provenanceFields.basePipelineId = pipeline.pipelineId;
+      provenanceFields.profileId = storedProfile.profileId;
+      provenanceFields.profileVersion = storedProfile.version;
+      provenanceFields.profileHash = storedProfile.profileHash;
+      provenanceFields.profileSnapshot = storedProfile.profile;
       provenanceFields.materializedTemplateHash = materializedTemplateHash;
+      provenanceFields.materializedTemplate = materializedTemplate;
       provenanceFields.materializerVersion = MATERIALIZER_VERSION;
       provenanceFields.policyVersion = POLICY_VERSION;
-    } else if (requestedPipelineId !== basePipelineId) {
-      provenanceFields.requestedPipelineId = requestedPipelineId;
-      provenanceFields.basePipelineId = basePipelineId;
     }
 
     const allRoles = (await this.roles.listRoles()).filter((role) => role.playbookId === playbook.id);
@@ -1853,7 +1835,7 @@ export class TaskControlPlaneApiService {
     return selected.map((roleId): RouteRoleBinding => {
       const role = byPlaybookRole.get(roleId) as RoleSummary;
       assertProductionRunnerBinding(role.runner, 'playbook', roleId);
-      const runnerResolved = resolveRunnerForProfile(role.runner, executionProfile);
+      const runnerResolved = resolveRunnerForRole(role.runner, roleId, executionProfile);
       assertProductionRunnerBinding(runnerResolved.runnerId, runnerResolved.source, roleId);
       assertRunnerAvailable(runnerResolved.runnerId, executionProfile, roleId);
       const bindingResolution = resolveBindingForRole(role, roleId, runnerResolved.runnerId, executionProfile);

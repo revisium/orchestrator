@@ -1,0 +1,208 @@
+[
+  {
+    "id": "claude-standard",
+    "pipelineId": "feature-development",
+    "schemaVersion": "run-profile/v1",
+    "version": "1",
+    "displayName": "Claude standard",
+    "summary": "Claude Code for feature-development agent slots with the default single-review topology.",
+    "topology": {
+      "stages": {
+        "planReviewer": {
+          "mode": "single"
+        },
+        "codeReview": {
+          "mode": "single"
+        }
+      }
+    },
+    "bindings": {
+      "slots": {
+        "analyst": {
+          "runnerId": "claude-code",
+          "modelLevel": "deep"
+        },
+        "reviewer": {
+          "runnerId": "claude-code",
+          "modelLevel": "deep"
+        },
+        "developer": {
+          "runnerId": "claude-code",
+          "modelLevel": "standard",
+          "permissionMode": "acceptEdits"
+        },
+        "triager": {
+          "runnerId": "claude-code",
+          "modelLevel": "deep"
+        },
+        "watcher": {
+          "runnerId": "claude-code",
+          "modelLevel": "cheap"
+        }
+      }
+    },
+    "status": "active"
+  },
+  {
+    "id": "codex-standard",
+    "pipelineId": "feature-development",
+    "schemaVersion": "run-profile/v1",
+    "version": "1",
+    "displayName": "Codex standard",
+    "summary": "Codex for feature-development agent slots with the default single-review topology.",
+    "topology": {
+      "stages": {
+        "planReviewer": {
+          "mode": "single"
+        },
+        "codeReview": {
+          "mode": "single"
+        }
+      }
+    },
+    "bindings": {
+      "slots": {
+        "analyst": {
+          "runnerId": "codex",
+          "modelLevel": "codex-deep",
+          "permissionMode": "workspace-write"
+        },
+        "reviewer": {
+          "runnerId": "codex",
+          "modelLevel": "codex-deep"
+        },
+        "developer": {
+          "runnerId": "codex",
+          "modelLevel": "codex-standard",
+          "permissionMode": "workspace-write"
+        },
+        "triager": {
+          "runnerId": "codex",
+          "modelLevel": "codex-deep"
+        },
+        "watcher": {
+          "runnerId": "codex",
+          "modelLevel": "codex-standard"
+        }
+      }
+    },
+    "status": "active"
+  },
+  {
+    "id": "codex-primary-claude-review-consensus",
+    "pipelineId": "feature-development",
+    "schemaVersion": "run-profile/v1",
+    "version": "1",
+    "displayName": "Codex primary, Claude review consensus",
+    "summary": "Codex is primary for analysis and development; Codex plus Claude run parallel consensus for plan and code review.",
+    "topology": {
+      "stages": {
+        "planReviewer": {
+          "mode": "consensus",
+          "branches": 2
+        },
+        "codeReview": {
+          "mode": "consensus",
+          "branches": 2
+        }
+      }
+    },
+    "bindings": {
+      "slots": {
+        "analyst": {
+          "runnerId": "codex",
+          "modelLevel": "codex-deep",
+          "permissionMode": "workspace-write"
+        },
+        "developer": {
+          "runnerId": "codex",
+          "modelLevel": "codex-standard",
+          "permissionMode": "workspace-write"
+        },
+        "triager": {
+          "runnerId": "codex",
+          "modelLevel": "codex-deep"
+        },
+        "watcher": {
+          "runnerId": "codex",
+          "modelLevel": "codex-standard"
+        },
+        "planReviewPrimary": {
+          "runnerId": "codex",
+          "modelLevel": "codex-deep"
+        },
+        "planReviewSecondary": {
+          "runnerId": "claude-code",
+          "modelLevel": "deep"
+        },
+        "codeReviewPrimary": {
+          "runnerId": "codex",
+          "modelLevel": "codex-deep"
+        },
+        "codeReviewSecondary": {
+          "runnerId": "claude-code",
+          "modelLevel": "deep"
+        }
+      }
+    },
+    "status": "active"
+  },
+  {
+    "id": "claude-primary-codex-review-consensus",
+    "pipelineId": "feature-development",
+    "schemaVersion": "run-profile/v1",
+    "version": "1",
+    "displayName": "Claude primary, Codex review consensus",
+    "summary": "Claude Code is primary for analysis and development; Claude plus Codex run parallel consensus for plan and code review.",
+    "topology": {
+      "stages": {
+        "planReviewer": {
+          "mode": "consensus",
+          "branches": 2
+        },
+        "codeReview": {
+          "mode": "consensus",
+          "branches": 2
+        }
+      }
+    },
+    "bindings": {
+      "slots": {
+        "analyst": {
+          "runnerId": "claude-code",
+          "modelLevel": "deep"
+        },
+        "developer": {
+          "runnerId": "claude-code",
+          "modelLevel": "standard",
+          "permissionMode": "acceptEdits"
+        },
+        "triager": {
+          "runnerId": "claude-code",
+          "modelLevel": "deep"
+        },
+        "watcher": {
+          "runnerId": "claude-code",
+          "modelLevel": "cheap"
+        },
+        "planReviewPrimary": {
+          "runnerId": "claude-code",
+          "modelLevel": "deep"
+        },
+        "planReviewSecondary": {
+          "runnerId": "codex",
+          "modelLevel": "codex-deep"
+        },
+        "codeReviewPrimary": {
+          "runnerId": "claude-code",
+          "modelLevel": "deep"
+        },
+        "codeReviewSecondary": {
+          "runnerId": "codex",
+          "modelLevel": "codex-deep"
+        }
+      }
+    },
+    "status": "active"
+  }
+]

@@ -52,6 +52,13 @@ export const AnyNull = runtime.AnyNull
 
 export const ModelName = {
   RevoProject: 'RevoProject',
+  TaskRun: 'TaskRun',
+  RunTask: 'RunTask',
+  RunEvent: 'RunEvent',
+  RunAttempt: 'RunAttempt',
+  InboxItem: 'InboxItem',
+  RunOutput: 'RunOutput',
+  CostLedgerEntry: 'CostLedgerEntry',
   Branch: 'Branch',
   Revision: 'Revision',
   Table: 'Table',
@@ -89,6 +96,146 @@ export const RevoProjectScalarFieldEnum = {
 } as const
 
 export type RevoProjectScalarFieldEnum = (typeof RevoProjectScalarFieldEnum)[keyof typeof RevoProjectScalarFieldEnum]
+
+
+export const TaskRunScalarFieldEnum = {
+  id: 'id',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt',
+  projectId: 'projectId',
+  title: 'title',
+  description: 'description',
+  status: 'status',
+  repos: 'repos',
+  scope: 'scope',
+  priority: 'priority',
+  playbookId: 'playbookId',
+  pipelineId: 'pipelineId',
+  params: 'params',
+  routeDecision: 'routeDecision',
+  executionProfile: 'executionProfile',
+  createdBy: 'createdBy'
+} as const
+
+export type TaskRunScalarFieldEnum = (typeof TaskRunScalarFieldEnum)[keyof typeof TaskRunScalarFieldEnum]
+
+
+export const RunTaskScalarFieldEnum = {
+  id: 'id',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt',
+  runId: 'runId',
+  repoRef: 'repoRef',
+  roleHint: 'roleHint',
+  title: 'title',
+  status: 'status',
+  dependsOn: 'dependsOn',
+  scope: 'scope',
+  priority: 'priority'
+} as const
+
+export type RunTaskScalarFieldEnum = (typeof RunTaskScalarFieldEnum)[keyof typeof RunTaskScalarFieldEnum]
+
+
+export const RunEventScalarFieldEnum = {
+  id: 'id',
+  createdAt: 'createdAt',
+  sequence: 'sequence',
+  runId: 'runId',
+  taskId: 'taskId',
+  stepId: 'stepId',
+  type: 'type',
+  payload: 'payload',
+  actor: 'actor'
+} as const
+
+export type RunEventScalarFieldEnum = (typeof RunEventScalarFieldEnum)[keyof typeof RunEventScalarFieldEnum]
+
+
+export const RunAttemptScalarFieldEnum = {
+  id: 'id',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt',
+  runId: 'runId',
+  stepId: 'stepId',
+  workerId: 'workerId',
+  attemptNo: 'attemptNo',
+  iteration: 'iteration',
+  status: 'status',
+  idempotencyKey: 'idempotencyKey',
+  modelProfile: 'modelProfile',
+  verdict: 'verdict',
+  inputTokens: 'inputTokens',
+  outputTokens: 'outputTokens',
+  costAmount: 'costAmount',
+  currency: 'currency',
+  durationMs: 'durationMs',
+  outputSummary: 'outputSummary',
+  artifactRef: 'artifactRef',
+  stdoutTail: 'stdoutTail',
+  stderrTail: 'stderrTail',
+  lesson: 'lesson',
+  error: 'error',
+  startedAt: 'startedAt',
+  finishedAt: 'finishedAt'
+} as const
+
+export type RunAttemptScalarFieldEnum = (typeof RunAttemptScalarFieldEnum)[keyof typeof RunAttemptScalarFieldEnum]
+
+
+export const InboxItemScalarFieldEnum = {
+  id: 'id',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt',
+  kind: 'kind',
+  runId: 'runId',
+  taskId: 'taskId',
+  stepId: 'stepId',
+  projectId: 'projectId',
+  title: 'title',
+  context: 'context',
+  options: 'options',
+  status: 'status',
+  answer: 'answer',
+  resolvedBy: 'resolvedBy',
+  resolvedAt: 'resolvedAt'
+} as const
+
+export type InboxItemScalarFieldEnum = (typeof InboxItemScalarFieldEnum)[keyof typeof InboxItemScalarFieldEnum]
+
+
+export const RunOutputScalarFieldEnum = {
+  id: 'id',
+  createdAt: 'createdAt',
+  runId: 'runId',
+  nodeId: 'nodeId',
+  ordinal: 'ordinal',
+  name: 'name',
+  schemaRef: 'schemaRef',
+  payload: 'payload',
+  payloadRef: 'payloadRef',
+  attemptId: 'attemptId',
+  producedAt: 'producedAt'
+} as const
+
+export type RunOutputScalarFieldEnum = (typeof RunOutputScalarFieldEnum)[keyof typeof RunOutputScalarFieldEnum]
+
+
+export const CostLedgerEntryScalarFieldEnum = {
+  id: 'id',
+  createdAt: 'createdAt',
+  runId: 'runId',
+  stepId: 'stepId',
+  attemptId: 'attemptId',
+  modelProfile: 'modelProfile',
+  inputTokens: 'inputTokens',
+  outputTokens: 'outputTokens',
+  costAmount: 'costAmount',
+  currency: 'currency',
+  recordedAt: 'recordedAt'
+} as const
+
+export type CostLedgerEntryScalarFieldEnum = (typeof CostLedgerEntryScalarFieldEnum)[keyof typeof CostLedgerEntryScalarFieldEnum]
 
 
 export const BranchScalarFieldEnum = {
@@ -217,6 +364,14 @@ export const JsonNullValueInput = {
 export type JsonNullValueInput = (typeof JsonNullValueInput)[keyof typeof JsonNullValueInput]
 
 
+export const NullableJsonNullValueInput = {
+  DbNull: DbNull,
+  JsonNull: JsonNull
+} as const
+
+export type NullableJsonNullValueInput = (typeof NullableJsonNullValueInput)[keyof typeof NullableJsonNullValueInput]
+
+
 export const QueryMode = {
   default: 'default',
   insensitive: 'insensitive'
@@ -240,6 +395,119 @@ export const RevoProjectOrderByRelevanceFieldEnum = {
 } as const
 
 export type RevoProjectOrderByRelevanceFieldEnum = (typeof RevoProjectOrderByRelevanceFieldEnum)[keyof typeof RevoProjectOrderByRelevanceFieldEnum]
+
+
+export const JsonNullValueFilter = {
+  DbNull: DbNull,
+  JsonNull: JsonNull,
+  AnyNull: AnyNull
+} as const
+
+export type JsonNullValueFilter = (typeof JsonNullValueFilter)[keyof typeof JsonNullValueFilter]
+
+
+export const TaskRunOrderByRelevanceFieldEnum = {
+  id: 'id',
+  projectId: 'projectId',
+  title: 'title',
+  description: 'description',
+  status: 'status',
+  repos: 'repos',
+  scope: 'scope',
+  playbookId: 'playbookId',
+  pipelineId: 'pipelineId',
+  createdBy: 'createdBy'
+} as const
+
+export type TaskRunOrderByRelevanceFieldEnum = (typeof TaskRunOrderByRelevanceFieldEnum)[keyof typeof TaskRunOrderByRelevanceFieldEnum]
+
+
+export const RunTaskOrderByRelevanceFieldEnum = {
+  id: 'id',
+  runId: 'runId',
+  repoRef: 'repoRef',
+  roleHint: 'roleHint',
+  title: 'title',
+  status: 'status',
+  dependsOn: 'dependsOn',
+  scope: 'scope'
+} as const
+
+export type RunTaskOrderByRelevanceFieldEnum = (typeof RunTaskOrderByRelevanceFieldEnum)[keyof typeof RunTaskOrderByRelevanceFieldEnum]
+
+
+export const RunEventOrderByRelevanceFieldEnum = {
+  id: 'id',
+  runId: 'runId',
+  taskId: 'taskId',
+  stepId: 'stepId',
+  type: 'type',
+  actor: 'actor'
+} as const
+
+export type RunEventOrderByRelevanceFieldEnum = (typeof RunEventOrderByRelevanceFieldEnum)[keyof typeof RunEventOrderByRelevanceFieldEnum]
+
+
+export const RunAttemptOrderByRelevanceFieldEnum = {
+  id: 'id',
+  runId: 'runId',
+  stepId: 'stepId',
+  workerId: 'workerId',
+  status: 'status',
+  idempotencyKey: 'idempotencyKey',
+  modelProfile: 'modelProfile',
+  verdict: 'verdict',
+  currency: 'currency',
+  outputSummary: 'outputSummary',
+  artifactRef: 'artifactRef',
+  stdoutTail: 'stdoutTail',
+  stderrTail: 'stderrTail',
+  lesson: 'lesson',
+  error: 'error'
+} as const
+
+export type RunAttemptOrderByRelevanceFieldEnum = (typeof RunAttemptOrderByRelevanceFieldEnum)[keyof typeof RunAttemptOrderByRelevanceFieldEnum]
+
+
+export const InboxItemOrderByRelevanceFieldEnum = {
+  id: 'id',
+  kind: 'kind',
+  runId: 'runId',
+  taskId: 'taskId',
+  stepId: 'stepId',
+  projectId: 'projectId',
+  title: 'title',
+  options: 'options',
+  status: 'status',
+  resolvedBy: 'resolvedBy'
+} as const
+
+export type InboxItemOrderByRelevanceFieldEnum = (typeof InboxItemOrderByRelevanceFieldEnum)[keyof typeof InboxItemOrderByRelevanceFieldEnum]
+
+
+export const RunOutputOrderByRelevanceFieldEnum = {
+  id: 'id',
+  runId: 'runId',
+  nodeId: 'nodeId',
+  name: 'name',
+  schemaRef: 'schemaRef',
+  payloadRef: 'payloadRef',
+  attemptId: 'attemptId'
+} as const
+
+export type RunOutputOrderByRelevanceFieldEnum = (typeof RunOutputOrderByRelevanceFieldEnum)[keyof typeof RunOutputOrderByRelevanceFieldEnum]
+
+
+export const CostLedgerEntryOrderByRelevanceFieldEnum = {
+  id: 'id',
+  runId: 'runId',
+  stepId: 'stepId',
+  attemptId: 'attemptId',
+  modelProfile: 'modelProfile',
+  currency: 'currency'
+} as const
+
+export type CostLedgerEntryOrderByRelevanceFieldEnum = (typeof CostLedgerEntryOrderByRelevanceFieldEnum)[keyof typeof CostLedgerEntryOrderByRelevanceFieldEnum]
 
 
 export const BranchOrderByRelevanceFieldEnum = {
@@ -268,15 +536,6 @@ export const TableOrderByRelevanceFieldEnum = {
 } as const
 
 export type TableOrderByRelevanceFieldEnum = (typeof TableOrderByRelevanceFieldEnum)[keyof typeof TableOrderByRelevanceFieldEnum]
-
-
-export const JsonNullValueFilter = {
-  DbNull: DbNull,
-  JsonNull: JsonNull,
-  AnyNull: AnyNull
-} as const
-
-export type JsonNullValueFilter = (typeof JsonNullValueFilter)[keyof typeof JsonNullValueFilter]
 
 
 export const RowOrderByRelevanceFieldEnum = {

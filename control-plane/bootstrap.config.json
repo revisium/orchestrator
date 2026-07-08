@@ -6,463 +6,6 @@
   ],
   "tables": [
     {
-      "id": "task_runs",
-      "schema": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "type": "string",
-            "default": ""
-          },
-          "project_id": {
-            "type": "string",
-            "default": ""
-          },
-          "title": {
-            "type": "string",
-            "default": ""
-          },
-          "description": {
-            "type": "string",
-            "default": ""
-          },
-          "status": {
-            "type": "string",
-            "default": "pending",
-            "description": "pending|planning|ready|running|completed|failed|awaiting_approval|paused|cancelled"
-          },
-          "repos": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "default": ""
-            }
-          },
-          "scope": {
-            "type": "string",
-            "default": ""
-          },
-          "priority": {
-            "type": "number",
-            "default": 0
-          },
-          "playbook_id": {
-            "type": "string",
-            "default": "",
-            "description": "Installed playbook selected for this run"
-          },
-          "pipeline_id": {
-            "type": "string",
-            "default": "",
-            "description": "Installed pipeline row id selected for this run"
-          },
-          "params": {
-            "type": "string",
-            "default": "",
-            "description": "Serialized JSON run params"
-          },
-          "route_decision": {
-            "type": "string",
-            "default": "",
-            "description": "Serialized JSON structured route decision"
-          },
-          "execution_profile": {
-            "type": "string",
-            "default": "",
-            "description": "Serialized JSON resolved execution profile"
-          },
-          "created_by": {
-            "type": "string",
-            "default": ""
-          },
-          "created_at": {
-            "type": "string",
-            "default": ""
-          },
-          "updated_at": {
-            "type": "string",
-            "default": ""
-          }
-        },
-        "required": []
-      }
-    },
-    {
-      "id": "tasks",
-      "schema": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "type": "string",
-            "default": ""
-          },
-          "run_id": {
-            "type": "string",
-            "default": ""
-          },
-          "repo_ref": {
-            "type": "string",
-            "default": ""
-          },
-          "role_hint": {
-            "type": "string",
-            "default": ""
-          },
-          "title": {
-            "type": "string",
-            "default": ""
-          },
-          "status": {
-            "type": "string",
-            "default": "pending"
-          },
-          "depends_on": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "default": ""
-            }
-          },
-          "scope": {
-            "type": "string",
-            "default": ""
-          },
-          "priority": {
-            "type": "number",
-            "default": 0
-          },
-          "created_at": {
-            "type": "string",
-            "default": ""
-          },
-          "updated_at": {
-            "type": "string",
-            "default": ""
-          }
-        },
-        "required": []
-      }
-    },
-    {
-      "id": "steps",
-      "schema": {
-        "type": "object",
-        "description": "DEPRECATED/unused — runtime path retired (audit §3.1, #86); no live path writes or reads a steps row (DBOS owns progress). Table drop deferred — a schema drop on existing control-planes is riskier than retiring the writes; tracked in docs/roadmap.md → Post-MVP cleanup.",
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "type": "string",
-            "default": ""
-          },
-          "task_id": {
-            "type": "string",
-            "default": ""
-          },
-          "run_id": {
-            "type": "string",
-            "default": ""
-          },
-          "role": {
-            "type": "string",
-            "default": ""
-          },
-          "kind": {
-            "type": "string",
-            "default": ""
-          },
-          "status": {
-            "type": "string",
-            "default": "pending",
-            "description": "pending|ready|claimed|running|succeeded|failed|dead|awaiting_approval|skipped"
-          },
-          "input": {
-            "type": "string",
-            "default": "",
-            "description": "Serialized JSON"
-          },
-          "output": {
-            "type": "string",
-            "default": "",
-            "description": "Serialized JSON"
-          },
-          "model_profile": {
-            "type": "string",
-            "default": ""
-          },
-          "run_after": {
-            "type": "string",
-            "default": ""
-          },
-          "attempt_count": {
-            "type": "number",
-            "default": 0
-          },
-          "max_attempts": {
-            "type": "number",
-            "default": 3
-          },
-          "priority": {
-            "type": "number",
-            "default": 0
-          },
-          "depends_on": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "default": ""
-            }
-          },
-          "lease_owner": {
-            "type": "string",
-            "default": ""
-          },
-          "lease_expires_at": {
-            "type": "string",
-            "default": ""
-          },
-          "dead_reason": {
-            "type": "string",
-            "default": ""
-          },
-          "created_at": {
-            "type": "string",
-            "default": ""
-          },
-          "updated_at": {
-            "type": "string",
-            "default": ""
-          }
-        },
-        "required": []
-      }
-    },
-    {
-      "id": "attempts",
-      "schema": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "type": "string",
-            "default": ""
-          },
-          "step_id": {
-            "type": "string",
-            "default": ""
-          },
-          "run_id": {
-            "type": "string",
-            "default": ""
-          },
-          "worker_id": {
-            "type": "string",
-            "default": ""
-          },
-          "attempt_no": {
-            "type": "number",
-            "default": 0
-          },
-          "iteration": {
-            "type": "number",
-            "default": 0,
-            "description": "developer/reviewer rework iteration (0 = first pass)"
-          },
-          "status": {
-            "type": "string",
-            "default": ""
-          },
-          "idempotency_key": {
-            "type": "string",
-            "default": ""
-          },
-          "model_profile": {
-            "type": "string",
-            "default": ""
-          },
-          "verdict": {
-            "type": "string",
-            "default": "",
-            "description": "extracted reviewer/agent verdict (PASS|MINOR|MAJOR|BLOCKER|…)"
-          },
-          "input_tokens": {
-            "type": "number",
-            "default": 0
-          },
-          "output_tokens": {
-            "type": "number",
-            "default": 0
-          },
-          "cost_amount": {
-            "type": "number",
-            "default": 0
-          },
-          "currency": {
-            "type": "string",
-            "default": "USD"
-          },
-          "duration_ms": {
-            "type": "number",
-            "default": 0
-          },
-          "output_summary": {
-            "type": "string",
-            "default": "",
-            "description": "Serialized JSON, secret-redacted, capped"
-          },
-          "artifact_ref": {
-            "type": "string",
-            "default": "",
-            "description": "Stable run artifact reference, e.g. run_id/attempt_id"
-          },
-          "stdout_tail": {
-            "type": "string",
-            "default": "",
-            "description": "Secret-redacted process stdout tail, capped"
-          },
-          "stderr_tail": {
-            "type": "string",
-            "default": "",
-            "description": "Secret-redacted process stderr tail, capped"
-          },
-          "lesson": {
-            "type": "string",
-            "default": ""
-          },
-          "error": {
-            "type": "string",
-            "default": ""
-          },
-          "started_at": {
-            "type": "string",
-            "default": ""
-          },
-          "finished_at": {
-            "type": "string",
-            "default": ""
-          }
-        },
-        "required": []
-      }
-    },
-    {
-      "id": "events",
-      "schema": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "type": "string",
-            "default": ""
-          },
-          "run_id": {
-            "type": "string",
-            "default": ""
-          },
-          "task_id": {
-            "type": "string",
-            "default": ""
-          },
-          "step_id": {
-            "type": "string",
-            "default": ""
-          },
-          "type": {
-            "type": "string",
-            "default": ""
-          },
-          "payload": {
-            "type": "string",
-            "default": "",
-            "description": "Serialized JSON"
-          },
-          "actor": {
-            "type": "string",
-            "default": ""
-          },
-          "created_at": {
-            "type": "string",
-            "default": ""
-          }
-        },
-        "required": []
-      }
-    },
-    {
-      "id": "inbox",
-      "schema": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "type": "string",
-            "default": ""
-          },
-          "kind": {
-            "type": "string",
-            "default": "",
-            "description": "approval|question|alert"
-          },
-          "run_id": {
-            "type": "string",
-            "default": ""
-          },
-          "task_id": {
-            "type": "string",
-            "default": ""
-          },
-          "step_id": {
-            "type": "string",
-            "default": ""
-          },
-          "project_id": {
-            "type": "string",
-            "default": ""
-          },
-          "title": {
-            "type": "string",
-            "default": ""
-          },
-          "context": {
-            "type": "string",
-            "default": "",
-            "description": "Serialized JSON"
-          },
-          "options": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "default": ""
-            }
-          },
-          "status": {
-            "type": "string",
-            "default": "pending",
-            "description": "pending|resolved"
-          },
-          "answer": {
-            "type": "string",
-            "default": "",
-            "description": "Serialized JSON"
-          },
-          "resolved_by": {
-            "type": "string",
-            "default": ""
-          },
-          "created_at": {
-            "type": "string",
-            "default": ""
-          },
-          "resolved_at": {
-            "type": "string",
-            "default": ""
-          }
-        },
-        "required": []
-      }
-    },
-    {
       "id": "roles",
       "schema": {
         "type": "object",
@@ -552,6 +95,15 @@
             "default": "",
             "description": "claude --permission-mode; '' = default (0008 #5)"
           },
+          "status": {
+            "type": "string",
+            "default": "active",
+            "description": "active|removed"
+          },
+          "retired_at": {
+            "type": "string",
+            "default": ""
+          },
           "updated_at": {
             "type": "string",
             "default": ""
@@ -611,6 +163,10 @@
             "default": ""
           },
           "updated_at": {
+            "type": "string",
+            "default": ""
+          },
+          "run_profiles_catalog_path": {
             "type": "string",
             "default": ""
           }
@@ -682,6 +238,15 @@
             "default": "",
             "description": "Serialized JSON"
           },
+          "status": {
+            "type": "string",
+            "default": "active",
+            "description": "active|removed"
+          },
+          "retired_at": {
+            "type": "string",
+            "default": ""
+          },
           "updated_at": {
             "type": "string",
             "default": ""
@@ -735,6 +300,78 @@
       }
     },
     {
+      "id": "run_profiles",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "default": ""
+          },
+          "playbook_id": {
+            "type": "string",
+            "default": ""
+          },
+          "pipeline_id": {
+            "type": "string",
+            "default": ""
+          },
+          "profile_id": {
+            "type": "string",
+            "default": ""
+          },
+          "schema_version": {
+            "type": "string",
+            "default": "run-profile/v1"
+          },
+          "version": {
+            "type": "string",
+            "default": "1"
+          },
+          "display_name": {
+            "type": "string",
+            "default": ""
+          },
+          "summary": {
+            "type": "string",
+            "default": ""
+          },
+          "profile_json": {
+            "type": "string",
+            "default": "",
+            "description": "Serialized JSON normalized RunProfile payload"
+          },
+          "profile_hash": {
+            "type": "string",
+            "default": ""
+          },
+          "status": {
+            "type": "string",
+            "default": "active",
+            "description": "active|deprecated|removed"
+          },
+          "retired_at": {
+            "type": "string",
+            "default": ""
+          },
+          "source_path": {
+            "type": "string",
+            "default": ""
+          },
+          "source_hash": {
+            "type": "string",
+            "default": ""
+          },
+          "updated_at": {
+            "type": "string",
+            "default": ""
+          }
+        },
+        "required": []
+      }
+    },
+    {
       "id": "routing_policy",
       "schema": {
         "type": "object",
@@ -764,112 +401,6 @@
         },
         "required": []
       }
-    },
-    {
-      "id": "cost_ledger",
-      "schema": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "type": "string",
-            "default": ""
-          },
-          "run_id": {
-            "type": "string",
-            "default": ""
-          },
-          "step_id": {
-            "type": "string",
-            "default": ""
-          },
-          "attempt_id": {
-            "type": "string",
-            "default": ""
-          },
-          "model_profile": {
-            "type": "string",
-            "default": ""
-          },
-          "input_tokens": {
-            "type": "number",
-            "default": 0
-          },
-          "output_tokens": {
-            "type": "number",
-            "default": 0
-          },
-          "cost_amount": {
-            "type": "number",
-            "default": 0
-          },
-          "currency": {
-            "type": "string",
-            "default": "USD"
-          },
-          "recorded_at": {
-            "type": "string",
-            "default": ""
-          }
-        },
-        "required": []
-      }
-    },
-    {
-      "id": "run_outputs",
-      "schema": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "type": "string",
-            "default": "",
-            "description": "Deterministic: out_<fnv1a64Hex(runId|nodeId|ordinal)>"
-          },
-          "run_id": {
-            "type": "string",
-            "default": ""
-          },
-          "node_id": {
-            "type": "string",
-            "default": ""
-          },
-          "ordinal": {
-            "type": "number",
-            "default": 0,
-            "description": "Adapter-owned per-(run,node) execution ordinal; 1,2,3 across loop iterations (0016 §4.1)"
-          },
-          "name": {
-            "type": "string",
-            "default": "",
-            "description": "Artifact name from the node's produces.name, e.g. plan"
-          },
-          "schema_ref": {
-            "type": "string",
-            "default": "",
-            "description": "resultSchema the payload was shape-checked against, e.g. schema:plan"
-          },
-          "payload": {
-            "type": "string",
-            "default": "",
-            "description": "Serialized JSON content, secret-redacted + size-capped at the adapter boundary"
-          },
-          "payload_ref": {
-            "type": "string",
-            "default": "",
-            "description": "Set instead of payload when the content exceeds the inline cap (0016 §8)"
-          },
-          "attempt_id": {
-            "type": "string",
-            "default": ""
-          },
-          "produced_at": {
-            "type": "string",
-            "default": ""
-          }
-        },
-        "required": []
-      }
     }
   ],
   "rows": [
@@ -883,7 +414,12 @@
         "model_level": "deep",
         "effort": "high",
         "runner": "claude-code",
-        "allowed_tools": ["Read", "Grep", "Glob", "Write"],
+        "allowed_tools": [
+          "Read",
+          "Grep",
+          "Glob",
+          "Write"
+        ],
         "scope_rules": "{}",
         "timeout_ms": 1200000,
         "permission_mode": "default",
@@ -900,7 +436,14 @@
         "model_level": "standard",
         "effort": "high",
         "runner": "claude-code",
-        "allowed_tools": ["Read", "Edit", "Write", "Bash", "Grep", "Glob"],
+        "allowed_tools": [
+          "Read",
+          "Edit",
+          "Write",
+          "Bash",
+          "Grep",
+          "Glob"
+        ],
         "scope_rules": "{}",
         "timeout_ms": 900000,
         "permission_mode": "default",
@@ -917,7 +460,12 @@
         "model_level": "standard",
         "effort": "high",
         "runner": "claude-code",
-        "allowed_tools": ["Read", "Grep", "Glob", "Bash"],
+        "allowed_tools": [
+          "Read",
+          "Grep",
+          "Glob",
+          "Bash"
+        ],
         "scope_rules": "{}",
         "timeout_ms": 600000,
         "permission_mode": "default",
@@ -934,7 +482,10 @@
         "model_level": "standard",
         "effort": "high",
         "runner": "script",
-        "allowed_tools": ["Read", "Bash"],
+        "allowed_tools": [
+          "Read",
+          "Bash"
+        ],
         "scope_rules": "{}",
         "timeout_ms": 0,
         "permission_mode": "default",
@@ -968,7 +519,10 @@
         "model_level": "cheap",
         "effort": "low",
         "runner": "claude-code",
-        "allowed_tools": ["Read", "Bash"],
+        "allowed_tools": [
+          "Read",
+          "Bash"
+        ],
         "scope_rules": "{}",
         "timeout_ms": 300000,
         "permission_mode": "default",
@@ -984,8 +538,8 @@
         "provider": "anthropic",
         "model_id": "claude-sonnet-4-6",
         "params": "{}",
-        "cost_per_input": 3.0,
-        "cost_per_output": 15.0,
+        "cost_per_input": 3,
+        "cost_per_output": 15,
         "updated_at": "2026-06-03T00:00:00.000Z"
       }
     },
@@ -999,7 +553,7 @@
         "model_id": "claude-haiku-4-5-20251001",
         "params": "{}",
         "cost_per_input": 0.8,
-        "cost_per_output": 4.0,
+        "cost_per_output": 4,
         "updated_at": "2026-06-03T00:00:00.000Z"
       }
     },
@@ -1012,8 +566,8 @@
         "provider": "anthropic",
         "model_id": "claude-opus-4-8",
         "params": "{}",
-        "cost_per_input": 15.0,
-        "cost_per_output": 75.0,
+        "cost_per_input": 15,
+        "cost_per_output": 75,
         "updated_at": "2026-06-03T00:00:00.000Z"
       }
     },
@@ -1026,8 +580,8 @@
         "provider": "openai",
         "model_id": "gpt-5.5",
         "params": "{}",
-        "cost_per_input": 2.0,
-        "cost_per_output": 8.0,
+        "cost_per_input": 2,
+        "cost_per_output": 8,
         "updated_at": "2026-06-03T00:00:00.000Z"
       }
     },
@@ -1040,8 +594,8 @@
         "provider": "openai",
         "model_id": "gpt-5.5",
         "params": "{}",
-        "cost_per_input": 2.0,
-        "cost_per_output": 8.0,
+        "cost_per_input": 2,
+        "cost_per_output": 8,
         "updated_at": "2026-06-03T00:00:00.000Z"
       }
     },
@@ -1054,8 +608,8 @@
         "provider": "openai",
         "model_id": "gpt-5.5",
         "params": "{}",
-        "cost_per_input": 2.0,
-        "cost_per_output": 8.0,
+        "cost_per_input": 2,
+        "cost_per_output": 8,
         "updated_at": "2026-06-03T00:00:00.000Z"
       }
     },
@@ -1071,5 +625,5 @@
       }
     }
   ],
-  "commitMessage": "Bootstrap control-plane schema and seed roles/model-profiles + pipeline policy (plan 0001+0007+0008)"
+  "commitMessage": "Bootstrap control-plane meaning schema and seed roles/model-profiles + pipeline policy"
 }

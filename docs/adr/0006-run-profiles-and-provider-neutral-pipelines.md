@@ -6,174 +6,122 @@
 - **Relates-to:** [pipeline state machine v1](../specs/pipeline-state-machine-v1.spec.md),
   [default playbook policy](../specs/default-playbook-policy.spec.md),
   [runner capabilities v1](../specs/runner-capabilities-v1.spec.md),
-  [runner manifest v1](../specs/runner-manifest-v1.spec.md),
   [playbook storage v1](../specs/playbook-storage-v1.spec.md)
 
 ## Context
 
-The default feature-development path needs to be usable with different runner/provider mixes without duplicating the
-pipeline graph. The current implementation already has the first pieces:
+The default feature-development workflow must support different runner/model mixes without duplicating the pipeline
+graph. Pipeline variants that encode provider choices drift quickly: every recovery path, gate, cleanup step, and policy
+rule has to be kept in sync by hand.
 
-- the pipeline grammar has `parallel` and `join` nodes;
-- `materializeTemplate` can clone selected agent nodes into deterministic fanout plus join topology;
-- `CODEX_CONSENSUS_PROFILE` materializes reviewer consensus for `planReviewer` and `codeReview`;
-- route decisions stamp `profileId`, `profileHash`, `materializedTemplateHash`, and binding provenance;
-- MCP accepts `profileId` and `executionProfile` on `create_run` / `simulate_route`.
+The storage boundary is now explicit:
 
-That shape is still too hard to reason about as a public protocol. It has a legacy pipeline alias
-`feature-development-codex-consensus`; concrete runner binding is split between `profileId` and `executionProfile`;
-the public MCP surface does not teach a caller how to discover or design a profile; and profile materialization is
-limited to hardcoded reviewer fanout.
+- Revisium engine stores versioned meaning and static configuration.
+- Revo Prisma stores runtime facts and mutable run state.
+- DBOS owns workflow execution/replay progress.
 
-The intended operator experience is:
-
-1. choose the canonical `feature-development` pipeline;
-2. choose an existing run profile or provide an inline run profile;
-3. inspect runner/model capability metadata through MCP before launch;
-4. launch a run whose materialized graph, profile snapshot, runner bindings, and capability snapshot are pinned for
-   replay.
+Run profiles belong to Revisium meaning because they are versioned launch configuration. Run instances, route decisions,
+events, attempts, inbox items, outputs, and costs belong to Prisma.
 
 ## Decision
 
-Adopt `RunProfile` as the public launch-time customization contract for provider selection, model levels, fanout,
-joins, consensus review, synthesis, and implementation-candidate selection.
+Adopt `RunProfile` as first-class control-plane data for launch configuration.
 
-### Pipeline identity
+### Pipeline Identity
 
-- `feature-development` is the only canonical default feature-development pipeline id.
-- Provider or topology variants MUST NOT be exposed as pipeline ids.
-- `feature-development-codex-consensus` is a legacy compatibility alias to remove from the public catalog and MCP
-  examples. Existing stored runs MAY keep their pinned route decision and requested pipeline id for audit.
-- New launches MUST use `pipelineId: "feature-development"` plus either `profileId` or an inline `profile`.
+- `feature-development` is the canonical default feature-development pipeline id.
+- Provider or topology variants are not public pipeline ids.
+- The default playbook imports `feature-development` from `control-plane/default-playbook/catalog/pipelines.json`.
+- Runtime code must not contain an authoritative TypeScript profile registry or provider-specific pipeline alias table.
 
-### Provider-neutral pipeline
+### Run Profile Ownership
 
-The base pipeline describes workflow semantics only: analysis, plan review, plan gate, development, code review,
-integration, PR readiness, merge gate, recovery, and cleanup. Agent nodes name semantic capabilities or binding slots;
-they do not encode provider identities, model names, or multi-provider consensus by duplicating graph variants.
+A run profile owns launch configuration:
 
-Concrete diversity belongs to the selected profile:
+- `pipelineId`;
+- topology overlay, such as single-stage or consensus fanout for semantic stages;
+- slot/node/runner bindings for runner id, model level, permission mode, timeout, and future budget fields;
+- version, hash, status, source path, and provenance.
 
-- runner id (`codex`, `claude-code`, `opencode`, `revo-integrator`, etc.);
-- model level or concrete model key, as exposed by runner capabilities;
-- permission mode, timeout, and budget;
-- fanout lanes and their bindings;
-- deterministic join and review reducers;
-- optional post-join agent/human/script selection steps.
+The base pipeline owns workflow semantics: nodes, edges, gates, slot names, and allowed materialization points. It does
+not encode concrete provider identities by duplicating the graph.
 
-### Explicit launch profile
+### Storage
 
-`create_run` and `simulate_route` MUST require exactly one profile source for provider/model/topology customization:
+Stored run profiles are imported into Revisium `run_profiles` rows alongside the default playbook data.
 
-- `profileId` references a stored, versioned run profile;
-- `profile` supplies an inline run profile.
+Built-in feature-development profiles are seeded from `control-plane/default-playbook/catalog/run-profiles.json`:
 
-The server MUST NOT silently auto-select a default profile. If neither field is present, MCP returns a profile-required
-response with candidate profiles, runner capabilities, and profile-design guidance, and creates no run.
+- `claude-standard`;
+- `codex-standard`;
+- `codex-primary-claude-review-consensus`;
+- `claude-primary-codex-review-consensus`.
 
-Seeded profiles MAY exist for convenience, but they are choices, not defaults. A future installation can seed profiles
-such as `codex-standard`, `claude-standard`, `codex-claude-review-consensus`,
-`analytics-codex-claude-opencode`, and `developer-codex-opencode-candidates`.
+Consensus profile ids use `<primary-runner>-primary-<review-runner>-review-consensus` so the first provider is the
+primary analysis/development runner and the second provider participates in review consensus.
 
-### Profile composition
+Changing a built-in profile means changing the catalog data and importing a new version/hash. Runtime code may contain
+schema, validation, import, and materialization logic, but not the authoritative profile data itself.
 
-A run profile owns two related concerns:
+Playbook import validates catalog-owned structured JSON with AJV before writing Revisium rows. In particular,
+`run-profile/v1` records and pipeline `execution_policy.template_json` must pass JSON Schema validation before they are
+serialized into `run_profiles.profile_json` or `pipelines.execution_policy_json`.
 
-- topology overlays: which semantic stages are single-lane, review consensus, proposal consensus, implementation
-  candidates, or post-join synthesis;
-- bindings: which runner/model/permission/budget settings apply to slots, lanes, and post-join nodes.
+The public identifiers are the catalog `pipeline_id` and `profile_id`. Revisium row ids such as
+`revisium-default-codex-standard` are internal storage ids and are not accepted as alternate launch ids. When a later built-in
+catalog removes a row, import marks the old row `status=removed`; runtime list/resolve paths ignore removed rows.
 
-This intentionally replaces the current split where `profileId` changes topology and `executionProfile` changes
-bindings. `executionProfile` can remain as an internal or compatibility seam during migration, but the public MCP
-contract should expose one `profile` concept.
+### Runtime Resolution
 
-### Join and after-join behavior
+`list_profiles({ pipelineId })` reads Revisium control-plane storage and filters by playbook/pipeline. It does not import
+hardcoded arrays.
 
-`join` remains deterministic runtime topology, not an arbitrary user script. A profile can then route the joined
-bundle to an explicit next step:
+`create_run` and `simulate_route` resolve the selected pipeline from Revisium storage. If `profileId` is supplied, they:
 
-- an agent that synthesizes analysis or chooses an implementation candidate;
-- a human gate that selects/adopts/rejects candidates;
-- a script that validates or adopts a candidate;
-- a choice/router that dispatches from a structured verdict.
+1. resolve the stored profile row for the same playbook and pipeline;
+2. convert the profile topology overlay into a materialized template;
+3. convert profile bindings into launch overrides;
+4. validate the effective execution profile;
+5. pin profile/version/hash/snapshot and materialized template hash into the Prisma `TaskRun.routeDecision`.
 
-The runtime must preserve enough branch output data for that next step. A verdict-only join is sufficient for simple
-review consensus, but proposal synthesis and implementation-candidate selection require a durable branch-output bundle.
+If no profile is supplied, the base pipeline runs as imported.
 
-### Replay and provenance
+### Replay And Provenance
 
-A run MUST pin:
+Run replay and resume use the pinned Prisma route decision. They do not re-read the latest Revisium profile row and do
+not re-materialize unless an explicit future command creates a new run or route decision.
 
-- profile source (`profileId` or inline), profile version, profile snapshot, and `profileHash`;
-- materializer version and materialized graph hash;
-- resolved runner/model/permission/timeout bindings per role, node, and lane;
-- runner capability snapshot used for validation;
-- playbook version and base pipeline version.
+The pinned route decision records:
 
-Recovery and replay MUST use those pins. They MUST NOT re-materialize from the latest stored profile or latest runner
-capability catalog unless an explicit migration/rebase command creates a new run or new route decision.
-
-### MCP profile ergonomics
-
-MCP must make profile design discoverable. The capability surface should expose:
-
-- profile schema and examples;
-- seeded stored profiles;
-- stored-profile creation and versioning;
-- available runners, model levels, permissions, and capability flags;
-- validation/simulation diagnostics before launch;
-- clear remediation when a caller tries the removed legacy alias or omits a profile.
+- requested and base pipeline ids;
+- profile id, version, hash, and normalized profile snapshot when a profile was used;
+- materialized template hash and materializer version;
+- policy version;
+- resolved role/node launch bindings.
 
 ## Alternatives
 
-- **Keep provider variants as pipeline ids.** Rejected. It duplicates control-flow policy, makes default-policy
-  validation drift-prone, and hides that provider/model selection is a launch concern.
-- **Keep `profileId` for topology and `executionProfile` for bindings as public API.** Rejected for MCP ergonomics.
-  It forces callers to understand an implementation split and makes provenance harder to explain.
-- **Auto-select a default profile.** Rejected. Revo runs change real repositories; provider/model/runtime selection
-  must be explicit and reviewable.
-- **Make join an arbitrary script hook.** Rejected as the base primitive. Deterministic join remains part of the
-  runtime graph. Scripts, agents, and human gates can run after the join using the joined bundle.
-- **Store only profile id and re-read it on replay.** Rejected. It violates replay safety when stored profiles or
-  runner catalogs evolve.
+- **Keep provider variants as pipeline ids.** Rejected. It duplicates workflow policy and makes route behavior drift.
+- **Keep profiles in TypeScript constants.** Rejected. It makes built-ins invisible to control-plane import/versioning and
+  prevents operator discovery through MCP.
+- **Store runtime run state in Revisium.** Rejected. Runtime state is Prisma-owned; Revisium engine is reserved for
+  versioned meaning/config.
+- **Store only `profileId` in the run.** Rejected. Replay would change when a profile row changes.
 
 ## Consequences
 
-- The bundled catalog should expose `feature-development` as the canonical default pipeline and stop advertising
-  provider-specific aliases for new launches.
-- MCP tools and instructions need profile-oriented discovery and validation.
-- Stored profiles need a versioned row shape or an evolution of the existing `model_profiles` row class.
-- The topology materializer needs to grow from hardcoded consensus toggles to a profile-driven stage model.
-- Branch execution and join outputs need a bundle form for synthesis, selector agents, human selection, and candidate
-  adoption.
-- Route decisions and run-created events need to carry enough profile and capability snapshot data for debugging and
-  replay.
+- The default playbook imports `run_profiles` together with playbooks, roles, and pipelines.
+- MCP advertises `list_profiles` and profile-aware route simulation.
+- Existing run/profile logic is centered on storage-backed profile rows.
+- Tests must assert that built-in profiles are catalog data and that route decisions pin profile provenance.
 
 ## Validation
 
-Implementing PRs should add focused tests for:
+Implementation PRs should verify:
 
-- `create_run` rejects missing profile with a profile-required response and creates no run;
-- `create_run` accepts exactly one of `profileId` or inline `profile`;
-- `feature-development-codex-consensus` is not listed as a public launch pipeline and returns a migration diagnostic
-  if requested;
-- profile validation rejects unknown runners, models, permission modes, duplicate lane ids, unresolved slots, and
-  unsafe implementation-candidate topology;
-- route simulation returns the same materialized graph/provenance that run creation pins;
-- replay uses the pinned profile snapshot, graph hash, bindings, and capability snapshot after the stored profile is
-  modified;
-- profile-driven review consensus can run plan review and code review with independent lane bindings;
-- proposal consensus can route a branch-output bundle to a synthesis agent;
-- implementation-candidate consensus uses isolated worktrees and an explicit adoption/selection step;
-- MCP `get_capabilities` advertises profile requirements and does not expose removed legacy observation/profile
-  shortcuts.
-
-## Open Questions
-
-- Whether the persistent table should be renamed from `model_profiles` to `run_profiles`, or whether a typed
-  `kind: "run-profile/v1"` payload inside `model_profiles` is sufficient for migration.
-- Whether seeded profile ids should be installed by default or exposed as example templates until the runner catalog
-  is complete.
-- How much of runner capability discovery should come from local runner manifests versus live provider probes.
-- Whether implementation-candidate selection should ship first with human adoption only, then add agent/script
-  selectors after branch-output bundles are stable.
+- default playbook import writes four `run_profiles` rows;
+- invalid run profile JSON Schema payloads and invalid pipeline template shapes fail during import before Revisium write;
+- `list_profiles` returns storage-backed profiles by selected playbook/pipeline;
+- `simulate_route` and `create_run` with `profileId` materialize the graph and stamp route provenance;
+- replay/resume uses the pinned Prisma route decision without re-resolving the latest profile row;
+- no provider-specific feature-development pipeline id or TypeScript profile registry remains.

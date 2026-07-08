@@ -162,7 +162,7 @@ test('runs query handlers delegate and shape run data', async () => {
           routeGates: [],
           activeNodeIds: [],
           status: 'running',
-          provenance: { materializedTemplateHash: 'abc123', profileId: 'codex-consensus', profileHash: 'def456' },
+          provenance: { materializedTemplateHash: 'abc123', profileId: 'review-consensus', profileHash: 'def456' },
         },
       };
     },

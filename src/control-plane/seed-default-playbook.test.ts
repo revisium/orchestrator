@@ -7,8 +7,7 @@
  *
  * Assertions:
  *   1. The default playbook installs via the REAL PlaybookInstaller (fake access) as `revisium-default`
- *      with the expected roles + pipelines (feature-development, feature-development-codex-consensus,
- *      and local-change).
+ *      with the expected roles, pipelines, and launch profiles.
  *   2. Every pipeline carries a data-driven `template_json` that passes `pipeline-core.validateTemplate`
  *      (zero errors) — the authoritative validator.
  *   3. Every `roleRef`/`scriptRef` a template references is covered by the pipeline's required_roles
@@ -35,7 +34,7 @@ import {
   type DefaultPlaybookInstaller,
 } from './seed-default-playbook.js';
 import type { PlaybookInstallResult } from '../playbook/playbook-installer.js';
-import { CODEX_CONSENSUS_PROFILE, CONSENSUS_TOGGLE_ALLOWLIST } from './topology-profiles.js';
+import { topologyProfileFromRunProfile } from './run-profiles.js';
 
 // ---------------------------------------------------------------------------
 // In-memory versioned-meaning access — records upserts/commits, never touches a daemon.
@@ -49,6 +48,9 @@ function fakeAccess() {
       const op: VersionedMeaningOperation = { action: 'create', table: row.table, rowId: row.rowId };
       return op;
     },
+    async retireMissingRows() {
+      return [];
+    },
     async commit() {
       committed = true;
       return { id: 'rev-default' };
@@ -60,7 +62,7 @@ function fakeAccess() {
 // ---------------------------------------------------------------------------
 // 1. The default playbook installs cleanly with the expected shape.
 // ---------------------------------------------------------------------------
-test('default playbook: installs as revisium-default with feature-development + codex-consensus + local-change', async () => {
+test('default playbook: installs as revisium-default with feature-development/local-change and seeded run profiles', async () => {
   const fake = fakeAccess();
   const installer = new PlaybookInstaller({ access: fake.access });
   const result = await installer.install({
@@ -72,7 +74,8 @@ test('default playbook: installs as revisium-default with feature-development + 
   assert.equal(result.playbookId, DEFAULT_PLAYBOOK_ID);
   assert.equal(result.committed, true);
   assert.equal(result.roles, 13, `expected exactly 13 default roles (got ${result.roles})`);
-  assert.equal(result.pipelines, 3, 'feature-development + feature-development-codex-consensus + local-change');
+  assert.equal(result.pipelines, 2, 'feature-development + local-change');
+  assert.equal(result.runProfiles, 4, 'four built-in feature-development run profiles');
 
   const pipelineRowIds = fake.rows.filter((r) => r.table === 'pipelines').map((r) => r.rowId);
   assert.ok(
@@ -83,10 +86,14 @@ test('default playbook: installs as revisium-default with feature-development + 
     pipelineRowIds.includes('revisium-default-local-change'),
     'local-change pipeline row is written (scoped by playbook id)',
   );
-  assert.ok(
-    pipelineRowIds.includes('revisium-default-feature-development-codex-consensus'),
-    'Codex consensus feature-development pipeline row is written (scoped by playbook id)',
-  );
+
+  const profileRowIds = fake.rows.filter((r) => r.table === 'run_profiles').map((r) => r.rowId);
+  assert.deepEqual(profileRowIds.sort(), [
+    'revisium-default-claude-primary-codex-review-consensus',
+    'revisium-default-claude-standard',
+    'revisium-default-codex-primary-claude-review-consensus',
+    'revisium-default-codex-standard',
+  ]);
 });
 
 // ---------------------------------------------------------------------------
@@ -97,13 +104,23 @@ type PipelineCatalogEntry = {
   required_roles: string[];
   triggers?: string[];
   route_gates?: string[];
-  execution_policy: { template_json?: unknown; alias?: { basePipelineId: string; profileId: string } };
+  execution_policy: { template_json?: unknown };
+};
+type RunProfileCatalogEntry = {
+  id: string;
+  pipelineId: string;
+  topology: unknown;
+  bindings: unknown;
+  status: string;
 };
 
 const catalogDir = join(DEFAULT_PLAYBOOK_SOURCE, 'catalog');
 const pipelines = JSON.parse(
   readFileSync(join(catalogDir, 'pipelines.json'), 'utf8'),
 ) as PipelineCatalogEntry[];
+const runProfiles = JSON.parse(
+  readFileSync(join(catalogDir, 'run-profiles.json'), 'utf8'),
+) as RunProfileCatalogEntry[];
 const roleCatalog = JSON.parse(readFileSync(join(catalogDir, 'roles.json'), 'utf8')) as Array<{ id: string }>;
 const declaredRoleIds = new Set(roleCatalog.map((r) => r.id));
 const bootstrapSeed = JSON.parse(
@@ -139,43 +156,34 @@ function capabilityRoleIds(template: { nodes: Record<string, Record<string, unkn
   return [...ids];
 }
 
-test('default playbook: Codex consensus alias entry shape — id/triggers/required_roles/route_gates present, template_json absent', () => {
-  const pipeline = pipelines.find((item) => item.id === 'feature-development-codex-consensus');
-  assert.ok(pipeline, 'feature-development-codex-consensus is declared');
-  assert.deepEqual(pipeline.required_roles, [
-    'orchestrator-codex',
-    'analyst-codex',
-    'reviewer-codex',
-    'triager-codex',
-    'developer-codex',
-    'integrator',
-    'watcher-codex',
+test('default playbook: consensus launch shapes are catalog data, not pipeline rows', () => {
+  assert.equal(
+    pipelines.some((pipeline) => pipeline.id.includes('consensus')),
+    false,
+    'consensus launch shapes are not public pipeline rows',
+  );
+  assert.deepEqual(runProfiles.map((profile) => profile.id).sort(), [
+    'claude-primary-codex-review-consensus',
+    'claude-standard',
+    'codex-primary-claude-review-consensus',
+    'codex-standard',
   ]);
-  assert.ok(Array.isArray(pipeline.triggers) && pipeline.triggers.length > 0, 'alias entry retains triggers');
-  assert.ok(Array.isArray(pipeline.route_gates) && pipeline.route_gates.length > 0, 'alias entry retains route_gates');
-  assert.equal(pipeline.execution_policy.template_json, undefined, 'alias entry must NOT carry template_json');
-  assert.deepEqual(
-    pipeline.execution_policy.alias,
-    { basePipelineId: 'feature-development', profileId: 'codex-consensus' },
-    'alias entry must declare basePipelineId and profileId',
-  );
-
-  const roles = new Map(
-    (roleCatalog as Array<{ id: string; runner_id?: string; default_model_level?: string }>).map((role) => [role.id, role]),
-  );
-  for (const roleId of ['orchestrator-codex', 'analyst-codex', 'reviewer-codex', 'triager-codex', 'developer-codex', 'watcher-codex']) {
-    const role = roles.get(roleId);
-    assert.equal(role?.runner_id, 'codex', `${roleId} runs on Codex`);
-    assert.match(role?.default_model_level ?? '', /^codex-/, `${roleId} uses a Codex-compatible model profile`);
+  for (const profile of runProfiles) {
+    assert.equal(profile.pipelineId, 'feature-development', `${profile.id} is scoped to feature-development`);
+    assert.equal(profile.status, 'active', `${profile.id} is active`);
   }
 });
 
-test('default playbook: materialized codex-consensus fans out plan + code review with canonical role refs', () => {
+test('default playbook: materialized consensus profile fans out plan + code review with canonical role refs', () => {
   const base = pipelines.find((p) => p.id === 'feature-development')?.execution_policy?.template_json;
   assert.ok(base, 'feature-development carries execution_policy.template_json');
-  const allowlist = CONSENSUS_TOGGLE_ALLOWLIST['feature-development'];
-  assert.ok(allowlist, 'feature-development has a toggle allowlist');
-  const { template: materialized, diagnostics } = materializeTemplate(base as never, CODEX_CONSENSUS_PROFILE, { allowlist });
+  const profile = runProfiles.find((item) => item.id === 'codex-primary-claude-review-consensus');
+  assert.ok(profile, 'codex-primary-claude-review-consensus profile exists');
+  const { template: materialized, diagnostics } = materializeTemplate(
+    base as never,
+    topologyProfileFromRunProfile(profile as never),
+    { allowlist: ['planReviewer', 'codeReview'] },
+  );
   assert.deepEqual(diagnostics, [], 'materializeTemplate must emit no diagnostics');
 
   const nodes = materialized.nodes as Record<string, Record<string, unknown>>;
@@ -256,13 +264,7 @@ test('default playbook: stuck code-review gates surface the latest code-change a
 });
 
 for (const pipeline of pipelines) {
-  const isAlias = pipeline.execution_policy.alias !== undefined;
-
   test(`default playbook: ${pipeline.id} template validates via validateTemplate (zero errors)`, () => {
-    if (isAlias) {
-      assert.equal(pipeline.execution_policy.template_json, undefined, `${pipeline.id} is an alias and must NOT carry template_json`);
-      return;
-    }
     const template = pipeline.execution_policy.template_json as
       | { specVersion: string; nodes: Record<string, Record<string, unknown>> }
       | undefined;
@@ -272,7 +274,6 @@ for (const pipeline of pipelines) {
   });
 
   test(`default playbook: ${pipeline.id} capability handles are covered by required_roles + roles catalog`, () => {
-    if (isAlias) return;
     const template = pipeline.execution_policy.template_json as {
       nodes: Record<string, Record<string, unknown>>;
     };
@@ -327,7 +328,8 @@ const STUB_RESULT: PlaybookInstallResult = {
   version: '0.1.0',
   source: 'local:default',
   roles: 13,
-  pipelines: 3,
+  pipelines: 2,
+  runProfiles: 4,
   operations: [],
   committed: true,
   dryRun: false,
@@ -353,61 +355,30 @@ const BUNDLED_DEFAULT_VERSION = JSON.parse(
   readFileSync(join(DEFAULT_PLAYBOOK_SOURCE, 'package.json'), 'utf8'),
 ).version as string;
 
-test('seedDefaultPlaybook: skips when the installed version equals the bundled version', async () => {
+test('seedDefaultPlaybook: re-seeds when an installed row has no catalogHash', async () => {
   let installs = 0;
   const installer: DefaultPlaybookInstaller = {
     async listPlaybooks() { return [{ id: DEFAULT_PLAYBOOK_ID, version: BUNDLED_DEFAULT_VERSION }]; },
     async install() { installs += 1; return STUB_RESULT; },
   };
   const outcome = await seedDefaultPlaybook(installer, DEFAULT_PLAYBOOK_SOURCE);
-  assert.equal(outcome.status, 'already-installed');
-  assert.equal(installs, 0, 'must not re-install when versions match');
-});
-
-test('seedDefaultPlaybook: skips when the installed version is NEWER than the bundle (never downgrade)', async () => {
-  let installs = 0;
-  const installer: DefaultPlaybookInstaller = {
-    async listPlaybooks() { return [{ id: DEFAULT_PLAYBOOK_ID, version: '99.0.0' }]; },
-    async install() { installs += 1; return STUB_RESULT; },
-  };
-  const outcome = await seedDefaultPlaybook(installer, DEFAULT_PLAYBOOK_SOURCE);
-  assert.equal(outcome.status, 'already-installed');
-  assert.equal(installs, 0, 'must not downgrade to an older bundle');
-});
-
-test('seedDefaultPlaybook: re-seeds when the bundle is NEWER than the installed version', async () => {
-  // 0.0.1 is below any plausible bundled release version, so the bundle always wins the semver compare.
-  let installs = 0;
-  const installer: DefaultPlaybookInstaller = {
-    async listPlaybooks() { return [{ id: DEFAULT_PLAYBOOK_ID, version: '0.0.1' }]; },
-    async install() { installs += 1; return STUB_RESULT; },
-  };
-  const outcome = await seedDefaultPlaybook(installer, DEFAULT_PLAYBOOK_SOURCE);
-  assert.equal(outcome.status, 'installed', 'a newer bundle overwrites the installed playbook');
-  assert.equal(installs, 1);
-});
-
-test('seedDefaultPlaybook: re-seeds once when the installed row has NO recorded version', async () => {
-  // Backward-compat: a pre-versioning install reads as "older" so the one-time upgrade lands.
-  let installs = 0;
-  const installer: DefaultPlaybookInstaller = {
-    async listPlaybooks() { return [{ id: DEFAULT_PLAYBOOK_ID }]; },
-    async install() { installs += 1; return STUB_RESULT; },
-  };
-  const outcome = await seedDefaultPlaybook(installer, DEFAULT_PLAYBOOK_SOURCE);
-  assert.equal(outcome.status, 'installed', 'a versionless installed row is treated as older → re-seed');
-  assert.equal(installs, 1);
+  assert.equal(outcome.status, 'installed');
+  assert.equal(installs, 1, 'missing hash is not considered up to date');
 });
 
 test('seedDefaultPlaybook: logs the up-to-date decision when skipping', async () => {
   const messages: string[] = [];
+  let installs = 0;
+  const catalogHash = bundledCatalogHash(DEFAULT_PLAYBOOK_SOURCE);
   const installer: DefaultPlaybookInstaller = {
-    async listPlaybooks() { return [{ id: DEFAULT_PLAYBOOK_ID, version: BUNDLED_DEFAULT_VERSION }]; },
-    async install() { return STUB_RESULT; },
+    async listPlaybooks() { return [{ id: DEFAULT_PLAYBOOK_ID, version: BUNDLED_DEFAULT_VERSION, catalogHash }]; },
+    async install() { installs += 1; return STUB_RESULT; },
   };
-  await seedDefaultPlaybook(installer, DEFAULT_PLAYBOOK_SOURCE, (m) => messages.push(m));
+  const outcome = await seedDefaultPlaybook(installer, DEFAULT_PLAYBOOK_SOURCE, (m) => messages.push(m));
+  assert.equal(outcome.status, 'already-installed');
+  assert.equal(installs, 0);
   assert.ok(
-    messages.some((m) => /up to date/i.test(m)),
+    messages.some((m) => /unchanged|skipping seed/i.test(m)),
     'the skip decision is logged for the operator',
   );
 });
@@ -420,8 +391,8 @@ test('seedDefaultPlaybook: logs the re-seed decision when the bundle is newer', 
   };
   await seedDefaultPlaybook(installer, DEFAULT_PLAYBOOK_SOURCE, (m) => messages.push(m));
   assert.ok(
-    messages.some((m) => /re-seed/i.test(m)),
-    'the re-seed decision is logged for the operator',
+    messages.some((m) => /no catalog hash/i.test(m)),
+    'the no-hash re-seed decision is logged for the operator',
   );
 });
 
@@ -498,15 +469,13 @@ test('seedDefaultPlaybook: skips when catalogHash matches (older version but ide
   assert.equal(installs, 0, 'must not call install when content is identical');
 });
 
-test('seedDefaultPlaybook: falls back to version compare when catalogHash is absent (legacy row)', async () => {
-  // A row without catalogHash exercises the version-compare path, not the hash path.
+test('seedDefaultPlaybook: re-seeds when catalogHash is absent', async () => {
   let installs = 0;
   const installer: DefaultPlaybookInstaller = {
-    // version '0.0.1' is older than any bundle version → version fallback triggers re-seed
     async listPlaybooks() { return [{ id: DEFAULT_PLAYBOOK_ID, version: '0.0.1' }]; },
     async install() { installs += 1; return STUB_RESULT; },
   };
   const outcome = await seedDefaultPlaybook(installer, DEFAULT_PLAYBOOK_SOURCE);
-  assert.equal(outcome.status, 'installed', 'legacy row with old version should re-seed via version compare');
+  assert.equal(outcome.status, 'installed', 'missing hash should re-seed');
   assert.equal(installs, 1);
 });

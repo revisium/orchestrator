@@ -25,6 +25,43 @@ function makeRoot(): { root: string; manifest: PlaybookManifest } {
   return { root, manifest };
 }
 
+function writeValidRoleCatalog(root: string): void {
+  writeFileSync(
+    join(root, 'catalog', 'roles.json'),
+    JSON.stringify([
+      {
+        id: 'developer',
+        path: 'roles/developer/ROLE.md',
+        surface: 'any',
+        rights: 'write-working-tree',
+        allowed_tools: ['Read', 'Edit', 'Write', 'Bash'],
+        default_model_level: 'standard',
+        runner_id: 'claude-code',
+        wrappers: {},
+      },
+    ]),
+  );
+}
+
+function writeValidPipelineCatalog(root: string, executionPolicy: unknown = {}): void {
+  writeFileSync(
+    join(root, 'catalog', 'pipelines.json'),
+    JSON.stringify([
+      {
+        id: 'feature-development',
+        path: 'pipelines/feature-development/PIPELINE.md',
+        triggers: ['new feature'],
+        required_roles: ['developer'],
+        alternative_roles: [],
+        optional_roles: [],
+        route_gates: ['merge approval'],
+        platform_invocation: 'canonical-only',
+        execution_policy: executionPolicy,
+      },
+    ]),
+  );
+}
+
 test('loadPlaybookCatalogs: validates role and pipeline records', () => {
   const { root, manifest } = makeRoot();
   writeFileSync(
@@ -195,5 +232,54 @@ test('loadPlaybookCatalogs: normalizes runner_id before production-runner valida
   assert.throws(
     () => loadPlaybookCatalogs(root, manifest),
     /runner_id must not be stub-agent/,
+  );
+});
+
+test('loadPlaybookCatalogs: rejects invalid pipeline template_json before import', () => {
+  const { root, manifest } = makeRoot();
+  writeValidRoleCatalog(root);
+  writeValidPipelineCatalog(root, {
+    template_json: {
+      specVersion: '1.0',
+      pipelineId: 'feature-development',
+      entry: 'developer',
+      verdicts: { domain: ['approved'] },
+    },
+  });
+
+  assert.throws(
+    () => loadPlaybookCatalogs(root, manifest),
+    /pipelines\[0\]\.execution_policy violates pipeline execution_policy schema: .*\/template_json\/nodes/,
+  );
+});
+
+test('loadPlaybookCatalogs: rejects invalid run profile JSON before import', () => {
+  const { root, manifest } = makeRoot();
+  const manifestWithProfiles: PlaybookManifest = {
+    ...manifest,
+    catalogs: { ...manifest.catalogs, runProfiles: 'catalog/run-profiles.json' },
+  };
+  writeValidRoleCatalog(root);
+  writeValidPipelineCatalog(root);
+  writeFileSync(
+    join(root, 'catalog', 'run-profiles.json'),
+    JSON.stringify([
+      {
+        id: 'codex-consensus',
+        pipelineId: 'feature-development',
+        schemaVersion: 'run-profile/v1',
+        version: '1',
+        displayName: 'Codex consensus',
+        summary: 'Invalid consensus profile missing branch count.',
+        topology: { stages: { codeReview: { mode: 'consensus' } } },
+        bindings: { slots: { developer: { runnerId: 'codex', modelLevel: 'codex-standard' } } },
+        status: 'active',
+      },
+    ]),
+  );
+
+  assert.throws(
+    () => loadPlaybookCatalogs(root, manifestWithProfiles),
+    /runProfiles\[0\] violates run-profile\/v1 schema: .*\/topology\/stages\/codeReview\/branches/,
   );
 });

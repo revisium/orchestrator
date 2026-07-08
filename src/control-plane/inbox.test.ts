@@ -14,7 +14,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join, dirname } from 'node:path';
-import type { ControlPlaneDataAccess, ControlPlaneRow, PatchOperation } from './data-access.js';
+import type { ControlPlaneDataAccess, ControlPlaneRow, ListRowsOptions, PatchOperation } from './data-access.js';
 import type { RuntimeTable } from './tables.js';
 import { pushInbox, listInbox, getInbox, resolveInbox, redactSecrets, type NewInboxItem } from './inbox.js';
 import { ControlPlaneError } from './errors.js';
@@ -35,12 +35,14 @@ function makeFakeDa(
   const createCalls: Array<{ table: RuntimeTable; rowId: string; data: StoredRow }> = [];
   const patchCalls: Array<{ table: RuntimeTable; rowId: string; ops: PatchOperation[] }> = [];
   const getCalls: Array<{ table: RuntimeTable; rowId: string }> = [];
+  const listCalls: Array<{ table: RuntimeTable; options?: ListRowsOptions }> = [];
 
   const da: ControlPlaneDataAccess = {
     async assertReady() {
       if (opts.assertReadyError) throw opts.assertReadyError;
     },
-    async listRows(table) {
+    async listRows(table, options) {
+      listCalls.push({ table, options });
       const rows: ControlPlaneRow[] = [];
       for (const [key, val] of store) {
         if (key.startsWith(`${String(table)}:`)) {
@@ -78,7 +80,7 @@ function makeFakeDa(
     },
   };
 
-  return { da, createCalls, patchCalls, getCalls, store };
+  return { da, createCalls, patchCalls, getCalls, listCalls, store };
 }
 
 const FIXED_NOW = new Date('2026-06-07T10:00:00.000Z');
@@ -165,6 +167,24 @@ test('listInbox returns mapped items', async () => {
   assert.equal(items.length, 1);
   assert.equal(items[0]?.id, 'inbox-1');
   assert.equal(items[0]?.status, 'pending');
+});
+
+test('listInbox passes run/status filters into data access before pagination', async () => {
+  const { da, listCalls } = makeFakeDa();
+  await listInbox(da, { runId: 'run-1', status: 'pending', limit: 20 });
+
+  assert.deepEqual(listCalls, [{
+    table: 'inbox',
+    options: {
+      first: 20,
+      where: {
+        AND: [
+          { data: { path: 'run_id', equals: 'run-1' } },
+          { data: { path: 'status', equals: 'pending' } },
+        ],
+      },
+    },
+  }]);
 });
 
 test('getInbox returns item when found and null when missing', async () => {

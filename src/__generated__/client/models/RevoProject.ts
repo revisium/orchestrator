@@ -207,6 +207,7 @@ export type RevoProjectWhereInput = {
   slug?: Prisma.StringFilter<"RevoProject"> | string
   status?: Prisma.EnumRevoProjectStatusFilter<"RevoProject"> | $Enums.RevoProjectStatus
   revisiumBranches?: Prisma.BranchListRelationFilter
+  taskRuns?: Prisma.TaskRunListRelationFilter
 }
 
 export type RevoProjectOrderByWithRelationInput = {
@@ -219,6 +220,7 @@ export type RevoProjectOrderByWithRelationInput = {
   slug?: Prisma.SortOrder
   status?: Prisma.SortOrder
   revisiumBranches?: Prisma.BranchOrderByRelationAggregateInput
+  taskRuns?: Prisma.TaskRunOrderByRelationAggregateInput
   _relevance?: Prisma.RevoProjectOrderByRelevanceInput
 }
 
@@ -235,6 +237,7 @@ export type RevoProjectWhereUniqueInput = Prisma.AtLeast<{
   name?: Prisma.StringFilter<"RevoProject"> | string
   status?: Prisma.EnumRevoProjectStatusFilter<"RevoProject"> | $Enums.RevoProjectStatus
   revisiumBranches?: Prisma.BranchListRelationFilter
+  taskRuns?: Prisma.TaskRunListRelationFilter
 }, "id" | "slug">
 
 export type RevoProjectOrderByWithAggregationInput = {
@@ -275,6 +278,7 @@ export type RevoProjectCreateInput = {
   slug: string
   status?: $Enums.RevoProjectStatus
   revisiumBranches?: Prisma.BranchCreateNestedManyWithoutRevoProjectInput
+  taskRuns?: Prisma.TaskRunCreateNestedManyWithoutProjectInput
 }
 
 export type RevoProjectUncheckedCreateInput = {
@@ -287,6 +291,7 @@ export type RevoProjectUncheckedCreateInput = {
   slug: string
   status?: $Enums.RevoProjectStatus
   revisiumBranches?: Prisma.BranchUncheckedCreateNestedManyWithoutRevoProjectInput
+  taskRuns?: Prisma.TaskRunUncheckedCreateNestedManyWithoutProjectInput
 }
 
 export type RevoProjectUpdateInput = {
@@ -299,6 +304,7 @@ export type RevoProjectUpdateInput = {
   slug?: Prisma.StringFieldUpdateOperationsInput | string
   status?: Prisma.EnumRevoProjectStatusFieldUpdateOperationsInput | $Enums.RevoProjectStatus
   revisiumBranches?: Prisma.BranchUpdateManyWithoutRevoProjectNestedInput
+  taskRuns?: Prisma.TaskRunUpdateManyWithoutProjectNestedInput
 }
 
 export type RevoProjectUncheckedUpdateInput = {
@@ -311,6 +317,7 @@ export type RevoProjectUncheckedUpdateInput = {
   slug?: Prisma.StringFieldUpdateOperationsInput | string
   status?: Prisma.EnumRevoProjectStatusFieldUpdateOperationsInput | $Enums.RevoProjectStatus
   revisiumBranches?: Prisma.BranchUncheckedUpdateManyWithoutRevoProjectNestedInput
+  taskRuns?: Prisma.TaskRunUncheckedUpdateManyWithoutProjectNestedInput
 }
 
 export type RevoProjectCreateManyInput = {
@@ -385,6 +392,11 @@ export type RevoProjectMinOrderByAggregateInput = {
   status?: Prisma.SortOrder
 }
 
+export type RevoProjectNullableScalarRelationFilter = {
+  is?: Prisma.RevoProjectWhereInput | null
+  isNot?: Prisma.RevoProjectWhereInput | null
+}
+
 export type RevoProjectScalarRelationFilter = {
   is?: Prisma.RevoProjectWhereInput
   isNot?: Prisma.RevoProjectWhereInput
@@ -410,6 +422,22 @@ export type EnumRevoProjectStatusFieldUpdateOperationsInput = {
   set?: $Enums.RevoProjectStatus
 }
 
+export type RevoProjectCreateNestedOneWithoutTaskRunsInput = {
+  create?: Prisma.XOR<Prisma.RevoProjectCreateWithoutTaskRunsInput, Prisma.RevoProjectUncheckedCreateWithoutTaskRunsInput>
+  connectOrCreate?: Prisma.RevoProjectCreateOrConnectWithoutTaskRunsInput
+  connect?: Prisma.RevoProjectWhereUniqueInput
+}
+
+export type RevoProjectUpdateOneWithoutTaskRunsNestedInput = {
+  create?: Prisma.XOR<Prisma.RevoProjectCreateWithoutTaskRunsInput, Prisma.RevoProjectUncheckedCreateWithoutTaskRunsInput>
+  connectOrCreate?: Prisma.RevoProjectCreateOrConnectWithoutTaskRunsInput
+  upsert?: Prisma.RevoProjectUpsertWithoutTaskRunsInput
+  disconnect?: Prisma.RevoProjectWhereInput | boolean
+  delete?: Prisma.RevoProjectWhereInput | boolean
+  connect?: Prisma.RevoProjectWhereUniqueInput
+  update?: Prisma.XOR<Prisma.XOR<Prisma.RevoProjectUpdateToOneWithWhereWithoutTaskRunsInput, Prisma.RevoProjectUpdateWithoutTaskRunsInput>, Prisma.RevoProjectUncheckedUpdateWithoutTaskRunsInput>
+}
+
 export type RevoProjectCreateNestedOneWithoutRevisiumBranchesInput = {
   create?: Prisma.XOR<Prisma.RevoProjectCreateWithoutRevisiumBranchesInput, Prisma.RevoProjectUncheckedCreateWithoutRevisiumBranchesInput>
   connectOrCreate?: Prisma.RevoProjectCreateOrConnectWithoutRevisiumBranchesInput
@@ -424,6 +452,70 @@ export type RevoProjectUpdateOneRequiredWithoutRevisiumBranchesNestedInput = {
   update?: Prisma.XOR<Prisma.XOR<Prisma.RevoProjectUpdateToOneWithWhereWithoutRevisiumBranchesInput, Prisma.RevoProjectUpdateWithoutRevisiumBranchesInput>, Prisma.RevoProjectUncheckedUpdateWithoutRevisiumBranchesInput>
 }
 
+export type RevoProjectCreateWithoutTaskRunsInput = {
+  id?: string
+  createdAt?: Date | string
+  updatedAt?: Date | string
+  deletedAt?: Date | string | null
+  kind?: $Enums.RevoProjectKind
+  name: string
+  slug: string
+  status?: $Enums.RevoProjectStatus
+  revisiumBranches?: Prisma.BranchCreateNestedManyWithoutRevoProjectInput
+}
+
+export type RevoProjectUncheckedCreateWithoutTaskRunsInput = {
+  id?: string
+  createdAt?: Date | string
+  updatedAt?: Date | string
+  deletedAt?: Date | string | null
+  kind?: $Enums.RevoProjectKind
+  name: string
+  slug: string
+  status?: $Enums.RevoProjectStatus
+  revisiumBranches?: Prisma.BranchUncheckedCreateNestedManyWithoutRevoProjectInput
+}
+
+export type RevoProjectCreateOrConnectWithoutTaskRunsInput = {
+  where: Prisma.RevoProjectWhereUniqueInput
+  create: Prisma.XOR<Prisma.RevoProjectCreateWithoutTaskRunsInput, Prisma.RevoProjectUncheckedCreateWithoutTaskRunsInput>
+}
+
+export type RevoProjectUpsertWithoutTaskRunsInput = {
+  update: Prisma.XOR<Prisma.RevoProjectUpdateWithoutTaskRunsInput, Prisma.RevoProjectUncheckedUpdateWithoutTaskRunsInput>
+  create: Prisma.XOR<Prisma.RevoProjectCreateWithoutTaskRunsInput, Prisma.RevoProjectUncheckedCreateWithoutTaskRunsInput>
+  where?: Prisma.RevoProjectWhereInput
+}
+
+export type RevoProjectUpdateToOneWithWhereWithoutTaskRunsInput = {
+  where?: Prisma.RevoProjectWhereInput
+  data: Prisma.XOR<Prisma.RevoProjectUpdateWithoutTaskRunsInput, Prisma.RevoProjectUncheckedUpdateWithoutTaskRunsInput>
+}
+
+export type RevoProjectUpdateWithoutTaskRunsInput = {
+  id?: Prisma.StringFieldUpdateOperationsInput | string
+  createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  deletedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  kind?: Prisma.EnumRevoProjectKindFieldUpdateOperationsInput | $Enums.RevoProjectKind
+  name?: Prisma.StringFieldUpdateOperationsInput | string
+  slug?: Prisma.StringFieldUpdateOperationsInput | string
+  status?: Prisma.EnumRevoProjectStatusFieldUpdateOperationsInput | $Enums.RevoProjectStatus
+  revisiumBranches?: Prisma.BranchUpdateManyWithoutRevoProjectNestedInput
+}
+
+export type RevoProjectUncheckedUpdateWithoutTaskRunsInput = {
+  id?: Prisma.StringFieldUpdateOperationsInput | string
+  createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  updatedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  deletedAt?: Prisma.NullableDateTimeFieldUpdateOperationsInput | Date | string | null
+  kind?: Prisma.EnumRevoProjectKindFieldUpdateOperationsInput | $Enums.RevoProjectKind
+  name?: Prisma.StringFieldUpdateOperationsInput | string
+  slug?: Prisma.StringFieldUpdateOperationsInput | string
+  status?: Prisma.EnumRevoProjectStatusFieldUpdateOperationsInput | $Enums.RevoProjectStatus
+  revisiumBranches?: Prisma.BranchUncheckedUpdateManyWithoutRevoProjectNestedInput
+}
+
 export type RevoProjectCreateWithoutRevisiumBranchesInput = {
   id?: string
   createdAt?: Date | string
@@ -433,6 +525,7 @@ export type RevoProjectCreateWithoutRevisiumBranchesInput = {
   name: string
   slug: string
   status?: $Enums.RevoProjectStatus
+  taskRuns?: Prisma.TaskRunCreateNestedManyWithoutProjectInput
 }
 
 export type RevoProjectUncheckedCreateWithoutRevisiumBranchesInput = {
@@ -444,6 +537,7 @@ export type RevoProjectUncheckedCreateWithoutRevisiumBranchesInput = {
   name: string
   slug: string
   status?: $Enums.RevoProjectStatus
+  taskRuns?: Prisma.TaskRunUncheckedCreateNestedManyWithoutProjectInput
 }
 
 export type RevoProjectCreateOrConnectWithoutRevisiumBranchesInput = {
@@ -471,6 +565,7 @@ export type RevoProjectUpdateWithoutRevisiumBranchesInput = {
   name?: Prisma.StringFieldUpdateOperationsInput | string
   slug?: Prisma.StringFieldUpdateOperationsInput | string
   status?: Prisma.EnumRevoProjectStatusFieldUpdateOperationsInput | $Enums.RevoProjectStatus
+  taskRuns?: Prisma.TaskRunUpdateManyWithoutProjectNestedInput
 }
 
 export type RevoProjectUncheckedUpdateWithoutRevisiumBranchesInput = {
@@ -482,6 +577,7 @@ export type RevoProjectUncheckedUpdateWithoutRevisiumBranchesInput = {
   name?: Prisma.StringFieldUpdateOperationsInput | string
   slug?: Prisma.StringFieldUpdateOperationsInput | string
   status?: Prisma.EnumRevoProjectStatusFieldUpdateOperationsInput | $Enums.RevoProjectStatus
+  taskRuns?: Prisma.TaskRunUncheckedUpdateManyWithoutProjectNestedInput
 }
 
 
@@ -491,10 +587,12 @@ export type RevoProjectUncheckedUpdateWithoutRevisiumBranchesInput = {
 
 export type RevoProjectCountOutputType = {
   revisiumBranches: number
+  taskRuns: number
 }
 
 export type RevoProjectCountOutputTypeSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   revisiumBranches?: boolean | RevoProjectCountOutputTypeCountRevisiumBranchesArgs
+  taskRuns?: boolean | RevoProjectCountOutputTypeCountTaskRunsArgs
 }
 
 /**
@@ -514,6 +612,13 @@ export type RevoProjectCountOutputTypeCountRevisiumBranchesArgs<ExtArgs extends 
   where?: Prisma.BranchWhereInput
 }
 
+/**
+ * RevoProjectCountOutputType without action
+ */
+export type RevoProjectCountOutputTypeCountTaskRunsArgs<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
+  where?: Prisma.TaskRunWhereInput
+}
+
 
 export type RevoProjectSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetSelect<{
   id?: boolean
@@ -525,6 +630,7 @@ export type RevoProjectSelect<ExtArgs extends runtime.Types.Extensions.InternalA
   slug?: boolean
   status?: boolean
   revisiumBranches?: boolean | Prisma.RevoProject$revisiumBranchesArgs<ExtArgs>
+  taskRuns?: boolean | Prisma.RevoProject$taskRunsArgs<ExtArgs>
   _count?: boolean | Prisma.RevoProjectCountOutputTypeDefaultArgs<ExtArgs>
 }, ExtArgs["result"]["revoProject"]>
 
@@ -564,6 +670,7 @@ export type RevoProjectSelectScalar = {
 export type RevoProjectOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "createdAt" | "updatedAt" | "deletedAt" | "kind" | "name" | "slug" | "status", ExtArgs["result"]["revoProject"]>
 export type RevoProjectInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   revisiumBranches?: boolean | Prisma.RevoProject$revisiumBranchesArgs<ExtArgs>
+  taskRuns?: boolean | Prisma.RevoProject$taskRunsArgs<ExtArgs>
   _count?: boolean | Prisma.RevoProjectCountOutputTypeDefaultArgs<ExtArgs>
 }
 export type RevoProjectIncludeCreateManyAndReturn<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {}
@@ -573,6 +680,7 @@ export type $RevoProjectPayload<ExtArgs extends runtime.Types.Extensions.Interna
   name: "RevoProject"
   objects: {
     revisiumBranches: Prisma.$BranchPayload<ExtArgs>[]
+    taskRuns: Prisma.$TaskRunPayload<ExtArgs>[]
   }
   scalars: runtime.Types.Extensions.GetPayloadResult<{
     id: string
@@ -978,6 +1086,7 @@ readonly fields: RevoProjectFieldRefs;
 export interface Prisma__RevoProjectClient<T, Null = never, ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs, GlobalOmitOptions = {}> extends Prisma.PrismaPromise<T> {
   readonly [Symbol.toStringTag]: "PrismaPromise"
   revisiumBranches<T extends Prisma.RevoProject$revisiumBranchesArgs<ExtArgs> = {}>(args?: Prisma.Subset<T, Prisma.RevoProject$revisiumBranchesArgs<ExtArgs>>): Prisma.PrismaPromise<runtime.Types.Result.GetResult<Prisma.$BranchPayload<ExtArgs>, T, "findMany", GlobalOmitOptions> | Null>
+  taskRuns<T extends Prisma.RevoProject$taskRunsArgs<ExtArgs> = {}>(args?: Prisma.Subset<T, Prisma.RevoProject$taskRunsArgs<ExtArgs>>): Prisma.PrismaPromise<runtime.Types.Result.GetResult<Prisma.$TaskRunPayload<ExtArgs>, T, "findMany", GlobalOmitOptions> | Null>
   /**
    * Attaches callbacks for the resolution and/or rejection of the Promise.
    * @param onfulfilled The callback to execute when the Promise is resolved.
@@ -1429,6 +1538,30 @@ export type RevoProject$revisiumBranchesArgs<ExtArgs extends runtime.Types.Exten
   take?: number
   skip?: number
   distinct?: Prisma.BranchScalarFieldEnum | Prisma.BranchScalarFieldEnum[]
+}
+
+/**
+ * RevoProject.taskRuns
+ */
+export type RevoProject$taskRunsArgs<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
+  /**
+   * Select specific fields to fetch from the TaskRun
+   */
+  select?: Prisma.TaskRunSelect<ExtArgs> | null
+  /**
+   * Omit specific fields from the TaskRun
+   */
+  omit?: Prisma.TaskRunOmit<ExtArgs> | null
+  /**
+   * Choose, which related nodes to fetch as well
+   */
+  include?: Prisma.TaskRunInclude<ExtArgs> | null
+  where?: Prisma.TaskRunWhereInput
+  orderBy?: Prisma.TaskRunOrderByWithRelationInput | Prisma.TaskRunOrderByWithRelationInput[]
+  cursor?: Prisma.TaskRunWhereUniqueInput
+  take?: number
+  skip?: number
+  distinct?: Prisma.TaskRunScalarFieldEnum | Prisma.TaskRunScalarFieldEnum[]
 }
 
 /**

@@ -2,32 +2,18 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { CodexService } from './codex.service.js';
 import { RunService } from '../revisium/run.service.js';
-import type { ControlPlaneTransport, TransportRow } from '../control-plane/data-access.js';
+import { createInMemoryRuntimeDataAccess } from '../testing/runtime-data-access.js';
 import type { ExecResult, ProcessExecutor } from '../worker/process-executor.js';
 
-function makeFakeRow(id: string, data: Record<string, unknown>): TransportRow {
-  return { id, data, createdAt: '2026-06-08T00:00:00.000Z', updatedAt: '2026-06-08T00:00:00.000Z' };
-}
-
-function makeDraftTransport(repoRef = '/tmp'): ControlPlaneTransport {
-  return {
-    mode: 'draft' as const,
-    async assertReady() {},
-    async listRows(table): Promise<{ edges: Array<{ node: TransportRow }> }> {
-      if (table === 'task_runs') return { edges: [{ node: makeFakeRow('run-1', { repos: [repoRef] }) }] };
-      if (table === 'tasks') return { edges: [{ node: makeFakeRow('task-1', { run_id: 'run-1', repo_ref: repoRef }) }] };
-      return { edges: [] };
+function makeRunService(repoRef = '/tmp'): RunService {
+  return new RunService(createInMemoryRuntimeDataAccess({
+    task_runs: {
+      'run-1': { id: 'run-1', title: 'Run', status: 'ready', repos: [repoRef] },
     },
-    async getRow(table, rowId): Promise<TransportRow> {
-      if (table === 'tasks') return makeFakeRow(rowId, { repo_ref: repoRef });
-      return makeFakeRow(rowId, {});
+    tasks: {
+      'task-1': { id: 'task-1', run_id: 'run-1', title: 'Task', status: 'ready', repo_ref: repoRef },
     },
-    async createRow(_table, rowId, data): Promise<TransportRow> {
-      return makeFakeRow(rowId, data as Record<string, unknown>);
-    },
-    async updateRow(_table, rowId): Promise<TransportRow> { return makeFakeRow(rowId, {}); },
-    async patchRow(_table, rowId): Promise<TransportRow> { return makeFakeRow(rowId, {}); },
-  };
+  }).access);
 }
 
 function codexOutput(output: Record<string, unknown>): string {
@@ -56,7 +42,7 @@ test('CodexService uses injected fake ProcessExecutor and resolves cwd from RunS
     return { code: 0, stdout: codexOutput({ echo: 'test output' }), stderr: '', timedOut: false };
   };
 
-  const svc = new CodexService(fakeExecutor, new RunService(makeDraftTransport('/tmp')));
+  const svc = new CodexService(fakeExecutor, makeRunService('/tmp'));
 
   const result = await svc.run({
     role: {
@@ -107,7 +93,7 @@ test('CodexService uses injected fake ProcessExecutor and resolves cwd from RunS
 
 test('CodexService.run is an arrow property and safe to pass unbound', () => {
   const fakeExecutor: ProcessExecutor = async () => ({ code: 0, stdout: '', stderr: '', timedOut: false });
-  const svc = new CodexService(fakeExecutor, new RunService(makeDraftTransport()));
+  const svc = new CodexService(fakeExecutor, makeRunService());
   const { run } = svc;
   assert.equal(typeof run, 'function');
 });
