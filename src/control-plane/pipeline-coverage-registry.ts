@@ -76,6 +76,7 @@ type PipelineDslCoverageScenarioWithId<Id extends string> = PipelineDslCoverageS
 
 const DEFAULT_PLAYBOOK_POLICY_TEST = 'src/control-plane/default-playbook-policy.test.ts';
 const RECOVERY_GRAPH_E2E_TEST = 'src/e2e/recovery-graph.e2e.test.ts';
+const RUNNER_RETRY_GATE_E2E_TEST = 'src/e2e/runner-retry-gate.e2e.test.ts';
 const SEED_DEFAULT_PLAYBOOK_E2E_TEST = 'src/e2e/seed-default-playbook.e2e.test.ts';
 const TARGET_CONTRACT_E2E_TEST = 'src/e2e/target-contract-red-suite.e2e.test.ts';
 
@@ -96,6 +97,13 @@ function recoveryGraphScenario<const Id extends string>(
   tags: readonly PipelineCoverageTag[],
 ): PipelineDslCoverageScenarioWithId<Id> {
   return dslScenario(id, RECOVERY_GRAPH_E2E_TEST, tags);
+}
+
+function runnerRetryGateScenario<const Id extends string>(
+  id: Id,
+  tags: readonly PipelineCoverageTag[],
+): PipelineDslCoverageScenarioWithId<Id> {
+  return dslScenario(id, RUNNER_RETRY_GATE_E2E_TEST, tags);
 }
 
 function targetContractScenario<const Id extends string>(
@@ -301,6 +309,10 @@ export const PIPELINE_DSL_COVERAGE_SCENARIOS = [
       nodeOutcome('overrideMergeRouter', 'clean'),
     ],
   ),
+  runnerRetryGateScenario(
+    'RG234-D-agent-question-resume',
+    [],
+  ),
   seedDefaultPlaybookScenario(
     'M1-profile-single',
     [
@@ -418,13 +430,7 @@ export const PIPELINE_COVERAGE_OWNERSHIP: readonly PipelineCoverageOwnership[] =
   ]),
 ] as const;
 
-export const PIPELINE_COVERAGE_WAIVERS: readonly PipelineCoverageWaiver[] = [
-  {
-    id: 'waive-agent-question-resume-234',
-    ownerSurface: 'src/e2e/agent-failures.e2e.test.ts',
-    reason: '#234 agent-question resume is intentionally deferred; the hard-skipped executable spec remains tracked and must not be counted as zero-gap coverage.',
-  },
-] as const;
+export const PIPELINE_COVERAGE_WAIVERS: readonly PipelineCoverageWaiver[] = [] as const;
 
 export const PIPELINE_COVERAGE_REGISTRY: PipelineCoverageRegistry = {
   scenarios: PIPELINE_DSL_COVERAGE_SCENARIOS,

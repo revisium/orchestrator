@@ -239,11 +239,18 @@ Merge gate:
   outcomes. `address_review_threads` and `return_to_development` both route to `triage`; `override_merge` routes to
   `confirmMerge`; `cancel` routes to `cancelledEnd`.
 
-Question gate:
+Agent question:
 
-- Used when an agent or triage step needs external judgment.
+- Used when an agent role result returns `needsHuman: true` with a lesson.
+- Persists an inbox row with `kind: 'question'` and `context.topic: 'question'`.
 - Resolved with `answer_question` / `answerQuestion`.
-- The answer is fed back into the pipeline through run dataflow and the parked workflow's recorded result.
+- The answer is fed back as `retryContext` into the reopened agent node.
+
+Review question gate:
+
+- Used when PR-feedback triage returns `question`.
+- It is the data-driven `questionGate`: an approval/named-outcome gate with outcomes `fix`, `wontfix`, and
+  `cancel`, resolved with `resolve_gate` / `resolveGate`, not `answer_question`.
 
 ## PR Review-Feedback Loop
 
@@ -263,6 +270,7 @@ mergeReadiness review_changes -> analyst triage
 pollPr ci_changes -> developer rework -> integrator
 pollPr review_changes -> analyst triage
 triage question -> questionGate
+questionGate is a named-outcome approval gate resolved with resolve_gate/resolveGate:
 questionGate fix -> question-scoped developer rework -> respondThreads -> pollPr
 questionGate wontfix -> respondThreads -> pollPr
 questionGate cancel -> cancelledEnd

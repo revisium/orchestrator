@@ -18,7 +18,15 @@ export function resolveWriteDir(registered: string | undefined, context: string)
 }
 
 /** One recorded agent invocation — lets tests assert who ran with which runner (scoped by runId). */
-export type AgentCall = { role: string; runner: string; attemptId: string; runId: string; context: string; nodeId?: string };
+export type AgentCall = {
+  role: string;
+  runner: string;
+  attemptId: string;
+  runId: string;
+  context: string;
+  stepInput: unknown;
+  nodeId?: string;
+};
 
 /** runId → worktree path where the `developer` role should write a change file. */
 export type DeveloperWrites = Map<string, string>;
@@ -72,6 +80,7 @@ function recordAgentCall(agentCalls: AgentCall[], input: {
     attemptId: input.attemptId,
     runId: input.runId,
     context: input.context,
+    stepInput: input.stepInput,
     ...(nodeId ? { nodeId } : {}),
   });
 }

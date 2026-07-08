@@ -117,31 +117,3 @@ test('C4: markdown output without top-level verdict terminal-fails as invalid re
     target.cleanup();
   }
 });
-
-// GAP (always skipped — executable spec for a not-yet-built feature):
-// Architecture invariant #5 says the inbox handles "approve / answer" and an answer signals the
-// parked DBOS workflow to resume. Today only the plan/merge GATES are wired for park+resume; a role
-// step's needsHuman merely marks the step `awaiting_approval` and the workflow continues (it does not
-// pause for an answer). Un-skip once role-needsHuman is wired to pushInbox(question) + DBOS.recv/send.
-// Tracked in 05-HYPOTHESES as H-AgentQuestionResume.
-test('B (gap): an agent question parks the run; answering it resumes to completion', {
-  skip: '#234: pending agent-question resume not implemented (only plan/merge gates park+resume)',
-}, async () => {
-  const target = createTargetRepo();
-  try {
-    const { runId } = await startFeatureWithSpec(target, {
-      byRole: { analyst: { kind: 'needsHuman', lesson: 'which auth provider should the feature use?' } },
-    });
-    // The run should park as a question the human can read…
-    const parked = await waitState(h.api, runId);
-    assert.equal(parked.state, 'question');
-    const [question] = await h.api.getPendingDecisions(runId);
-    assert.ok(question, 'a needs-human question must surface in the inbox');
-    // …and answering it should resume the workflow with that answer, to completion.
-    await h.api.answerQuestion({ inboxId: question.id, answer: { provider: 'oauth' } });
-    const resumed = await approveUntilTerminal(h.api, runId);
-    assert.equal(resumed.state, 'completed');
-  } finally {
-    target.cleanup();
-  }
-});

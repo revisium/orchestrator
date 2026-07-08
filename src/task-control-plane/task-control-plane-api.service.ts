@@ -168,6 +168,14 @@ function gateSignalTopic(item: InboxItem, topic: GateTopic): string {
   return typeof signalTopic === 'string' && signalTopic.length > 0 ? signalTopic : topic;
 }
 
+function questionSignalTopic(item: InboxItem): string | null {
+  if (item.kind !== 'question' || !item.runId) return null;
+  const context = asRecord(item.context);
+  if (context?.topic !== 'question') return null;
+  const signalTopic = context.signalTopic;
+  return typeof signalTopic === 'string' && signalTopic.length > 0 ? signalTopic : null;
+}
+
 function gateDeclaredOutcomes(item: InboxItem): string[] {
   const context = asRecord(item.context);
   const summary = asRecord(context?.summary);
@@ -1398,12 +1406,29 @@ export class TaskControlPlaneApiService {
         `inbox item is a gate; use resolve_gate, approve_gate, or reject_gate: ${input.inboxId}`,
       );
     }
-    return this.resolveInboxItem({
+    const resolvedBy = input.resolvedBy ?? 'mcp';
+    const answerRecord = asRecord(input.answer);
+    if (typeof answerRecord?.outcome === 'string' && answerRecord.outcome.trim() === 'adopt_patch_manually') {
+      validateManualAdoptionAudit(answerRecord.adoptionAudit, item);
+    }
+    const result = await this.inbox.resolveInbox(input.inboxId, input.answer, resolvedBy);
+    const signalTopic = questionSignalTopic(item);
+    const shouldSignal = signalTopic !== null;
+    if (signalTopic) {
+      await this.dbos.signal(item.runId, signalTopic, {
+        answer: result.answer,
+        resolvedBy,
+        inboxId: input.inboxId,
+      }, input.inboxId);
+    }
+    return {
       inboxId: input.inboxId,
-      answer: input.answer,
-      resolvedBy: input.resolvedBy ?? 'mcp',
-      signalGate: false,
-    });
+      previousStatus: result.status,
+      answer: result.answer,
+      signaled: shouldSignal,
+      topic: shouldSignal ? 'question' : null,
+      runId: item.runId,
+    };
   }
 
   async resolveInboxItem(input: {

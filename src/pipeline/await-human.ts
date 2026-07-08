@@ -17,7 +17,7 @@
 
 
 import { fnv1a64Hex } from '../control-plane/steps.js';
-import type { NewInboxItem } from '../control-plane/inbox.js';
+import type { InboxKind, NewInboxItem } from '../control-plane/inbox.js';
 import type { AppendEventInput } from '../run/append-event.js';
 
 
@@ -31,7 +31,8 @@ type DecisionMeta = {
 
 export type Decision =
   | ({ decision: 'approve' | 'reject'; outcome?: string } & DecisionMeta)
-  | ({ outcome: string; decision?: 'approve' | 'reject' } & DecisionMeta);
+  | ({ outcome: string; decision?: 'approve' | 'reject' } & DecisionMeta)
+  | ({ answer: unknown; decision?: 'approve' | 'reject'; outcome?: string } & DecisionMeta);
 
 export type GateTopic = 'plan' | 'merge' | 'question' | 'retry';
 
@@ -55,9 +56,9 @@ function cleanOptions(input: readonly string[] | undefined): string[] {
 }
 
 function gateSignalTopic(runId: string, topic: GateTopic, gateKey: string): string {
-  if (topic !== 'retry') return topic;
+  if (topic !== 'retry' && topic !== 'question') return topic;
   const signalKey = `${runId}|${gateKey}`;
-  return `retry:${fnv1a64Hex(signalKey)}`;
+  return `${topic}:${fnv1a64Hex(signalKey)}`;
 }
 
 
@@ -73,6 +74,7 @@ export function makeAwaitHuman(deps: AwaitHumanDeps) {
     title: string,
     summary: unknown,
     options?: string[],
+    kind: Extract<InboxKind, 'approval' | 'question'> = 'approval',
   ): Promise<Decision> {
     const inboxKey = `${runId}|${gateKey}`;
     const inboxId = `inbox_${fnv1a64Hex(inboxKey)}`;
@@ -81,11 +83,15 @@ export function makeAwaitHuman(deps: AwaitHumanDeps) {
       ? cleanOptions(summary.outcomes.filter((item): item is string => typeof item === 'string'))
       : [];
     const explicitOptions = cleanOptions(options);
-    const gateOptions = explicitOptions.length > 0 ? explicitOptions : outcomes.length > 0 ? outcomes : ['approve', 'reject'];
+    const gateOptions = explicitOptions.length > 0
+      ? explicitOptions
+      : outcomes.length > 0
+        ? outcomes
+        : kind === 'question' ? [] : ['approve', 'reject'];
 
     await pushInbox(
       {
-        kind: 'approval',
+        kind,
         runId,
         title,
         context: { topic, ...(signalTopic !== topic ? { signalTopic } : {}), summary },
@@ -98,8 +104,8 @@ export function makeAwaitHuman(deps: AwaitHumanDeps) {
       runId,
       taskId: '',
       stepId: '',
-      stepKey: `gate:${gateKey}`,
-      type: 'gate_opened',
+      stepKey: kind === 'question' ? `question:${gateKey}` : `gate:${gateKey}`,
+      type: kind === 'question' ? 'agent_question_opened' : 'gate_opened',
       payload: { topic, ...(signalTopic !== topic ? { signalTopic } : {}) },
     });
 

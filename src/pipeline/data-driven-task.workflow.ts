@@ -150,6 +150,25 @@ type InvokeRoleBlockedResult = {
   attemptsMade: number;
 };
 
+type AgentQuestionRetryContext = {
+  kind: 'agent_question';
+  nodeId: string;
+  answer: unknown;
+  lesson: string;
+  inboxId: string;
+  resolvedBy: string;
+};
+
+type RetryRoleResult = {
+  action: 'retry';
+};
+
+type InvokeRoleQuestionResult = {
+  question: true;
+  retryContext: AgentQuestionRetryContext;
+  attemptsMade: number;
+};
+
 type InvokeRoleSucceededResult = {
   failed: false;
   verdict?: string;
@@ -158,7 +177,11 @@ type InvokeRoleSucceededResult = {
   attemptsMade: number;
 };
 
-type InvokeRoleResult = InvokeRoleFailedResult | InvokeRoleBlockedResult | InvokeRoleSucceededResult;
+type InvokeRoleResult =
+  | InvokeRoleFailedResult
+  | InvokeRoleBlockedResult
+  | InvokeRoleQuestionResult
+  | InvokeRoleSucceededResult;
 
 type VerificationEnvironmentRecovery = {
   classification: 'verification_environment';
@@ -227,11 +250,13 @@ function stepInputForAttempt(
   nodeId: string,
   inputs: Record<string, unknown>,
   attempt: PhysicalRunStepAttempt,
+  retryContext?: AgentQuestionRetryContext,
 ): Record<string, unknown> {
   return {
     nodeId,
     attempt: { attemptNo: attempt.attemptNo, attemptId: attempt.attemptId },
     ...(Object.keys(inputs).length > 0 ? { inputs } : {}),
+    ...(retryContext ? { retryContext } : {}),
   };
 }
 
@@ -548,6 +573,7 @@ export type DataDrivenTaskDeps = {
     title: string,
     summary: unknown,
     options?: string[],
+    kind?: 'approval' | 'question',
   ) => Promise<GateDecision>;
   completeRun: (
     runId: string,
@@ -1238,6 +1264,7 @@ export function makeDataDrivenTask(
     let stepCount = 0;
     const effectOrdinalByNode = new Map<string, number>();
     const outputsByNode = new Map<string, RunOutputRow[]>();
+    const agentQuestionRetryContextByNode = new Map<string, AgentQuestionRetryContext>();
 
     for (let i = 0; i < MAX_STEPS; i++) {
       const { state: nextState, decision } = coreStep(template, state, lastResult);
@@ -1250,7 +1277,7 @@ export function makeDataDrivenTask(
 
       const eff = await applyDecision(decision, {
         runId, template, state, bindingByRef, executionProfile, taskId, title, base, issueRef, issueAction,
-        effectOrdinalByNode, outputsByNode, runnerRetryPolicy,
+        effectOrdinalByNode, outputsByNode, runnerRetryPolicy, agentQuestionRetryContextByNode,
         live,
         lastVerdict,
         lastProducedOutput,
@@ -1320,6 +1347,7 @@ export function makeDataDrivenTask(
     effectOrdinalByNode: Map<string, number>;
     outputsByNode: Map<string, RunOutputRow[]>;
     runnerRetryPolicy: RunnerTransientRetryPolicy;
+    agentQuestionRetryContextByNode: Map<string, AgentQuestionRetryContext>;
     lastVerdict: string;
     lastProducedOutput?: RunOutputRow;
     approvedMergeGateHeadSha?: string;
@@ -1338,8 +1366,9 @@ export function makeDataDrivenTask(
     inputs: Record<string, unknown>;
     stepKey: string;
     binding: RouteRoleBinding;
+    retryContext?: AgentQuestionRetryContext;
   };
-  type NeedsHumanRoleResult = 'retry' | InvokeRoleBlockedResult | undefined;
+  type NeedsHumanRoleResult = RetryRoleResult | InvokeRoleBlockedResult | InvokeRoleQuestionResult | undefined;
 
   function branchTemplateForJoin(template: Template, joinId: string): Template {
     const join = resolveNode(template, joinId);
@@ -1467,8 +1496,17 @@ export function makeDataDrivenTask(
           return { lastResult: { outcome: 'failed', errorCode: REVO_INPUT_MISSING }, lastVerdict: 'failed', failureReason: reason, stepDelta: 1 };
         }
         const result = await invokeRole(runId, decision, node, ctx, resolved.inputs, stepKey);
+        if ('question' in result) {
+          ctx.agentQuestionRetryContextByNode.set(node.id, result.retryContext);
+          return {
+            lastResult: undefined,
+            stateOverride: reopenNodeState(ctx.state, node.id),
+            stepDelta: result.attemptsMade,
+          };
+        }
         if ('blocked' in result) {
           if (result.recovery) {
+            ctx.agentQuestionRetryContextByNode.delete(node.id);
             const recovery = await awaitVerificationRecoveryGate(runId, ctx, result.recovery);
             return {
               lastResult: undefined,
@@ -1495,6 +1533,7 @@ export function makeDataDrivenTask(
               };
             }
           }
+          ctx.agentQuestionRetryContextByNode.delete(node.id);
           return {
             lastResult: undefined,
             terminal: {
@@ -1507,6 +1546,7 @@ export function makeDataDrivenTask(
           };
         }
         if (result.failed) {
+          ctx.agentQuestionRetryContextByNode.delete(node.id);
           await appendEvent({
             runId, taskId, stepId: '', stepKey, type: 'step_failed',
             idempotencyKey: result.attemptId,
@@ -1514,6 +1554,7 @@ export function makeDataDrivenTask(
           });
           return { lastResult: { outcome: 'failed', errorCode: result.errorCode }, lastVerdict: 'failed', failureReason: result.reason, stepDelta: result.attemptsMade };
         }
+        ctx.agentQuestionRetryContextByNode.delete(node.id);
         const producedOutput = await recordOutput(runId, node, ordinal, result.attemptId, result.output, ctx.outputsByNode);
         const verdict = result.verdict;
         return {
@@ -1658,7 +1699,16 @@ export function makeDataDrivenTask(
     stepKey: string,
   ): Promise<InvokeRoleResult> {
     const binding = resolveRoleBinding(ctx, decision);
-    return invokeRoleAttempts({ runId, decision, node, ctx, inputs, stepKey, binding });
+    return invokeRoleAttempts({
+      runId,
+      decision,
+      node,
+      ctx,
+      inputs,
+      stepKey,
+      binding,
+      retryContext: ctx.agentQuestionRetryContextByNode.get(node.id),
+    });
   }
 
   function resolveRoleBinding(
@@ -1675,6 +1725,7 @@ export function makeDataDrivenTask(
   async function invokeRoleAttempts(input: InvokeRoleAttemptInput): Promise<InvokeRoleResult> {
     const { runId, decision, node, ctx, inputs, stepKey, binding } = input;
     const attemptIds: string[] = [];
+    const retryContext = input.retryContext;
 
     for (let attemptNo = 1; attemptNo <= ctx.runnerRetryPolicy.maxAttempts; attemptNo++) {
       const physicalAttempt = physicalAttemptFor(runId, stepKey, attemptNo);
@@ -1684,7 +1735,7 @@ export function makeDataDrivenTask(
         runId,
         binding.rowId,
         stepKey,
-        stepInputForAttempt(decision.nodeId, inputs, physicalAttempt),
+        stepInputForAttempt(decision.nodeId, inputs, physicalAttempt, retryContext),
         binding.resolvedRunnerId,
         ctx.executionProfile,
         physicalAttempt,
@@ -1698,8 +1749,12 @@ export function makeDataDrivenTask(
         physicalAttempt,
         result,
       });
-      if (needsHuman === 'retry') continue;
-      if (needsHuman) return needsHuman;
+      if (needsHuman) {
+        if ('action' in needsHuman) {
+          continue;
+        }
+        return needsHuman;
+      }
 
       const failed = roleValidationFailure(ctx.template, node, result, physicalAttempt);
       if (failed) return failed;
@@ -1771,17 +1826,62 @@ export function makeDataDrivenTask(
       }
       const transient = transientRunnerFailure(result);
       if (transient === undefined) {
-        return {
-          blocked: true,
-          reason: 'agent-needs-human',
-          lesson: safeLesson,
-          attemptsMade: physicalAttempt.attemptNo,
-        };
+        const retryContext = await awaitAgentQuestion({ ...input, safeLesson, physicalAttempt });
+        return { question: true, retryContext, attemptsMade: physicalAttempt.attemptNo };
       }
       return handleTransientRoleResult({ ...input, transient });
     }
 
     return undefined;
+  }
+
+  async function awaitAgentQuestion(
+    input: InvokeRoleAttemptInput & {
+      physicalAttempt: PhysicalRunStepAttempt;
+      safeLesson: string;
+    },
+  ): Promise<AgentQuestionRetryContext> {
+    const { runId, node, ctx, stepKey, binding, physicalAttempt, safeLesson } = input;
+    const question = await awaitHuman(
+      runId,
+      'question',
+      `agentQuestion:${stepKey}:attempt${physicalAttempt.attemptNo}`,
+      `${node.id} question`,
+      {
+        kind: 'agent_question',
+        runId,
+        taskId: ctx.taskId,
+        nodeId: node.id,
+        step: stepKey,
+        role: binding.rowId,
+        runner: binding.resolvedRunnerId,
+        lesson: safeLesson,
+        attemptId: physicalAttempt.attemptId,
+      },
+      undefined,
+      'question',
+    );
+    await appendEvent({
+      runId,
+      taskId: ctx.taskId,
+      stepId: '',
+      stepKey,
+      type: 'agent_question_resolved',
+      idempotencyKey: `${physicalAttempt.attemptId}:question`,
+      payload: {
+        nodeId: node.id,
+        inboxId: question.inboxId ?? '',
+        resolvedBy: question.resolvedBy ?? '',
+      },
+    });
+    return {
+      kind: 'agent_question',
+      nodeId: node.id,
+      answer: question.answer,
+      lesson: safeLesson,
+      inboxId: question.inboxId ?? '',
+      resolvedBy: question.resolvedBy ?? '',
+    };
   }
 
   async function handleTransientRoleResult(
@@ -1790,7 +1890,7 @@ export function makeDataDrivenTask(
       physicalAttempt: PhysicalRunStepAttempt;
       transient: TransientRunnerFailure;
     },
-  ): Promise<'retry' | InvokeRoleBlockedResult> {
+  ): Promise<RetryRoleResult | InvokeRoleBlockedResult> {
     const { runId, node, ctx, stepKey, attemptIds, physicalAttempt, transient } = input;
     const policy = ctx.runnerRetryPolicy;
     if (shouldRetryTransient(transient, physicalAttempt, policy)) {
@@ -1806,7 +1906,7 @@ export function makeDataDrivenTask(
         transient,
       });
       if (policy.backoffMs > 0) await deps.sleep(policy.backoffMs);
-      return 'retry';
+      return { action: 'retry' };
     }
 
     const retry = runnerRetryBlockPayload({

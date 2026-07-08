@@ -160,6 +160,8 @@ type Recorder = {
   worktreeIssueRefs: Array<IssueRef | undefined>;
   /** Hydrated `inputs` the adapter passed to each step, keyed by stepKey (0016 consumes). */
   inputsByStep: Record<string, unknown>;
+  stepInputsByStep: Record<string, unknown>;
+  stepInputs: Array<{ stepKey: string; attemptNo?: number; input: unknown }>;
   runStepAttempts: Array<{ stepKey: string; attemptNo?: number; attemptId?: string }>;
   acceptedVerdictsByStep: Record<string, readonly string[] | undefined>;
   retrySleeps: number[];
@@ -217,6 +219,8 @@ function buildAdapter(opts: {
     capturedChanges: [],
     worktreeIssueRefs: [],
     inputsByStep: {},
+    stepInputsByStep: {},
+    stepInputs: [],
     runStepAttempts: [],
     acceptedVerdictsByStep: {},
     retrySleeps: [],
@@ -246,6 +250,8 @@ function buildAdapter(opts: {
       attemptNo: physicalAttempt?.attemptNo,
       attemptId: physicalAttempt?.attemptId,
     });
+    rec.stepInputsByStep[stepKey] = input;
+    rec.stepInputs.push({ stepKey, attemptNo: physicalAttempt?.attemptNo, input });
     // Capture hydrated consumes (0016) so a test can assert an upstream output reached this step.
     if (input !== null && typeof input === 'object' && 'inputs' in (input as Record<string, unknown>)) {
       rec.inputsByStep[stepKey] = (input as Record<string, unknown>).inputs;
@@ -1817,26 +1823,168 @@ test('DD4e: questionGate(fix) sends the human note to question rework without le
   assert.equal(rec.respondCalls, 2);
 });
 
-test('DD5: a DELIBERATE agent needsHuman → blocked terminal + pipeline_blocked lesson, NOT a ResultInvalid abort', async () => {
-  // A self-reported needsHuman (the result-envelope contract) is a recoverable human-block, not a wiring
-  // fault. It must surface as `blocked` with the agent's lesson — never abort the run (regression guard:
-  // the old engine turned this into revo.ResultInvalid → onFailure:'abort' → a silently failed run).
+test('DD5: a DELIBERATE agent needsHuman opens a question and retries with the answer', async () => {
+  const answer = { provider: 'oauth' };
   const { run, rec } = buildAdapter({
-    needsHumanNodes: new Set(['developer']), // developer self-reports needsHuman with lesson 'parked'
+    template: singleDeveloperTemplate('agent-question-resume'),
+    results: {
+      developer: [
+        { output: { from: 'developer' }, verdict: 'blocker', nextSteps: [], costs: [], needsHuman: true, lesson: 'parked' },
+        { output: { from: 'developer', ok: true }, verdict: 'approved', nextSteps: [], costs: [], needsHuman: false },
+      ],
+    },
+    gate: (topic) => (topic === 'question'
+      ? { answer, resolvedBy: 'human', inboxId: 'inbox-question' }
+      : { decision: 'approve' }),
   });
   const result = await run();
-  assert.equal(result.status, 'blocked', 'a needsHuman agent BLOCKS the run (does NOT fail/abort)');
-  assert.equal(rec.blocked.length, 1, 'blockRun called for the blocked terminal');
-  assert.equal(rec.failed.length, 0, 'failRun NOT called — needsHuman is a block, not a failure');
-  assert.equal(rec.completed.length, 0);
-  const block = rec.blocked[0];
-  assert.equal(block?.reason, 'agent-needs-human', 'the block reason distinguishes a deliberate agent block');
-  assert.ok(
-    rec.events.includes('pipeline_blocked:pipeline'),
-    'the blocking lesson is surfaced as pipeline_blocked (visible to the human)',
+
+  assert.equal(result.status, 'succeeded');
+  assert.deepEqual(rec.gates, ['question']);
+  assert.equal(rec.blocked.length, 0);
+  assert.equal(rec.failed.length, 0);
+  assert.deepEqual(
+    rec.runStepAttempts.filter((attempt) => baseStepKey(attempt.stepKey) === 'developer').map((attempt) => [attempt.stepKey, attempt.attemptNo]),
+    [['developer', 1], ['developer#2', 1]],
   );
-  // The agent's own lesson rides the pipeline_blocked payload (asserted via the recorded lesson below).
-  assert.ok(rec.blockedLessons.some((l) => l.includes('parked')), 'the agent lesson is carried on the block');
+  const developerInputs = rec.stepInputs.filter((item) => baseStepKey(item.stepKey) === 'developer');
+  assert.deepEqual((developerInputs[0]?.input as { retryContext?: unknown }).retryContext, undefined);
+  assert.deepEqual((developerInputs[1]?.input as { retryContext?: unknown }).retryContext, {
+    kind: 'agent_question',
+    nodeId: 'developer',
+    answer,
+    lesson: 'parked',
+    inboxId: 'inbox-question',
+    resolvedBy: 'human',
+  });
+  assert.ok(rec.events.includes('agent_question_resolved:developer'));
+});
+
+test('DD5: an answered agent question retries even when transient maxAttempts is 1', async () => {
+  const answer = { provider: 'oauth' };
+  const { run, rec } = buildAdapter({
+    template: singleDeveloperTemplate('agent-question-single-attempt'),
+    retryPolicy: { maxAttempts: 1, backoffMs: 0 },
+    results: {
+      developer: [
+        { output: { from: 'developer' }, verdict: 'blocker', nextSteps: [], costs: [], needsHuman: true, lesson: 'which provider?' },
+        { output: { from: 'developer', ok: true }, verdict: 'approved', nextSteps: [], costs: [], needsHuman: false },
+      ],
+    },
+    gate: (topic) => (topic === 'question'
+      ? { answer, resolvedBy: 'human', inboxId: 'inbox-question-1' }
+      : { decision: 'approve' }),
+  });
+  const result = await run();
+
+  assert.equal(result.status, 'succeeded');
+  assert.deepEqual(rec.gates, ['question']);
+  assert.equal(rec.blocked.length, 0);
+  assert.equal(rec.failed.length, 0);
+  assert.deepEqual(
+    rec.runStepAttempts.filter((attempt) => baseStepKey(attempt.stepKey) === 'developer').map((attempt) => [attempt.stepKey, attempt.attemptNo]),
+    [['developer', 1], ['developer#2', 1]],
+  );
+  const developerInputs = rec.stepInputs.filter((item) => baseStepKey(item.stepKey) === 'developer');
+  assert.deepEqual((developerInputs[1]?.input as { retryContext?: unknown }).retryContext, {
+    kind: 'agent_question',
+    nodeId: 'developer',
+    answer,
+    lesson: 'which provider?',
+    inboxId: 'inbox-question-1',
+    resolvedBy: 'human',
+  });
+});
+
+test('DD5: repeated agent questions use fresh inbox keys and sequential retry contexts', async () => {
+  const firstAnswer = { provider: 'oauth' };
+  const secondAnswer = { region: 'eu' };
+  const questionAnswers = [firstAnswer, secondAnswer];
+  const { run, rec } = buildAdapter({
+    template: singleDeveloperTemplate('agent-question-repeated'),
+    retryPolicy: { maxAttempts: 1, backoffMs: 0 },
+    results: {
+      developer: [
+        { output: { from: 'developer' }, verdict: 'blocker', nextSteps: [], costs: [], needsHuman: true, lesson: 'which provider?' },
+        { output: { from: 'developer' }, verdict: 'blocker', nextSteps: [], costs: [], needsHuman: true, lesson: 'which region?' },
+        { output: { from: 'developer', ok: true }, verdict: 'approved', nextSteps: [], costs: [], needsHuman: false },
+      ],
+    },
+    gate: (topic, gateKey) => {
+      if (topic !== 'question') return { decision: 'approve' };
+      const answer = questionAnswers.shift();
+      assert.ok(answer, `unexpected question gate ${gateKey}`);
+      return { answer, resolvedBy: 'human', inboxId: `inbox-${gateKey}` };
+    },
+  });
+  const result = await run();
+
+  assert.equal(result.status, 'succeeded');
+  assert.deepEqual(rec.gates, ['question', 'question']);
+  assert.equal(new Set(rec.gateKeys).size, 2);
+  assert.deepEqual(
+    rec.runStepAttempts.filter((attempt) => baseStepKey(attempt.stepKey) === 'developer').map((attempt) => [attempt.stepKey, attempt.attemptNo]),
+    [['developer', 1], ['developer#2', 1], ['developer#3', 1]],
+  );
+  const developerInputs = rec.stepInputs.filter((item) => baseStepKey(item.stepKey) === 'developer');
+  assert.deepEqual((developerInputs[1]?.input as { retryContext?: unknown }).retryContext, {
+    kind: 'agent_question',
+    nodeId: 'developer',
+    answer: firstAnswer,
+    lesson: 'which provider?',
+    inboxId: `inbox-${rec.gateKeys[0]}`,
+    resolvedBy: 'human',
+  });
+  assert.deepEqual((developerInputs[2]?.input as { retryContext?: unknown }).retryContext, {
+    kind: 'agent_question',
+    nodeId: 'developer',
+    answer: secondAnswer,
+    lesson: 'which region?',
+    inboxId: `inbox-${rec.gateKeys[1]}`,
+    resolvedBy: 'human',
+  });
+});
+
+test('DD5: question retryContext survives a transient retry on the reopened node', async () => {
+  const answer = { provider: 'oauth' };
+  const retryContext = {
+    kind: 'agent_question',
+    nodeId: 'developer',
+    answer,
+    lesson: 'which provider?',
+    inboxId: 'inbox-question-transient',
+    resolvedBy: 'human',
+  };
+  const { run, rec } = buildAdapter({
+    template: singleDeveloperTemplate('agent-question-transient-retry'),
+    retryPolicy: { maxAttempts: 2, backoffMs: 0 },
+    results: {
+      developer: [
+        { output: { from: 'developer' }, verdict: 'blocker', nextSteps: [], costs: [], needsHuman: true, lesson: 'which provider?' },
+        runnerFailedResult('runner process timed out'),
+        { output: { from: 'developer', ok: true }, verdict: 'approved', nextSteps: [], costs: [], needsHuman: false },
+      ],
+    },
+    gate: (topic) => (topic === 'question'
+      ? { answer, resolvedBy: 'human', inboxId: retryContext.inboxId }
+      : { decision: 'approve' }),
+  });
+  const result = await run();
+
+  assert.equal(result.status, 'succeeded');
+  assert.deepEqual(rec.gates, ['question']);
+  assert.deepEqual(
+    rec.runStepAttempts.filter((attempt) => baseStepKey(attempt.stepKey) === 'developer').map((attempt) => [attempt.stepKey, attempt.attemptNo]),
+    [['developer', 1], ['developer#2', 1], ['developer#2', 2]],
+  );
+  const developerInputs = rec.stepInputs.filter((item) => baseStepKey(item.stepKey) === 'developer');
+  assert.deepEqual((developerInputs[0]?.input as { retryContext?: unknown }).retryContext, undefined);
+  assert.deepEqual((developerInputs[1]?.input as { retryContext?: unknown }).retryContext, retryContext);
+  assert.deepEqual((developerInputs[2]?.input as { retryContext?: unknown }).retryContext, retryContext);
+  assert.ok(rec.events.includes('runner_retry_scheduled:developer#2'));
+  assert.equal(rec.events.includes('runner_retry_exhausted:developer#2'), false);
+  assert.equal(rec.blocked.length, 0);
+  assert.equal(rec.failed.length, 0);
 });
 
 test('DD5-transient: a TRANSIENT runner_failed (crash/timeout/429) → blocked with a transient reason, NOT abort', async () => {
@@ -2444,26 +2592,42 @@ test('runner_failed verification environment block opens recovery gate before tr
   assert.equal(summary['reason'], 'verification-environment-blocked');
 });
 
-test('code verification needsHuman does not open environment recovery gate', async () => {
+test('code verification needsHuman opens an agent question, not an environment recovery gate', async () => {
+  const answer = { decision: 'fix the test failure' };
   const { run, rec } = buildAdapter({
     template: singleDeveloperTemplate('verification-recovery-code'),
     results: {
-      developer: {
-        output: { from: 'developer', reason: 'verification failed: expected 1 got 2' },
-        verdict: 'blocker',
-        nextSteps: [],
-        costs: [],
-        needsHuman: true,
-        lesson: 'pnpm test failed: assertion expected 1 got 2',
-      },
+      developer: [
+        {
+          output: { from: 'developer', reason: 'verification failed: expected 1 got 2' },
+          verdict: 'blocker',
+          nextSteps: [],
+          costs: [],
+          needsHuman: true,
+          lesson: 'pnpm test failed: assertion expected 1 got 2',
+        },
+        {
+          output: { from: 'developer', ok: true },
+          verdict: 'approved',
+          nextSteps: [],
+          costs: [],
+          needsHuman: false,
+        },
+      ],
     },
+    gate: (topic) => (topic === 'question'
+      ? { answer, resolvedBy: 'human', inboxId: 'inbox-code-question' }
+      : { decision: 'approve' }),
   });
 
   const result = await run();
 
-  assert.equal(result.status, 'blocked');
-  assert.deepEqual(rec.gates, []);
-  assert.equal(rec.blocked[0]?.reason, 'agent-needs-human');
+  assert.equal(result.status, 'succeeded');
+  assert.deepEqual(rec.gates, ['question']);
+  assert.equal((rec.gateSummaries[0] as Record<string, unknown>)['kind'], 'agent_question');
+  assert.notEqual((rec.gateSummaries[0] as Record<string, unknown>)['topic'], 'verification_recovery');
+  const developerInputs = rec.stepInputs.filter((item) => baseStepKey(item.stepKey) === 'developer');
+  assert.deepEqual((developerInputs[1]?.input as { retryContext?: { answer?: unknown } }).retryContext?.answer, answer);
 });
 
 test('DD9: a live preflight that needsHuman blocks the run BEFORE the graph runs (no steps)', async () => {
