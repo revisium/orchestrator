@@ -1,12 +1,4 @@
 
-
-
-
-
-
-
-
-
 import type { ControlPlaneDataAccess, ListRowsOptions } from '../control-plane/data-access.js';
 import { ControlPlaneError } from '../control-plane/errors.js';
 import { fnv1a64Hex } from '../control-plane/steps.js';
@@ -25,15 +17,19 @@ export type RunOutputRow = {
   producedAt?: string;
 };
 
-
 const PAYLOAD_MAX = 16_000;
 
-
-
-
-
 function whereRun(runId: string): ListRowsOptions['where'] {
-  return { data: { path: 'run_id', equals: runId } } as unknown as ListRowsOptions['where'];
+  return { data: { path: 'run_id', equals: runId } };
+}
+
+function whereRunNode(runId: string, nodeId: string): ListRowsOptions['where'] {
+  return {
+    AND: [
+      { data: { path: 'run_id', equals: runId } },
+      { data: { path: 'node_id', equals: nodeId } },
+    ],
+  };
 }
 
 function rowToOutput(data: Record<string, unknown>): RunOutputRow {
@@ -49,12 +45,25 @@ function rowToOutput(data: Record<string, unknown>): RunOutputRow {
   };
 }
 
-
-
-
-
-
-
+async function listAllOutputRows(
+  da: ControlPlaneDataAccess,
+  options: Omit<ListRowsOptions, 'first' | 'after'>,
+): Promise<Awaited<ReturnType<ControlPlaneDataAccess['listRows']>>> {
+  const rows: Awaited<ReturnType<ControlPlaneDataAccess['listRows']>> = [];
+  let after: string | undefined;
+  for (;;) {
+    const page = await da.listRows('run_outputs', {
+      ...options,
+      first: 1000,
+      after,
+    });
+    rows.push(...page);
+    if (page.length < 1000) break;
+    after = page.at(-1)?.cursor;
+    if (!after) break;
+  }
+  return rows;
+}
 
 export async function appendRunOutput(da: ControlPlaneDataAccess, input: RunOutputRow): Promise<void> {
   const id = `out_${fnv1a64Hex(`${input.runId}|${input.nodeId}|${input.ordinal}`)}`;
@@ -79,39 +88,35 @@ export async function appendRunOutput(da: ControlPlaneDataAccess, input: RunOutp
   }
 }
 
-
 export async function allRunOutputs(
   da: ControlPlaneDataAccess,
   runId: string,
   nodeId: string,
 ): Promise<RunOutputRow[]> {
-  const rows = await da.listRows('run_outputs', {
-    first: 1000,
-    where: whereRun(runId),
+  const rows = await listAllOutputRows(da, {
+    where: whereRunNode(runId, nodeId),
+    orderBy: [{ field: 'ordinal', direction: 'asc' }],
   });
-  return rows
-    .map((r) => rowToOutput(r.data))
-    .filter((o) => o.nodeId === nodeId)
-    .sort((a, b) => a.ordinal - b.ordinal);
+  return rows.map((r) => rowToOutput(r.data));
 }
-
 
 export async function latestRunOutput(
   da: ControlPlaneDataAccess,
   runId: string,
   nodeId: string,
 ): Promise<RunOutputRow | null> {
-  const rows = await allRunOutputs(da, runId, nodeId);
-  return rows.length ? rows[rows.length - 1] : null;
+  const rows = await da.listRows('run_outputs', {
+    first: 1,
+    where: whereRunNode(runId, nodeId),
+    orderBy: [{ field: 'ordinal', direction: 'desc' }],
+  });
+  return rows[0] ? rowToOutput(rows[0].data) : null;
 }
 
-
 export async function outputsForRun(da: ControlPlaneDataAccess, runId: string): Promise<RunOutputRow[]> {
-  const rows = await da.listRows('run_outputs', {
-    first: 1000,
+  const rows = await listAllOutputRows(da, {
     where: whereRun(runId),
+    orderBy: [{ field: 'producedAt', direction: 'asc' }],
   });
-  return rows
-    .map((r) => rowToOutput(r.data))
-    .sort((a, b) => (a.producedAt ?? '').localeCompare(b.producedAt ?? ''));
+  return rows.map((r) => rowToOutput(r.data));
 }

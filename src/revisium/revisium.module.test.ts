@@ -4,7 +4,7 @@
  * Tests:
  *  - NestFactory.createApplicationContext(RevisiumModule) succeeds (host-free, no DBOS).
  *  - RolesService, RunService, InboxService, PlaybooksService resolve and are defined.
- *  - REVISIUM_TRANSPORT_DRAFT and REVISIUM_TRANSPORT_HEAD tokens resolve with correct mode.
+ *  - REVISIUM_TRANSPORT_HEAD token resolves with correct mode.
  *  - Module construction makes NO network call (context creation succeeds without a live daemon).
  *  - Revo source and package manifests use only approved @revisium packages.
  */
@@ -42,7 +42,7 @@ test('RevisiumModule creates an application context and provides all services wi
   const { RunService } = await import('./run.service.js');
   const { InboxService } = await import('./inbox.service.js');
   const { PlaybooksService } = await import('./playbooks.service.js');
-  const { REVISIUM_TRANSPORT_DRAFT, REVISIUM_TRANSPORT_HEAD } = await import('./tokens.js');
+  const { REVISIUM_TRANSPORT_HEAD } = await import('./tokens.js');
 
   const ctx = await NestFactory.createApplicationContext(RevisiumModule, { logger: false });
 
@@ -58,12 +58,9 @@ test('RevisiumModule creates an application context and provides all services wi
     assert.ok(inboxService instanceof InboxService, 'InboxService must be injectable');
     assert.ok(playbooksService instanceof PlaybooksService, 'PlaybooksService must be injectable');
 
-    // Transport tokens must resolve to objects with a `mode` property.
-    const draftTransport = ctx.get<{ mode: string }>(REVISIUM_TRANSPORT_DRAFT);
+    // The engine transport exposed through DI is read-only committed meaning.
     const headTransport = ctx.get<{ mode: string }>(REVISIUM_TRANSPORT_HEAD);
-    assert.ok(draftTransport !== null && draftTransport !== undefined, 'draft transport token must resolve');
     assert.ok(headTransport !== null && headTransport !== undefined, 'head transport token must resolve');
-    assert.equal(draftTransport.mode, 'draft');
     assert.equal(headTransport.mode, 'head');
   } finally {
     await ctx.close();

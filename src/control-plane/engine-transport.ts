@@ -8,7 +8,7 @@ import { getConfig } from '../config.js';
 import type { RevoPrismaService } from '../storage/revo-prisma.service.js';
 import { ControlPlaneError } from './errors.js';
 import { computeAdditiveSchemaPatches } from './schema-migration.js';
-import { runtimeTables } from './tables.js';
+import { controlPlaneMeaningTables } from './tables.js';
 import {
   makeRecoverableScopeResolver,
   type ControlPlaneTransport,
@@ -315,17 +315,17 @@ export function createEngineTransport(
           lastCursor = edge.cursor ?? lastCursor;
           if (edge.node) ids.add(edge.node.id);
         }
-        if (runtimeTables.every((table) => ids.has(table))) return ids;
+        if (controlPlaneMeaningTables.every((table) => ids.has(table))) return ids;
         if (!tables.pageInfo?.hasNextPage) return ids;
         after = tables.pageInfo.endCursor ?? lastCursor;
         if (!after) return ids;
       }
     }, '/tables');
-    const missing = runtimeTables.filter((table) => !tableIds.has(table));
+    const missing = controlPlaneMeaningTables.filter((table) => !tableIds.has(table));
     if (missing.length > 0) {
       throw new ControlPlaneError(
         'BOOTSTRAP_NOT_APPLIED',
-        'Control-plane bootstrap is missing runtime tables',
+        'Control-plane bootstrap is missing versioned meaning tables',
         {
           details: { missing },
         },
@@ -457,6 +457,16 @@ export function createEngineVersionedMeaningScope(
 ): VersionedMeaningScope {
   const draft = createEngineTransport('draft', engine, prisma);
   return {
+    async listRows(tableId, options) {
+      const rows = await draft.listRows(tableId, {
+        first: options?.first ?? 1000,
+        after: options?.after,
+        where: options?.where,
+      });
+      return (rows.edges ?? []).flatMap((edge) =>
+        edge.node ? [{ id: edge.node.id, data: edge.node.data ?? {}, cursor: edge.cursor }] : [],
+      );
+    },
     getRow: (tableId, rowId) => draft.getRow(tableId, rowId),
     createRow: (tableId, rowId, data) => draft.createRow(tableId, rowId, data),
     updateRow: (tableId, rowId, data) => draft.updateRow(tableId, rowId, data),

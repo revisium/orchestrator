@@ -15,7 +15,7 @@ import { makeDataDrivenTask, resolveRunnerTransientRetryPolicy, type DataDrivenP
 import { templateFromExecutionPolicy } from './data-driven-template.js';
 import { featureDevelopment, featureDevelopmentPrReview, confirmMergeFlow, localChange } from '../pipeline-core/kit/fixtures.js';
 import { materializeTemplate } from '../pipeline-core/materialize.js';
-import { CODEX_CONSENSUS_PROFILE, CONSENSUS_TOGGLE_ALLOWLIST } from '../control-plane/topology-profiles.js';
+import { topologyProfileFromRunProfile } from '../control-plane/run-profiles.js';
 import type { Template } from '../pipeline-core/index.js';
 import type { AttemptResult } from '../worker/runner.js';
 import type { AppendEventInput } from '../run/append-event.js';
@@ -41,10 +41,20 @@ type PipelineCatalogEntry = {
   id: string;
   execution_policy: unknown;
 };
+type RunProfileCatalogEntry = {
+  id: string;
+  pipelineId: string;
+  topology: unknown;
+  bindings: unknown;
+  status: string;
+};
 
 const defaultPlaybookPipelines = JSON.parse(
   readFileSync(new URL('../../control-plane/default-playbook/catalog/pipelines.json', import.meta.url), 'utf8'),
 ) as PipelineCatalogEntry[];
+const defaultPlaybookRunProfiles = JSON.parse(
+  readFileSync(new URL('../../control-plane/default-playbook/catalog/run-profiles.json', import.meta.url), 'utf8'),
+) as RunProfileCatalogEntry[];
 
 function binding(roleId: string, resolvedRunnerId = 'script'): RouteRoleBinding {
   return { roleId, rowId: roleId, modelLevel: 'standard', runnerId: 'claude-code', resolvedRunnerId, runnerSource: 'playbook' };
@@ -75,14 +85,18 @@ function makeRoute(options: { developerRunnerId?: string; integratorRunnerId?: s
   };
 }
 
-function defaultCodexConsensusTemplate(): Template {
+function defaultConsensusProfileTemplate(): Template {
   const pipeline = defaultPlaybookPipelines.find((candidate) => candidate.id === 'feature-development');
   assert.ok(pipeline, 'bundled feature-development pipeline exists');
   const base = templateFromExecutionPolicy(pipeline.execution_policy);
   assert.ok(base, 'bundled feature-development carries a valid template_json');
-  const allowlist = CONSENSUS_TOGGLE_ALLOWLIST['feature-development'];
-  assert.ok(allowlist, 'feature-development must have a toggle allowlist');
-  const { template } = materializeTemplate(base, CODEX_CONSENSUS_PROFILE, { allowlist });
+  const profile = defaultPlaybookRunProfiles.find((candidate) => candidate.id === 'codex-primary-claude-review-consensus');
+  assert.ok(profile, 'bundled consensus run profile exists');
+  const { template } = materializeTemplate(
+    base,
+    topologyProfileFromRunProfile(profile as never),
+    { allowlist: ['planReviewer', 'codeReview'] },
+  );
   return template;
 }
 
@@ -93,7 +107,7 @@ function codexBinding(roleId: string): RouteRoleBinding {
   return { roleId, rowId: roleId, modelLevel: 'codex-standard', runnerId: 'claude-code', resolvedRunnerId: 'codex', runnerSource: 'execution-profile' };
 }
 
-function makeCodexConsensusRoute(): RouteDecision {
+function makeConsensusProfileRoute(): RouteDecision {
   const roles = [
     'orchestrator',
     'analyst',
@@ -105,8 +119,8 @@ function makeCodexConsensusRoute(): RouteDecision {
   ];
   return {
     playbookId: 'revisium-default',
-    pipelineId: 'feature-development-codex-consensus',
-    pipelineRowId: 'revisium-default-feature-development-codex-consensus',
+    pipelineId: 'feature-development',
+    pipelineRowId: 'revisium-default-feature-development',
     source: 'explicit',
     roles,
     requiredRoles: roles,
@@ -630,8 +644,8 @@ test('DD-issue-279: override refused on trusted gate head mismatch never calls c
     headSha: 'new-head',
   };
   const { run, rec } = buildAdapter({
-    template: defaultCodexConsensusTemplate(),
-    route: makeCodexConsensusRoute(),
+    template: defaultConsensusProfileTemplate(),
+    route: makeConsensusProfileRoute(),
     verdicts: {
       planReviewPrimary: 'approved',
       planReviewSecondary: 'approved',
@@ -929,8 +943,8 @@ test('DD-parallel: consensus blocks when both reviewers are non-approved', async
 
 test('DD-default-codex: plan consensus reworks when one reviewer is non-approved, then proceeds after both pass', async () => {
   const { run, rec } = buildAdapter({
-    template: defaultCodexConsensusTemplate(),
-    route: makeCodexConsensusRoute(),
+    template: defaultConsensusProfileTemplate(),
+    route: makeConsensusProfileRoute(),
     verdicts: {
       planReviewPrimary: ['changes_requested', 'approved'],
       planReviewSecondary: ['approved', 'clean'],
@@ -954,8 +968,8 @@ test('DD-default-codex: plan consensus reworks when one reviewer is non-approved
 
 test('DD-default-codex: code consensus reworks when one reviewer is non-approved, then integrates after both pass', async () => {
   const { run, rec } = buildAdapter({
-    template: defaultCodexConsensusTemplate(),
-    route: makeCodexConsensusRoute(),
+    template: defaultConsensusProfileTemplate(),
+    route: makeConsensusProfileRoute(),
     verdicts: {
       planReviewPrimary: 'approved',
       planReviewSecondary: 'approved',
@@ -978,8 +992,8 @@ test('DD-default-codex: code consensus reworks when one reviewer is non-approved
 
 test('DD-default-codex: repeated plan consensus failures hit planStuckGate at the cap', async () => {
   const { run, rec } = buildAdapter({
-    template: defaultCodexConsensusTemplate(),
-    route: makeCodexConsensusRoute(),
+    template: defaultConsensusProfileTemplate(),
+    route: makeConsensusProfileRoute(),
     verdicts: {
       planReviewPrimary: 'changes_requested',
       planReviewSecondary: 'approved',
@@ -1001,8 +1015,8 @@ test('DD-default-codex: repeated plan consensus failures hit planStuckGate at th
 test('DD-default-codex: codeStuckGate rework runs bounded recovery then returns to consensus review', async () => {
   let planTopicGates = 0;
   const { run, rec } = buildAdapter({
-    template: defaultCodexConsensusTemplate(),
-    route: makeCodexConsensusRoute(),
+    template: defaultConsensusProfileTemplate(),
+    route: makeConsensusProfileRoute(),
     verdicts: {
       planReviewPrimary: 'approved',
       planReviewSecondary: 'approved',
@@ -1045,8 +1059,8 @@ test('DD-default-codex: codeStuckGate rework runs bounded recovery then returns 
 test('DD-default-codex: failed stuck rework routes to final stuck gate without another implicit rework', async () => {
   let planTopicGates = 0;
   const { run, rec } = buildAdapter({
-    template: defaultCodexConsensusTemplate(),
-    route: makeCodexConsensusRoute(),
+    template: defaultConsensusProfileTemplate(),
+    route: makeConsensusProfileRoute(),
     verdicts: {
       planReviewPrimary: 'approved',
       planReviewSecondary: 'approved',
@@ -2766,13 +2780,13 @@ test('DD-reverify-d: pollPr UNKNOWN recheck → blocked at reverify → recovery
   assert.equal(rec.confirmMergeCalls, 0, 'confirmMerge must not be called');
 });
 
-test('DD-reverify-a-codex: blocked at mergeApproveReverify → recoveryGate on materialized codex-consensus graph (AC#2 + AC#6)', async () => {
-  // Same as DD-reverify-a but on the real materialized codex-consensus template to verify the
+test('DD-reverify-profile-consensus: blocked at mergeApproveReverify → recoveryGate on materialized consensus graph', async () => {
+  // Same as DD-reverify-a but on the real materialized consensus template to verify the
   // parallel/join edges also route correctly through the recovery path.
   let pollCount = 0;
   const { run, rec } = buildAdapter({
-    template: defaultCodexConsensusTemplate(),
-    route: makeCodexConsensusRoute(),
+    template: defaultConsensusProfileTemplate(),
+    route: makeConsensusProfileRoute(),
     verdicts: { codeReview: 'approved', planReview: 'approved' },
     gate: (_topic, gateKey) => gateKey.startsWith('recoveryGate') ? { outcome: 'cancel' } : { decision: 'approve' },
     pollPr: (): PrFeedback | IntegratorBlocked => {
@@ -2782,7 +2796,7 @@ test('DD-reverify-a-codex: blocked at mergeApproveReverify → recoveryGate on m
     },
   });
   const result = await run();
-  assert.equal(result.status, 'cancelled', 'codex-consensus graph: blocked at reverify → recoveryGate cancel → cancelled');
-  assert.equal(rec.confirmMergeCalls, 0, 'confirmMerge must not be called on codex graph');
-  assert.ok(rec.gates.includes('merge'), 'recoveryGate opens on codex graph');
+  assert.equal(result.status, 'cancelled', 'consensus graph: blocked at reverify -> recoveryGate cancel -> cancelled');
+  assert.equal(rec.confirmMergeCalls, 0, 'confirmMerge must not be called on consensus graph');
+  assert.ok(rec.gates.includes('merge'), 'recoveryGate opens on consensus graph');
 });

@@ -31,10 +31,176 @@ model RevoProject {
   status    RevoProjectStatus @default(ACTIVE)
 
   revisiumBranches Branch[]
+  taskRuns         TaskRun[]
 
   @@index([status])
   @@index([kind, status])
   @@index([deletedAt])
+}
+
+model TaskRun {
+  id               String       @id
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  projectId        String?
+  project          RevoProject? @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  title            String
+  description      String       @default("")
+  status           String
+  repos            String[]
+  scope            String       @default("")
+  priority         Int          @default(0)
+  playbookId       String       @default("")
+  pipelineId       String       @default("")
+  params           Json         @default("{}")
+  routeDecision    Json         @default("{}")
+  executionProfile Json         @default("{}")
+  createdBy        String       @default("")
+
+  tasks     RunTask[]
+  events    RunEvent[]
+  attempts  RunAttempt[]
+  inbox     InboxItem[]
+  outputs   RunOutput[]
+  costItems CostLedgerEntry[]
+
+  @@index([projectId])
+  @@index([status])
+  @@index([playbookId, pipelineId])
+  @@index([createdAt])
+}
+
+model RunTask {
+  id        String   @id
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  runId     String
+  run       TaskRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+  repoRef   String   @default("")
+  roleHint  String   @default("")
+  title     String
+  status    String
+  dependsOn String[]
+  scope     String   @default("")
+  priority  Int      @default(0)
+
+  @@index([runId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model RunEvent {
+  id        String   @id
+  createdAt DateTime @default(now())
+  sequence  Int      @default(autoincrement())
+  runId     String
+  run       TaskRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+  taskId    String   @default("")
+  stepId    String   @default("")
+  type      String
+  payload   Json     @default("{}")
+  actor     String   @default("")
+
+  @@unique([runId, sequence])
+  @@index([runId])
+  @@index([runId, createdAt])
+  @@index([runId, sequence])
+  @@index([type])
+}
+
+model RunAttempt {
+  id             String   @id
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  runId          String
+  run            TaskRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+  stepId         String
+  workerId       String   @default("")
+  attemptNo      Int      @default(0)
+  iteration      Int      @default(0)
+  status         String
+  idempotencyKey String   @default("")
+  modelProfile   String   @default("")
+  verdict        String   @default("")
+  inputTokens    Int      @default(0)
+  outputTokens   Int      @default(0)
+  costAmount     Decimal  @default(0) @db.Decimal(20, 12)
+  currency       String   @default("USD")
+  durationMs     Int      @default(0)
+  outputSummary  String   @default("")
+  artifactRef    String   @default("")
+  stdoutTail     String   @default("")
+  stderrTail     String   @default("")
+  lesson         String   @default("")
+  error          String   @default("")
+  startedAt      DateTime @default(now())
+  finishedAt     DateTime @default(now())
+
+  @@index([runId])
+  @@index([runId, stepId])
+  @@index([status])
+}
+
+model InboxItem {
+  id         String    @id
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  kind       String
+  runId      String?
+  run        TaskRun?  @relation(fields: [runId], references: [id], onDelete: Cascade)
+  taskId     String    @default("")
+  stepId     String    @default("")
+  projectId  String    @default("")
+  title      String
+  context    Json      @default("{}")
+  options    String[]
+  status     String
+  answer     Json?
+  resolvedBy String    @default("")
+  resolvedAt DateTime?
+
+  @@index([runId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model RunOutput {
+  id         String   @id
+  createdAt  DateTime @default(now())
+  runId      String
+  run        TaskRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+  nodeId     String
+  ordinal    Int
+  name       String
+  schemaRef  String   @default("")
+  payload    Json     @default("{}")
+  payloadRef String   @default("")
+  attemptId  String   @default("")
+  producedAt DateTime @default(now())
+
+  @@unique([runId, nodeId, ordinal])
+  @@index([runId])
+  @@index([nodeId])
+  @@index([producedAt])
+}
+
+model CostLedgerEntry {
+  id           String   @id
+  createdAt    DateTime @default(now())
+  runId        String
+  run          TaskRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+  stepId       String   @default("")
+  attemptId    String   @default("")
+  modelProfile String   @default("")
+  inputTokens  Int      @default(0)
+  outputTokens Int      @default(0)
+  costAmount   Decimal  @default(0) @db.Decimal(20, 12)
+  currency     String   @default("USD")
+  recordedAt   DateTime @default(now())
+
+  @@index([runId])
+  @@index([attemptId])
+  @@index([recordedAt])
 }
 
 model Branch {

@@ -1,12 +1,12 @@
-import { Injectable, Inject } from '@nestjs/common';
-import type { ControlPlaneTransport, ControlPlaneDataAccess, ControlPlaneRow } from '../control-plane/data-access.js';
-import { createControlPlaneDataAccessForTransport } from '../control-plane/data-access.js';
+import { Inject, Injectable } from '@nestjs/common';
+import type { ControlPlaneDataAccess, ControlPlaneRow } from '../control-plane/data-access.js';
 import { ControlPlaneError } from '../control-plane/errors.js';
 import { fnv1a64Hex } from '../control-plane/steps.js';
 import type { Step } from '../control-plane/steps.js';
 import { makeResolveCwd, makeResolveTaskCwd, makeResolveRunCwd } from '../control-plane/resolve-cwd.js';
 import { getConfig } from '../config.js';
 import type { AgentRunContext } from '../worker/build-context.js';
+import { RevoPrismaService } from '../storage/revo-prisma.service.js';
 import { createRunWorkflow, type CreateRunInput, type CreateRunResult } from '../run/create-run.js';
 import { listRuns, showRun, listRunEvents, listRunAttempts, getRunFailure, type RunSummary, type RunDetail, type EventSummary, type AttemptSummary } from '../run/inspect-run.js';
 import { cancelRun, type CancelRunResult } from '../run/cancel-run.js';
@@ -14,9 +14,9 @@ import { failRun, type FailRunResult } from '../run/fail-run.js';
 import { completeRun, type CompleteRunResult } from '../run/complete-run.js';
 import { blockRun, type BlockRunResult } from '../run/block-run.js';
 import { appendRunEvent, appendRunCost, appendRunAttempt, type AppendEventInput, type AppendCostInput, type AppendAttemptInput } from '../run/append-event.js';
+import { createPrismaRuntimeDataAccess } from '../run/prisma-runtime-data-access.js';
 import { appendRunOutput as appendRunOutputRow, type RunOutputRow } from '../run/run-outputs.js';
 import type { IssueAction, IssueRef } from '../run/issue-ref.js';
-import { REVISIUM_TRANSPORT_DRAFT } from './tokens.js';
 
 
 
@@ -29,17 +29,17 @@ import { REVISIUM_TRANSPORT_DRAFT } from './tokens.js';
 export class RunService {
   private readonly da: ControlPlaneDataAccess;
 
-  constructor(
-    @Inject(REVISIUM_TRANSPORT_DRAFT) private readonly draftTransport: ControlPlaneTransport,
-  ) {
-    this.da = createControlPlaneDataAccessForTransport(this.draftTransport);
+  constructor(@Inject(RevoPrismaService) prismaOrDataAccess: RevoPrismaService | ControlPlaneDataAccess) {
+    this.da = 'assertReady' in prismaOrDataAccess
+      ? prismaOrDataAccess
+      : createPrismaRuntimeDataAccess(prismaOrDataAccess);
   }
 
   createRun(input: CreateRunInput): Promise<CreateRunResult> {
     return createRunWorkflow(this.da, input);
   }
 
-  listRuns(filter?: { status?: string; limit?: number }): Promise<RunSummary[]> {
+  listRuns(filter?: { status?: string; statuses?: string[]; limit?: number }): Promise<RunSummary[]> {
     return listRuns(this.da, filter);
   }
 

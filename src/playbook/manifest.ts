@@ -13,6 +13,7 @@ export type PlaybookManifest = {
   catalogs: {
     roles: string;
     pipelines: string;
+    runProfiles?: string;
   };
   supportedRuntimes: string[];
 };
@@ -54,6 +55,9 @@ export function parsePlaybookManifest(raw: unknown): PlaybookManifest {
     catalogs: {
       roles: requireString(catalogs, 'roles'),
       pipelines: requireString(catalogs, 'pipelines'),
+      runProfiles: typeof catalogs.runProfiles === 'string' && catalogs.runProfiles.trim() !== ''
+        ? catalogs.runProfiles
+        : undefined,
     },
     supportedRuntimes: optionalStringArray(record, 'supported_runtimes'),
   };
@@ -65,6 +69,7 @@ export function readPlaybookManifest(root: string): PlaybookManifest {
     const manifest = parsePlaybookManifest(JSON.parse(readFileSync(manifestPath, 'utf8')) as unknown);
     resolvePathInside(root, manifest.catalogs.roles);
     resolvePathInside(root, manifest.catalogs.pipelines);
+    if (manifest.catalogs.runProfiles) resolvePathInside(root, manifest.catalogs.runProfiles);
     return manifest;
   } catch (error) {
     if (error instanceof PlaybookError) throw error;

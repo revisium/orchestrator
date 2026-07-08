@@ -1,6 +1,8 @@
 import { ControlPlaneError } from './errors.js';
+import type { RowWhereInput } from './query-types.js';
 
-export type VersionedMeaningTable = 'playbooks' | 'roles' | 'pipelines';
+export type VersionedMeaningTable = 'playbooks' | 'roles' | 'pipelines' | 'run_profiles';
+export type VersionedMeaningCatalogTable = Exclude<VersionedMeaningTable, 'playbooks'>;
 
 export type VersionedMeaningRow = {
   table: VersionedMeaningTable;
@@ -9,7 +11,7 @@ export type VersionedMeaningRow = {
 };
 
 export type VersionedMeaningOperation = {
-  action: 'dry-run' | 'create' | 'update';
+  action: 'dry-run' | 'create' | 'update' | 'retire';
   table: VersionedMeaningTable;
   rowId: string;
 };
@@ -18,7 +20,16 @@ export type VersionedMeaningRevision = {
   id?: unknown;
 };
 
+export type VersionedMeaningListOptions = {
+  first?: number;
+  after?: string;
+  where?: RowWhereInput;
+};
+
+type VersionedMeaningListedRow = { id: string; data?: Record<string, unknown>; cursor?: string };
+
 export type VersionedMeaningScope = {
+  listRows(tableId: string, options?: VersionedMeaningListOptions): Promise<VersionedMeaningListedRow[]>;
   getRow(tableId: string, rowId: string): Promise<unknown>;
   createRow(tableId: string, rowId: string, data: object): Promise<unknown>;
   updateRow(tableId: string, rowId: string, data: object): Promise<unknown>;
@@ -27,6 +38,12 @@ export type VersionedMeaningScope = {
 
 export type VersionedMeaningAccess = {
   upsertRow(row: VersionedMeaningRow): Promise<VersionedMeaningOperation>;
+  retireMissingRows(input: {
+    table: VersionedMeaningCatalogTable;
+    playbookId: string;
+    keepRowIds: readonly string[];
+    retiredAt: string;
+  }): Promise<VersionedMeaningOperation[]>;
   commit(message: string): Promise<VersionedMeaningRevision | null>;
 };
 
@@ -49,6 +66,32 @@ function isRowNotFound(error: unknown): boolean {
     (typeof err?.message === 'string' &&
       err.message.toLowerCase().includes('not found'))
   );
+}
+
+function objectData(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function dataEquals(path: string, equals: string): RowWhereInput {
+  return { data: { path, equals } };
+}
+
+const RETIRE_PAGE_SIZE = 500;
+
+function retirableCatalogRow(
+  row: VersionedMeaningListedRow,
+  playbookId: string,
+  keepRowIds: ReadonlySet<string>,
+): Record<string, unknown> | null {
+  const data = objectData(row.data);
+  if (data.playbook_id !== playbookId) return null;
+  if (keepRowIds.has(row.id)) return null;
+  if (data.status === 'removed') return null;
+  return data;
+}
+
+function nextRetireCursor(rows: VersionedMeaningListedRow[]): string | undefined {
+  return rows.length < RETIRE_PAGE_SIZE ? undefined : rows.at(-1)?.cursor;
 }
 
 export function createVersionedMeaningAccess(
@@ -86,6 +129,39 @@ export function createVersionedMeaningAccess(
 
       await draft.updateRow(row.table, row.rowId, row.data);
       return { action: 'update', table: row.table, rowId: row.rowId };
+    },
+
+    async retireMissingRows(input) {
+      if (dryRun) return [];
+      const keep = new Set(input.keepRowIds);
+      const draft = await scope();
+      const operations: VersionedMeaningOperation[] = [];
+      let after: string | undefined;
+
+      do {
+        const existingRows = await draft.listRows(input.table, {
+          first: RETIRE_PAGE_SIZE,
+          after,
+          where: dataEquals('playbook_id', input.playbookId),
+        });
+
+        for (const existing of existingRows) {
+          const data = retirableCatalogRow(existing, input.playbookId, keep);
+          if (!data) continue;
+
+          await draft.updateRow(input.table, existing.id, {
+            ...data,
+            status: 'removed',
+            retired_at: input.retiredAt,
+            updated_at: input.retiredAt,
+          });
+          operations.push({ action: 'retire', table: input.table, rowId: existing.id });
+        }
+
+        after = nextRetireCursor(existingRows);
+      } while (after);
+
+      return operations;
     },
 
     async commit(message) {

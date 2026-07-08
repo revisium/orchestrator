@@ -3,6 +3,10 @@ import { PlaybookError } from './errors.js';
 import type { PlaybookManifest } from './manifest.js';
 import { resolvePathInside } from './source-resolver.js';
 import type { ModelLevel } from '../control-plane/definitions.js';
+import {
+  assertValidPipelineExecutionPolicy,
+  assertValidRunProfileCatalogRecord,
+} from './catalog-schema-validator.js';
 
 export type RoleCatalogRecord = {
   id: string;
@@ -33,9 +37,22 @@ export type PipelineCatalogRecord = {
   executionPolicy: unknown;
 };
 
+export type RunProfileCatalogRecord = {
+  id: string;
+  pipelineId: string;
+  schemaVersion: string;
+  version: string;
+  displayName: string;
+  summary: string;
+  topology: unknown;
+  bindings: unknown;
+  status: 'active' | 'deprecated';
+};
+
 export type PlaybookCatalogs = {
   roles: RoleCatalogRecord[];
   pipelines: PipelineCatalogRecord[];
+  runProfiles: RunProfileCatalogRecord[];
 };
 
 const MODEL_LEVELS = new Set<ModelLevel>([
@@ -117,6 +134,20 @@ function assertPipelineRoleReferences(roles: RoleCatalogRecord[], pipelines: Pip
   }
 }
 
+function assertRunProfilePipelineReferences(
+  pipelines: PipelineCatalogRecord[],
+  runProfiles: RunProfileCatalogRecord[],
+): void {
+  const pipelineIds = new Set(pipelines.map((pipeline) => pipeline.id));
+  for (const profile of runProfiles) {
+    if (pipelineIds.has(profile.pipelineId)) continue;
+    throw new PlaybookError(
+      'PLAYBOOK_INVALID_CATALOG',
+      `run profile ${profile.id} references unknown pipeline id: ${profile.pipelineId}`,
+    );
+  }
+}
+
 function parseRole(value: unknown, index: number, root: string): RoleCatalogRecord {
   const context = `roles[${index}]`;
   const record = asRecord(value, context);
@@ -166,6 +197,8 @@ function parseAlternativeRoles(value: unknown, context: string): AlternativeRole
 function parsePipeline(value: unknown, index: number, root: string): PipelineCatalogRecord {
   const context = `pipelines[${index}]`;
   const record = asRecord(value, context);
+  const executionPolicy = record.execution_policy ?? {};
+  assertValidPipelineExecutionPolicy(executionPolicy, `${context}.execution_policy`);
   const path = stringField(record, 'path', context);
   const resolvedPath = resolvePathInside(root, path);
   if (!existsSync(resolvedPath)) {
@@ -180,7 +213,28 @@ function parsePipeline(value: unknown, index: number, root: string): PipelineCat
     optionalRoles: stringArrayField(record, 'optional_roles', context),
     routeGates: stringArrayField(record, 'route_gates', context),
     platformInvocation: stringField(record, 'platform_invocation', context),
-    executionPolicy: record.execution_policy ?? {},
+    executionPolicy,
+  };
+}
+
+function parseRunProfile(value: unknown, index: number): RunProfileCatalogRecord {
+  const context = `runProfiles[${index}]`;
+  const record = asRecord(value, context);
+  assertValidRunProfileCatalogRecord(record, context);
+  const status = stringField(record, 'status', context);
+  if (status !== 'active' && status !== 'deprecated') {
+    throw new PlaybookError('PLAYBOOK_INVALID_CATALOG', `${context}.status must be active or deprecated`);
+  }
+  return {
+    id: stringField(record, 'id', context),
+    pipelineId: stringField(record, 'pipelineId', context),
+    schemaVersion: stringField(record, 'schemaVersion', context),
+    version: stringField(record, 'version', context),
+    displayName: stringField(record, 'displayName', context),
+    summary: stringField(record, 'summary', context),
+    topology: record.topology ?? {},
+    bindings: record.bindings ?? {},
+    status,
   };
 }
 
@@ -200,10 +254,16 @@ export function loadPlaybookCatalogs(root: string, manifest: PlaybookManifest): 
     const pipelines = readJsonArray(pipelinePath, manifest.catalogs.pipelines).map((pipeline, index) =>
       parsePipeline(pipeline, index, root),
     );
+    const runProfiles = manifest.catalogs.runProfiles
+      ? readJsonArray(resolvePathInside(root, manifest.catalogs.runProfiles), manifest.catalogs.runProfiles)
+        .map((profile, index) => parseRunProfile(profile, index))
+      : [];
     assertUniqueIds(roles, 'role');
     assertUniqueIds(pipelines, 'pipeline');
+    assertUniqueIds(runProfiles, 'run profile');
     assertPipelineRoleReferences(roles, pipelines);
-    return { roles, pipelines };
+    assertRunProfilePipelineReferences(pipelines, runProfiles);
+    return { roles, pipelines, runProfiles };
   } catch (error) {
     if (error instanceof PlaybookError) throw error;
     throw new PlaybookError('PLAYBOOK_INVALID_CATALOG', 'Unable to load playbook catalogs', { error });

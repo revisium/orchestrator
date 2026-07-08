@@ -18,6 +18,7 @@
 import { randomUUID } from 'node:crypto';
 import type { ControlPlaneDataAccess } from './data-access.js';
 import { ControlPlaneError } from './errors.js';
+import type { RowWhereInput } from './query-types.js';
 import { compactStamp } from './steps.js';
 
 
@@ -117,6 +118,14 @@ function mapInboxRow(rowId: string, data: Record<string, unknown>): InboxItem {
 
 
 
+function inboxWhere(filter?: InboxFilter): RowWhereInput | undefined {
+  const clauses: RowWhereInput[] = [];
+  if (filter?.runId) clauses.push({ data: { path: 'run_id', equals: filter.runId } });
+  if (filter?.status) clauses.push({ data: { path: 'status', equals: filter.status } });
+  if (clauses.length === 0) return undefined;
+  return clauses.length === 1 ? clauses[0] : { AND: clauses };
+}
+
 export async function pushInbox(
   da: ControlPlaneDataAccess,
   item: NewInboxItem,
@@ -166,11 +175,11 @@ export async function listInbox(
   filter?: InboxFilter,
 ): Promise<InboxItem[]> {
   await da.assertReady();
-  const rows = await da.listRows('inbox', { first: filter?.limit ?? 500 });
-  let items = rows.map((row) => mapInboxRow(row.rowId, row.data));
-  if (filter?.status) items = items.filter((i) => i.status === filter.status);
-  if (filter?.runId) items = items.filter((i) => i.runId === filter.runId);
-  return items;
+  const rows = await da.listRows('inbox', {
+    first: filter?.limit ?? 500,
+    where: inboxWhere(filter),
+  });
+  return rows.map((row) => mapInboxRow(row.rowId, row.data));
 }
 
 

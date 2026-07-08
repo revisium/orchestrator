@@ -463,7 +463,9 @@ export function makeRunStep(deps: RunStepDeps) {
       throw err;
     }
 
-    const effectiveRunner = dispatchRunnerId(resolveStepRunner(loadedRole.runner, resolvedRunnerId, executionProfile));
+    const effectiveRunner = dispatchRunnerId(
+      launchOverrides?.runnerId ?? resolveStepRunner(loadedRole.runner, resolvedRunnerId, executionProfile),
+    );
     const dispatchRole = {
       ...loadedRole,
       runner: effectiveRunner,

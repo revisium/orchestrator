@@ -158,26 +158,38 @@ function toAttemptSummary(row: ControlPlaneRow): AttemptSummary {
   };
 }
 
+function dataEquals(path: string, equals: string): RowWhereInput {
+  return { data: { path, equals } };
+}
+
+function dataIn(path: string, values: readonly string[]): RowWhereInput {
+  return { data: { path, in: [...values] } };
+}
+
+function andWhere(...clauses: RowWhereInput[]): RowWhereInput {
+  return clauses.length === 1 ? clauses[0]! : { AND: clauses };
+}
+
 function runIdWhere(runId: string): RowWhereInput {
-  return { data: { path: 'run_id', equals: runId } };
+  return dataEquals('run_id', runId);
 }
 
 export async function listRuns(
   da: ControlPlaneDataAccess,
-  filter?: { status?: string; limit?: number },
+  filter?: { status?: string; statuses?: string[]; limit?: number },
 ): Promise<RunSummary[]> {
   await da.assertReady();
+  const statusValues = filter?.status ? [filter.status] : (filter?.statuses ?? []);
+  const first = filter?.limit ?? GLOBAL_CAP;
   const rows = await da.listRows('task_runs', {
-    first: GLOBAL_CAP,
+    first,
     orderBy: [{ field: 'createdAt', direction: 'desc' }],
+    ...(statusValues.length > 0 ? { where: dataIn('status', statusValues) } : {}),
   });
-  if (rows.length === GLOBAL_CAP) {
+  if (filter?.limit === undefined && rows.length === GLOBAL_CAP) {
     process.stderr.write(`warning: task_runs results may be incomplete (cap=${GLOBAL_CAP})\n`);
   }
-  let result = rows.map(toRunSummary);
-  if (filter?.status) result = result.filter((r) => r.status === filter.status);
-  if (filter?.limit !== undefined) result = result.slice(0, filter.limit);
-  return result;
+  return rows.map(toRunSummary);
 }
 
 export async function showRun(da: ControlPlaneDataAccess, runId: string): Promise<RunDetail | null> {
@@ -206,15 +218,15 @@ export async function listRunEvents(
 ): Promise<EventSummary[]> {
   await da.assertReady();
   const expandGraph = filter?.expand?.includes('graph') ?? false;
+  const where = filter?.type
+    ? andWhere(runIdWhere(runId), dataEquals('type', filter.type))
+    : runIdWhere(runId);
   const rows = await da.listRows('events', {
-    first: GLOBAL_CAP,
-    orderBy: [{ field: 'createdAt', direction: 'asc' }],
-    where: runIdWhere(runId),
+    first: filter?.limit ?? GLOBAL_CAP,
+    orderBy: [{ field: 'sequence', direction: 'asc' }],
+    where,
   });
-  let events = rows.map((row) => toEventSummary(row, expandGraph));
-  if (filter?.type) events = events.filter((e) => e.type === filter.type);
-  if (filter?.limit !== undefined) events = events.slice(0, filter.limit);
-  return events;
+  return rows.map((row) => toEventSummary(row, expandGraph));
 }
 
 
@@ -225,13 +237,11 @@ export async function listRunAttempts(
 ): Promise<AttemptSummary[]> {
   await da.assertReady();
   const rows = await da.listRows('attempts', {
-    first: GLOBAL_CAP,
+    first: filter?.limit ?? GLOBAL_CAP,
     orderBy: [{ field: 'createdAt', direction: 'asc' }],
     where: runIdWhere(runId),
   });
-  let attempts = rows.map(toAttemptSummary);
-  if (filter?.limit !== undefined) attempts = attempts.slice(0, filter.limit);
-  return attempts;
+  return rows.map(toAttemptSummary);
 }
 
 
@@ -248,11 +258,11 @@ export async function getRunFailure(
   const runStatus = str(runRow.data.status);
 
   const rows = await da.listRows('events', {
-    first: GLOBAL_CAP,
-    orderBy: [{ field: 'createdAt', direction: 'desc' }],
-    where: runIdWhere(runId),
+    first: 1,
+    orderBy: [{ field: 'sequence', direction: 'desc' }],
+    where: andWhere(runIdWhere(runId), dataEquals('type', 'run_failed')),
   });
-  const failed = rows.find((r) => str(r.data.type) === 'run_failed');
+  const failed = rows[0];
   const payload = failed?.data.payload;
   const reason =
     payload && typeof payload === 'object' && !Array.isArray(payload)

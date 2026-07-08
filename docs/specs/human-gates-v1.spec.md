@@ -2,6 +2,7 @@
 
 - **Status:** Accepted.
 - **Source files:** `src/pipeline-core/types.ts`, `src/pipeline/await-human.ts`, `src/revisium/inbox.service.ts`,
+  `src/run/prisma-runtime-data-access.ts`,
   `src/features/inbox/**`, `src/api/graphql-api/inbox/**`, `src/mcp/mcp-tools.ts`,
   `src/task-control-plane/run-watch.service.ts`, `src/poller/pr-readiness.ts`.
 - **Related specs:** [pipeline-state-machine-v1.spec.md](./pipeline-state-machine-v1.spec.md),
@@ -48,7 +49,7 @@ Rules:
 
 ## Inbox Contract
 
-Inbox rows are runtime draft rows and MUST NOT be committed as versioned meaning. Logical fields:
+Inbox rows are Prisma runtime rows and MUST NOT be committed as versioned meaning. Logical fields:
 
 ```text
 inbox {

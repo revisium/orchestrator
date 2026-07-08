@@ -14,3 +14,12 @@ export type RuntimeTable = (typeof runtimeTables)[number];
 export function isRuntimeTable(table: string): table is RuntimeTable {
   return (runtimeTables as readonly string[]).includes(table);
 }
+
+export const controlPlaneMeaningTables = [
+  'playbooks',
+  'roles',
+  'pipelines',
+  'model_profiles',
+  'routing_policy',
+  'run_profiles',
+] as const;

@@ -1,6 +1,5 @@
-import { Injectable, Inject } from '@nestjs/common';
-import type { ControlPlaneTransport, ControlPlaneDataAccess } from '../control-plane/data-access.js';
-import { createControlPlaneDataAccessForTransport } from '../control-plane/data-access.js';
+import { Inject, Injectable } from '@nestjs/common';
+import type { ControlPlaneDataAccess } from '../control-plane/data-access.js';
 import {
   pushInbox,
   listInbox,
@@ -11,7 +10,8 @@ import {
   type InboxItem,
   type ResolveInboxResult,
 } from '../control-plane/inbox.js';
-import { REVISIUM_TRANSPORT_DRAFT } from './tokens.js';
+import { createPrismaRuntimeDataAccess } from '../run/prisma-runtime-data-access.js';
+import { RevoPrismaService } from '../storage/revo-prisma.service.js';
 
 
 
@@ -25,10 +25,10 @@ import { REVISIUM_TRANSPORT_DRAFT } from './tokens.js';
 export class InboxService {
   private readonly da: ControlPlaneDataAccess;
 
-  constructor(
-    @Inject(REVISIUM_TRANSPORT_DRAFT) private readonly draftTransport: ControlPlaneTransport,
-  ) {
-    this.da = createControlPlaneDataAccessForTransport(this.draftTransport);
+  constructor(@Inject(RevoPrismaService) prismaOrDataAccess: RevoPrismaService | ControlPlaneDataAccess) {
+    this.da = 'assertReady' in prismaOrDataAccess
+      ? prismaOrDataAccess
+      : createPrismaRuntimeDataAccess(prismaOrDataAccess);
   }
 
 

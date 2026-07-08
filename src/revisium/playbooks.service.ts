@@ -1,7 +1,9 @@
 import { Inject, Injectable, Optional } from '@nestjs/common';
 import { EngineApiService } from '@revisium/engine';
 import { createEngineVersionedMeaningScope } from '../control-plane/engine-transport.js';
-import type { ControlPlaneTransport } from '../control-plane/data-access.js';
+import type { ListRowsOptions } from '../control-plane/data-access.js';
+import type { RowWhereInput } from '../control-plane/query-types.js';
+import type { ControlPlaneTransport, TransportRow } from '../control-plane/transport.js';
 import { ControlPlaneError } from '../control-plane/errors.js';
 import { createVersionedMeaningAccess } from '../control-plane/versioned-meaning.js';
 import { PlaybookInstaller, type PlaybookInstallOptions, type PlaybookInstallResult } from '../playbook/playbook-installer.js';
@@ -11,6 +13,7 @@ import { REVISIUM_TRANSPORT_HEAD } from './tokens.js';
 
 const DEFAULT_PLAYBOOK_ID = 'revisium-default';
 const DEFAULT_PLAYBOOK_PACKAGE = '@revisium/orchestrator-default-playbook';
+const CATALOG_PAGE_SIZE = 500;
 
 export type PlaybookSummary = {
   id: string;
@@ -33,10 +36,33 @@ export type PipelineSummary = {
   optionalRoles: string[];
   routeGates: string[];
   executionPolicy: unknown;
+  status?: 'active' | 'removed';
+};
+
+export type RunProfileSummary = {
+  id: string;
+  playbookId: string;
+  pipelineId: string;
+  profileId: string;
+  schemaVersion: string;
+  version: string;
+  displayName: string;
+  summary: string;
+  profile: Record<string, unknown>;
+  profileHash: string;
+  status: 'active' | 'deprecated' | 'removed';
 };
 
 function str(value: unknown): string {
   return typeof value === 'string' ? value : '';
+}
+
+function dataEquals(path: string, equals: string): RowWhereInput {
+  return { data: { path, equals } };
+}
+
+function andWhere(...clauses: RowWhereInput[]): RowWhereInput {
+  return clauses.length === 1 ? clauses[0]! : { AND: clauses };
 }
 
 function strArr(value: unknown): string[] {
@@ -94,7 +120,57 @@ function pipelineFromRow(row: { id: string; data?: Record<string, unknown> }): P
     optionalRoles: strArr(data.optional_roles),
     routeGates: normalizeRouteGates(data.route_gates),
     executionPolicy: parseJson(data.execution_policy_json),
+    status: str(data.status) === 'removed' ? 'removed' : 'active',
   };
+}
+
+function runProfileStatus(value: unknown): RunProfileSummary['status'] {
+  const status = str(value);
+  if (status === 'removed') return 'removed';
+  if (status === 'deprecated') return 'deprecated';
+  return 'active';
+}
+
+function runProfileFromRow(row: { id: string; data?: Record<string, unknown> }): RunProfileSummary {
+  const data = row.data ?? {};
+  const profile = parseJson(data.profile_json);
+  return {
+    id: row.id,
+    playbookId: str(data.playbook_id),
+    pipelineId: str(data.pipeline_id),
+    profileId: str(data.profile_id) || row.id,
+    schemaVersion: str(data.schema_version),
+    version: str(data.version),
+    displayName: str(data.display_name),
+    summary: str(data.summary),
+    profile: profile && typeof profile === 'object' && !Array.isArray(profile)
+      ? profile as Record<string, unknown>
+      : {},
+    profileHash: str(data.profile_hash),
+    status: runProfileStatus(data.status),
+  };
+}
+
+async function listAllRows(
+  transport: ControlPlaneTransport,
+  table: string,
+  options: Omit<ListRowsOptions, 'first' | 'after'> = {},
+): Promise<TransportRow[]> {
+  const rows: TransportRow[] = [];
+  let after: string | undefined;
+  for (;;) {
+    const page = await transport.listRows(table, {
+      ...options,
+      first: CATALOG_PAGE_SIZE,
+      after,
+    });
+    const edges = page.edges ?? [];
+    rows.push(...edges.flatMap((edge) => edge.node ? [edge.node] : []));
+    if (edges.length < CATALOG_PAGE_SIZE) break;
+    after = edges.at(-1)?.cursor;
+    if (!after) break;
+  }
+  return rows;
 }
 
 @Injectable()
@@ -125,10 +201,8 @@ export class PlaybooksService {
   }
 
   async listPlaybooks(): Promise<PlaybookSummary[]> {
-    const rows = await this.head.listRows('playbooks', { first: 100 });
-    return (rows.edges ?? []).flatMap((edge) => {
-      const node = edge.node;
-      if (!node) return [];
+    const rows = await listAllRows(this.head, 'playbooks');
+    return rows.flatMap((node) => {
       const data = node.data ?? {};
       return [{
         id: node.id,
@@ -181,10 +255,10 @@ export class PlaybooksService {
   }
 
   async listPipelines(): Promise<PipelineSummary[]> {
-    const rows = await this.head.listRows('pipelines', { first: 500 });
-    return (rows.edges ?? []).flatMap((edge) => {
-      const node = edge.node;
-      if (!node) return [];
+    const rows = await listAllRows(this.head, 'pipelines', {
+      where: dataEquals('status', 'active'),
+    });
+    return rows.flatMap((node) => {
       const data = node.data ?? {};
       return [pipelineFromRow({ id: node.id, data })];
     });
@@ -199,22 +273,67 @@ export class PlaybooksService {
       throw error;
     }
     if (!row) return null;
-    return pipelineFromRow(row);
+    const pipeline = pipelineFromRow(row);
+    return pipeline.status === 'removed' ? null : pipeline;
   }
 
   async resolvePipeline(input: { playbookId?: string; pipelineId: string }): Promise<PipelineSummary> {
     const playbook = await this.resolvePlaybook(input.playbookId);
-    const direct = await this.getPipeline(input.pipelineId);
-    if (direct?.playbookId === playbook.id) return direct;
-
-    const pipelines = await this.listPipelines();
-    const match = pipelines.find(
-      (pipeline) => pipeline.playbookId === playbook.id && pipeline.pipelineId === input.pipelineId,
-    );
-    if (!match) {
+    const rows = await this.head.listRows('pipelines', {
+      first: 1,
+      where: andWhere(
+        dataEquals('playbook_id', playbook.id),
+        dataEquals('pipeline_id', input.pipelineId),
+        dataEquals('status', 'active'),
+      ),
+    });
+    const row = rows.edges?.[0]?.node;
+    if (!row) {
       throw new ControlPlaneError(
         'ROW_NOT_FOUND',
         `pipeline not found in playbook ${playbook.id}: ${input.pipelineId}`,
+      );
+    }
+    return pipelineFromRow(row);
+  }
+
+  async listRunProfiles(input: {
+    playbookId?: string;
+    pipelineId?: string;
+    includeDeprecated?: boolean;
+  } = {}): Promise<RunProfileSummary[]> {
+    const playbook = await this.resolvePlaybook(input.playbookId);
+    const base = [
+      dataEquals('playbook_id', playbook.id),
+      ...(input.pipelineId ? [dataEquals('pipeline_id', input.pipelineId)] : []),
+    ];
+    const statuses: Array<RunProfileSummary['status']> = input.includeDeprecated ? ['active', 'deprecated'] : ['active'];
+    const rows = (await Promise.all(statuses.map((status) =>
+      listAllRows(this.head, 'run_profiles', {
+        where: andWhere(...base, dataEquals('status', status)),
+      }),
+    ))).flat();
+    return rows
+      .map((node) => runProfileFromRow({ id: node.id, data: node.data ?? {} }))
+      .sort((left, right) => left.profileId.localeCompare(right.profileId));
+  }
+
+  async resolveRunProfile(input: {
+    playbookId?: string;
+    pipelineId: string;
+    profileId: string;
+    includeDeprecated?: boolean;
+  }): Promise<RunProfileSummary> {
+    const profiles = await this.listRunProfiles({
+      playbookId: input.playbookId,
+      pipelineId: input.pipelineId,
+      includeDeprecated: input.includeDeprecated,
+    });
+    const match = profiles.find((profile) => profile.profileId === input.profileId);
+    if (!match) {
+      throw new ControlPlaneError(
+        'ROW_NOT_FOUND',
+        `run profile not found in pipeline ${input.pipelineId}: ${input.profileId}`,
       );
     }
     return match;

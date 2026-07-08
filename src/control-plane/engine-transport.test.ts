@@ -9,7 +9,7 @@ import {
   createEngineVersionedMeaningScope,
   ensureControlPlaneProject,
 } from './engine-transport.js';
-import { runtimeTables } from './tables.js';
+import { controlPlaneMeaningTables } from './tables.js';
 
 type Call = { name: string; args: unknown };
 type PrismaKnownError = Error & {
@@ -110,7 +110,7 @@ function makeEngine(
     },
     async getTables(args: unknown) {
       calls.push({ name: 'getTables', args });
-      return { edges: runtimeTables.map((id) => ({ node: { id } })) };
+      return { edges: controlPlaneMeaningTables.map((id) => ({ node: { id } })) };
     },
     async getRows(args: unknown) {
       calls.push({ name: 'getRows', args });
@@ -233,7 +233,7 @@ test('createEngineTransport maps engine CRUD responses to transport rows and fil
   );
 
   await transport.assertReady();
-  const list = await transport.listRows('task_runs', {
+  const list = await transport.listRows('roles', {
     first: 10,
     after: 'after-1',
     orderBy: [
@@ -243,14 +243,14 @@ test('createEngineTransport maps engine CRUD responses to transport rows and fil
     ],
     where: { id: { equals: 'row-1' } } as never,
   });
-  const row = await transport.getRow('task_runs', 'row-1');
-  const created = await transport.createRow('task_runs', 'row-2', {
+  const row = await transport.getRow('roles', 'row-1');
+  const created = await transport.createRow('roles', 'row-2', {
     title: 'Created',
   });
-  const updated = await transport.updateRow('task_runs', 'row-2', {
+  const updated = await transport.updateRow('roles', 'row-2', {
     title: 'Updated',
   });
-  const patched = await transport.patchRow('task_runs', 'row-2', [
+  const patched = await transport.patchRow('roles', 'row-2', [
     { op: 'replace', path: 'title', value: 'Patched' },
   ]);
 
@@ -305,7 +305,7 @@ test('draft engine transport invalidates a stale draft scope once and retries wi
     prisma as unknown as RevoPrismaService,
   );
 
-  const rows = await transport.listRows('task_runs');
+  const rows = await transport.listRows('roles');
 
   assert.equal(attempts, 2);
   assert.equal(rows.edges?.at(0)?.node?.id, 'row-1');
@@ -332,21 +332,21 @@ test('engine transport maps engine failures to control-plane errors', async () =
   );
 
   await assert.rejects(
-    () => transport.createRow('task_runs', 'row-1', {}),
+    () => transport.createRow('roles', 'row-1', {}),
     (error) =>
       error instanceof ControlPlaneError && error.code === 'ROW_CONFLICT',
   );
   await assert.rejects(
-    () => transport.updateRow('task_runs', 'row-1', {}),
+    () => transport.updateRow('roles', 'row-1', {}),
     (error) =>
       error instanceof ControlPlaneError && error.code === 'VALIDATION_FAILURE',
   );
 });
 
-test('assertReady reports missing runtime tables as a bootstrap failure', async () => {
+test('assertReady reports missing control-plane meaning tables as a bootstrap failure', async () => {
   const engine = makeEngine({
     async getTables() {
-      return { edges: [{ node: { id: runtimeTables[0] } }] };
+      return { edges: [{ node: { id: controlPlaneMeaningTables[0] } }] };
     },
   });
   const prisma = makePrisma(true);
@@ -371,12 +371,12 @@ test('assertReady paginates engine tables before reporting bootstrap readiness',
       calls.push(args);
       if (calls.length === 1) {
         return {
-          edges: [{ cursor: 'cursor-1', node: { id: runtimeTables[0] } }],
+          edges: [{ cursor: 'cursor-1', node: { id: controlPlaneMeaningTables[0] } }],
           pageInfo: { hasNextPage: true, endCursor: 'cursor-1' },
         };
       }
       return {
-        edges: runtimeTables.slice(1).map((id) => ({ node: { id } })),
+        edges: controlPlaneMeaningTables.slice(1).map((id) => ({ node: { id } })),
         pageInfo: { hasNextPage: false },
       };
     },
@@ -402,11 +402,28 @@ test('createEngineVersionedMeaningScope delegates writes and commits a new engin
     prisma as unknown as RevoPrismaService,
   );
 
-  await scope.getRow('task_runs', 'row-1');
-  await scope.createRow('task_runs', 'row-2', { title: 'Created' });
-  await scope.updateRow('task_runs', 'row-2', { title: 'Updated' });
+  const rows = await scope.listRows('roles', {
+    first: 10,
+    after: 'cursor-0',
+    where: { data: { path: 'playbook_id', equals: 'pb' } },
+  });
+  await scope.getRow('roles', 'row-1');
+  await scope.createRow('roles', 'row-2', { title: 'Created' });
+  await scope.updateRow('roles', 'row-2', { title: 'Updated' });
   const revision = await scope.commit('seed');
 
+  assert.deepEqual(rows, [{ id: 'row-1', data: { title: 'Run' }, cursor: 'cursor-1' }]);
+  assert.deepEqual(
+    engine.calls.find((call) => call.name === 'getRows')?.args,
+    {
+      revisionId: 'draft-1',
+      tableId: 'roles',
+      first: 10,
+      after: 'cursor-0',
+      orderBy: undefined,
+      where: { data: { path: 'playbook_id', equals: 'pb' } },
+    },
+  );
   assert.deepEqual(revision, { id: 'revision-2', sequence: 2 });
   assert.equal(
     engine.calls.filter((call) => call.name === 'createRevision').length,

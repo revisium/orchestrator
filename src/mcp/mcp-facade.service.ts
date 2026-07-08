@@ -29,6 +29,7 @@ type SimulateRouteMcpInput = {
   title: string;
   repo?: string;
   pipeline?: string;
+  profileId?: string;
   playbookId?: string;
   params?: unknown;
   executionProfile?: unknown;
@@ -40,6 +41,12 @@ type ListPipelinesMcpInput = {
 type GetPipelineMcpInput = {
   pipelineId: string;
   includeDetails?: boolean;
+};
+type ListProfilesMcpInput = {
+  playbookId?: string;
+  pipelineId?: string;
+  includeDetails?: boolean;
+  includeDeprecated?: boolean;
 };
 
 function formatCause(error: unknown): string {
@@ -177,6 +184,21 @@ function compactPipeline(value: unknown): unknown {
     optionalRoles: compactStringArray(pipeline.optionalRoles),
     routeGates: compactStringArray(pipeline.routeGates),
     executionPolicySummary: compactExecutionPolicySummary(pipeline.executionPolicy),
+  });
+}
+
+function compactRunProfile(value: unknown): unknown {
+  const profile = asRecord(value);
+  if (!profile) return value;
+  return definedEntries({
+    profileId: asString(profile.profileId),
+    pipelineId: asString(profile.pipelineId),
+    playbookId: asString(profile.playbookId),
+    version: asString(profile.version),
+    displayName: asString(profile.displayName),
+    summary: compactText(profile.summary),
+    profileHash: asString(profile.profileHash),
+    status: asString(profile.status),
   });
 }
 
@@ -413,6 +435,7 @@ export class McpFacadeService {
     scope?: string;
     playbookId?: string;
     pipelineId?: string;
+    profileId?: string;
     params?: Record<string, unknown>;
     executionProfile?: unknown;
     issueRef?: { repo: string; number: number; url: string };
@@ -484,7 +507,7 @@ export class McpFacadeService {
     return this.api.cancelRun(runId);
   }
 
-  listRuns(filter?: { status?: string; limit?: number }) {
+  listRuns(filter?: { status?: string; statuses?: string[]; limit?: number }) {
     return this.api.listRuns(filter);
   }
 
@@ -624,6 +647,11 @@ export class McpFacadeService {
   async getPipeline(input: GetPipelineMcpInput) {
     const pipeline = await this.api.getPipeline(input.pipelineId);
     return input.includeDetails ? pipeline : compactPipeline(pipeline);
+  }
+
+  async listProfiles(input: ListProfilesMcpInput = {}) {
+    const profiles = await this.api.listProfiles(input);
+    return input.includeDetails ? profiles : profiles.map(compactRunProfile);
   }
 
   async simulateRoute(input: SimulateRouteMcpInput) {

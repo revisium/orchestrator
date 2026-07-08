@@ -13,7 +13,8 @@ ADRs, and specs. Do not copy canonical roles or pipelines into this repo's docs.
 stores product meaning in Revisium.
 
 - **DBOS owns progress:** durable workflow cursor, retries, waits, and resume.
-- **Revisium owns meaning:** playbooks, roles, pipeline templates, inbox rows, events, costs, and projections.
+- **Revisium owns meaning:** playbooks, roles, pipeline templates, model profiles, run profiles, and routing policy.
+- **Prisma owns runtime state:** runs, tasks, attempts, inbox items, events, outputs, and costs.
 - **MCP is the agent front door:** local stdio bridge over product tools.
 - **GraphQL is the UI/script front door:** local NestJS/Yoga endpoint over the same feature services.
 - **CLI is lifecycle-first:** start, stop, status, restart, doctor, logs, and the MCP bridge.

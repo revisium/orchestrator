@@ -16,12 +16,8 @@ import type { RolesService } from '../revisium/roles.service.js';
 import type { RunService } from '../revisium/run.service.js';
 import { CreateRunWorkflowError, previewCreateRunIds } from '../run/create-run.js';
 import { hasWorkflowProgress, TaskControlPlaneApiService } from './task-control-plane-api.service.js';
-import {
-  CODEX_CONSENSUS_PROFILE,
-  CODEX_CONSENSUS_PROFILE_VERSION,
-  CONSENSUS_TOGGLE_ALLOWLIST,
-} from '../control-plane/topology-profiles.js';
-import { hashProfile, materializeTemplate, MATERIALIZER_VERSION } from '../pipeline-core/materialize.js';
+import { topologyProfileFromRunProfile } from '../control-plane/run-profiles.js';
+import { materializeTemplate, MATERIALIZER_VERSION } from '../pipeline-core/materialize.js';
 import { POLICY_VERSION } from '../control-plane/default-playbook-policy.js';
 import { templateFromExecutionPolicy } from '../pipeline/data-driven-template.js';
 import { INTEGRATOR_PROGRESS_EVENT_TYPES } from '../pipeline/data-driven-task.workflow.js';
@@ -3948,7 +3944,7 @@ test('simulateRoute forwards executionProfile', async () => {
   assert.equal(result.executionProfile.bindingOverrides?.length, 1);
 });
 
-// ─── codex-consensus alias resolution + provenance ───────────────────────────
+// Stored run profile resolution + provenance.
 
 const FEATURE_DEV_TEMPLATE = {
   specVersion: '1.0',
@@ -3964,6 +3960,48 @@ const FEATURE_DEV_TEMPLATE = {
   },
 };
 const FEATURE_DEV_POLICY = { template_json: FEATURE_DEV_TEMPLATE };
+const STORED_PROFILE_ID = 'codex-primary-claude-review-consensus';
+const STORED_PROFILE_HASH = 'stored-profile-hash-1';
+const STORED_PROFILE = {
+  id: STORED_PROFILE_ID,
+  pipelineId: 'feature-development',
+  schemaVersion: 'run-profile/v1',
+  version: '1',
+  displayName: 'Codex primary, Claude review consensus',
+  summary: 'Codex development with parallel Codex plus Claude consensus for plan and code review.',
+  topology: {
+    stages: {
+      planReviewer: { mode: 'consensus', branches: 2 },
+      codeReview: { mode: 'consensus', branches: 2 },
+    },
+  },
+  bindings: {
+    slots: {
+      analyst: { runnerId: 'codex', modelLevel: 'codex-deep', permissionMode: 'workspace-write' },
+      developer: { runnerId: 'codex', modelLevel: 'codex-standard', permissionMode: 'workspace-write' },
+      triager: { runnerId: 'codex', modelLevel: 'codex-deep' },
+      watcher: { runnerId: 'codex', modelLevel: 'codex-standard' },
+      planReviewPrimary: { runnerId: 'codex', modelLevel: 'codex-deep' },
+      planReviewSecondary: { runnerId: 'claude-code', modelLevel: 'deep' },
+      codeReviewPrimary: { runnerId: 'codex', modelLevel: 'codex-deep' },
+      codeReviewSecondary: { runnerId: 'claude-code', modelLevel: 'deep' },
+    },
+  },
+  status: 'active',
+};
+const STORED_PROFILE_SUMMARY = {
+  id: `pb-${STORED_PROFILE_ID}`,
+  playbookId: 'pb',
+  pipelineId: 'feature-development',
+  profileId: STORED_PROFILE_ID,
+  schemaVersion: 'run-profile/v1',
+  version: '1',
+  displayName: 'Codex primary, Claude review consensus',
+  summary: 'Codex development with parallel Codex plus Claude consensus for plan and code review.',
+  profile: STORED_PROFILE,
+  profileHash: STORED_PROFILE_HASH,
+  status: 'active' as const,
+};
 
 const CANONICAL_ROLES = [
   { id: 'pb-orchestrator', name: 'orchestrator', modelLevel: 'deep', runner: 'claude-code', surface: 'any', rights: 'write-working-tree', playbookId: 'pb', playbookRoleId: 'orchestrator' },
@@ -3975,12 +4013,12 @@ const CANONICAL_ROLES = [
   { id: 'pb-watcher', name: 'watcher', modelLevel: 'cheap', runner: 'claude-code', surface: 'any', rights: 'read-only', playbookId: 'pb', playbookRoleId: 'watcher' },
 ];
 
-function makeApiForCodexAliasTests() {
+function makeApiForStoredProfileTests() {
   return makeApi({
     rolesService: {
       async listRoles() { return CANONICAL_ROLES as never; },
       async loadModelProfile(level: string) {
-        return { level: level as never, provider: 'anthropic', modelId: 'x', params: {}, costPerInput: 0, costPerOutput: 0 };
+        return { level: level as never, provider: level.startsWith('codex-') ? 'openai' : 'anthropic', modelId: 'x', params: {}, costPerInput: 0, costPerOutput: 0 };
       },
     },
     playbooksService: {
@@ -3988,259 +4026,128 @@ function makeApiForCodexAliasTests() {
         return { id: 'pb', name: 'PB', packageName: '@x/pb', version: '1.0.0', source: 'local:/pb', schemaVersion: 2 };
       },
       async listPipelines() {
-        return [
-          {
-            id: 'pb-feature-development',
-            playbookId: 'pb',
-            pipelineId: 'feature-development',
-            path: 'pipelines/feature-development/PIPELINE.md',
-            triggers: ['feature development task'],
-            requiredRoles: ['orchestrator', 'analyst', 'reviewer', 'triager', 'developer', 'integrator', 'watcher'],
-            alternativeRoles: [],
-            optionalRoles: [],
-            routeGates: ['task spec approval', 'merge approval'],
-            executionPolicy: FEATURE_DEV_POLICY,
-          },
-          {
-            id: 'pb-feature-development-codex-consensus',
-            playbookId: 'pb',
-            pipelineId: 'feature-development-codex-consensus',
-            path: 'pipelines/feature-development-codex-consensus/PIPELINE.md',
-            triggers: ['codex feature', 'codex consensus feature', 'codex task-to-PR work'],
-            requiredRoles: ['orchestrator-codex', 'analyst-codex', 'reviewer-codex', 'triager-codex', 'developer-codex', 'integrator', 'watcher-codex'],
-            alternativeRoles: [],
-            optionalRoles: [],
-            routeGates: ['task spec approval', 'merge approval'],
-            executionPolicy: {},
-          },
-        ] as never;
+        return [{
+          id: 'pb-feature-development',
+          playbookId: 'pb',
+          pipelineId: 'feature-development',
+          path: 'pipelines/feature-development/PIPELINE.md',
+          triggers: ['feature development task'],
+          requiredRoles: ['orchestrator', 'analyst', 'reviewer', 'triager', 'developer', 'integrator', 'watcher'],
+          alternativeRoles: [],
+          optionalRoles: [],
+          routeGates: ['task spec approval', 'merge approval'],
+          executionPolicy: FEATURE_DEV_POLICY,
+        }] as never;
       },
       async resolvePipeline({ pipelineId }: { playbookId: string; pipelineId: string }) {
-        if (pipelineId === 'feature-development') {
-          return {
-            id: 'pb-feature-development',
-            playbookId: 'pb',
-            pipelineId: 'feature-development',
-            path: 'pipelines/feature-development/PIPELINE.md',
-            triggers: ['feature development task'],
-            requiredRoles: ['orchestrator', 'analyst', 'reviewer', 'triager', 'developer', 'integrator', 'watcher'],
-            alternativeRoles: [],
-            optionalRoles: [],
-            routeGates: ['task spec approval', 'merge approval'],
-            executionPolicy: FEATURE_DEV_POLICY,
-          } as never;
+        if (pipelineId !== 'feature-development') throw new Error(`unexpected pipelineId: ${pipelineId}`);
+        return {
+          id: 'pb-feature-development',
+          playbookId: 'pb',
+          pipelineId: 'feature-development',
+          path: 'pipelines/feature-development/PIPELINE.md',
+          triggers: ['feature development task'],
+          requiredRoles: ['orchestrator', 'analyst', 'reviewer', 'triager', 'developer', 'integrator', 'watcher'],
+          alternativeRoles: [],
+          optionalRoles: [],
+          routeGates: ['task spec approval', 'merge approval'],
+          executionPolicy: FEATURE_DEV_POLICY,
+        } as never;
+      },
+      async resolveRunProfile({ pipelineId, profileId }: { playbookId: string; pipelineId: string; profileId: string }) {
+        if (pipelineId !== 'feature-development' || profileId !== STORED_PROFILE_ID) {
+          throw new ControlPlaneError('ROW_NOT_FOUND', `run profile not found: ${profileId}`);
         }
-        if (pipelineId === 'feature-development-codex-consensus') {
-          return {
-            id: 'pb-feature-development-codex-consensus',
-            playbookId: 'pb',
-            pipelineId: 'feature-development-codex-consensus',
-            path: 'pipelines/feature-development-codex-consensus/PIPELINE.md',
-            triggers: ['codex feature', 'codex consensus feature', 'codex task-to-PR work'],
-            requiredRoles: ['orchestrator-codex', 'analyst-codex', 'reviewer-codex', 'triager-codex', 'developer-codex', 'integrator', 'watcher-codex'],
-            alternativeRoles: [],
-            optionalRoles: [],
-            routeGates: ['task spec approval', 'merge approval'],
-            executionPolicy: {},
-          } as never;
-        }
-        throw new Error(`unexpected pipelineId: ${pipelineId}`);
+        return STORED_PROFILE_SUMMARY as never;
+      },
+      async listRunProfiles() {
+        return [STORED_PROFILE_SUMMARY] as never;
       },
       async getPipeline() { return null; },
     },
   });
 }
 
-function assertCodexProvenanceFields(route: RouteDecision): void {
-  assert.equal(route.requestedPipelineId, 'feature-development-codex-consensus', 'requestedPipelineId must be alias id');
-  assert.equal(route.basePipelineId, 'feature-development', 'basePipelineId must be base id');
-  assert.equal(route.profileId, 'codex-consensus', 'profileId must be codex-consensus');
-  assert.equal(route.profileVersion, CODEX_CONSENSUS_PROFILE_VERSION, 'profileVersion must match constant');
-  assert.equal(route.profileHash, hashProfile(CODEX_CONSENSUS_PROFILE), 'profileHash must match hashProfile');
-  assert.equal(route.materializerVersion, MATERIALIZER_VERSION, 'materializerVersion must match constant');
-  assert.equal(route.policyVersion, POLICY_VERSION, 'policyVersion must match constant');
-  assert.ok(typeof route.materializedTemplateHash === 'string' && route.materializedTemplateHash.length === 64, 'materializedTemplateHash must be a SHA-256 hex string');
-  assert.equal(route.pipelineId, 'feature-development-codex-consensus', 'public pipelineId is the alias id');
-  assert.equal(route.pipelineRowId, 'pb-feature-development', 'pipelineRowId points to BASE pipeline row');
+function assertStoredProfileProvenance(route: RouteDecision): void {
+  assert.equal(route.requestedPipelineId, 'feature-development');
+  assert.equal(route.basePipelineId, 'feature-development');
+  assert.equal(route.profileId, STORED_PROFILE_ID);
+  assert.equal(route.profileVersion, '1');
+  assert.equal(route.profileHash, STORED_PROFILE_HASH);
+  assert.equal(route.profileSnapshot, STORED_PROFILE);
+  assert.equal(route.materializerVersion, MATERIALIZER_VERSION);
+  assert.equal(route.policyVersion, POLICY_VERSION);
+  assert.ok(typeof route.materializedTemplateHash === 'string' && route.materializedTemplateHash.length === 64);
+  assert.equal(route.pipelineId, 'feature-development');
+  assert.equal(route.pipelineRowId, 'pb-feature-development');
 }
 
-test('resolveRouteDecision: explicit codex-consensus alias → materialized template + full provenance', async () => {
-  const api = makeApiForCodexAliasTests();
+test('resolveRouteDecision: stored run profile materializes template and stamps provenance', async () => {
+  const api = makeApiForStoredProfileTests();
   const route = await api.simulateRoute({
     title: 'test',
-    pipeline: 'feature-development-codex-consensus',
+    pipeline: 'feature-development',
+    profileId: STORED_PROFILE_ID,
   });
-  assertCodexProvenanceFields(route);
+  assertStoredProfileProvenance(route);
 
   const template = (route.executionPolicy as { template_json?: { pipelineId?: string; nodes?: Record<string, unknown> } }).template_json;
-  assert.equal(template?.pipelineId, 'feature-development', 'materialized template pipelineId matches base');
+  assert.equal(template?.pipelineId, 'feature-development');
   assert.ok('planReviewFanout' in (template?.nodes ?? {}), 'materialized template has planReviewFanout');
   assert.ok('codeReviewFanout' in (template?.nodes ?? {}), 'materialized template has codeReviewFanout');
 });
 
-test('resolveRouteDecision: auto-routed codex title → materialized template + full provenance (MUST-FIX)', async () => {
-  const api = makeApiForCodexAliasTests();
-  const route = await api.simulateRoute({
-    title: 'codex task-to-PR work feature implementation',
-  });
-  assertCodexProvenanceFields(route);
-
-  const template = (route.executionPolicy as { template_json?: { nodes?: Record<string, unknown> } }).template_json;
-  assert.ok('planReviewFanout' in (template?.nodes ?? {}), 'auto-routed: materialized template has planReviewFanout');
-  assert.ok('codeReviewFanout' in (template?.nodes ?? {}), 'auto-routed: materialized template has codeReviewFanout');
-});
-
-test('resolveRouteDecision: codex-consensus runner bindings — 6 canonical roles → codex, integrator stays revo-integrator', async () => {
-  const api = makeApiForCodexAliasTests();
+test('resolveRouteDecision: stored run profile role and node bindings affect launch configuration', async () => {
+  const api = makeApiForStoredProfileTests();
   const route = await api.simulateRoute({
     title: 'test',
-    pipeline: 'feature-development-codex-consensus',
+    pipeline: 'feature-development',
+    profileId: STORED_PROFILE_ID,
   });
 
-  const byRole = new Map(route.roleBindings.map((b) => [b.roleId, b]));
-
-  for (const roleId of ['orchestrator', 'analyst', 'reviewer', 'triager', 'developer', 'watcher']) {
+  const byRole = new Map(route.roleBindings.map((binding) => [binding.roleId, binding]));
+  for (const roleId of ['analyst', 'triager', 'developer', 'watcher']) {
     const binding = byRole.get(roleId);
     assert.ok(binding, `${roleId} must have a binding`);
     assert.equal(binding.resolvedRunnerId, 'codex', `${roleId} resolves to codex runner`);
     assert.equal(binding.runnerSource, 'execution-profile', `${roleId} runnerSource is execution-profile`);
   }
+  assert.equal(byRole.get('developer')?.resolvedModelLevel, 'codex-standard');
+  assert.equal(byRole.get('developer')?.modelSource, 'execution-profile');
+  assert.equal(byRole.get('reviewer')?.resolvedRunnerId, 'claude-code', 'reviewer role stays generic; branch nodes carry runner overrides');
+  assert.equal(byRole.get('integrator')?.resolvedRunnerId, 'revo-integrator', 'integrator stays on revo-integrator');
 
-  const codexModelExpectations: Record<string, string> = {
-    orchestrator: 'codex-deep',
-    analyst: 'codex-deep',
-    reviewer: 'codex-deep',
-    triager: 'codex-deep',
-    developer: 'codex-standard',
-    watcher: 'codex-cheap',
-  };
-  for (const [roleId, expectedLevel] of Object.entries(codexModelExpectations)) {
-    const binding = byRole.get(roleId);
-    assert.equal(binding?.resolvedModelLevel, expectedLevel, `${roleId} resolvedModelLevel must be ${expectedLevel}`);
-    assert.equal(binding?.modelSource, 'execution-profile', `${roleId} modelSource is execution-profile`);
-  }
-
-  const integrator = byRole.get('integrator');
-  assert.ok(integrator, 'integrator must have a binding');
-  assert.equal(integrator.resolvedRunnerId, 'revo-integrator', 'integrator stays on revo-integrator');
-  assert.equal(integrator.runnerSource, 'playbook', 'integrator runnerSource is playbook');
-  assert.equal(integrator.resolvedModelLevel, 'standard', 'integrator model stays standard');
-  assert.equal(integrator.modelSource, 'playbook', 'integrator modelSource is playbook');
+  const byNodeOverride = new Map(
+    (route.executionProfile.bindingOverrides ?? [])
+      .filter((override) => override.match.nodeId)
+      .map((override) => [override.match.nodeId, override]),
+  );
+  assert.equal(byNodeOverride.get('planReviewPrimary')?.runnerId, 'codex');
+  assert.equal(byNodeOverride.get('planReviewSecondary')?.runnerId, 'claude-code');
+  assert.equal(byNodeOverride.get('codeReviewPrimary')?.modelLevel, 'codex-deep');
 });
 
-test('resolveRouteDecision: caller runnerOverrides win over derived (claude-code→stub-agent bypasses codex remap)', async () => {
-  const api = makeApiForCodexAliasTests();
+test('resolveRouteDecision: caller binding override wins over stored profile binding override', async () => {
+  const api = makeApiForStoredProfileTests();
   const route = await api.simulateRoute({
     title: 'test',
-    pipeline: 'feature-development-codex-consensus',
-    executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent' } },
-  });
-
-  const byRole = new Map(route.roleBindings.map((b) => [b.roleId, b]));
-  const developer = byRole.get('developer');
-  assert.equal(developer?.resolvedRunnerId, 'stub-agent', 'caller override wins: claude-code→stub-agent overrides derived claude-code→codex');
-});
-
-test('resolveRouteDecision: base pipeline direct + profileId=codex-consensus (rule 2) yields same result as alias', async () => {
-  const api = makeApiForCodexAliasTests();
-  const viaAlias = await api.simulateRoute({ title: 'test', pipeline: 'feature-development-codex-consensus' });
-  const viaDirect = await api.simulateRoute({ title: 'test', pipeline: 'feature-development', profileId: 'codex-consensus' });
-
-  assert.equal(viaDirect.requestedPipelineId, 'feature-development', 'direct requestedPipelineId is base');
-  assert.equal(viaDirect.basePipelineId, 'feature-development');
-  assert.equal(viaDirect.profileId, 'codex-consensus');
-  assert.equal(viaDirect.materializedTemplateHash, viaAlias.materializedTemplateHash, 'same materialized hash via both paths');
-});
-
-test('resolveRouteDecision: alias + conflicting explicit profileId throws VALIDATION_FAILURE', async () => {
-  const api = makeApiForCodexAliasTests();
-  await assert.rejects(
-    () => api.simulateRoute({ title: 'test', pipeline: 'feature-development-codex-consensus', profileId: 'other-profile' }),
-    (err: ControlPlaneError) => err.code === 'VALIDATION_FAILURE' && err.message.includes('conflicts'),
-  );
-});
-
-// ─── pinned-replay: old codex-consensus run uses cached route_decision, never re-resolves ───────
-
-const OLD_CODEX_CONSENSUS_TEMPLATE = {
-  specVersion: '1.0',
-  pipelineId: 'feature-development-codex-consensus',
-  entry: 'analyst',
-  verdicts: { domain: ['approved'] },
-  nodes: {
-    analyst: { id: 'analyst', kind: 'agent', roleRef: 'role:analyst-codex', next: 'doneEnd', onFailure: 'abort' },
-    doneEnd: { id: 'doneEnd', kind: 'terminal', status: 'succeeded' },
-  },
-};
-
-const OLD_CODEX_CONSENSUS_ROUTE: RouteDecision = {
-  playbookId: 'revisium-default',
-  pipelineId: 'feature-development-codex-consensus',
-  pipelineRowId: 'revisium-default-feature-development-codex-consensus',
-  source: 'explicit',
-  roles: ['analyst-codex', 'developer-codex', 'integrator'],
-  requiredRoles: ['analyst-codex', 'developer-codex', 'integrator'],
-  optionalRoles: [],
-  routeGates: ['plan', 'merge'],
-  executionPolicy: { template_json: OLD_CODEX_CONSENSUS_TEMPLATE },
-  executionProfile: { id: 'default', runnerOverrides: {} },
-  roleBindings: [
-    { roleId: 'analyst-codex', rowId: 'rd-analyst-codex', modelLevel: 'codex-deep', runnerId: 'codex', resolvedRunnerId: 'codex', runnerSource: 'playbook' },
-    { roleId: 'developer-codex', rowId: 'rd-developer-codex', modelLevel: 'codex-standard', runnerId: 'codex', resolvedRunnerId: 'codex', runnerSource: 'playbook' },
-    { roleId: 'integrator', rowId: 'rd-integrator', modelLevel: 'standard', runnerId: 'revo-integrator', resolvedRunnerId: 'revo-integrator', runnerSource: 'playbook' },
-  ],
-  params: {},
-};
-
-test('startRun: old codex-consensus run with cached route_decision replays PINNED template, never re-resolves', async () => {
-  let resolvePipelineCalled = false;
-  let capturedOpts: { route: RouteDecision; template: unknown } | undefined;
-
-  const api = makeApi({
-    runService: {
-      async getRun() {
-        return {
-          rowId: 'old-codex-run',
-          data: {
-            id: 'old-codex-run',
-            title: 'old codex run',
-            status: 'ready',
-            route_decision: OLD_CODEX_CONSENSUS_ROUTE,
-          },
-        };
-      },
-    },
-    playbooksService: {
-      async resolvePipeline() {
-        resolvePipelineCalled = true;
-        throw new Error('resolvePipeline must not be called when route_decision is cached');
-      },
-    },
-    pipelineService: {
-      async startDataDrivenTask(_runId, opts) {
-        capturedOpts = opts as { route: RouteDecision; template: unknown };
-        return { workflowID: 'old-codex-run' } as Awaited<ReturnType<PipelineService['startDataDrivenTask']>>;
-      },
+    pipeline: 'feature-development',
+    profileId: STORED_PROFILE_ID,
+    executionProfile: {
+      bindingOverrides: [{ match: { roleId: 'developer' }, runnerId: 'stub-agent', modelLevel: 'standard' }],
     },
   });
 
-  const result = await api.startRun({ runId: 'old-codex-run' }) as Record<string, unknown>;
-
-  assert.equal(resolvePipelineCalled, false, 'resolvePipeline must not be called for cached route_decision (no re-materialization)');
-  assert.ok(capturedOpts, 'startDataDrivenTask must be called with opts');
-
-  const route = capturedOpts.route as RouteDecision;
-  assert.equal(route.pipelineId, 'feature-development-codex-consensus', 'pinned pipelineId is the old alias id');
-  assert.equal(route.pipelineRowId, 'revisium-default-feature-development-codex-consensus', 'pinned pipelineRowId is the old codex-consensus row');
-  assert.deepEqual(
-    (route.executionPolicy as { template_json?: unknown }).template_json,
-    OLD_CODEX_CONSENSUS_TEMPLATE,
-    'pinned template_json is the OLD hand-authored graph, not a re-materialized one',
-  );
-  assert.equal(result.engine, 'data-driven');
+  const developer = route.roleBindings.find((binding) => binding.roleId === 'developer');
+  assert.equal(developer?.resolvedRunnerId, 'stub-agent');
+  assert.equal(developer?.resolvedModelLevel, 'standard');
 });
 
-// ─── profile replay-pin: real materialized route replays across startRun/getRunWorkflow/resumeRun ──
+test('listProfiles delegates to storage-backed playbook profiles', async () => {
+  const api = makeApiForStoredProfileTests();
+  const profiles = await api.listProfiles({ pipelineId: 'feature-development' });
+  assert.deepEqual(profiles.map((profile) => profile.profileId), [STORED_PROFILE_ID]);
+});
 
 type PipelineCatalogEntry = { id: string; execution_policy: unknown };
 
@@ -4248,18 +4155,21 @@ const bundledPipelines = JSON.parse(
   readFileSync(new URL('../../control-plane/default-playbook/catalog/pipelines.json', import.meta.url), 'utf8'),
 ) as PipelineCatalogEntry[];
 
-function makeRealMaterializedCodexRoute(): RouteDecision {
+function makePinnedMaterializedProfileRoute(): RouteDecision {
   const pipeline = bundledPipelines.find((p) => p.id === 'feature-development');
   assert.ok(pipeline, 'bundled feature-development pipeline must exist');
   const base = templateFromExecutionPolicy(pipeline.execution_policy);
   assert.ok(base, 'bundled feature-development must carry a valid template_json');
-  const allowlist = CONSENSUS_TOGGLE_ALLOWLIST['feature-development'];
-  assert.ok(allowlist, 'feature-development must have a toggle allowlist');
-  const { template: materializedTemplate, materializedTemplateHash } = materializeTemplate(base, CODEX_CONSENSUS_PROFILE, { allowlist });
+  const topologyProfile = topologyProfileFromRunProfile(STORED_PROFILE);
+  const { template: materializedTemplate, materializedTemplateHash } = materializeTemplate(
+    base,
+    topologyProfile,
+    { allowlist: ['planReviewer', 'codeReview'] },
+  );
   const roles = ['orchestrator', 'analyst', 'reviewer', 'triager', 'developer', 'integrator', 'watcher'];
   return {
     playbookId: 'revisium-default',
-    pipelineId: 'feature-development-codex-consensus',
+    pipelineId: 'feature-development',
     pipelineRowId: 'revisium-default-feature-development',
     source: 'explicit',
     roles,
@@ -4267,26 +4177,28 @@ function makeRealMaterializedCodexRoute(): RouteDecision {
     optionalRoles: [],
     routeGates: ['plan', 'merge'],
     executionPolicy: { template_json: materializedTemplate },
-    executionProfile: { id: 'codex-consensus', runnerOverrides: { 'claude-code': 'codex' } },
+    executionProfile: { id: STORED_PROFILE_ID, runnerOverrides: {}, bindingOverrides: [] },
     roleBindings: roles.map((roleId) =>
       roleId === 'integrator'
         ? { roleId, rowId: roleId, modelLevel: 'standard', runnerId: 'revo-integrator', resolvedRunnerId: 'revo-integrator', runnerSource: 'playbook' as const }
-        : { roleId, rowId: roleId, modelLevel: 'codex-standard', runnerId: 'claude-code', resolvedRunnerId: 'codex', runnerSource: 'execution-profile' as const },
+        : { roleId, rowId: roleId, modelLevel: 'standard', runnerId: 'claude-code', resolvedRunnerId: 'claude-code', runnerSource: 'playbook' as const },
     ),
     params: {},
-    requestedPipelineId: 'feature-development-codex-consensus',
+    requestedPipelineId: 'feature-development',
     basePipelineId: 'feature-development',
-    profileId: 'codex-consensus',
-    profileVersion: CODEX_CONSENSUS_PROFILE_VERSION,
-    profileHash: hashProfile(CODEX_CONSENSUS_PROFILE),
+    profileId: STORED_PROFILE_ID,
+    profileVersion: '1',
+    profileHash: STORED_PROFILE_HASH,
+    profileSnapshot: STORED_PROFILE,
     materializedTemplateHash,
+    materializedTemplate,
     materializerVersion: MATERIALIZER_VERSION,
     policyVersion: POLICY_VERSION,
   };
 }
 
-test('startRun/getRunWorkflow/resumeRun: pinned real materialized codex-consensus route never re-resolves (AC#10)', async () => {
-  const pinnedRoute = makeRealMaterializedCodexRoute();
+test('startRun/getRunWorkflow/resumeRun: pinned materialized profile route never re-resolves', async () => {
+  const pinnedRoute = makePinnedMaterializedProfileRoute();
 
   let resolvePipelineCalled = false;
   let capturedOpts: { route: RouteDecision; template: unknown } | undefined;
@@ -4294,7 +4206,7 @@ test('startRun/getRunWorkflow/resumeRun: pinned real materialized codex-consensu
   const api = makeApi({
     runService: {
       async getRun() {
-        return { rowId: 'codex-pin-run', data: { id: 'codex-pin-run', title: 'codex pin test', status: 'ready', route_decision: pinnedRoute } };
+        return { rowId: 'profile-pin-run', data: { id: 'profile-pin-run', title: 'profile pin test', status: 'ready', route_decision: pinnedRoute } };
       },
     },
     playbooksService: {
@@ -4306,12 +4218,12 @@ test('startRun/getRunWorkflow/resumeRun: pinned real materialized codex-consensu
     pipelineService: {
       async startDataDrivenTask(_runId, opts) {
         capturedOpts = opts as { route: RouteDecision; template: unknown };
-        return { workflowID: 'codex-pin-run' } as Awaited<ReturnType<PipelineService['startDataDrivenTask']>>;
+        return { workflowID: 'profile-pin-run' } as Awaited<ReturnType<PipelineService['startDataDrivenTask']>>;
       },
     },
   });
 
-  await api.startRun({ runId: 'codex-pin-run' });
+  await api.startRun({ runId: 'profile-pin-run' });
   assert.equal(resolvePipelineCalled, false, 'startRun must not call resolvePipeline for cached route_decision');
   assert.ok(capturedOpts, 'startDataDrivenTask must be called');
   assert.equal(
@@ -4320,15 +4232,13 @@ test('startRun/getRunWorkflow/resumeRun: pinned real materialized codex-consensu
     'startRun uses the pinned materializedTemplateHash',
   );
 
-  // Verify materialized template has parallel/join nodes (AC#6: consensus fanout/join)
   const pinnedTemplate = templateFromExecutionPolicy((capturedOpts.route as RouteDecision).executionPolicy);
   assert.ok(pinnedTemplate, 'pinned executionPolicy must carry a valid template_json');
-  const nodeKinds = new Set(Object.values(pinnedTemplate.nodes).map((n) => (n as { kind: string }).kind));
-  assert.ok(nodeKinds.has('parallel'), 'materialized codex-consensus template must have parallel (fanout) nodes');
-  assert.ok(nodeKinds.has('join'), 'materialized codex-consensus template must have join nodes');
+  const nodeKinds = new Set(Object.values(pinnedTemplate.nodes).map((node) => (node as { kind: string }).kind));
+  assert.ok(nodeKinds.has('parallel'), 'materialized profile template must have parallel nodes');
+  assert.ok(nodeKinds.has('join'), 'materialized profile template must have join nodes');
 
-  // getRunWorkflow uses pinned route and exposes provenance
-  const workflow = await api.getRunWorkflow('codex-pin-run');
+  const workflow = await api.getRunWorkflow('profile-pin-run');
   assert.equal(resolvePipelineCalled, false, 'getRunWorkflow must not call resolvePipeline');
   assert.equal(
     workflow.pipeline.provenance?.materializedTemplateHash,
@@ -4336,19 +4246,17 @@ test('startRun/getRunWorkflow/resumeRun: pinned real materialized codex-consensu
     'getRunWorkflow provenance carries the pinned materializedTemplateHash',
   );
 
-  // resumeRun (status=ready, workflow=null: no preflight block) delegates to startRun → same pinned route
-  await api.resumeRun({ runId: 'codex-pin-run' });
+  await api.resumeRun({ runId: 'profile-pin-run' });
   assert.equal(resolvePipelineCalled, false, 'resumeRun must not call resolvePipeline');
 });
 
-test('getRunWorkflow.pipeline.provenance.materializedTemplateHash ties simulateRoute hash to the pinned run (AC#11)', async () => {
-  // Build the pinned route from the real materialized graph
-  const pinnedRoute = makeRealMaterializedCodexRoute();
+test('getRunWorkflow.pipeline.provenance.materializedTemplateHash ties route hash to the pinned run', async () => {
+  const pinnedRoute = makePinnedMaterializedProfileRoute();
 
   const api = makeApi({
     runService: {
       async getRun() {
-        return { rowId: 'codex-prov-run', data: { id: 'codex-prov-run', title: 'provenance test', status: 'ready', route_decision: pinnedRoute } };
+        return { rowId: 'profile-prov-run', data: { id: 'profile-prov-run', title: 'provenance test', status: 'ready', route_decision: pinnedRoute } };
       },
     },
     playbooksService: {
@@ -4356,19 +4264,15 @@ test('getRunWorkflow.pipeline.provenance.materializedTemplateHash ties simulateR
     },
   });
 
-  const workflow = await api.getRunWorkflow('codex-prov-run');
+  const workflow = await api.getRunWorkflow('profile-prov-run');
 
-  // provenance reads the pinned hash verbatim (not recomputed)
   assert.equal(
     workflow.pipeline.provenance?.materializedTemplateHash,
     pinnedRoute.materializedTemplateHash,
-    'getRunWorkflow provenance.materializedTemplateHash equals the pinned route hash (route + run + pin tied)',
+    'getRunWorkflow provenance.materializedTemplateHash equals the pinned route hash',
   );
-  assert.equal(workflow.pipeline.provenance?.basePipelineId, 'feature-development', 'basePipelineId in provenance');
-  assert.equal(workflow.pipeline.provenance?.profileId, 'codex-consensus', 'profileId in provenance');
-  assert.ok(
-    typeof workflow.pipeline.provenance?.profileHash === 'string' && workflow.pipeline.provenance.profileHash.length > 0,
-    'profileHash in provenance',
-  );
-  assert.equal(workflow.pipeline.provenance?.requestedPipelineId, 'feature-development-codex-consensus', 'requestedPipelineId in provenance');
+  assert.equal(workflow.pipeline.provenance?.basePipelineId, 'feature-development');
+  assert.equal(workflow.pipeline.provenance?.profileId, STORED_PROFILE_ID);
+  assert.equal(workflow.pipeline.provenance?.profileHash, STORED_PROFILE_HASH);
+  assert.equal(workflow.pipeline.provenance?.requestedPipelineId, 'feature-development');
 });

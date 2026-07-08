@@ -125,8 +125,8 @@ through `stuckReworkDeveloper`, and `cancel` completes the run as `cancelled`. T
 its own scope, and `codeReviewLoop` is a child of that scope so each human-approved stuck rework starts a fresh normal
 developer/reviewer cycle series without creating a separate follow-up task.
 
-The bundled `feature-development-codex-consensus` pipeline keeps the older compatibility shape: a bounded stuck recovery
-attempt followed by a final stuck gate that allows only explicit `approve_anyway` or `abort`.
+Materialized run-profile templates must preserve the same stuck-recovery safeguards as the base
+`feature-development` template.
 
 ## Fork and Join
 

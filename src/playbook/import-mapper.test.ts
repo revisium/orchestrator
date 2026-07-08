@@ -35,7 +35,7 @@ test('mapPlaybookRows: maps roles and pipelines into versioned rows', () => {
     name: 'PB',
     schemaVersion: 2,
     packageName: '@x/pb',
-    catalogs: { roles: 'catalog/roles.json', pipelines: 'catalog/pipelines.json' },
+    catalogs: { roles: 'catalog/roles.json', pipelines: 'catalog/pipelines.json', runProfiles: 'catalog/run-profiles.json' },
     supportedRuntimes: ['revo'],
   };
   const catalogs: PlaybookCatalogs = {
@@ -64,6 +64,19 @@ test('mapPlaybookRows: maps roles and pipelines into versioned rows', () => {
         executionPolicy: { iteration_cap: 3 },
       },
     ],
+    runProfiles: [
+      {
+        id: 'codex-standard',
+        pipelineId: 'feature-development',
+        schemaVersion: 'run-profile/v1',
+        version: '1',
+        displayName: 'Codex standard',
+        summary: 'Codex-bound feature-development launch profile.',
+        topology: { stages: { analyst: { mode: 'single' } } },
+        bindings: { slots: { developer: { runnerId: 'codex', modelLevel: 'codex-standard' } } },
+        status: 'active',
+      },
+    ],
   };
 
   const rows = mapPlaybookRows({
@@ -84,6 +97,16 @@ test('mapPlaybookRows: maps roles and pipelines into versioned rows', () => {
   assert.deepEqual(rows.roles[0]?.data.allowed_tools, ['Read', 'Grep', 'Glob']);
   assert.equal(rows.pipelines[0]?.rowId, 'pb-feature-development');
   assert.deepEqual(rows.pipelines[0]?.data.route_gates, []);
+  assert.equal(rows.runProfiles[0]?.rowId, 'pb-codex-standard');
+  assert.equal(rows.runProfiles[0]?.table, 'run_profiles');
+  assert.equal(rows.runProfiles[0]?.data.profile_id, 'codex-standard');
+  assert.equal(rows.runProfiles[0]?.data.pipeline_id, 'feature-development');
+  assert.equal(rows.runProfiles[0]?.data.source_path, 'catalog/run-profiles.json');
+  assert.ok(typeof rows.runProfiles[0]?.data.profile_hash === 'string');
+  assert.equal(
+    (JSON.parse(String(rows.runProfiles[0]?.data.profile_json)) as { bindings?: unknown }).bindings !== undefined,
+    true,
+  );
   assert.equal(rows.catalogHash.length, 64);
 });
 
@@ -118,6 +141,7 @@ test('mapPlaybookRows: passes allowedTools through verbatim from the catalog', (
         },
       ],
       pipelines: [],
+      runProfiles: [],
     },
     now: '2026-06-13T00:00:00.000Z',
   });
@@ -172,6 +196,7 @@ test('mapPlaybookRows: normalizes canonical gate labels to workflow gate ids', (
           executionPolicy: {},
         },
       ],
+      runProfiles: [],
     },
     now: '2026-06-13T00:00:00.000Z',
   });
@@ -209,6 +234,7 @@ test('mapPlaybookRows: runner_id, not rights, selects the runtime runner', () =>
         },
       ],
       pipelines: [],
+      runProfiles: [],
     },
     now: '2026-06-13T00:00:00.000Z',
   });
@@ -232,6 +258,7 @@ test('mapPlaybookRows: mutating a role prompt changes catalogHash (prompt hashes
       allowedTools: ['Read'], defaultModelLevel: 'cheap', runnerId: 'claude-code', wrappers: {},
     }],
     pipelines: [],
+    runProfiles: [],
   };
   const source = { type: 'local' as const, input: '.', root, source: `local:${root}`, packageName: '@x/pb', version: '1.0.0' };
 
@@ -277,6 +304,7 @@ test('mapPlaybookRows: rejects production stub-agent role bindings', () => {
           },
         ],
         pipelines: [],
+        runProfiles: [],
       },
       now: '2026-06-13T00:00:00.000Z',
     }),

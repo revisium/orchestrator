@@ -203,7 +203,7 @@ The first Revo Prisma runtime schema SHOULD include these groups:
 | Tasks/nodes | current graph cursor or node-level execution state if needed outside DBOS |
 | Attempts | physical runner attempts, verdict, cost, token usage, artifact refs, bounded stdout/stderr tails |
 | Inbox | human gates/questions, deterministic identity, status, answer payload, signal state |
-| Events | append-only run events with monotonic per-run sequence |
+| Events | append-only run events with monotonic sequence used for deterministic per-run ordering |
 | Outputs | named node outputs and output summaries |
 | Costs | cost ledger by run/node/attempt/provider/model |
 | Artifacts | file/worktree/artifact index rows pointing to filesystem storage |
@@ -213,6 +213,7 @@ Runtime constraints SHOULD include:
 - enum or check constraints for statuses/verdicts;
 - idempotency unique constraints for DBOS-replayed writes;
 - `RunEvent(runId, sequence)` uniqueness;
+- decimal/NUMERIC storage for persisted cost amounts;
 - uniqueness for active/pending inbox identity;
 - indexes for status dashboards and run attention queries;
 - retention-friendly timestamps and optional partitioning seams.

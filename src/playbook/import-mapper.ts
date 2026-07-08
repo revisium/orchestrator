@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { RoleCatalogRecord, PipelineCatalogRecord, PlaybookCatalogs } from './catalog-loader.js';
+import type { RoleCatalogRecord, PipelineCatalogRecord, PlaybookCatalogs, RunProfileCatalogRecord } from './catalog-loader.js';
 import type { PlaybookManifest } from './manifest.js';
 import { PlaybookError } from './errors.js';
 import type { ResolvedPlaybookSource } from './source-resolver.js';
@@ -7,7 +7,7 @@ import { composeRolePrompt } from './prompt-composer.js';
 import { normalizeRouteGates } from '../pipeline/route-contract.js';
 
 export type VersionedRow = {
-  table: 'playbooks' | 'roles' | 'pipelines';
+  table: 'playbooks' | 'roles' | 'pipelines' | 'run_profiles';
   rowId: string;
   data: Record<string, unknown>;
 };
@@ -17,6 +17,7 @@ export type PlaybookImportRows = {
   playbook: VersionedRow;
   roles: VersionedRow[];
   pipelines: VersionedRow[];
+  runProfiles: VersionedRow[];
   catalogHash: string;
 };
 
@@ -134,6 +135,7 @@ function mapRole(root: string, playbookId: string, role: RoleCatalogRecord, now:
       rights: role.rights,
       timeout_ms: 0,
       permission_mode: 'default',
+      status: 'active',
       updated_at: now,
     },
   };
@@ -156,6 +158,48 @@ function mapPipeline(playbookId: string, pipeline: PipelineCatalogRecord, now: s
       route_gates: normalizeRouteGates(pipeline.routeGates),
       platform_invocation: pipeline.platformInvocation,
       execution_policy_json: JSON.stringify(pipeline.executionPolicy),
+      status: 'active',
+      updated_at: now,
+    },
+  };
+}
+
+function mapRunProfile(
+  playbookId: string,
+  profile: RunProfileCatalogRecord,
+  now: string,
+  sourcePath: string,
+): VersionedRow {
+  const importedProfileId = scopedImportRowId(playbookId, profile.id);
+  const profileJson = {
+    id: profile.id,
+    pipelineId: profile.pipelineId,
+    schemaVersion: profile.schemaVersion,
+    version: profile.version,
+    displayName: profile.displayName,
+    summary: profile.summary,
+    topology: profile.topology,
+    bindings: profile.bindings,
+    status: profile.status,
+  };
+  const profileHash = hash(profileJson);
+  return {
+    table: 'run_profiles',
+    rowId: importedProfileId,
+    data: {
+      id: importedProfileId,
+      playbook_id: playbookId,
+      pipeline_id: profile.pipelineId,
+      profile_id: profile.id,
+      schema_version: profile.schemaVersion,
+      version: profile.version,
+      display_name: profile.displayName,
+      summary: profile.summary,
+      profile_json: JSON.stringify(profileJson),
+      profile_hash: profileHash,
+      status: profile.status,
+      source_path: sourcePath,
+      source_hash: profileHash,
       updated_at: now,
     },
   };
@@ -166,10 +210,14 @@ export function mapPlaybookRows(options: MapPlaybookRowsOptions): PlaybookImport
   const playbookId = options.nameOverride ?? options.manifest.id;
   const version = options.versionOverride ?? options.source.version;
   const roleRows = options.catalogs.roles.map((role) => mapRole(options.root, playbookId, role, now));
+  const runProfileRows = options.catalogs.runProfiles.map((profile) =>
+    mapRunProfile(playbookId, profile, now, options.manifest.catalogs.runProfiles ?? ''),
+  );
   const catalogHash = hash({
     manifest: options.manifest,
     roles: options.catalogs.roles,
     pipelines: options.catalogs.pipelines,
+    runProfiles: options.catalogs.runProfiles,
     prompts: roleRows.map((r) => ({ role: r.data.playbook_role_id, hash: r.data.source_hash })),
   });
   const playbook: VersionedRow = {
@@ -185,6 +233,7 @@ export function mapPlaybookRows(options: MapPlaybookRowsOptions): PlaybookImport
       manifest_path: 'playbook.json',
       roles_catalog_path: options.manifest.catalogs.roles,
       pipelines_catalog_path: options.manifest.catalogs.pipelines,
+      run_profiles_catalog_path: options.manifest.catalogs.runProfiles ?? '',
       catalog_hash: catalogHash,
       installed_at: now,
       updated_at: now,
@@ -195,6 +244,7 @@ export function mapPlaybookRows(options: MapPlaybookRowsOptions): PlaybookImport
     playbook,
     roles: roleRows,
     pipelines: options.catalogs.pipelines.map((pipeline) => mapPipeline(playbookId, pipeline, now)),
+    runProfiles: runProfileRows,
     catalogHash,
   };
 }

@@ -183,7 +183,7 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
         scope: z.string().optional(),
         playbookId: z.string().min(1).optional(),
         pipelineId: z.string().min(1).optional().describe('Required: the pipeline to use. Omit to receive candidatePipelines for selection (no run is created).'),
-        profileId: z.string().min(1).optional().describe('Optional topology profile to apply (e.g. "codex-consensus"). Use with base pipelineId or an alias that expands to it.'),
+        profileId: z.string().min(1).optional().describe('Optional stored run profile id. Use list_profiles to discover accepted ids for the selected pipelineId.'),
         params: paramsSchema,
         executionProfile: executionProfileSchema,
         issueRef: issueRefSchema,
@@ -614,6 +614,21 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
   );
 
   server.registerTool(
+    'list_profiles',
+    {
+      description: 'List stored run profiles from control-plane storage. Compact by default; pass includeDetails:true to include full profile JSON.',
+      inputSchema: {
+        playbookId: z.string().min(1).optional(),
+        pipelineId: z.string().min(1).optional(),
+        includeDetails: z.boolean().optional(),
+        includeDeprecated: z.boolean().optional(),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async (input) => json(await facade.listProfiles(input)),
+  );
+
+  server.registerTool(
     'simulate_route',
     {
       description: 'Return the current advisory route for a task without creating a run. Compact by default; pass includeDetails:true only for route graph/debugging.',
@@ -621,7 +636,7 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
         title: z.string().min(1),
         repo: z.string().optional(),
         pipeline: z.string().optional(),
-        profileId: z.string().min(1).optional().describe('Optional topology profile to apply (e.g. "codex-consensus").'),
+        profileId: z.string().min(1).optional().describe('Optional stored run profile id. Use list_profiles to discover accepted ids for the selected pipeline.'),
         playbookId: z.string().optional(),
         params: paramsSchema,
         executionProfile: executionProfileSchema,

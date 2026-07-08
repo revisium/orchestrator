@@ -12,22 +12,18 @@ The static bundled-playbook checks are accepted, and #141 merge-gate reject/rech
 
 ## Scope
 
-This spec defines product policy for the bundled default `feature-development` playbook variants. It sits above the
+This spec defines product policy for the bundled default `feature-development` playbook. It sits above the
 generic pipeline grammar: `pipeline-core` validates whether a template is structurally legal; this policy validates
 whether the bundled default graph keeps the handoffs and safeguards expected by the current Revo default pipeline.
 
-The verifier covers two hand-authored PRODUCT catalog variants in
+The verifier covers the canonical PRODUCT catalog pipeline in
 `control-plane/default-playbook/catalog/pipelines.json`:
 
 - `feature-development` — the reconciled canonical variant; passes all rules with zero diagnostics.
-- `feature-development-codex-consensus` — materialized-profile alias (base: `feature-development`, profileId:
-  `codex-consensus`) since #242; validated via `materializeTemplate` + `CODEX_CONSENSUS_PROFILE`; passes all
-  rules with zero diagnostics (`CODEX_LEGACY_WAIVERS = []`). Profile/materializer rules are owned by #244/#245
-  and cross-referenced here, NOT duplicated.
 
 The e2e test fixture at `src/e2e/fixtures/playbook/catalog/pipelines.json` is test infrastructure (a smaller
 pre-escalation graph driven by specific e2e paths) and is out of product-policy scope. The AC's
-"hand-authored variants" refers to the two product catalog entries above.
+"hand-authored variants" refers to product catalog entries, not run profiles.
 
 The key words MUST, MUST NOT, SHOULD, SHOULD NOT, MAY are to be interpreted as in RFC 2119 / BCP 14.
 
@@ -55,7 +51,7 @@ The bundled `feature-development` policy verifier reports errors for these stati
 
 | Rule | Diagnostic code |
 | --- | --- |
-| The verifier is applied only to supported `feature-development` variants. | `DEFAULT_POLICY_WRONG_PIPELINE` |
+| The verifier is applied only to supported `feature-development` templates. | `DEFAULT_POLICY_WRONG_PIPELINE` |
 | Developer/rework/CI/review-fix change producers expose `schema:change` outputs and downstream reviewer/integrator steps consume them. | `DEFAULT_POLICY_CHANGE_HANDOFF_MISSING` |
 | PR readiness flows through `pollPr`, then a fresh `mergeReadiness` poll, then `mergeGate`; terminal `merged` routes cleanup and terminal `closed` routes recovery; the gate surfaces the `mergeReadiness` artifact. | `DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING` |
 | `pollPr` and `mergeReadiness` recheck branches MUST be bounded by `pollLoop < 8`, and `pollLoop` MUST be declared with `cap=8`. | `DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING` |
@@ -72,24 +68,18 @@ The bundled `feature-development` policy verifier reports errors for these stati
 | `confirmMerge` script catches (`revo.ScriptBlocked`, `revo.ScriptFailed`) MUST NOT route to a terminal node; base-drift and head-guard failures are recoverable. | `DEFAULT_POLICY_CONFIRM_MERGE_FAILURE_TERMINAL` |
 | `confirmMerge.next` MUST be `cleanupWorktree`; `cleanupWorktree` MUST be a `script:cleanupWorktree` node with `.next = mergedEnd`. No `confirmMerge -> mergedEnd` bypass is permitted. | `DEFAULT_POLICY_POST_MERGE_CLEANUP_MISSING` |
 | Every declared `humanGate` outcome MUST have a guarded (non-default) branch whose condition explicitly mentions that verdict. Defaults catch only out-of-menu or invalid verdicts. | `DEFAULT_POLICY_GATE_OUTCOMES_IMPLICIT` |
-| The codex variant's actual violation set MUST be a subset of `CODEX_LEGACY_WAIVERS` (every fired code must be consciously documented). | `DEFAULT_POLICY_VARIANT_POLICY_GAP` |
-| The codex variant's actual violation set MUST exactly match `CODEX_LEGACY_WAIVERS` (drift in either direction signals an undocumented graph change). | `DEFAULT_POLICY_VARIANT_PARITY_DRIFT` |
+## Profile-Materialized Templates
 
-## Variant Handling
+The verifier can also be applied to materialized templates produced from stored run profile data. A seeded consensus
+profile is read from `control-plane/default-playbook/catalog/run-profiles.json`, converted through
+`src/control-plane/run-profiles.ts`, materialized with `materializeTemplate`, and then checked with the same
+`validateDefaultPlaybookPolicy` rule set.
 
-The verifier dispatches to the same reconciled rule set for both supported variants. Both variants pass with zero
-diagnostics since #242.
-
-`feature-development-codex-consensus` is a materialized-profile alias: the verifier resolves it via
-`materializeTemplate(base, CODEX_CONSENSUS_PROFILE, { allowlist })` before applying the rule set. `CODEX_LEGACY_WAIVERS`
-is `[]`; `VARIANT_POLICY_GAP` and `VARIANT_PARITY_DRIFT` guard that the materialized variant stays at zero
-diagnostics — any future graph divergence fires one of these codes.
-
-To update `CODEX_LEGACY_WAIVERS`: run `validateDefaultPlaybookPolicy(codexTemplate)`, capture the unique code set,
-replace the constant, and commit with a reference to the issue that changed the graph.
+Run profiles are not product pipeline variants. Their import/versioning rules are owned by
+[run-profiles-v1.spec.md](./run-profiles-v1.spec.md); this policy spec only states that a materialized default
+feature-development template must preserve the same static safeguards.
 
 Cross-references:
-- #242 — migrated codex to materialized-profile alias; emptied `CODEX_LEGACY_WAIVERS`.
 - #244 — typed profile bindings; owns `PROFILE_*` codes (not duplicated here).
 - #245 — topology materializer and materialized-variant rules.
 - #248 — runtime/replay/e2e matrix for policy rules.
@@ -127,15 +117,12 @@ contract: the verifier does not prove that GitHub/provider state was fresh at ru
   `questionReviewRework`, which receives the gate resolution before integration and thread responses.
 - 2026-07-06: #272 — bounded `pollPr`/`mergeReadiness` readiness recheck self-loops with `pollLoop < 8`,
   documented cap exhaustion as a recovery off-ramp, and made counterless resilience cycles errors.
-- 2026-07-02: #242 — migrated `feature-development-codex-consensus` from hand-authored catalog entry to
-  materialized-profile alias (`base: feature-development`, `profileId: codex-consensus`); emptied
-  `CODEX_LEGACY_WAIVERS`; both variants now validate with zero diagnostics.
-- 2026-07-02: Generalized verifier to cover `feature-development` + `feature-development-codex-consensus`; added 9
+- 2026-07-07: Run profiles are catalog-backed control-plane data; provider/topology choices are no longer public
+  pipeline variants or TypeScript registry entries.
+- 2026-07-02: Generalized verifier for materialized feature-development templates; added 7
   new static rules (RECOVERABLE_CATCH_TERMINAL, CAP_EXHAUSTION_OFFRAMP_MISSING, APPROVE_REVERIFY_MISSING,
   MERGE_READINESS_FRESHNESS_MISSING, CONFIRM_MERGE_FAILURE_TERMINAL, POST_MERGE_CLEANUP_MISSING,
-  GATE_OUTCOMES_IMPLICIT, VARIANT_POLICY_GAP, VARIANT_PARITY_DRIFT); migrated reverify/fresh-readiness checks from
-  PR_FRESHNESS to first-class codes; added CODEX_LEGACY_WAIVERS + validateVariantParity; updated Scope and Variant
-  Handling subsection (issue #247).
+  GATE_OUTCOMES_IMPLICIT); migrated reverify/fresh-readiness checks from PR_FRESHNESS to first-class codes.
 - 2026-07-02: `pollPr`/`mergeReadiness` `clean` now requires mergeability clean in addition to required
   checks and no unresolved threads; `UNKNOWN`/async → `recheck`; definite-negative merge state → `blockedEnd`
   reason `poll-pr` (issue #240).

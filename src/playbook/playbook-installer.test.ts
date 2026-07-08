@@ -59,16 +59,33 @@ function makePlaybookRoot(): string {
   return root;
 }
 
-function fakeAccess() {
+function fakeAccess(existing: VersionedMeaningRow[] = []) {
   const rows: VersionedMeaningRow[] = [];
   const operations: VersionedMeaningOperation[] = [];
+  const existingRows = new Map(existing.map((row) => [`${row.table}/${row.rowId}`, row]));
   let commitMessage = '';
   const access: VersionedMeaningAccess = {
     async upsertRow(row) {
       rows.push(row);
+      existingRows.set(`${row.table}/${row.rowId}`, row);
       const op: VersionedMeaningOperation = { action: 'dry-run', table: row.table, rowId: row.rowId };
       operations.push(op);
       return op;
+    },
+    async retireMissingRows({ table, playbookId, keepRowIds, retiredAt }) {
+      const keep = new Set(keepRowIds);
+      const retired: VersionedMeaningOperation[] = [];
+      for (const row of existingRows.values()) {
+        if (row.table !== table) continue;
+        if (row.data.playbook_id !== playbookId) continue;
+        if (keep.has(row.rowId)) continue;
+        row.data.status = 'removed';
+        row.data.retired_at = retiredAt;
+        const op: VersionedMeaningOperation = { action: 'retire', table, rowId: row.rowId };
+        operations.push(op);
+        retired.push(op);
+      }
+      return retired;
     },
     async commit(message) {
       commitMessage = message;
@@ -109,6 +126,10 @@ test('PlaybookInstaller: dry-run never calls the versioned writer', async () => 
         writes += 1;
         throw new Error('dry-run should not write');
       },
+      async retireMissingRows() {
+        writes += 1;
+        throw new Error('dry-run should not write');
+      },
       async commit() {
         throw new Error('dry-run should not commit');
       },
@@ -122,4 +143,42 @@ test('PlaybookInstaller: dry-run never calls the versioned writer', async () => 
   assert.equal(result.dryRun, true);
   assert.equal(result.committed, false);
   assert.equal(result.operations.every((op) => op.action === 'dry-run'), true);
+});
+
+test('PlaybookInstaller: retires rows removed from the playbook catalog', async () => {
+  const root = makePlaybookRoot();
+  const fake = fakeAccess([
+    {
+      table: 'pipelines',
+      rowId: 'pb-removed-pipeline',
+      data: {
+        id: 'pb-removed-pipeline',
+        playbook_id: 'pb',
+        status: 'active',
+      },
+    },
+    {
+      table: 'run_profiles',
+      rowId: 'pb-removed-profile',
+      data: {
+        id: 'pb-removed-profile',
+        playbook_id: 'pb',
+        status: 'active',
+      },
+    },
+  ]);
+  const installer = new PlaybookInstaller({
+    access: fake.access,
+    sourceResolverOptions: { cwd: join(root, '..') },
+  });
+
+  const result = await installer.install({ source: `./${basename(root)}`, commit: true });
+
+  assert.deepEqual(
+    result.operations.filter((op) => op.action === 'retire').map((op) => `${op.table}/${op.rowId}`).sort(),
+    [
+      'pipelines/pb-removed-pipeline',
+      'run_profiles/pb-removed-profile',
+    ],
+  );
 });
