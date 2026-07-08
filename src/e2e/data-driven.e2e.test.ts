@@ -19,6 +19,7 @@ import {
   assertEventsPresent,
   assertBlocked,
   executedRoles,
+  stubFixtureFullProfile,
 } from './kit/index.js';
 
 // Group L — DATA-DRIVEN PIPELINE on real DBOS (plan 0015).
@@ -28,7 +29,7 @@ import {
 // driving plan→merge gates to completion, surviving crash-recovery, and enforcing the bounded rework cap to
 // `blocked`. Since the plan-0015 cutover the data-driven engine is the SOLE pipeline engine.
 //
-// The agent + integrator are stubbed (runnerOverrides) so no real claude/git/gh runs. The agent is
+// The agent + integrator are stubbed through inline run profiles so no real claude/git/gh runs. The agent is
 // scripted per-run so a test can choose each node's DOMAIN verdict (the watcher must emit `clean` to
 // reach the merge gate; the reviewer emits `blocker` to drive the rework loop).
 
@@ -52,7 +53,12 @@ after(async () => {
 });
 
 test('L0: the data-driven pipeline is routed (carries a state-machine template; engine=data-driven)', { skip: e2eSkip }, async () => {
-  const route = (await h.api.simulateRoute({ title: 'route', playbookId: PLAYBOOK_ID, pipeline: DATA_DRIVEN_PIPELINE })) as unknown as {
+  const route = (await h.api.simulateRoute({
+    title: 'route',
+    playbookId: PLAYBOOK_ID,
+    pipeline: DATA_DRIVEN_PIPELINE,
+    profile: stubFixtureFullProfile(),
+  })) as unknown as {
     pipelineId: string;
     roles: string[];
     executionPolicy: { template_json?: { specVersion?: string; nodes?: Record<string, unknown> } };

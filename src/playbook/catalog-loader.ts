@@ -164,7 +164,7 @@ function parseRole(value: unknown, index: number, root: string): RoleCatalogReco
   if (PRODUCTION_BLOCKED_RUNNERS.has(runnerId)) {
     throw new PlaybookError(
       'PLAYBOOK_INVALID_CATALOG',
-      `${context}.runner_id must not be ${runnerId}; use an execution profile override for test stubs`,
+      `${context}.runner_id must not be ${runnerId}; use a run profile binding for test stubs`,
     );
   }
   const id = stringField(record, 'id', context);

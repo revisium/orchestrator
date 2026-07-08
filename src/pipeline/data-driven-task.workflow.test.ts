@@ -72,7 +72,7 @@ function makeRoute(options: { developerRunnerId?: string; integratorRunnerId?: s
     optionalRoles: [],
     routeGates: ['plan', 'merge'],
     executionPolicy: {},
-    executionProfile: { id: 'test', runnerOverrides: {} },
+    launchBindings: [],
     roleBindings: [
       binding('analyst'),
       binding('developer', options.developerRunnerId ?? 'claude-code'),
@@ -104,7 +104,7 @@ function codexBinding(roleId: string): RouteRoleBinding {
   if (roleId === 'integrator') {
     return { roleId, rowId: roleId, modelLevel: 'standard', runnerId: 'revo-integrator', resolvedRunnerId: 'revo-integrator', runnerSource: 'playbook' };
   }
-  return { roleId, rowId: roleId, modelLevel: 'codex-standard', runnerId: 'claude-code', resolvedRunnerId: 'codex', runnerSource: 'execution-profile' };
+  return { roleId, rowId: roleId, modelLevel: 'codex-standard', runnerId: 'claude-code', resolvedRunnerId: 'codex', runnerSource: 'profile' };
 }
 
 function makeConsensusProfileRoute(): RouteDecision {
@@ -127,7 +127,7 @@ function makeConsensusProfileRoute(): RouteDecision {
     optionalRoles: [],
     routeGates: ['plan', 'merge'],
     executionPolicy: {},
-    executionProfile: { id: 'test', runnerOverrides: {} },
+    launchBindings: [],
     roleBindings: roles.map(codexBinding),
     params: {},
   };
@@ -235,7 +235,6 @@ function buildAdapter(opts: {
     stepKey: string,
     input: unknown,
     _resolvedRunnerId?: string,
-    _executionProfile?: unknown,
     physicalAttempt?: { attemptNo: number; attemptId: string },
     acceptedVerdicts?: readonly string[],
   ): Promise<AttemptResult> => {
@@ -2978,7 +2977,7 @@ function makeLocalChangeRoute(developerBindingOverrides: Partial<RouteRoleBindin
     optionalRoles: [],
     routeGates: [],
     executionPolicy: {},
-    executionProfile: { id: 'test', runnerOverrides: {} },
+    launchBindings: [],
     roleBindings: [
       bindingWithOverride('orchestrator'),
       bindingWithOverride('developer', developerBindingOverrides),
@@ -2987,7 +2986,7 @@ function makeLocalChangeRoute(developerBindingOverrides: Partial<RouteRoleBindin
   };
 }
 
-test('dispatch: launchOverrides forwarded to runStepFn when bindingOverride has execution-profile source', async () => {
+test('dispatch: launchOverrides forwarded to runStepFn when binding has profile source', async () => {
   const capturedLaunchOverrides = new Map<string, LaunchOverrides | undefined>();
 
   const runStepFn = async (
@@ -2996,7 +2995,6 @@ test('dispatch: launchOverrides forwarded to runStepFn when bindingOverride has 
     stepKey: string,
     _input: unknown,
     _resolvedRunnerId?: string,
-    _executionProfile?: unknown,
     _physicalAttempt?: { attemptNo: number; attemptId: string },
     _acceptedVerdicts?: readonly string[],
     launchOverrides?: LaunchOverrides,
@@ -3007,15 +3005,11 @@ test('dispatch: launchOverrides forwarded to runStepFn when bindingOverride has 
 
   const route = makeLocalChangeRoute({
     resolvedModelLevel: 'cheap',
-    modelSource: 'execution-profile',
+    modelSource: 'profile',
     resolvedTimeoutMs: 60000,
-    timeoutSource: 'execution-profile',
+    timeoutSource: 'profile',
   });
-  route.executionProfile = {
-    id: 'override-profile',
-    runnerOverrides: {},
-    bindingOverrides: [{ match: { roleId: 'developer' }, modelLevel: 'cheap', timeoutMs: 60000 }],
-  };
+  route.launchBindings = [{ match: { roleId: 'developer' }, modelLevel: 'cheap', timeoutMs: 60000 }];
 
   const fn = makeDataDrivenTask(runStepFn, makeMinimalDeps());
   await fn(RUN_ID, { route, template: localChange(), runnerRetryPolicy: resolveRunnerTransientRetryPolicy() });
@@ -3036,7 +3030,6 @@ test('dispatch: no launchOverrides when binding has only playbook sources', asyn
     stepKey: string,
     _input: unknown,
     _resolvedRunnerId?: string,
-    _executionProfile?: unknown,
     _physicalAttempt?: { attemptNo: number; attemptId: string },
     _acceptedVerdicts?: readonly string[],
     launchOverrides?: LaunchOverrides,

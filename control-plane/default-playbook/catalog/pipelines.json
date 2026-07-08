@@ -1493,5 +1493,56 @@
         "title": "Local change — developer only, no gate"
       }
     }
+  },
+  {
+    "id": "analysis-only",
+    "path": "prompts/orchestrator.md",
+    "triggers": [
+      "analysis only",
+      "research",
+      "investigation"
+    ],
+    "required_roles": [
+      "orchestrator",
+      "analyst"
+    ],
+    "alternative_roles": [],
+    "optional_roles": [],
+    "route_gates": [],
+    "platform_invocation": "canonical-only",
+    "execution_policy": {
+      "raw": [
+        "Built-in default: analyst produces a read-only analysis result, then the run completes."
+      ],
+      "template_json": {
+        "specVersion": "1.0",
+        "pipelineId": "analysis-only",
+        "entry": "analyst",
+        "verdicts": {
+          "domain": [
+            "approved"
+          ]
+        },
+        "nodes": {
+          "analyst": {
+            "id": "analyst",
+            "kind": "agent",
+            "roleRef": "role:analyst",
+            "next": "doneEnd",
+            "onFailure": "abort",
+            "resultSchema": "schema:analysis",
+            "produces": {
+              "name": "analysis"
+            }
+          },
+          "doneEnd": {
+            "id": "doneEnd",
+            "kind": "terminal",
+            "status": "succeeded"
+          }
+        },
+        "title": "Analysis only"
+      }
+    }
   }
 ]

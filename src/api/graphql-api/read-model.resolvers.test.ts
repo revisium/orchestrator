@@ -54,8 +54,8 @@ test('read-model resolvers delegate to domain api services', async () => {
   assert.equal(new RunsResolver(runsApi as never).runAgentAttempts('run_1'), 'agentAttempts');
   assert.equal(new RunsResolver(runsApi as never).runAgentLog({ runId: 'run_1', stream: AgentLogStream.stdout }), 'agentLog');
   assert.equal(new RunsResolver(runsApi as never).runDigest('run_1'), 'digest');
-  assert.equal(new RunsResolver(runsApi as never).simulateRoute({ title: 'Build' }), 'route');
-  assert.equal(new RunsResolver(runsApi as never).createRun({ title: 'Build', repo: '.' }), 'create');
+  assert.equal(new RunsResolver(runsApi as never).simulateRoute({ title: 'Build', pipeline: 'local-change' }), 'route');
+  assert.equal(new RunsResolver(runsApi as never).createRun({ title: 'Build', repo: '.', pipelineId: 'local-change' }), 'create');
   assert.equal(new RunEventsResolver(runsApi as never).events({ id: 'run_1' } as never, 'created', 1, 'cursor'), 'events');
   assert.equal(new RunProgressResolver(runsApi as never).runProgress('run_1'), 'progress');
   assert.equal(new RunProgressResolver(runsApi as never).progress({ id: 'run_1' } as never), 'progress');
@@ -94,7 +94,7 @@ test('read-model resolvers delegate to domain api services', async () => {
   assert.ok(calls.some((call) => call === 'agentAttempts:{"runId":"run_1"}'));
   assert.ok(calls.some((call) => call === 'agentLog:{"runId":"run_1","stream":"stdout"}'));
   assert.equal(calls.filter((call) => call === 'progress:{"runId":"run_1"}').length, 2);
-  assert.ok(calls.some((call) => call === 'create:{"title":"Build","repo":"."}'));
+  assert.ok(calls.some((call) => call === 'create:{"title":"Build","repo":".","pipelineId":"local-change"}'));
   assert.ok(calls.some((call) => call === 'approve:{"inboxId":"inbox_1"}'));
   assert.ok(calls.some((call) => call === `resolveGate:${JSON.stringify({ inboxId: 'inbox_1', outcome: 'recheck', reconcile: GateReconcileInput.keep, adoptionAudit })}`));
   assert.ok(calls.some((call) => call === 'resolve:{"inboxId":"inbox_1","answer":{"decision":"approve"}}'));

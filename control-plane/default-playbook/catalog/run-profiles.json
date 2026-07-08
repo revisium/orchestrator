@@ -18,6 +18,10 @@
     },
     "bindings": {
       "slots": {
+        "orchestrator": {
+          "runnerId": "claude-code",
+          "modelLevel": "deep"
+        },
         "analyst": {
           "runnerId": "claude-code",
           "modelLevel": "deep"
@@ -30,6 +34,10 @@
           "runnerId": "claude-code",
           "modelLevel": "standard",
           "permissionMode": "acceptEdits"
+        },
+        "integrator": {
+          "runnerId": "revo-integrator",
+          "modelLevel": "standard"
         },
         "triager": {
           "runnerId": "claude-code",
@@ -62,6 +70,10 @@
     },
     "bindings": {
       "slots": {
+        "orchestrator": {
+          "runnerId": "codex",
+          "modelLevel": "codex-deep"
+        },
         "analyst": {
           "runnerId": "codex",
           "modelLevel": "codex-deep",
@@ -75,6 +87,10 @@
           "runnerId": "codex",
           "modelLevel": "codex-standard",
           "permissionMode": "workspace-write"
+        },
+        "integrator": {
+          "runnerId": "revo-integrator",
+          "modelLevel": "standard"
         },
         "triager": {
           "runnerId": "codex",
@@ -109,6 +125,10 @@
     },
     "bindings": {
       "slots": {
+        "orchestrator": {
+          "runnerId": "codex",
+          "modelLevel": "codex-deep"
+        },
         "analyst": {
           "runnerId": "codex",
           "modelLevel": "codex-deep",
@@ -118,6 +138,10 @@
           "runnerId": "codex",
           "modelLevel": "codex-standard",
           "permissionMode": "workspace-write"
+        },
+        "integrator": {
+          "runnerId": "revo-integrator",
+          "modelLevel": "standard"
         },
         "triager": {
           "runnerId": "codex",
@@ -168,6 +192,10 @@
     },
     "bindings": {
       "slots": {
+        "orchestrator": {
+          "runnerId": "claude-code",
+          "modelLevel": "deep"
+        },
         "analyst": {
           "runnerId": "claude-code",
           "modelLevel": "deep"
@@ -176,6 +204,10 @@
           "runnerId": "claude-code",
           "modelLevel": "standard",
           "permissionMode": "acceptEdits"
+        },
+        "integrator": {
+          "runnerId": "revo-integrator",
+          "modelLevel": "standard"
         },
         "triager": {
           "runnerId": "claude-code",
@@ -198,6 +230,120 @@
           "modelLevel": "deep"
         },
         "codeReviewSecondary": {
+          "runnerId": "codex",
+          "modelLevel": "codex-deep"
+        }
+      }
+    },
+    "status": "active"
+  },
+  {
+    "id": "local-change-claude-standard",
+    "pipelineId": "local-change",
+    "schemaVersion": "run-profile/v1",
+    "version": "1",
+    "displayName": "Local change Claude standard",
+    "summary": "Claude Code runs the local-change developer slot.",
+    "topology": {
+      "stages": {
+        "developer": {
+          "mode": "single"
+        }
+      }
+    },
+    "bindings": {
+      "slots": {
+        "orchestrator": {
+          "runnerId": "claude-code",
+          "modelLevel": "deep"
+        },
+        "developer": {
+          "runnerId": "claude-code",
+          "modelLevel": "standard",
+          "permissionMode": "acceptEdits"
+        }
+      }
+    },
+    "status": "active"
+  },
+  {
+    "id": "local-change-codex-standard",
+    "pipelineId": "local-change",
+    "schemaVersion": "run-profile/v1",
+    "version": "1",
+    "displayName": "Local change Codex standard",
+    "summary": "Codex runs the local-change developer slot.",
+    "topology": {
+      "stages": {
+        "developer": {
+          "mode": "single"
+        }
+      }
+    },
+    "bindings": {
+      "slots": {
+        "orchestrator": {
+          "runnerId": "codex",
+          "modelLevel": "codex-deep"
+        },
+        "developer": {
+          "runnerId": "codex",
+          "modelLevel": "codex-standard",
+          "permissionMode": "workspace-write"
+        }
+      }
+    },
+    "status": "active"
+  },
+  {
+    "id": "analysis-only-claude-standard",
+    "pipelineId": "analysis-only",
+    "schemaVersion": "run-profile/v1",
+    "version": "1",
+    "displayName": "Analysis only Claude standard",
+    "summary": "Claude Code runs the analysis-only analyst slot.",
+    "topology": {
+      "stages": {
+        "analyst": {
+          "mode": "single"
+        }
+      }
+    },
+    "bindings": {
+      "slots": {
+        "orchestrator": {
+          "runnerId": "claude-code",
+          "modelLevel": "deep"
+        },
+        "analyst": {
+          "runnerId": "claude-code",
+          "modelLevel": "deep"
+        }
+      }
+    },
+    "status": "active"
+  },
+  {
+    "id": "analysis-only-codex-standard",
+    "pipelineId": "analysis-only",
+    "schemaVersion": "run-profile/v1",
+    "version": "1",
+    "displayName": "Analysis only Codex standard",
+    "summary": "Codex runs the analysis-only analyst slot.",
+    "topology": {
+      "stages": {
+        "analyst": {
+          "mode": "single"
+        }
+      }
+    },
+    "bindings": {
+      "slots": {
+        "orchestrator": {
+          "runnerId": "codex",
+          "modelLevel": "codex-deep"
+        },
+        "analyst": {
           "runnerId": "codex",
           "modelLevel": "codex-deep"
         }

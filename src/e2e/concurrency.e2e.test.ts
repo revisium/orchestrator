@@ -17,6 +17,7 @@ import {
   approveUntilTerminal,
   assertPrOpened,
   git,
+  stubFixtureAgentProfile,
 } from './kit/index.js';
 
 // Group J — CONCURRENCY. The dev-tasks queue runs up to REVO_DEV_TASKS_CONCURRENCY (8 under
@@ -82,7 +83,7 @@ test('J2: a concurrent double-start runs the workflow exactly once', { skip: e2e
     scope: 'No source changes.',
     playbookId: PLAYBOOK_ID,
     pipelineId: 'local-change',
-    executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent' } },
+    profile: stubFixtureAgentProfile(),
     start: false,
   });
   // Fire two starts for the SAME runId in the same tick — DBOS dedups by workflowID=runId. The

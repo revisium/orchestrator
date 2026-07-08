@@ -3,6 +3,12 @@ import { PLAYBOOK_SOURCE } from './env.js';
 import type { RunHarness } from './harness.js';
 import type { TargetRepo } from './git-target-repo.js';
 import { waitForGate } from './drive.js';
+import {
+  stubDefaultAgentProfile,
+  stubDefaultFullProfile,
+  stubFixtureAgentProfile,
+  stubFixtureFullProfile,
+} from './run-profiles.js';
 
 /** Playbook id installed by {@link givenInstalledPlaybook}. */
 export const PLAYBOOK_ID = 'revisium-agent-playbook';
@@ -12,11 +18,6 @@ export const PLAYBOOK_ID = 'revisium-agent-playbook';
  * Distinct from {@link PLAYBOOK_ID} (the e2e fixture) — Group M targets THIS to prove the shipped default.
  */
 export const DEFAULT_PLAYBOOK_ID = 'revisium-default';
-
-const STUB_OVERRIDE = { runnerOverrides: { 'claude-code': 'stub-agent' } };
-
-/** Stub BOTH the agent and the (script) integrator — a self-contained run with no real git/gh. */
-const STUB_OVERRIDE_FULL = { runnerOverrides: { 'claude-code': 'stub-agent', 'revo-integrator': 'stub-agent' } };
 
 /**
  * Create + start a run on the SEEDED DEFAULT playbook's `feature-development` pipeline (slice 5). Both
@@ -32,7 +33,7 @@ export async function startDefaultFeatureRun(h: RunHarness, repo: string = proce
     scope: 'seeded-default e2e',
     playbookId: DEFAULT_PLAYBOOK_ID,
     pipelineId: 'feature-development',
-    executionProfile: STUB_OVERRIDE_FULL,
+    profile: stubDefaultFullProfile(),
     start: true,
   });
   if (!('workflow' in created)) throw new Error('start:true must return workflow metadata');
@@ -48,7 +49,7 @@ export async function startDefaultLocalChangeRun(h: RunHarness, repo: string = p
     scope: 'seeded-default e2e',
     playbookId: DEFAULT_PLAYBOOK_ID,
     pipelineId: 'local-change',
-    executionProfile: STUB_OVERRIDE,
+    profile: stubDefaultAgentProfile(),
     start: true,
   });
   if (!('workflow' in created)) throw new Error('start:true must return workflow metadata');
@@ -109,7 +110,7 @@ export async function startLocalChangeRun(h: RunHarness, repo: string = process.
     scope: 'No source changes.',
     playbookId: PLAYBOOK_ID,
     pipelineId: 'local-change',
-    executionProfile: STUB_OVERRIDE,
+    profile: stubFixtureAgentProfile(),
     start: true,
   });
   if (!('workflow' in created)) throw new Error('start:true must return workflow metadata');
@@ -125,7 +126,7 @@ export async function startFeatureRun(h: RunHarness, target: TargetRepo) {
     scope: 'Only mutate the temporary e2e target repository.',
     playbookId: PLAYBOOK_ID,
     pipelineId: 'feature-development',
-    executionProfile: STUB_OVERRIDE,
+    profile: stubFixtureAgentProfile(),
     start: true,
   });
   if (!('workflow' in created)) throw new Error('start:true must return workflow metadata');
@@ -147,7 +148,7 @@ export async function startStubbedFeatureRun(h: RunHarness, target: TargetRepo) 
     scope: 'recovery e2e',
     playbookId: PLAYBOOK_ID,
     pipelineId: 'feature-development',
-    executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent', 'revo-integrator': 'stub-agent' } },
+    profile: stubFixtureFullProfile(),
     start: true,
   });
   if (!('workflow' in created)) throw new Error('start:true must return workflow metadata');
@@ -177,7 +178,7 @@ export async function startDataDrivenRun(
     scope: 'data-driven e2e',
     playbookId: PLAYBOOK_ID,
     pipelineId: DATA_DRIVEN_PIPELINE,
-    executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent', 'revo-integrator': 'stub-agent' } },
+    profile: stubFixtureFullProfile(),
     start: false,
   });
   if (specs && spec) specs.set(created.runId, spec);

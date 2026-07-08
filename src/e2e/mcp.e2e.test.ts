@@ -10,6 +10,7 @@ import {
   createTargetRepo,
   createMcpInvoker,
   type McpInvoker,
+  stubDefaultAgentProfile,
 } from './kit/index.js';
 
 // Group H — the MCP SURFACE (the AI-client-facing interface). Every tool runs through the REAL MCP
@@ -52,14 +53,14 @@ async function attentionUntil(runId: string, target: string, retries = 20): Prom
 }
 
 test('H1: create_run → start_run → get_run_attention → get_run round-trips a run to completion', { skip: e2eSkip }, async () => {
-  // MCP strips runner overrides (safety), so the real runner runs a live preflight — use a clean
-  // throwaway repo so local-change reaches completion.
+  // Use a clean throwaway repo so local-change reaches completion.
   const target = createTargetRepo();
   try {
     const created = await inv<{ runId: string }>('create_run', {
       title: 'E2E MCP local-change',
       repo: target.worktree,
       pipelineId: 'local-change',
+      profile: stubDefaultAgentProfile(),
       start: false,
     });
     h.developerWrites.set(created.runId, target.worktree);
@@ -80,6 +81,7 @@ test('H2: a feature run drives plan + merge gates entirely through MCP tools', {
       title: 'E2E MCP feature gates',
       repo: target.worktree,
       pipelineId: 'feature-development',
+      profile: stubDefaultAgentProfile(),
       start: false,
     });
     h.developerWrites.set(created.runId, target.worktree); // faked developer change so the real integrator has a diff
@@ -106,6 +108,7 @@ test('H11: watch_run_changes delivers gates and terminal under a single advancin
       title: 'E2E MCP watch-changes cursor',
       repo: target.worktree,
       pipelineId: 'feature-development',
+      profile: stubDefaultAgentProfile(),
       start: false,
     });
     h.developerWrites.set(created.runId, target.worktree);
@@ -154,6 +157,7 @@ test('H3: create_run → cancel_run marks the run cancelled', { skip: e2eSkip },
     title: 'E2E MCP cancel',
     repo: process.cwd(),
     pipelineId: 'local-change',
+    profile: stubDefaultAgentProfile(),
     start: false,
   });
   const res = await inv<{ status: string }>('cancel_run', { runId: created.runId });
@@ -162,23 +166,24 @@ test('H3: create_run → cancel_run marks the run cancelled', { skip: e2eSkip },
   assert.equal(detail.run.status, 'cancelled');
 });
 
-test('H4: simulate_route strips runner-override smuggling from public params', { skip: e2eSkip }, async () => {
-  const route = await inv<{ executionProfile: { runnerOverrides: Record<string, string> }; params: Record<string, unknown> }>(
+test('H4: simulate_route treats launch-looking params as inert data', { skip: e2eSkip }, async () => {
+  const route = await inv<{ roleBindings: Array<{ resolvedRunnerId: string }>; params: Record<string, unknown> }>(
     'simulate_route',
     {
       title: 'E2E MCP route safety',
       pipeline: 'local-change',
+      profile: stubDefaultAgentProfile(),
       includeDetails: true,
       params: {
-        executionProfile: { runnerOverrides: { 'claude-code': 'must-not-leak' } },
-        runnerOverrides: { 'claude-code': 'must-not-leak' },
+        profileLike: { runner: 'must-not-leak' },
+        runnerSelectionDraft: { runner: 'must-not-leak' },
         feature: 'ok-public-param',
       },
     },
   );
-  assert.deepEqual(route.executionProfile.runnerOverrides, {}, 'public params must not smuggle runner overrides via MCP');
-  assert.ok(!('runnerOverrides' in route.params), 'sanitized params must drop runnerOverrides');
-  assert.ok(!('executionProfile' in route.params), 'sanitized params must drop executionProfile');
+  assert.ok(route.roleBindings.every((binding) => binding.resolvedRunnerId !== 'must-not-leak'));
+  assert.equal((route.params.profileLike as Record<string, unknown>).runner, 'must-not-leak');
+  assert.equal((route.params.runnerSelectionDraft as Record<string, unknown>).runner, 'must-not-leak');
 });
 
 test('H5: create_run with a missing required field is rejected by schema validation', { skip: e2eSkip }, async () => {
@@ -203,6 +208,7 @@ test('H7: gate-only verbs are enforced — answer_question on a gate is rejected
       title: 'E2E MCP gate enforcement',
       repo: target.worktree,
       pipelineId: 'feature-development',
+      profile: stubDefaultAgentProfile(),
       start: false,
     });
     h.developerWrites.set(created.runId, target.worktree);
@@ -249,11 +255,49 @@ test('H9: catalog tools reflect the installed playbook', { skip: e2eSkip }, asyn
   assert.ok(playbooks.some((p) => p.id === PLAYBOOK_ID), 'list_playbooks must include the installed playbook');
 });
 
+test('H9b: list_profiles discovers seeded run profiles through the MCP layer', { skip: e2eSkip }, async () => {
+  const profiles = await inv<Array<{ profileId: string; pipelineId: string; status: string; profileHash: string }>>(
+    'list_profiles',
+    { pipelineId: 'feature-development' },
+  );
+  assert.deepEqual(profiles.map((profile) => profile.profileId).sort(), [
+    'claude-primary-codex-review-consensus',
+    'claude-standard',
+    'codex-primary-claude-review-consensus',
+    'codex-standard',
+  ]);
+  assert.ok(profiles.every((profile) => profile.pipelineId === 'feature-development'));
+  assert.ok(profiles.every((profile) => profile.status === 'active'));
+  assert.ok(profiles.every((profile) => /^[a-f0-9]{64}$/.test(profile.profileHash)));
+});
+
+test('H9c: simulate_route accepts a stored profileId through the MCP layer', { skip: e2eSkip }, async () => {
+  const route = await inv<{
+    source: string;
+    profileSource: string;
+    profileId: string;
+    profileHash: string;
+    materializedTemplateHash: string;
+    launchBindingCount: number;
+  }>('simulate_route', {
+    title: 'E2E MCP stored profile route',
+    pipeline: 'feature-development',
+    profileId: 'codex-standard',
+  });
+  assert.equal(route.source, 'explicit');
+  assert.equal(route.profileSource, 'stored');
+  assert.equal(route.profileId, 'codex-standard');
+  assert.match(route.profileHash, /^[a-f0-9]{64}$/);
+  assert.match(route.materializedTemplateHash, /^[a-f0-9]{64}$/);
+  assert.ok(route.launchBindingCount > 0, 'stored profile must produce launch bindings');
+});
+
 test('H12: create_run response includes monitoring directive by default (shape-only, no run completion)', { skip: e2eSkip }, async () => {
   const created = await inv<{ runId: string; monitoring?: Record<string, unknown> }>('create_run', {
     title: 'E2E monitoring directive shape',
     repo: process.cwd(),
     pipelineId: 'local-change',
+    profile: stubDefaultAgentProfile(),
     start: false,
   });
   try {
@@ -273,6 +317,7 @@ test('H12b: create_run with includeMonitoringGuidance:false omits the monitoring
     title: 'E2E no monitoring directive',
     repo: process.cwd(),
     pipelineId: 'local-change',
+    profile: stubDefaultAgentProfile(),
     start: false,
     includeMonitoringGuidance: false,
   });
@@ -291,6 +336,7 @@ test('H12c: start_run response includes monitoring directive', { skip: e2eSkip }
       title: 'E2E start_run monitoring',
       repo: target.worktree,
       pipelineId: 'local-change',
+      profile: stubDefaultAgentProfile(),
       start: false,
     });
     runId = created.runId;
@@ -311,6 +357,7 @@ test('H10: inspection tools reflect a completed run', { skip: e2eSkip }, async (
       title: 'E2E MCP inspection',
       repo: target.worktree,
       pipelineId: 'local-change',
+      profile: stubDefaultAgentProfile(),
       start: false,
     });
     h.developerWrites.set(created.runId, target.worktree);

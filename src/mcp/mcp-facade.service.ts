@@ -30,9 +30,9 @@ type SimulateRouteMcpInput = {
   repo?: string;
   pipeline?: string;
   profileId?: string;
+  profile?: unknown;
   playbookId?: string;
   params?: unknown;
-  executionProfile?: unknown;
   includeDetails?: boolean;
 };
 type ListPipelinesMcpInput = {
@@ -135,25 +135,21 @@ function compactRouteSummary(result: JsonRecord): JsonRecord | undefined {
   return Object.keys(summary).length > 0 ? summary : undefined;
 }
 
-function compactExecutionProfile(value: unknown): JsonRecord | undefined {
-  const profile = asRecord(value);
-  if (!profile) return undefined;
-  const bindingOverrides = Array.isArray(profile.bindingOverrides) ? profile.bindingOverrides : [];
-  return definedEntries({
-    id: asString(profile.id),
-    bindingOverrideCount: bindingOverrides.length > 0 ? bindingOverrides.length : undefined,
-  });
-}
-
 function compactRouteDecision(value: unknown): unknown {
   const route = asRecord(value);
   if (!route) return value;
   const roleBindings = compactRecordArray(route.roleBindings);
+  const launchBindings = compactRecordArray(route.launchBindings);
   const summary = compactRouteSummary(route) ?? {};
   return definedEntries({
     ...summary,
     source: asString(route.source),
-    executionProfile: compactExecutionProfile(route.executionProfile),
+    profileSource: asString(route.profileSource),
+    profileId: asString(route.profileId),
+    profileVersion: asString(route.profileVersion),
+    profileHash: asString(route.profileHash),
+    materializedTemplateHash: asString(route.materializedTemplateHash),
+    launchBindingCount: launchBindings.length > 0 ? launchBindings.length : undefined,
     roleBindingCount: roleBindings.length > 0 ? roleBindings.length : undefined,
   });
 }
@@ -388,7 +384,7 @@ export class McpFacadeService {
       notes: [
         'Local stdio MCP server; no remote HTTP listener.',
         'Tools expose product operations, not generic Revisium row CRUD.',
-        'Runs are driven by installed playbooks, pipeline catalogs, and execution profiles.',
+        'Runs are driven by installed playbooks, pipeline catalogs, and run profiles; use list_profiles to discover launch profiles.',
         'Agent run monitoring: follow task_monitoring_loop — poll get_run_attention, react to nextAction.',
       ],
       observation: {
@@ -436,8 +432,8 @@ export class McpFacadeService {
     playbookId?: string;
     pipelineId?: string;
     profileId?: string;
+    profile?: unknown;
     params?: Record<string, unknown>;
-    executionProfile?: unknown;
     issueRef?: { repo: string; number: number; url: string };
     issueAction?: 'close' | 'refs' | 'none';
     priority?: number;

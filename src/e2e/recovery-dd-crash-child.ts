@@ -24,6 +24,7 @@ import {
   waitForGate,
   scriptedAgent,
   type AgentSpec,
+  stubFixtureFullProfile,
 } from './kit/index.js';
 
 const stopAt = process.argv[2] ?? 'plan-gate';
@@ -41,7 +42,7 @@ const created = await h.api.createRun({
   scope: 'data-driven recovery e2e',
   playbookId: 'revisium-agent-playbook',
   pipelineId: DATA_DRIVEN_PIPELINE,
-  executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent', 'revo-integrator': 'stub-agent' } },
+  profile: stubFixtureFullProfile(),
   start: true,
 });
 const runId = created.runId;

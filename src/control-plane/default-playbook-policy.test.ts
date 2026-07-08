@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { repoRoot } from '../config.js';
 import type { Template } from '../pipeline-core/types.js';
+import { validateTemplate } from '../pipeline-core/index.js';
 import { materializeTemplate } from '../pipeline-core/materialize.js';
 import {
   validateDefaultPlaybookPolicy,
@@ -38,14 +39,18 @@ const runProfiles = JSON.parse(
 ) as RunProfileCatalogEntry[];
 
 function bundledFeatureDevelopment(): Template {
-  const template = pipelines.find((pipeline) => pipeline.id === 'feature-development')
+  return bundledPipelineTemplate('feature-development');
+}
+
+function bundledPipelineTemplate(pipelineId: string): Template {
+  const template = pipelines.find((pipeline) => pipeline.id === pipelineId)
     ?.execution_policy?.template_json;
-  assert.ok(template, 'feature-development carries execution_policy.template_json');
+  assert.ok(template, `${pipelineId} carries execution_policy.template_json`);
   return structuredClone(template);
 }
 
 function materializedProfile(profile: RunProfileCatalogEntry): Template {
-  const base = bundledFeatureDevelopment();
+  const base = bundledPipelineTemplate(profile.pipelineId);
   const { template, diagnostics } = materializeTemplate(
     base,
     topologyProfileFromRunProfile(profile as never),
@@ -951,10 +956,18 @@ test('default playbook policy: seeded consensus run profile has zero policy viol
   assert.deepEqual(diags, [], `seeded consensus profile must have zero policy violations; got: ${diags.map((d) => d.code).join(', ')}`);
 });
 
-for (const profile of runProfiles) {
+for (const profile of runProfiles.filter((item) => item.pipelineId === 'feature-development')) {
   test(`default playbook policy: seeded ${profile.id} run profile has zero policy violations`, () => {
     const materialized = materializedProfile(profile);
     const diags = diagnosticsFor(materialized);
     assert.deepEqual(diags, [], `seeded ${profile.id} profile must have zero policy violations; got: ${diags.map((d) => d.code).join(', ')}`);
+  });
+}
+
+for (const profile of runProfiles.filter((item) => item.pipelineId !== 'feature-development')) {
+  test(`default playbook policy: seeded ${profile.id} run profile materializes to a valid template`, () => {
+    const materialized = materializedProfile(profile);
+    const errors = validateTemplate(materialized).filter((diagnostic) => diagnostic.severity === 'error');
+    assert.deepEqual(errors, [], `seeded ${profile.id} profile must materialize to a valid template; got: ${errors.map((d) => d.code).join(', ')}`);
   });
 }

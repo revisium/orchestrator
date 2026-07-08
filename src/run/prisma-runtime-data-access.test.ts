@@ -245,7 +245,6 @@ test('Prisma runtime data access creates and reads runtime rows through Prisma m
         pipeline_id: 'feature-development',
         params: { issue: 285 },
         route_decision: { profileId: 'codex-standard' },
-        execution_profile: { id: 'profile' },
         created_by: 'tester',
       },
       expected: { status: 'ready', pipeline_id: 'feature-development' },
@@ -362,7 +361,6 @@ test('Prisma runtime data access patches mutable runtime rows and lists by mappe
     repos: [],
     params: {},
     route_decision: {},
-    execution_profile: {},
   });
 
   const patched = await access.patchRow('task_runs', 'run-1', [

@@ -109,7 +109,7 @@ review-feedback:
 - runs board — the cross-run picture: status, steps, spend;
 - domain memory — typed project tables that agents query;
 - projects / multi-repo;
-- model/execution profiles management.
+- model/run profiles management.
 
 ## Differentiators
 

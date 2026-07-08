@@ -42,7 +42,7 @@ import {
   type TerminalStatus,
 } from '../pipeline-core/index.js';
 import type { AttemptResult } from '../worker/runner.js';
-import type { ExecutionProfile, LaunchOverrides, RouteDecision, RouteRoleBinding } from './route-contract.js';
+import type { BindingOverride, LaunchOverrides, RouteDecision, RouteRoleBinding } from './route-contract.js';
 import { resolveLaunchOverrides, runnerNeedsLivePreflight, runnerUsesRealIntegrator } from './route-contract.js';
 import type {
   IntegratorInput,
@@ -1193,7 +1193,6 @@ export function makeDataDrivenTask(
     stepKey: string,
     stepInput: unknown,
     resolvedRunnerId?: string,
-    executionProfile?: ExecutionProfile,
     physicalAttempt?: PhysicalRunStepAttempt,
     acceptedVerdicts?: readonly string[],
     launchOverrides?: LaunchOverrides,
@@ -1325,7 +1324,7 @@ export function makeDataDrivenTask(
         bindingByRef.set('script:integrator', binding);
       }
     }
-    const executionProfile = route.executionProfile;
+    const launchBindings = route.launchBindings ?? [];
 
     let state: RunState = initialState(template);
     let lastResult: LastResult | undefined;
@@ -1348,7 +1347,7 @@ export function makeDataDrivenTask(
       }
 
       const eff = await applyDecision(decision, {
-        runId, template, state, bindingByRef, executionProfile, taskId, title, base, issueRef, issueAction,
+        runId, template, state, bindingByRef, launchBindings, taskId, title, base, issueRef, issueAction,
         effectOrdinalByNode, outputsByNode, runnerRetryPolicy, agentQuestionRetryContextByNode,
         live,
         lastVerdict,
@@ -1409,7 +1408,7 @@ export function makeDataDrivenTask(
     template: Template;
     state: RunState;
     bindingByRef: Map<string, RouteRoleBinding>;
-    executionProfile: ExecutionProfile;
+    launchBindings: BindingOverride[];
     taskId: string;
     title: string;
     base: string;
@@ -1802,14 +1801,13 @@ export function makeDataDrivenTask(
     for (let attemptNo = 1; attemptNo <= ctx.runnerRetryPolicy.maxAttempts; attemptNo++) {
       const physicalAttempt = physicalAttemptFor(runId, stepKey, attemptNo);
       attemptIds.push(physicalAttempt.attemptId);
-      const launchOverrides = resolveLaunchOverrides(binding, decision.nodeId, ctx.executionProfile);
+      const launchOverrides = resolveLaunchOverrides(binding, decision.nodeId, ctx.launchBindings);
       const result = await runStepFn(
         runId,
         binding.rowId,
         stepKey,
         stepInputForAttempt(decision.nodeId, inputs, physicalAttempt, retryContext),
         binding.resolvedRunnerId,
-        ctx.executionProfile,
         physicalAttempt,
         ctx.template.verdicts.domain,
         launchOverrides,

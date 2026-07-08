@@ -14,7 +14,7 @@ This spec governs the runner manifest field schema and the two code system-entit
 `StdoutParser` and `PermissionStyle`. It also pins the route-time snapshot that keeps capability resolution
 deterministic across DBOS replay and recovery.
 
-It does not govern selection (which runner a role resolves to, execution profiles) or manifest persistence/loading
+It does not govern selection (which runner a role resolves to, run profiles) or manifest persistence/loading
 — those are the registry decision (#169 / #170 / #186, a future selection ADR). The result-envelope schema and the
 structured-output tiers are in [runner-result-envelope-v1.spec.md](./runner-result-envelope-v1.spec.md); the full
 `capabilities` field list is in [runner-capabilities-v1.spec.md](./runner-capabilities-v1.spec.md).
@@ -121,7 +121,7 @@ type RouteRoleBinding = {
   modelLevel: string;
   runnerId: string;
   resolvedRunnerId: string;
-  runnerSource: 'playbook' | 'execution-profile';
+  runnerSource: 'playbook' | 'profile';
   // added by ADR-0004 (the determinism fix, a named schema change):
   stdoutParserId: string;
   permissionStyleId: string;

@@ -1,5 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
+import { VALID_MODEL_LEVELS } from '../control-plane/definitions.js';
 import { MAX_WATCH_CURSOR_CHARS } from '../task-control-plane/run-watch.service.js';
 import { OPERATOR_MONITORING_PROTOCOL } from './monitoring-directive.js';
 import type { McpFacadeService } from './mcp-facade.service.js';
@@ -23,23 +24,32 @@ const agentStreamSchema = z.enum(['stdout', 'stderr', 'events', 'combined']);
 const agentLogByteSchema = z.number().int().positive().max(1048576).optional();
 const agentLogOffsetSchema = z.number().int().nonnegative().max(1048576).optional();
 const paramsSchema = z.record(z.string(), z.unknown()).optional();
-const bindingOverrideMatchSchema = z.object({
-  roleId: z.string().min(1).optional(),
-  nodeId: z.string().min(1).optional(),
+const runProfileStageSchema = z.discriminatedUnion('mode', [
+  z.object({ mode: z.literal('single') }).strict(),
+  z.object({ mode: z.literal('consensus'), branches: z.number().int().min(2).max(8) }).strict(),
+]);
+const runProfileSlotBindingSchema = z.object({
   runnerId: z.string().min(1).optional(),
-});
-const bindingOverrideSchema = z.object({
-  match: bindingOverrideMatchSchema,
-  runnerId: z.string().min(1).optional(),
-  modelLevel: z.string().min(1).optional(),
-  timeoutMs: z.number().int().positive().max(86_400_000).optional(),
+  modelLevel: z.enum(VALID_MODEL_LEVELS).optional(),
+  timeoutMs: z.number().int().positive().optional(),
   permissionMode: z.string().min(1).optional(),
-});
-const executionProfileSchema = z.object({
-  runnerOverrides: z.record(z.string(), z.string()).optional(),
-  availableRunners: z.array(z.string().min(1)).optional(),
-  bindingOverrides: z.array(bindingOverrideSchema).optional(),
-}).optional();
+}).strict().refine(
+  (value) =>
+    value.runnerId !== undefined ||
+    value.modelLevel !== undefined ||
+    value.timeoutMs !== undefined ||
+    value.permissionMode !== undefined,
+  { message: 'run profile slot binding must set at least one launch field' },
+);
+const runProfileSchema = z.object({
+  schemaVersion: z.literal('run-profile/v1'),
+  topology: z.object({
+    stages: z.record(z.string(), runProfileStageSchema),
+  }).strict(),
+  bindings: z.object({
+    slots: z.record(z.string(), runProfileSlotBindingSchema),
+  }).strict(),
+}).strict().optional();
 const manualAdoptionAuditSchema = z.object({
   runId: z.string().trim().min(1),
   step: z.string().trim().min(1),
@@ -184,8 +194,8 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
         playbookId: z.string().min(1).optional(),
         pipelineId: z.string().min(1).optional().describe('Required: the pipeline to use. Omit to receive candidatePipelines for selection (no run is created).'),
         profileId: z.string().min(1).optional().describe('Optional stored run profile id. Use list_profiles to discover accepted ids for the selected pipelineId.'),
+        profile: runProfileSchema.describe('Optional inline run-profile/v1 body. Mutually exclusive with profileId.'),
         params: paramsSchema,
-        executionProfile: executionProfileSchema,
         issueRef: issueRefSchema,
         issueAction: issueActionSchema.describe('Issue linkage behavior for issue-bound delivery: close, refs, or none. Defaults to close when issueRef is supplied.'),
         priority: z.number().int().optional(),
@@ -638,9 +648,9 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
         repo: z.string().optional(),
         pipeline: z.string().optional(),
         profileId: z.string().min(1).optional().describe('Optional stored run profile id. Use list_profiles to discover accepted ids for the selected pipeline.'),
+        profile: runProfileSchema.describe('Optional inline run-profile/v1 body. Mutually exclusive with profileId.'),
         playbookId: z.string().optional(),
         params: paramsSchema,
-        executionProfile: executionProfileSchema,
         includeDetails: z.boolean().optional(),
       },
       annotations: { readOnlyHint: true },

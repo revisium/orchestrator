@@ -19,7 +19,7 @@ throw. The remaining sites are enumerated in the linked specs and the implementi
 
 Adding a runner today therefore means editing the engine at every one of those sites, even when the new runner is
 the same protocol shape as an existing one. This blocks Codex hardening (#184), an OpenCode runner (#187), and
-execution profiles (#168).
+run profiles (#168).
 
 The variation between runners is not uniform. Some of it is irreducibly code — each vendor frames its output as a
 different event tree — and some is pure data: flag names, schema delivery mechanism, the rights-to-sandbox table.

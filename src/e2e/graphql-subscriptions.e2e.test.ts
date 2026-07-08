@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createClient } from 'graphql-ws';
 import { isAlive } from '../config.js';
 import { readHostRuntime } from '../host/host-runtime.js';
-import { RUN_REAL_E2E, e2eSkip } from './kit/index.js';
+import { RUN_REAL_E2E, e2eSkip, stubFixtureAgentProfile } from './kit/index.js';
 
 let hostUrl: string | null = null;
 
@@ -100,6 +100,7 @@ test('GraphQL real host: read path → createRun mutation → subscription paylo
         repo: '.',
         playbookId: 'revisium-agent-playbook',
         pipelineId: 'local-change',
+        profile: stubFixtureAgentProfile(),
         start: false,
       },
     },

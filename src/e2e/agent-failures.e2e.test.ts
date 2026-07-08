@@ -16,6 +16,7 @@ import {
   approveUntilTerminal,
   executedRoles,
   assertEventsPresent,
+  stubFixtureAgentProfile,
 } from './kit/index.js';
 
 // Group C — agent failure modes injected via a per-run scripted agent. One real host per file.
@@ -41,7 +42,7 @@ async function startFeatureWithSpec(target: TargetRepo, spec: AgentSpec): Promis
     scope: 'Only mutate the temporary e2e target repository.',
     playbookId: PLAYBOOK_ID,
     pipelineId: 'feature-development',
-    executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent' } },
+    profile: stubFixtureAgentProfile(),
     start: false,
   });
   specs.set(created.runId, spec);

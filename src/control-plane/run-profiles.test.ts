@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { materializeTemplate } from '../pipeline-core/materialize.js';
 import { templateFromExecutionPolicy } from '../pipeline/data-driven-template.js';
 import type { BindingOverride } from '../pipeline/route-contract.js';
-import { executionProfileFromRunProfile, topologyProfileFromRunProfile } from './run-profiles.js';
+import { launchBindingsFromRunProfile, runProfileHash, topologyProfileFromRunProfile } from './run-profiles.js';
 
 type PipelineCatalogEntry = {
   id: string;
@@ -79,11 +79,7 @@ test('run profiles: catalog consensus profile materializes plan and code review 
 
 for (const candidate of runProfiles) {
   test(`run profiles: catalog bindings for ${candidate.id} become launch overrides`, () => {
-    const execution = executionProfileFromRunProfile(
-      candidate as never,
-      { id: 'caller', runnerOverrides: {}, bindingOverrides: [] },
-    );
-    const overrides = execution.bindingOverrides ?? [];
+    const overrides = launchBindingsFromRunProfile(candidate as never);
     const bySlot = new Map(overrides.map((override) => [overrideKey(override), override]));
     const slots = asRecord(asRecord(candidate.bindings).slots);
 
@@ -101,11 +97,7 @@ for (const candidate of runProfiles) {
 }
 
 test('run profiles: catalog bindings become role and node launch overrides', () => {
-  const execution = executionProfileFromRunProfile(
-    profile('codex-primary-claude-review-consensus') as never,
-    { id: 'caller', runnerOverrides: {}, bindingOverrides: [] },
-  );
-  const overrides = execution.bindingOverrides ?? [];
+  const overrides = launchBindingsFromRunProfile(profile('codex-primary-claude-review-consensus') as never);
   const byRole = new Map(
     overrides
       .filter((override) => 'roleId' in override.match)
@@ -124,5 +116,81 @@ test('run profiles: catalog bindings become role and node launch overrides', () 
   assert.equal(
     (byNode.get('codeReviewPrimary') as BindingOverride | undefined)?.modelLevel,
     'codex-deep',
+  );
+});
+
+test('run profiles: canonical hash ignores display-only fields', () => {
+  const base = profile('codex-standard') as never as Record<string, unknown>;
+  const changed = { ...base, displayName: 'Changed label', summary: 'Changed summary', status: 'deprecated' };
+
+  assert.equal(runProfileHash(base), runProfileHash(changed));
+});
+
+test('run profiles: canonical hash is stable across object insertion order', () => {
+  const left = {
+    pipelineId: 'analysis-only',
+    schemaVersion: 'run-profile/v1',
+    topology: { stages: { analyst: { mode: 'single' } } },
+    bindings: {
+      slots: {
+        analyst: { runnerId: 'codex', modelLevel: 'codex-deep' },
+        orchestrator: { runnerId: 'codex', modelLevel: 'codex-deep' },
+      },
+    },
+  };
+  const right = {
+    bindings: {
+      slots: {
+        orchestrator: { modelLevel: 'codex-deep', runnerId: 'codex' },
+        analyst: { modelLevel: 'codex-deep', runnerId: 'codex' },
+      },
+    },
+    topology: { stages: { analyst: { mode: 'single' } } },
+    schemaVersion: 'run-profile/v1',
+    pipelineId: 'analysis-only',
+  };
+
+  assert.equal(runProfileHash(left), runProfileHash(right));
+});
+
+test('run profiles: launch bindings are stable across object insertion order', () => {
+  const left = {
+    schemaVersion: 'run-profile/v1',
+    topology: { stages: {} },
+    bindings: {
+      slots: {
+        reviewer: { runnerId: 'claude-code', modelLevel: 'deep' },
+        developer: { runnerId: 'codex', modelLevel: 'codex-standard' },
+      },
+    },
+  };
+  const right = {
+    schemaVersion: 'run-profile/v1',
+    topology: { stages: {} },
+    bindings: {
+      slots: {
+        developer: { runnerId: 'codex', modelLevel: 'codex-standard' },
+        reviewer: { runnerId: 'claude-code', modelLevel: 'deep' },
+      },
+    },
+  };
+
+  assert.deepEqual(launchBindingsFromRunProfile(left), launchBindingsFromRunProfile(right));
+  assert.deepEqual(
+    launchBindingsFromRunProfile(left).map((override) => overrideKey(override)),
+    ['role:developer', 'role:reviewer'],
+  );
+});
+
+test('run profiles: canonical hash includes selected pipeline context outside the payload', () => {
+  const payload = {
+    schemaVersion: 'run-profile/v1',
+    topology: { stages: {} },
+    bindings: { slots: {} },
+  };
+
+  assert.notEqual(
+    runProfileHash(payload, { pipelineId: 'local-change' }),
+    runProfileHash(payload, { pipelineId: 'analysis-only' }),
   );
 });

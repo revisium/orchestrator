@@ -18,6 +18,10 @@ import {
   routedRunCaseAgent,
   type AgentSpec,
   type RunCase,
+  createTargetRepo,
+  type TargetRepo,
+  stubDefaultAgentProfile,
+  stubDefaultFullProfile,
 } from './kit/index.js';
 import { validateTemplate } from '../pipeline-core/index.js';
 import { coverageForScenario, type PipelineScenarioCoverage } from '../control-plane/pipeline-coverage-registry.js';
@@ -26,18 +30,19 @@ import { coverageForScenario, type PipelineScenarioCoverage } from '../control-p
 //
 // Distinct from Groups A–L, which install the e2e FIXTURE playbook (`revisium-agent-playbook`). This
 // group proves the SHIPPED DEFAULT: a fresh host bootstrap seeds `revisium-default` (committed under
-// control-plane/default-playbook/) so the control-plane has working `feature-development` and
-// `local-change` pipelines plus feature-development run profiles out-of-the-box — no external
+// control-plane/default-playbook/) so the control-plane has working `feature-development`,
+// `local-change`, and `analysis-only` pipelines plus feature-development run profiles out-of-the-box — no external
 // agent-playbook repo, no fixture override.
 //
 // The bootstrap in scripts/e2e-setup.ts already seeds the default; givenSeededDefaultPlaybook only
 // self-heals a reused test home that predates this slice (and never installs the fixture). The agent
-// (and the script integrator, for feature-development) are stubbed via runnerOverrides so no real
+// (and the script integrator, for feature-development) are stubbed via inline run profiles so no real
 // claude/git/gh runs; the default `feature-development` routes top-level domain verdicts past both
 // routers, so the deterministic agent drives plan->merge to completion.
 
 let h: RunHarness;
 const runCases = new Map<string, RunCase>();
+const targets: TargetRepo[] = [];
 
 before(async () => {
   if (!RUN_REAL_E2E) return;
@@ -47,6 +52,7 @@ before(async () => {
 
 after(async () => {
   if (h) await h.close();
+  for (const target of targets) target.cleanup();
 });
 
 async function startDefaultProfileRun(input: {
@@ -55,17 +61,22 @@ async function startDefaultProfileRun(input: {
   coverage: PipelineScenarioCoverage;
   agent?: AgentSpec;
 }) {
+  const profiles = await h.api.listProfiles({ playbookId: DEFAULT_PLAYBOOK_ID, pipelineId: 'feature-development' });
+  const storedProfile = profiles.find((profile) => profile.profileId === input.profileId);
+  assert.ok(storedProfile, `seeded profile ${input.profileId} must exist`);
+  const target = createTargetRepo();
+  targets.push(target);
   const created = await h.api.createRun({
-    repo: process.cwd(),
+    repo: target.worktree,
     title: input.title,
     description: 'Group M — default run profile coverage on the shipped feature pipeline.',
     scope: 'seeded-default run profile e2e',
     playbookId: DEFAULT_PLAYBOOK_ID,
     pipelineId: 'feature-development',
     profileId: input.profileId,
-    executionProfile: { runnerOverrides: { 'claude-code': 'stub-agent', codex: 'stub-agent', 'revo-integrator': 'stub-agent' } },
     start: false,
   });
+  h.developerWrites.set(created.runId, target.worktree);
   runCases.set(created.runId, {
     runId: created.runId,
     taskId: created.taskId,
@@ -85,11 +96,14 @@ test('M0: the bootstrap-seeded default playbook + pipelines are present and vali
 
   // Seeded pipelines exist under the default playbook and carry a data-driven template that
   // passes the AUTHORITATIVE validator (pipeline-core.validateTemplate) with zero errors.
-  for (const pipelineId of ['feature-development', 'local-change']) {
+  for (const pipelineId of ['feature-development', 'local-change', 'analysis-only']) {
     const route = (await h.api.simulateRoute({
       title: 'route',
       pipeline: pipelineId,
       playbookId: DEFAULT_PLAYBOOK_ID,
+      profile: pipelineId === 'feature-development'
+        ? stubDefaultFullProfile()
+        : stubDefaultAgentProfile(),
     })) as unknown as {
       pipelineId: string;
       roles?: string[];
@@ -114,7 +128,12 @@ test('M0: the bootstrap-seeded default playbook + pipelines are present and vali
 test('M0b: the seeded default is distinct from the e2e fixture playbook', { skip: e2eSkip }, async () => {
   // Same pipeline ids, different playbooks → distinct row ids (scoped by playbook). Proves Group M
   // exercises the SHIPPED default, not the fixture (which Groups A–L install separately).
-  const def = await h.api.simulateRoute({ title: 't', pipeline: 'feature-development', playbookId: DEFAULT_PLAYBOOK_ID });
+  const def = await h.api.simulateRoute({
+    title: 't',
+    pipeline: 'feature-development',
+    playbookId: DEFAULT_PLAYBOOK_ID,
+    profile: stubDefaultFullProfile(),
+  });
   assert.equal((def as { playbookId: string }).playbookId, DEFAULT_PLAYBOOK_ID);
   assert.notEqual(DEFAULT_PLAYBOOK_ID, PLAYBOOK_ID, 'the default and fixture playbook ids must differ');
   assert.equal((def as { pipelineRowId: string }).pipelineRowId, `${DEFAULT_PLAYBOOK_ID}-feature-development`);
@@ -126,7 +145,7 @@ test('M1: a seeded feature-development run drives plan→merge to completed on r
 
   // analyst → planReviewer → planGate → developer → codeReview → integrator(script) → pollPr(clean) →
   // mergeReadiness(clean) → mergeGate → confirmMerge. Approving both gates drives it to the
-  // `succeeded` terminal. (The pollPr polls are stubbed here — runnerOverrides stub the integrator, so
+  // `succeeded` terminal. (The pollPr polls are stubbed here — the inline profile stubs the integrator, so
   // the run skips the triage/CI-rework loop after the fresh pre-gate readiness check.)
   const terminal = await approveUntilTerminal(h.api, run.runId);
   assert.equal(terminal.state, 'completed');
@@ -192,6 +211,12 @@ test('M1c: a seeded Codex standard profile completes the single-review signature
 
 test('M2: a seeded local-change run completes (developer-only, no gate)', { skip: e2eSkip }, async () => {
   const run = await startDefaultLocalChangeRun(h);
+  runCases.set(run.runId, {
+    runId: run.runId,
+    taskId: run.taskId,
+    title: 'E2E seeded default local-change run',
+    coverage: coverageForScenario('M2-profile-local-change'),
+  });
   assert.equal((run.workflow as { engine?: string }).engine, 'data-driven');
 
   // local-change is developer → doneEnd with NO humanGate, so it runs straight to completion.
@@ -202,4 +227,35 @@ test('M2: a seeded local-change run completes (developer-only, no gate)', { skip
   const roles = executedRoles(h, run.runId).map(([role]) => role);
   assert.ok(roles.includes('developer'), 'the developer executed for the seeded local-change run');
   assert.ok(!roles.includes('reviewer'), 'local-change does not run a reviewer (no gate, no review node)');
+});
+
+test('M3: a seeded analysis-only run completes (analyst-only, no gate)', { skip: e2eSkip }, async () => {
+  const created = await h.api.createRun({
+    repo: process.cwd(),
+    title: 'E2E seeded default analysis-only run',
+    description: 'Group M — the bootstrap-seeded analysis-only pipeline on real DBOS/embedded engine.',
+    scope: 'seeded-default analysis e2e',
+    playbookId: DEFAULT_PLAYBOOK_ID,
+    pipelineId: 'analysis-only',
+    profile: stubDefaultAgentProfile(),
+    start: false,
+  });
+  runCases.set(created.runId, {
+    runId: created.runId,
+    taskId: created.taskId,
+    title: 'E2E seeded default analysis-only run',
+    coverage: coverageForScenario('M3-profile-analysis-only'),
+  });
+
+  const workflow = await h.api.startRun({ runId: created.runId });
+  assert.equal((workflow as { engine?: string }).engine, 'data-driven');
+
+  const state = await waitState(h.api, created.runId);
+  assert.equal(state.state, 'completed', 'analysis-only has no gate and completes without approval');
+  await assertCompleted(h.api, created.runId);
+
+  const roles = executedRoles(h, created.runId).map(([role]) => role);
+  assert.ok(roles.includes('analyst'), 'the analyst executed for the seeded analysis-only run');
+  assert.ok(!roles.includes('developer'), 'analysis-only does not run a developer');
+  assert.ok(!roles.includes('reviewer'), 'analysis-only does not run a reviewer');
 });
