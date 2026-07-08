@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { InboxResolver } from './inbox/inbox.resolver.js';
+import { GateReconcileInput } from './inbox/inputs/resolve-gate.input.js';
 import { MethodResolver } from './method/method.resolver.js';
 import { PrResolver } from './pr/pr.resolver.js';
 import { AgentLogStream } from './runs/model/agent-activity.model.js';
@@ -77,7 +78,7 @@ test('read-model resolvers delegate to domain api services', async () => {
     risk: 'manual verification required',
     verificationResponsibility: 'main session',
   };
-  assert.equal(new InboxResolver(inboxApi as never).resolveGate({ inboxId: 'inbox_1', outcome: 'recheck', adoptionAudit }), 'resolveGate');
+  assert.equal(new InboxResolver(inboxApi as never).resolveGate({ inboxId: 'inbox_1', outcome: 'recheck', reconcile: GateReconcileInput.keep, adoptionAudit }), 'resolveGate');
   assert.equal(new InboxResolver(inboxApi as never).answerQuestion({ inboxId: 'inbox_1', answer: 'yes' }), 'answer');
   assert.equal(new InboxResolver(inboxApi as never).resolveInboxItem({ inboxId: 'inbox_1', answer: { decision: 'approve' } }), 'resolve');
   assert.equal(new MethodResolver(methodApi as never).roles(), 'roles');
@@ -95,6 +96,6 @@ test('read-model resolvers delegate to domain api services', async () => {
   assert.equal(calls.filter((call) => call === 'progress:{"runId":"run_1"}').length, 2);
   assert.ok(calls.some((call) => call === 'create:{"title":"Build","repo":"."}'));
   assert.ok(calls.some((call) => call === 'approve:{"inboxId":"inbox_1"}'));
-  assert.ok(calls.some((call) => call === `resolveGate:${JSON.stringify({ inboxId: 'inbox_1', outcome: 'recheck', adoptionAudit })}`));
+  assert.ok(calls.some((call) => call === `resolveGate:${JSON.stringify({ inboxId: 'inbox_1', outcome: 'recheck', reconcile: GateReconcileInput.keep, adoptionAudit })}`));
   assert.ok(calls.some((call) => call === 'resolve:{"inboxId":"inbox_1","answer":{"decision":"approve"}}'));
 });

@@ -11,12 +11,13 @@ import { waitForGate, waitState } from './drive.js';
 import { DEFAULT_PLAYBOOK_ID, PLAYBOOK_ID } from './scenarios.js';
 import type { PipelineScenarioCoverage } from '../../control-plane/pipeline-coverage-registry.js';
 
-type GateTopic = 'plan' | 'merge' | 'question';
+type GateTopic = 'plan' | 'merge' | 'question' | 'retry';
 type GateStep =
   | readonly [GateTopic, string]
   | {
       topic: GateTopic;
       outcome: string;
+      reconcile?: 'keep';
       note?: string;
       mergeOverrideAudit?: Record<string, unknown>;
       nodeId?: string;
@@ -86,6 +87,7 @@ function playbookId(scenario: PipelineScenario): string {
 function normalizeGate(step: GateStep): {
   topic: GateTopic;
   outcome: string;
+  reconcile?: 'keep';
   note?: string;
   mergeOverrideAudit?: Record<string, unknown>;
   nodeId?: string;
@@ -96,6 +98,7 @@ function normalizeGate(step: GateStep): {
     return {
       topic: step.topic,
       outcome: step.outcome,
+      ...(step.reconcile ? { reconcile: step.reconcile } : {}),
       ...(step.note ? { note: step.note } : {}),
       ...(step.mergeOverrideAudit ? { mergeOverrideAudit: step.mergeOverrideAudit } : {}),
       ...(step.nodeId ? { nodeId: step.nodeId } : {}),
@@ -237,6 +240,7 @@ export async function pipelineScenario(
       inboxId: gate.inboxId,
       outcome: gateStep.outcome,
       resolvedBy: 'e2e',
+      ...(gateStep.reconcile ? { reconcile: gateStep.reconcile } : {}),
       ...(gateStep.note ? { note: gateStep.note } : {}),
       ...(gateStep.mergeOverrideAudit ? { mergeOverrideAudit: gateStep.mergeOverrideAudit } : {}),
     });

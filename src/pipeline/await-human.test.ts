@@ -129,6 +129,24 @@ test('A1c: awaitHuman falls back from empty explicit options to named outcomes',
   assert.deepEqual(pushInboxCalls[0]?.item.options, ['approve_anyway', 'rework', 'cancel']);
 });
 
+test('retry gates keep public topic but wait on a unique signal topic per gateKey', async () => {
+  const runId = 'run-ah-retry-signal';
+  const { deps, pushInboxCalls, awaitDecisionTopics } = makeDeps({ decision: { outcome: 'retry' } });
+  const awaitHuman = makeAwaitHuman(deps);
+
+  await awaitHuman(runId, 'retry', 'transientRetry:developer', 'Retry developer', {});
+  await awaitHuman(runId, 'retry', 'transientRetry:reviewer', 'Retry reviewer', {});
+
+  const firstSignalTopic = `retry:${fnv1a64Hex(`${runId}|transientRetry:developer`)}`;
+  const secondSignalTopic = `retry:${fnv1a64Hex(`${runId}|transientRetry:reviewer`)}`;
+  assert.deepEqual(awaitDecisionTopics, [firstSignalTopic, secondSignalTopic]);
+  assert.notEqual(firstSignalTopic, secondSignalTopic);
+  assert.equal((pushInboxCalls[0]?.item.context as Record<string, unknown>).topic, 'retry');
+  assert.equal((pushInboxCalls[0]?.item.context as Record<string, unknown>).signalTopic, firstSignalTopic);
+  assert.equal((pushInboxCalls[1]?.item.context as Record<string, unknown>).topic, 'retry');
+  assert.equal((pushInboxCalls[1]?.item.context as Record<string, unknown>).signalTopic, secondSignalTopic);
+});
+
 test('A1 (merge gate): awaitHuman works for merge topic too', async () => {
   const runId = 'run-ah-a1m';
   const topic = 'merge' as const;
