@@ -71,6 +71,10 @@ function diagnosticsFor(template: Template): DefaultPlaybookPolicyDiagnostic[] {
   return validateDefaultPlaybookPolicy(template);
 }
 
+function compareOptionalStrings(left: string | undefined, right: string | undefined): number {
+  return (left ?? '').localeCompare(right ?? '');
+}
+
 function assertDiagnostic(
   template: Template,
   code: DefaultPlaybookPolicyDiagnosticCode,
@@ -232,7 +236,7 @@ test('default playbook policy: missing ci_changes routes from both PR routers ar
   ).filter((diagnostic) => diagnostic.code === 'DEFAULT_POLICY_CI_CHANGES_ROUTE_MISSING');
 
   assert.deepEqual(
-    diagnostics.map((diagnostic) => diagnostic.nodeId).sort(),
+    diagnostics.map((diagnostic) => diagnostic.nodeId).sort(compareOptionalStrings),
     ['mergeReadinessRouter', 'prRouter'],
   );
   assert.ok(
@@ -531,7 +535,7 @@ test('default playbook policy: merge recheck evidence handoff is diagnostic when
   ).filter((diagnostic) => diagnostic.code === 'DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING');
 
   assert.deepEqual(
-    diagnostics.map((diagnostic) => diagnostic.nodeId).sort(),
+    diagnostics.map((diagnostic) => diagnostic.nodeId).sort(compareOptionalStrings),
     ['ciRework', 'triage'],
   );
   assert.ok(

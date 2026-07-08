@@ -70,6 +70,48 @@ type PipelineDslCoverageScenario = {
   tags: readonly PipelineCoverageTag[];
 };
 
+type PipelineDslCoverageScenarioWithId<Id extends string> = PipelineDslCoverageScenario & {
+  readonly id: Id;
+};
+
+const DEFAULT_PLAYBOOK_POLICY_TEST = 'src/control-plane/default-playbook-policy.test.ts';
+const RECOVERY_GRAPH_E2E_TEST = 'src/e2e/recovery-graph.e2e.test.ts';
+const SEED_DEFAULT_PLAYBOOK_E2E_TEST = 'src/e2e/seed-default-playbook.e2e.test.ts';
+const TARGET_CONTRACT_E2E_TEST = 'src/e2e/target-contract-red-suite.e2e.test.ts';
+
+function compareStrings(left: string, right: string): number {
+  return left.localeCompare(right);
+}
+
+function dslScenario<const Id extends string>(
+  id: Id,
+  ownerSurface: string,
+  tags: readonly PipelineCoverageTag[],
+): PipelineDslCoverageScenarioWithId<Id> {
+  return { id, ownerSurface, tags };
+}
+
+function recoveryGraphScenario<const Id extends string>(
+  id: Id,
+  tags: readonly PipelineCoverageTag[],
+): PipelineDslCoverageScenarioWithId<Id> {
+  return dslScenario(id, RECOVERY_GRAPH_E2E_TEST, tags);
+}
+
+function targetContractScenario<const Id extends string>(
+  id: Id,
+  tags: readonly PipelineCoverageTag[],
+): PipelineDslCoverageScenarioWithId<Id> {
+  return dslScenario(id, TARGET_CONTRACT_E2E_TEST, tags);
+}
+
+function seedDefaultPlaybookScenario<const Id extends string>(
+  id: Id,
+  tags: readonly PipelineCoverageTag[],
+): PipelineDslCoverageScenarioWithId<Id> {
+  return dslScenario(id, SEED_DEFAULT_PLAYBOOK_E2E_TEST, tags);
+}
+
 function nodeOutcome(nodeId: string, outcome: string): PipelineCoverageTag {
   return `node:${nodeId}:outcome:${outcome}`;
 }
@@ -104,7 +146,7 @@ function staticPolicy(
 ): PipelineCoverageOwnership {
   return {
     owner: 'static-policy',
-    ownerSurface: 'src/control-plane/default-playbook-policy.test.ts',
+    ownerSurface: DEFAULT_PLAYBOOK_POLICY_TEST,
     diagnosticCode,
     tags,
   };
@@ -125,173 +167,153 @@ const CONSENSUS_PROFILE_TAGS = [
 ] as const;
 
 export const PIPELINE_DSL_COVERAGE_SCENARIOS = [
-  {
-    id: 'RG-A-merge-approved',
-    ownerSurface: 'src/e2e/recovery-graph.e2e.test.ts',
-    tags: [
+  recoveryGraphScenario(
+    'RG-A-merge-approved',
+    [
       nodeOutcome('mergeGate', 'approved'),
       nodeOutcome('mergeApproveReverifyRouter', 'clean'),
     ],
-  },
-  {
-    id: 'RG-B-merge-cancel',
-    ownerSurface: 'src/e2e/recovery-graph.e2e.test.ts',
-    tags: [
+  ),
+  recoveryGraphScenario(
+    'RG-B-merge-cancel',
+    [
       nodeOutcome('mergeGate', 'cancel'),
     ],
-  },
-  {
-    id: 'RG-C-merge-override',
-    ownerSurface: 'src/e2e/recovery-graph.e2e.test.ts',
-    tags: [
+  ),
+  recoveryGraphScenario(
+    'RG-C-merge-override',
+    [
       nodeOutcome('mergeGate', 'override_merge'),
       nodeOutcome('overrideMergeRouter', 'clean'),
     ],
-  },
-  {
-    id: 'RG-D-merge-recheck-clean',
-    ownerSurface: 'src/e2e/recovery-graph.e2e.test.ts',
-    tags: [
+  ),
+  recoveryGraphScenario(
+    'RG-D-merge-recheck-clean',
+    [
       nodeOutcome('mergeGate', 'recheck'),
       nodeOutcome('mergeRecheckRouter', 'clean'),
       nodeOutcome('mergeGate', 'cancel'),
     ],
-  },
-  {
-    id: 'RG-E-ci-loop-recovery',
-    ownerSurface: 'src/e2e/recovery-graph.e2e.test.ts',
-    tags: [
+  ),
+  recoveryGraphScenario(
+    'RG-E-ci-loop-recovery',
+    [
       nodeOutcome('prRouter', 'ci_changes'),
       nodeDefault('prRouter'),
       nodeOutcome('recoveryGate', 'cancel'),
     ],
-  },
-  {
-    id: 'RG-F-unknown-then-clean',
-    ownerSurface: 'src/e2e/recovery-graph.e2e.test.ts',
-    tags: [
+  ),
+  recoveryGraphScenario(
+    'RG-F-unknown-then-clean',
+    [
       nodeOutcome('prRouter', 'recheck'),
       nodeOutcome('prRouter', 'clean'),
       nodeOutcome('mergeReadinessRouter', 'clean'),
       nodeOutcome('mergeGate', 'approved'),
       nodeOutcome('mergeApproveReverifyRouter', 'clean'),
     ],
-  },
-  {
-    id: 'RG-G-stale-reverify-recovery',
-    ownerSurface: 'src/e2e/recovery-graph.e2e.test.ts',
-    tags: [
+  ),
+  recoveryGraphScenario(
+    'RG-G-stale-reverify-recovery',
+    [
       nodeCatch('mergeApproveReverify', 'revo.ScriptBlocked'),
       nodeOutcome('recoveryGate', 'cancel'),
     ],
-  },
-  {
-    id: 'TC-272-no-checks-clean',
-    ownerSurface: 'src/e2e/target-contract-red-suite.e2e.test.ts',
-    tags: [
+  ),
+  targetContractScenario(
+    'TC-272-no-checks-clean',
+    [
       nodeOutcome('prRouter', 'clean'),
       nodeOutcome('mergeReadinessRouter', 'clean'),
       nodeOutcome('mergeGate', 'cancel'),
     ],
-  },
-  {
-    id: 'TC-272-never-settling-recovery',
-    ownerSurface: 'src/e2e/target-contract-red-suite.e2e.test.ts',
-    tags: [
+  ),
+  targetContractScenario(
+    'TC-272-never-settling-recovery',
+    [
       nodeOutcome('prRouter', 'recheck'),
       nodeDefault('prRouter'),
       nodeOutcome('recoveryGate', 'cancel'),
     ],
-  },
-  {
-    id: 'TC-272-unclassifiable-recovery',
-    ownerSurface: 'src/e2e/target-contract-red-suite.e2e.test.ts',
-    tags: [
+  ),
+  targetContractScenario(
+    'TC-272-unclassifiable-recovery',
+    [
       nodeDefault('recoveryRouter'),
       nodeOutcome('recoveryGate', 'cancel'),
     ],
-  },
-  {
-    id: 'TC-273-externally-merged',
-    ownerSurface: 'src/e2e/target-contract-red-suite.e2e.test.ts',
-    tags: [
+  ),
+  targetContractScenario(
+    'TC-273-externally-merged',
+    [
       nodeOutcome('prRouter', 'merged'),
     ],
-  },
-  {
-    id: 'TC-273-externally-closed',
-    ownerSurface: 'src/e2e/target-contract-red-suite.e2e.test.ts',
-    tags: [
+  ),
+  targetContractScenario(
+    'TC-273-externally-closed',
+    [
       nodeOutcome('prRouter', 'closed'),
       nodeOutcome('recoveryGate', 'cancel'),
     ],
-  },
-  {
-    id: 'TC-274-head-moved-reopens-merge-gate',
-    ownerSurface: 'src/e2e/target-contract-red-suite.e2e.test.ts',
-    tags: [
+  ),
+  targetContractScenario(
+    'TC-274-head-moved-reopens-merge-gate',
+    [
       nodeOutcome('mergeGate', 'approved'),
       nodeOutcome('mergeGate', 'cancel'),
     ],
-  },
-  {
-    id: 'TC-275-graphql-outage-recovery',
-    ownerSurface: 'src/e2e/target-contract-red-suite.e2e.test.ts',
-    tags: [
+  ),
+  targetContractScenario(
+    'TC-275-graphql-outage-recovery',
+    [
       nodeCatch('pollPr', 'revo.ScriptFailed'),
       nodeDefault('recoveryRouter'),
       nodeOutcome('recoveryGate', 'cancel'),
     ],
-  },
-  {
-    id: 'TC-276-question-fix',
-    ownerSurface: 'src/e2e/target-contract-red-suite.e2e.test.ts',
-    tags: [
+  ),
+  targetContractScenario(
+    'TC-276-question-fix',
+    [
       nodeOutcome('prRouter', 'review_changes'),
       nodeOutcome('triageRouter', 'question'),
       nodeOutcome('questionGate', 'fix'),
     ],
-  },
-  {
-    id: 'TC-276-question-wontfix',
-    ownerSurface: 'src/e2e/target-contract-red-suite.e2e.test.ts',
-    tags: [
+  ),
+  targetContractScenario(
+    'TC-276-question-wontfix',
+    [
       nodeOutcome('prRouter', 'review_changes'),
       nodeOutcome('triageRouter', 'question'),
       nodeOutcome('questionGate', 'wontfix'),
     ],
-  },
-  {
-    id: 'TC-277-cleanup-dirty-preserve',
-    ownerSurface: 'src/e2e/target-contract-red-suite.e2e.test.ts',
-    tags: [
+  ),
+  targetContractScenario(
+    'TC-277-cleanup-dirty-preserve',
+    [
       nodeOutcome('mergeGate', 'approved'),
       nodeOutcome('mergeApproveReverifyRouter', 'clean'),
     ],
-  },
-  {
-    id: 'TC-279-override-advisory-thread',
-    ownerSurface: 'src/e2e/target-contract-red-suite.e2e.test.ts',
-    tags: [
+  ),
+  targetContractScenario(
+    'TC-279-override-advisory-thread',
+    [
       nodeOutcome('mergeGate', 'override_merge'),
       nodeOutcome('overrideMergeRouter', 'clean'),
     ],
-  },
-  {
-    id: 'M1-profile-single',
-    ownerSurface: 'src/e2e/seed-default-playbook.e2e.test.ts',
-    tags: [
+  ),
+  seedDefaultPlaybookScenario(
+    'M1-profile-single',
+    [
       profileSignature('codex-standard', 'single-review'),
       nodeOutcome('planReviewRouter', 'approved'),
       nodeOutcome('planGate', 'approved'),
       nodeOutcome('codeReviewRouter', 'approved'),
       nodeOutcome('mergeGate', 'approved'),
     ],
-  },
-  {
-    id: 'M1b-profile-consensus-rework',
-    ownerSurface: 'src/e2e/seed-default-playbook.e2e.test.ts',
-    tags: [
+  ),
+  seedDefaultPlaybookScenario(
+    'M1b-profile-consensus-rework',
+    [
       profileSignature('codex-primary-claude-review-consensus', 'dual-consensus-review'),
       nodeOutcome('planReviewRouter', 'changes_requested'),
       nodeOutcome('planReviewRouter', 'approved'),
@@ -299,7 +321,7 @@ export const PIPELINE_DSL_COVERAGE_SCENARIOS = [
       nodeOutcome('codeReviewRouter', 'approved'),
       nodeOutcome('mergeGate', 'approved'),
     ],
-  },
+  ),
 ] as const;
 
 export type PipelineCoverageScenarioId = (typeof PIPELINE_DSL_COVERAGE_SCENARIOS)[number]['id'];
@@ -436,7 +458,7 @@ export function graphCoverageTagsForTemplate(template: Template): PipelineCovera
       for (const entry of node.catch ?? []) tags.add(nodeCatch(nodeId, entry.onError));
     }
   }
-  return [...tags].sort();
+  return [...tags].sort(compareStrings);
 }
 
 export function profileCoverageTag(profile: RunProfileCoverageInput): PipelineCoverageTag {
@@ -468,7 +490,7 @@ export function expectedCoverageTags(
     if (profile.status !== undefined && profile.status !== 'active') continue;
     tags.add(profileCoverageTag(profile));
   }
-  return [...tags].sort();
+  return [...tags].sort(compareStrings);
 }
 
 export function validatePipelineCoverageRegistry(input: {
@@ -481,43 +503,66 @@ export function validatePipelineCoverageRegistry(input: {
   const ownedTags = new Set<PipelineCoverageTag>();
   const diagnostics: PipelineCoverageDiagnostic[] = [];
 
-  for (const scenario of registry.scenarios) {
-    for (const tag of scenario.tags) {
-      addDefinedTagDiagnostic(diagnostics, definedTags, tag, {
-        scenarioId: scenario.id,
-        ownerSurface: scenario.ownerSurface,
-      });
-      ownedTags.add(tag);
-    }
-  }
+  addScenarioDiagnostics(diagnostics, definedTags, ownedTags, registry.scenarios);
+  addOwnershipDiagnostics(diagnostics, definedTags, ownedTags, registry.ownership);
+  addWaiverDiagnostics(diagnostics, definedTags, ownedTags, registry.waivers);
+  addUnownedTagDiagnostics(diagnostics, definedTags, ownedTags);
+  addProfileRoutingSignatureDiagnostics(diagnostics, input.runProfiles, registry);
 
-  for (const ownership of registry.ownership) {
-    for (const tag of ownership.tags) {
-      addDefinedTagDiagnostic(diagnostics, definedTags, tag, {
-        ownerSurface: ownership.ownerSurface,
-      });
-      ownedTags.add(tag);
-    }
-  }
+  return diagnostics;
+}
 
-  for (const waiver of registry.waivers) {
-    const complete = waiver.reason.trim().length > 0 && waiver.ownerSurface.trim().length > 0;
-    if (!complete) {
-      diagnostics.push({
-        code: 'PIPELINE_COVERAGE_INCOMPLETE_WAIVER',
-        message: `coverage waiver ${waiver.id} must include reason and ownerSurface`,
-        waiverId: waiver.id,
-      });
-    }
-    for (const tag of waiver.tags ?? []) {
-      addDefinedTagDiagnostic(diagnostics, definedTags, tag, {
-        waiverId: waiver.id,
-        ownerSurface: waiver.ownerSurface,
-      });
-      if (complete) ownedTags.add(tag);
-    }
+function addScenarioDiagnostics(
+  diagnostics: PipelineCoverageDiagnostic[],
+  definedTags: ReadonlySet<PipelineCoverageTag>,
+  ownedTags: Set<PipelineCoverageTag>,
+  scenarios: readonly PipelineDslCoverageScenario[],
+): void {
+  for (const scenario of scenarios) {
+    addDefinedTagDiagnostics(diagnostics, definedTags, scenario.tags, {
+      scenarioId: scenario.id,
+      ownerSurface: scenario.ownerSurface,
+    });
+    addOwnedTags(ownedTags, scenario.tags);
   }
+}
 
+function addOwnershipDiagnostics(
+  diagnostics: PipelineCoverageDiagnostic[],
+  definedTags: ReadonlySet<PipelineCoverageTag>,
+  ownedTags: Set<PipelineCoverageTag>,
+  ownership: readonly PipelineCoverageOwnership[],
+): void {
+  for (const owner of ownership) {
+    addDefinedTagDiagnostics(diagnostics, definedTags, owner.tags, {
+      ownerSurface: owner.ownerSurface,
+    });
+    addOwnedTags(ownedTags, owner.tags);
+  }
+}
+
+function addWaiverDiagnostics(
+  diagnostics: PipelineCoverageDiagnostic[],
+  definedTags: ReadonlySet<PipelineCoverageTag>,
+  ownedTags: Set<PipelineCoverageTag>,
+  waivers: readonly PipelineCoverageWaiver[],
+): void {
+  for (const waiver of waivers) {
+    const complete = isCompleteCoverageWaiver(waiver);
+    if (!complete) addIncompleteWaiverDiagnostic(diagnostics, waiver);
+    addDefinedTagDiagnostics(diagnostics, definedTags, waiver.tags ?? [], {
+      waiverId: waiver.id,
+      ownerSurface: waiver.ownerSurface,
+    });
+    if (complete) addOwnedTags(ownedTags, waiver.tags ?? []);
+  }
+}
+
+function addUnownedTagDiagnostics(
+  diagnostics: PipelineCoverageDiagnostic[],
+  definedTags: ReadonlySet<PipelineCoverageTag>,
+  ownedTags: ReadonlySet<PipelineCoverageTag>,
+): void {
   for (const tag of definedTags) {
     if (ownedTags.has(tag)) continue;
     diagnostics.push({
@@ -526,25 +571,78 @@ export function validatePipelineCoverageRegistry(input: {
       tag,
     });
   }
+}
 
-  for (const signature of profileRoutingSignatures(input.runProfiles)) {
-    const hasDsl = registry.scenarios.some((scenario) =>
-      scenario.tags.some((tag) => profileSignatureFromTag(tag) === signature),
-    );
-    const hasWaiver = registry.waivers.some((waiver) =>
-      waiver.reason.trim().length > 0 &&
-      waiver.ownerSurface.trim().length > 0 &&
-      (waiver.tags ?? []).some((tag) => profileSignatureFromTag(tag) === signature),
-    );
-    if (!hasDsl && !hasWaiver) {
-      diagnostics.push({
-        code: 'PIPELINE_COVERAGE_SIGNATURE_WITHOUT_DSL',
-        message: `profile routing signature ${signature} has no DSL scenario owner or waiver`,
-      });
-    }
+function addProfileRoutingSignatureDiagnostics(
+  diagnostics: PipelineCoverageDiagnostic[],
+  runProfiles: readonly RunProfileCoverageInput[],
+  registry: PipelineCoverageRegistry,
+): void {
+  for (const signature of profileRoutingSignatures(runProfiles)) {
+    if (isProfileRoutingSignatureCovered(signature, registry)) continue;
+    diagnostics.push({
+      code: 'PIPELINE_COVERAGE_SIGNATURE_WITHOUT_DSL',
+      message: `profile routing signature ${signature} has no DSL scenario owner or waiver`,
+    });
   }
+}
 
-  return diagnostics;
+function addDefinedTagDiagnostics(
+  diagnostics: PipelineCoverageDiagnostic[],
+  definedTags: ReadonlySet<PipelineCoverageTag>,
+  tags: readonly PipelineCoverageTag[],
+  context: { scenarioId?: string; ownerSurface?: string; waiverId?: string },
+): void {
+  for (const tag of tags) addDefinedTagDiagnostic(diagnostics, definedTags, tag, context);
+}
+
+function addOwnedTags(
+  ownedTags: Set<PipelineCoverageTag>,
+  tags: readonly PipelineCoverageTag[],
+): void {
+  for (const tag of tags) ownedTags.add(tag);
+}
+
+function addIncompleteWaiverDiagnostic(
+  diagnostics: PipelineCoverageDiagnostic[],
+  waiver: PipelineCoverageWaiver,
+): void {
+  diagnostics.push({
+    code: 'PIPELINE_COVERAGE_INCOMPLETE_WAIVER',
+    message: `coverage waiver ${waiver.id} must include reason and ownerSurface`,
+    waiverId: waiver.id,
+  });
+}
+
+function isProfileRoutingSignatureCovered(
+  signature: string,
+  registry: PipelineCoverageRegistry,
+): boolean {
+  return hasDslScenarioForSignature(signature, registry.scenarios) ||
+    hasWaiverForProfileSignature(signature, registry.waivers);
+}
+
+function hasDslScenarioForSignature(
+  signature: string,
+  scenarios: readonly PipelineDslCoverageScenario[],
+): boolean {
+  return scenarios.some((scenario) =>
+    scenario.tags.some((tag) => profileSignatureFromTag(tag) === signature),
+  );
+}
+
+function hasWaiverForProfileSignature(
+  signature: string,
+  waivers: readonly PipelineCoverageWaiver[],
+): boolean {
+  return waivers.some((waiver) =>
+    isCompleteCoverageWaiver(waiver) &&
+    (waiver.tags ?? []).some((tag) => profileSignatureFromTag(tag) === signature),
+  );
+}
+
+function isCompleteCoverageWaiver(waiver: PipelineCoverageWaiver): boolean {
+  return waiver.reason.trim().length > 0 && waiver.ownerSurface.trim().length > 0;
 }
 
 function addBranchTags(tags: Set<PipelineCoverageTag>, nodeId: string, branches: readonly Branch[]): void {
@@ -620,5 +718,5 @@ function profileRoutingSignatures(runProfiles: readonly RunProfileCoverageInput[
     if (profile.status !== undefined && profile.status !== 'active') continue;
     signatures.add(routingSignatureForRunProfile(profile));
   }
-  return [...signatures].sort();
+  return [...signatures].sort(compareStrings);
 }
