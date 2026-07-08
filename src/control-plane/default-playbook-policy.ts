@@ -92,6 +92,7 @@ export function validateDefaultPlaybookPolicy(
   checkOverrideMergeRouting(template, sink);
   checkMergeConsumesFreshReadiness(template, sink);
   checkMergeGateRecheckRouting(template, sink);
+  checkRecoveryGateRouting(template, sink);
   checkReviewFeedbackLoop(template, sink);
   checkLoopExhaustionEscalation(template, sink);
   checkRecoverableCatches(template, sink);
@@ -275,6 +276,11 @@ function checkApproveReverifyBeforeMerge(template: Template, sink: PolicySink): 
     verdict: 'closed',
     target: 'recoveryGate',
   });
+  expectDefaultRoute(template, sink, {
+    code: 'DEFAULT_POLICY_APPROVE_REVERIFY_MISSING',
+    nodeId: 'mergeApproveReverifyRouter',
+    target: 'classifyRecovery',
+  });
 }
 
 function checkOverrideMergeRouting(template: Template, sink: PolicySink): void {
@@ -391,6 +397,23 @@ function checkMergeGateRecheckRouting(template: Template, sink: PolicySink): voi
     as: 'recheckFeedback',
     optional: true,
     staleOk: true,
+  });
+}
+
+function checkRecoveryGateRouting(template: Template, sink: PolicySink): void {
+  expectHumanGateOutcomes(template, sink, {
+    code: 'DEFAULT_POLICY_GATE_OUTCOMES_IMPLICIT',
+    nodeId: 'recoveryGate',
+    outcomes: ['recheck', 'cancel'],
+  });
+  expectRoutes(template, sink, 'DEFAULT_POLICY_GATE_OUTCOMES_IMPLICIT', 'recoveryGate', [
+    ['recheck', 'pollPr'],
+    ['cancel', 'cancelledEnd'],
+  ]);
+  expectDefaultRoute(template, sink, {
+    code: 'DEFAULT_POLICY_GATE_OUTCOMES_IMPLICIT',
+    nodeId: 'recoveryGate',
+    target: 'blockedEnd',
   });
 }
 
@@ -538,10 +561,36 @@ function checkReviewFeedbackLoop(template: Template, sink: PolicySink): void {
 }
 
 function checkLoopExhaustionEscalation(template: Template, sink: PolicySink): void {
+  expectRoutes(template, sink, 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING', 'planReviewRouter', [
+    ['approved', 'planGate'],
+    ['clean', 'planGate'],
+  ]);
+  expectBoundedRoute(template, sink, {
+    code: 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
+    nodeId: 'planReviewRouter',
+    verdict: 'blocker',
+    target: 'analyst',
+    scope: 'planReviewLoop',
+    value: 4,
+  });
+  expectBoundedRoute(template, sink, {
+    code: 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
+    nodeId: 'planReviewRouter',
+    verdict: 'changes_requested',
+    target: 'analyst',
+    scope: 'planReviewLoop',
+    value: 4,
+  });
   expectHumanGateOutcomes(template, sink, {
     code: 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
     nodeId: 'planGate',
     outcomes: ['approved', 'rework', 'cancel'],
+  });
+  expectRoute(template, sink, {
+    code: 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
+    nodeId: 'planGate',
+    verdict: 'approved',
+    target: 'developer',
   });
   expectRoute(template, sink, {
     code: 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
@@ -554,6 +603,11 @@ function checkLoopExhaustionEscalation(template: Template, sink: PolicySink): vo
     nodeId: 'planGate',
     verdict: 'cancel',
     target: 'cancelledEnd',
+  });
+  expectDefaultRoute(template, sink, {
+    code: 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
+    nodeId: 'planGate',
+    target: 'blockedEnd',
   });
   expectRouterDefaultGate(template, sink, {
     routerId: 'planReviewRouter',
@@ -576,6 +630,26 @@ function checkLoopExhaustionEscalation(template: Template, sink: PolicySink): vo
     nodeId: 'planStuckGate',
     verdict: 'cancel',
     target: 'cancelledEnd',
+  });
+  expectRoutes(template, sink, 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING', 'codeReviewRouter', [
+    ['approved', 'integrator'],
+    ['clean', 'integrator'],
+  ]);
+  expectBoundedRoute(template, sink, {
+    code: 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
+    nodeId: 'codeReviewRouter',
+    verdict: 'blocker',
+    target: 'reworkDeveloper',
+    scope: 'codeReviewLoop',
+    value: 3,
+  });
+  expectBoundedRoute(template, sink, {
+    code: 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING',
+    nodeId: 'codeReviewRouter',
+    verdict: 'changes_requested',
+    target: 'reworkDeveloper',
+    scope: 'codeReviewLoop',
+    value: 3,
   });
   expectRouterDefaultGate(template, sink, {
     routerId: 'codeReviewRouter',
@@ -730,6 +804,11 @@ function checkPostMergeCleanup(template: Template, sink: PolicySink): void {
 }
 
 function checkGateOutcomesExplicit(template: Template, sink: PolicySink): void {
+  const expectedDefaults: Record<string, string> = {
+    mergeGate: 'blockedEnd',
+    recoveryGate: 'blockedEnd',
+  };
+
   for (const [nodeId, node] of Object.entries(template.nodes)) {
     if (node.kind !== 'humanGate') continue;
     for (const outcome of node.outcomes) {
@@ -745,6 +824,14 @@ function checkGateOutcomesExplicit(template: Template, sink: PolicySink): void {
           },
         );
       }
+    }
+    const defaultTarget = expectedDefaults[nodeId];
+    if (defaultTarget) {
+      expectDefaultRoute(template, sink, {
+        code: 'DEFAULT_POLICY_GATE_OUTCOMES_IMPLICIT',
+        nodeId,
+        target: defaultTarget,
+      });
     }
   }
 }

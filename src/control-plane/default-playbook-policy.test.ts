@@ -44,6 +44,17 @@ function bundledFeatureDevelopment(): Template {
   return structuredClone(template);
 }
 
+function materializedProfile(profile: RunProfileCatalogEntry): Template {
+  const base = bundledFeatureDevelopment();
+  const { template, diagnostics } = materializeTemplate(
+    base,
+    topologyProfileFromRunProfile(profile as never),
+    { allowlist: ['planReviewer', 'codeReview'] },
+  );
+  assert.deepEqual(diagnostics, [], `materializeTemplate emitted diagnostics for ${profile.id}: ${JSON.stringify(diagnostics)}`);
+  return template;
+}
+
 function mutateTemplate(mutator: (template: MutableTemplate) => void): Template {
   const template = bundledFeatureDevelopment() as MutableTemplate;
   mutator(template);
@@ -51,16 +62,9 @@ function mutateTemplate(mutator: (template: MutableTemplate) => void): Template 
 }
 
 function materializedConsensusProfile(): Template {
-  const base = bundledFeatureDevelopment();
   const profile = runProfiles.find((item) => item.id === 'codex-primary-claude-review-consensus');
   assert.ok(profile, 'codex-primary-claude-review-consensus profile exists');
-  const { template, diagnostics } = materializeTemplate(
-    base,
-    topologyProfileFromRunProfile(profile as never),
-    { allowlist: ['planReviewer', 'codeReview'] },
-  );
-  assert.deepEqual(diagnostics, [], `materializeTemplate emitted diagnostics: ${JSON.stringify(diagnostics)}`);
-  return template;
+  return materializedProfile(profile);
 }
 
 function diagnosticsFor(template: Template): DefaultPlaybookPolicyDiagnostic[] {
@@ -400,6 +404,18 @@ test('default playbook policy: mergeApproveReverifyRouter terminal PR states mus
   );
 });
 
+test('default playbook policy: mergeApproveReverifyRouter default must classify recovery', () => {
+  const diagnostic = assertDiagnostic(
+    mutateTemplate((template) => {
+      defaultBranch(template, 'mergeApproveReverifyRouter').default = 'recoveryGate';
+    }),
+    'DEFAULT_POLICY_APPROVE_REVERIFY_MISSING',
+  );
+
+  assert.equal(diagnostic.nodeId, 'mergeApproveReverifyRouter');
+  assert.match(diagnostic.expected ?? '', /default -> classifyRecovery/);
+});
+
 test('default playbook policy: confirmMerge must consume fresh mergeApproveReverify evidence', () => {
   const diagnostic = assertDiagnostic(
     mutateTemplate((template) => {
@@ -661,6 +677,54 @@ test('default playbook policy: loop exhaustion must not dead-end directly at blo
   assert.match(diagnostic.expected ?? '', /codeStuckGate/);
 });
 
+test('default playbook policy: review routers must keep pass routes and bounded rework routes', () => {
+  const diagnostics = diagnosticsFor(
+    mutateTemplate((template) => {
+      guardedBranchContaining(template, 'planReviewRouter', 'approved').goto = 'developer';
+      guardedBranchContaining(template, 'planReviewRouter', 'changes_requested').when = {
+        op: 'verdict.eq',
+        value: 'changes_requested',
+      };
+      guardedBranchContaining(template, 'codeReviewRouter', 'clean').goto = 'developer';
+      guardedBranchContaining(template, 'codeReviewRouter', 'blocker').when = {
+        op: 'verdict.eq',
+        value: 'blocker',
+      };
+    }),
+  ).filter((diagnostic) => diagnostic.code === 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING');
+
+  assert.ok(
+    diagnostics.some((diagnostic) =>
+      diagnostic.nodeId === 'planReviewRouter' &&
+      /approved -> planGate/.test(diagnostic.expected ?? ''),
+    ),
+    'plan approved must reach planGate',
+  );
+  assert.ok(
+    diagnostics.some((diagnostic) =>
+      diagnostic.nodeId === 'planReviewRouter' &&
+      /changes_requested \+ planReviewLoop<4 -> analyst/.test(diagnostic.expected ?? '') &&
+      /conjunctiveBound=false/.test(diagnostic.actual ?? ''),
+    ),
+    'plan changes_requested must stay bounded by planReviewLoop',
+  );
+  assert.ok(
+    diagnostics.some((diagnostic) =>
+      diagnostic.nodeId === 'codeReviewRouter' &&
+      /clean -> integrator/.test(diagnostic.expected ?? ''),
+    ),
+    'code clean must reach integrator',
+  );
+  assert.ok(
+    diagnostics.some((diagnostic) =>
+      diagnostic.nodeId === 'codeReviewRouter' &&
+      /blocker \+ codeReviewLoop<3 -> reworkDeveloper/.test(diagnostic.expected ?? '') &&
+      /conjunctiveBound=false/.test(diagnostic.actual ?? ''),
+    ),
+    'code blocker must stay bounded by codeReviewLoop',
+  );
+});
+
 test('default playbook policy: codeStuckGate rework must route to stuckReworkDeveloper', () => {
   const diagnostic = assertDiagnostic(
     mutateTemplate((template) => {
@@ -695,6 +759,30 @@ test('default playbook policy: plan gates must route rework back to analyst', ()
 
   assert.equal(diagnostic.nodeId, 'planGate');
   assert.match(diagnostic.expected ?? '', /rework -> analyst/);
+});
+
+test('default playbook policy: planGate approval continues to development and invalid outcomes block', () => {
+  const diagnostics = diagnosticsFor(
+    mutateTemplate((template) => {
+      guardedBranchContaining(template, 'planGate', 'approved').goto = 'analyst';
+      defaultBranch(template, 'planGate').default = 'cancelledEnd';
+    }),
+  ).filter((diagnostic) => diagnostic.code === 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING');
+
+  assert.ok(
+    diagnostics.some((diagnostic) =>
+      diagnostic.nodeId === 'planGate' &&
+      /approved -> developer/.test(diagnostic.expected ?? ''),
+    ),
+    'planGate approved must continue to developer',
+  );
+  assert.ok(
+    diagnostics.some((diagnostic) =>
+      diagnostic.nodeId === 'planGate' &&
+      /default -> blockedEnd/.test(diagnostic.expected ?? ''),
+    ),
+    'invalid planGate outcomes must block',
+  );
 });
 
 test('default playbook policy: code review loop must be reset by stuck recovery iterations', () => {
@@ -813,8 +901,48 @@ test('default playbook policy: every declared gate outcome must have an explicit
   assert.match(diagnostic.expected ?? '', /wontfix/);
 });
 
+test('default playbook policy: recoveryGate rechecks polling, cancels as cancelled, and invalid outcomes block', () => {
+  const diagnostics = diagnosticsFor(
+    mutateTemplate((template) => {
+      guardedBranchContaining(template, 'recoveryGate', 'recheck').goto = 'mergeGate';
+      guardedBranchContaining(template, 'recoveryGate', 'cancel').goto = 'blockedEnd';
+      defaultBranch(template, 'recoveryGate').default = 'cancelledEnd';
+    }),
+  ).filter((diagnostic) => diagnostic.code === 'DEFAULT_POLICY_GATE_OUTCOMES_IMPLICIT');
+
+  assert.ok(
+    diagnostics.some((diagnostic) =>
+      diagnostic.nodeId === 'recoveryGate' &&
+      /recheck -> pollPr/.test(diagnostic.expected ?? ''),
+    ),
+    'recovery recheck must restart PR polling',
+  );
+  assert.ok(
+    diagnostics.some((diagnostic) =>
+      diagnostic.nodeId === 'recoveryGate' &&
+      /cancel -> cancelledEnd/.test(diagnostic.expected ?? ''),
+    ),
+    'recovery cancel must terminate as cancelled',
+  );
+  assert.ok(
+    diagnostics.some((diagnostic) =>
+      diagnostic.nodeId === 'recoveryGate' &&
+      /default -> blockedEnd/.test(diagnostic.expected ?? ''),
+    ),
+    'invalid recovery outcomes must block',
+  );
+});
+
 test('default playbook policy: seeded consensus run profile has zero policy violations', () => {
   const materialized = materializedConsensusProfile();
   const diags = diagnosticsFor(materialized);
   assert.deepEqual(diags, [], `seeded consensus profile must have zero policy violations; got: ${diags.map((d) => d.code).join(', ')}`);
 });
+
+for (const profile of runProfiles) {
+  test(`default playbook policy: seeded ${profile.id} run profile has zero policy violations`, () => {
+    const materialized = materializedProfile(profile);
+    const diags = diagnosticsFor(materialized);
+    assert.deepEqual(diags, [], `seeded ${profile.id} profile must have zero policy violations; got: ${diags.map((d) => d.code).join(', ')}`);
+  });
+}
