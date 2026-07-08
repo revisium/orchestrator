@@ -97,6 +97,8 @@ GraphQL mutations:
 - `resolve_gate` / `resolveGate` MUST validate that `outcome` is one of the pending inbox row options.
 - It MUST require a non-empty note for `approve_anyway`.
 - It MUST require a non-empty note for `questionGate` outcomes `fix` and `wontfix`.
+- For runner transient retry gates, it MUST accept only declared outcomes `retry` and `give_up`; optional
+  `reconcile` is limited to `keep`.
 - `approve_gate` / `reject_gate` remain compatibility wrappers for simple two-way gates and MUST reject multi-outcome gates (plan, merge, stuck-review) rather than mapping approve to `approve_anyway` or reject to a recovery, recheck, cancel, or abort outcome.
 
 Verification environment blocks open a recovery gate with outcomes `rerun_with_permissions`, `continue_in_revo`,
@@ -182,9 +184,14 @@ Rules:
   or unbounded payloads.
 - `nextAction: 'ask_human'` means resolve the inbox item through gate/question tools. `inspect_digest` means call
   `get_run_digest`. `inspect_log` means use bounded `get_agent_log` reads with offsets or `tailBytes`.
-- Runner retry does not add a new state in v1. Retry evidence is exposed through the existing event,
+- Runner retry does not add a new state in v1. Automatic retry evidence is exposed through the existing event,
   attempt, digest, and log surfaces (`runner_retry_scheduled`, `runner_retry_exhausted`, per-attempt rows, and
-  per-attempt agent logs). `retrying` remains reserved for a future transition shape.
+  per-attempt agent logs). When automatic retries are exhausted for a transient runner failure, the workflow opens
+  an ordinary approval gate whose public inbox context has `topic: "retry"` and
+  `summary.kind: "transient_retry"`. Its declared outcomes are `retry` and `give_up`; `retry` re-enters the same
+  failed node in the same run/workflow/worktree with a fresh ordinal and attempt identity, while `give_up` preserves
+  terminal blocked behavior. Retry gates use a hidden unique `signalTopic` for DBOS delivery so concurrent retry
+  gates do not cross-deliver answers. `retrying` remains reserved for a future transition shape.
 
 ## Operator Monitoring Directive
 

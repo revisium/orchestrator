@@ -687,6 +687,49 @@ test('TaskControlPlaneApiService.resolveGate validates named outcomes and propag
   assert.match((signals[0] as { resolvedAt: string }).resolvedAt, /^\d{4}-\d{2}-\d{2}T/);
 });
 
+test('TaskControlPlaneApiService.resolveGate supports retry gates with reconcile metadata', async () => {
+  const signalTopic = 'retry:unique-gate-topic';
+  const signals: Array<{ topic: string; payload: unknown }> = [];
+  const api = makeApi({
+    inboxService: {
+      async getInbox() {
+        return makeInboxItem({
+          options: ['retry', 'give_up'],
+          context: { topic: 'retry', signalTopic, summary: { kind: 'transient_retry', outcomes: ['retry', 'give_up'] } },
+        });
+      },
+    },
+    dbosService: {
+      async signal(_workflowId, topic, payload) {
+        signals.push({ topic, payload });
+      },
+    },
+  });
+
+  const result = await api.resolveGate({
+    inboxId: 'inbox-1',
+    outcome: 'retry',
+    reconcile: 'keep',
+    note: 'try the provider again',
+    resolvedBy: 'human',
+  });
+
+  assert.equal(result.topic, 'retry');
+  assert.deepEqual(signals, [
+    {
+      topic: signalTopic,
+      payload: {
+        outcome: 'retry',
+        note: 'try the provider again',
+        reconcile: 'keep',
+        resolvedBy: 'human',
+        resolvedAt: (signals[0]?.payload as { resolvedAt: string }).resolvedAt,
+        inboxId: 'inbox-1',
+      },
+    },
+  ]);
+});
+
 test('TaskControlPlaneApiService.resolveGate rejects invalid outcome and approve_anyway without note', async () => {
   const api = makeApi({
     inboxService: {
@@ -701,6 +744,28 @@ test('TaskControlPlaneApiService.resolveGate rejects invalid outcome and approve
 
   await assert.rejects(() => api.resolveGate({ inboxId: 'inbox-1', outcome: 'approved', resolvedBy: 'human' }), /invalid gate outcome/);
   await assert.rejects(() => api.resolveGate({ inboxId: 'inbox-1', outcome: 'approve_anyway', resolvedBy: 'human' }), /requires a non-empty note/);
+});
+
+test('TaskControlPlaneApiService.resolveGate rejects invalid retry reconcile values', async () => {
+  const api = makeApi({
+    inboxService: {
+      async getInbox() {
+        return makeInboxItem({
+          options: ['retry', 'give_up'],
+          context: { topic: 'retry', summary: { kind: 'transient_retry', outcomes: ['retry', 'give_up'] } },
+        });
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => api.resolveGate({ inboxId: 'inbox-1', outcome: 'retry', reconcile: 'wipe' as never, resolvedBy: 'human' }),
+    /gate reconcile must be keep/,
+  );
+  await assert.rejects(
+    () => api.resolveGate({ inboxId: 'inbox-1', outcome: 'retry', reconcile: 'reset' as never, resolvedBy: 'human' }),
+    /gate reconcile must be keep/,
+  );
 });
 
 test('TaskControlPlaneApiService requires a human note for questionGate fix and wontfix outcomes', async () => {
@@ -1049,6 +1114,22 @@ test('TaskControlPlaneApiService approve/reject wrappers reject question gates t
         return makeInboxItem({
           options: ['fix', 'wontfix'],
           context: { topic: 'question', summary: { nodeId: 'questionGate', outcomes: ['fix', 'wontfix'] } },
+        });
+      },
+    },
+  });
+
+  await assert.rejects(() => api.approveGate({ inboxId: 'inbox-1' }), /use resolve_gate/);
+  await assert.rejects(() => api.rejectGate({ inboxId: 'inbox-1' }), /use resolve_gate/);
+});
+
+test('TaskControlPlaneApiService approve/reject wrappers reject retry gates', async () => {
+  const api = makeApi({
+    inboxService: {
+      async getInbox() {
+        return makeInboxItem({
+          options: ['retry', 'give_up'],
+          context: { topic: 'retry', summary: { kind: 'transient_retry', outcomes: ['retry', 'give_up'] } },
         });
       },
     },

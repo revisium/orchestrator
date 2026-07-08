@@ -206,6 +206,9 @@ recovery outcome. The resolver MUST reject that outcome unless the audit is comp
 `actor`, `scope`, `risk`, and `verificationResponsibility`, plus optional `artifactRef` and `worktreeRef`; at least
 one artifact/worktree reference is required by the resolver.
 
+`ResolveGateInput` also accepts optional `reconcile: GateReconcile`; the only v1 value is `keep`. Runner retry gates
+use it only as metadata on the `retry` outcome. `wipe` is not part of the GraphQL contract.
+
 `PrReadinessInput` also accepts optional `issueRef` and `issueAction` with the same shape. For issue-bound runs,
 readiness reports a human-decision item when branch/title linkage is missing. When `issueAction` is `close`,
 readiness MUST also require GitHub `closingIssuesReferences` to include the expected issue before the merge gate.

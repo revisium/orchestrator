@@ -33,6 +33,8 @@ export type Decision =
   | ({ decision: 'approve' | 'reject'; outcome?: string } & DecisionMeta)
   | ({ outcome: string; decision?: 'approve' | 'reject' } & DecisionMeta);
 
+export type GateTopic = 'plan' | 'merge' | 'question' | 'retry';
+
 
 export type AwaitHumanDeps = {
 
@@ -52,6 +54,12 @@ function cleanOptions(input: readonly string[] | undefined): string[] {
     .filter((item) => item.length > 0);
 }
 
+function gateSignalTopic(runId: string, topic: GateTopic, gateKey: string): string {
+  if (topic !== 'retry') return topic;
+  const signalKey = `${runId}|${gateKey}`;
+  return `retry:${fnv1a64Hex(signalKey)}`;
+}
+
 
 
 
@@ -60,7 +68,7 @@ export function makeAwaitHuman(deps: AwaitHumanDeps) {
 
   return async function awaitHumanImpl(
     runId: string,
-    topic: 'plan' | 'merge' | 'question',
+    topic: GateTopic,
     gateKey: string,
     title: string,
     summary: unknown,
@@ -68,6 +76,7 @@ export function makeAwaitHuman(deps: AwaitHumanDeps) {
   ): Promise<Decision> {
     const inboxKey = `${runId}|${gateKey}`;
     const inboxId = `inbox_${fnv1a64Hex(inboxKey)}`;
+    const signalTopic = gateSignalTopic(runId, topic, gateKey);
     const outcomes = summary && typeof summary === 'object' && 'outcomes' in summary && Array.isArray(summary.outcomes)
       ? cleanOptions(summary.outcomes.filter((item): item is string => typeof item === 'string'))
       : [];
@@ -79,7 +88,7 @@ export function makeAwaitHuman(deps: AwaitHumanDeps) {
         kind: 'approval',
         runId,
         title,
-        context: { topic, summary },
+        context: { topic, ...(signalTopic !== topic ? { signalTopic } : {}), summary },
         options: gateOptions,
       },
       inboxId,
@@ -91,10 +100,10 @@ export function makeAwaitHuman(deps: AwaitHumanDeps) {
       stepId: '',
       stepKey: `gate:${gateKey}`,
       type: 'gate_opened',
-      payload: { topic },
+      payload: { topic, ...(signalTopic !== topic ? { signalTopic } : {}) },
     });
 
-    const msg = await awaitDecision<Decision>(topic);
+    const msg = await awaitDecision<Decision>(signalTopic);
 
     return msg ?? { decision: 'reject', answer: { reason: 'gate-timeout' }, inboxId };
   };

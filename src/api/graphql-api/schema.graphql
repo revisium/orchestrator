@@ -186,6 +186,10 @@ input GateDecisionInput {
   resolvedBy: String
 }
 
+enum GateReconcile {
+  keep
+}
+
 type GateRiskModel {
   context: JSON
   inboxId: ID!
@@ -578,6 +582,7 @@ input ResolveGateInput {
   mergeOverrideAudit: MergeOverrideAuditInput
   note: String
   outcome: String!
+  reconcile: GateReconcile
   resolvedBy: String
 }
 

@@ -12,6 +12,7 @@ import {
   createTargetRepo,
   type TargetRepo,
   waitState,
+  waitForGate,
   approveUntilTerminal,
   executedRoles,
   assertEventsPresent,
@@ -82,15 +83,19 @@ test('C2: a review that never passes blocks the pipeline at the iteration cap', 
   }
 });
 
-test('C3: a developer that throws records step_failed and does not complete', { skip: e2eSkip }, async () => {
+test('C3: a developer that throws reaches the retry gate and does not complete after give_up', { skip: e2eSkip }, async () => {
   const target = createTargetRepo();
   try {
     const { runId } = await startFeatureWithSpec(target, {
       byRole: { developer: { kind: 'throw', message: 'scripted developer crash' } },
     });
-    const terminal = await approveUntilTerminal(h.api, runId);
+    const plan = await waitForGate(h.api, runId, 'plan');
+    await h.api.resolveGate({ inboxId: plan.inboxId, outcome: 'approved', resolvedBy: 'e2e' });
+    const retry = await waitForGate(h.api, runId, 'retry');
+    await h.api.resolveGate({ inboxId: retry.inboxId, outcome: 'give_up', resolvedBy: 'e2e' });
+    const terminal = await waitState(h.api, runId);
     assert.notEqual(terminal.state, 'completed', 'a crashing developer must not complete the run');
-    await assertEventsPresent(h.api, runId, ['step_failed']);
+    await assertEventsPresent(h.api, runId, ['runner_retry_exhausted', 'pipeline_blocked']);
   } finally {
     target.cleanup();
   }

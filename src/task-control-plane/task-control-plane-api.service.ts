@@ -26,6 +26,7 @@ import { POLICY_VERSION } from '../control-plane/default-playbook-policy.js';
 import { executionProfileFromRunProfile, topologyProfileFromRunProfile } from '../control-plane/run-profiles.js';
 import { materializeTemplate, MATERIALIZER_VERSION } from '../pipeline-core/materialize.js';
 import { DbosService } from '../engine/dbos.service.js';
+import type { GateTopic } from '../pipeline/await-human.js';
 import { PipelineService, type RunnerMode } from '../pipeline/pipeline.service.js';
 import { INTEGRATOR_PROGRESS_EVENT_TYPES, RUN_PROGRESS_EVENT_KEY, type DataDrivenProgressCursor } from '../pipeline/data-driven-task.workflow.js';
 import { templateFromExecutionPolicy } from '../pipeline/data-driven-template.js';
@@ -56,7 +57,7 @@ import type { IssueRef } from '../run/issue-ref.js';
 import { PrReadinessService, type GetPrReadinessInput } from './pr-readiness.service.js';
 
 const execFileAsync = promisify(execFile);
-const GATE_TOPICS = new Set<string>(['plan', 'merge', 'question']);
+const GATE_TOPICS = new Set<string>(['plan', 'merge', 'question', 'retry']);
 const WORKFLOW_SUCCESS_EVENT_TYPES = new Set(['step_succeeded', 'gate_signaled']);
 const WORKFLOW_FAILURE_EVENT_TYPES = new Set(['step_failed', 'attempt_failed']);
 export const WORKFLOW_PROGRESS_EVENT_TYPES = new Set<string>([
@@ -151,12 +152,20 @@ function dateOrEpoch(value: Date | string | number | undefined): Date {
   return Number.isNaN(parsed.getTime()) ? new Date(0) : parsed;
 }
 
-function gateTopic(item: InboxItem): 'plan' | 'merge' | 'question' | null {
+type GateReconcile = 'keep';
+
+function gateTopic(item: InboxItem): GateTopic | null {
   if (item.kind !== 'approval' || !item.runId) return null;
   const context = asRecord(item.context);
   const topic = context?.topic;
   if (typeof topic !== 'string' || !GATE_TOPICS.has(topic)) return null;
-  return topic as 'plan' | 'merge' | 'question';
+  return topic as GateTopic;
+}
+
+function gateSignalTopic(item: InboxItem, topic: GateTopic): string {
+  const context = asRecord(item.context);
+  const signalTopic = context?.signalTopic;
+  return typeof signalTopic === 'string' && signalTopic.length > 0 ? signalTopic : topic;
 }
 
 function gateDeclaredOutcomes(item: InboxItem): string[] {
@@ -197,6 +206,12 @@ function assertRequiredGateNote(item: InboxItem, outcome: string, note: string |
   if (isQuestionGateReasonOutcome(item, outcome) && !note) {
     throw new ControlPlaneError('VALIDATION_FAILURE', `questionGate ${outcome} requires a non-empty note`);
   }
+}
+
+function normalizeGateReconcile(value: unknown): GateReconcile | undefined {
+  if (value === undefined) return undefined;
+  if (value === 'keep') return value;
+  throw new ControlPlaneError('VALIDATION_FAILURE', 'gate reconcile must be keep');
 }
 
 async function git(cwd: string, args: string[]): Promise<GitResult> {
@@ -1280,6 +1295,7 @@ export class TaskControlPlaneApiService {
     inboxId: string;
     outcome: string;
     note?: string;
+    reconcile?: GateReconcile;
     resolvedBy?: string;
     adoptionAudit?: ManualAdoptionAuditInput;
     mergeOverrideAudit?: MergeOverrideAuditInput;
@@ -1287,7 +1303,7 @@ export class TaskControlPlaneApiService {
     const item = await this.getInboxItem(input.inboxId);
     const topic = gateTopic(item);
     if (!topic) {
-      throw new ControlPlaneError('VALIDATION_FAILURE', `inbox item is not a plan or merge gate: ${input.inboxId}`);
+      throw new ControlPlaneError('VALIDATION_FAILURE', `inbox item is not a named approval gate: ${input.inboxId}`);
     }
     const outcomes = gateOutcomes(item);
     if (outcomes.length === 0) {
@@ -1301,6 +1317,7 @@ export class TaskControlPlaneApiService {
       );
     }
     const note = input.note?.trim();
+    const reconcile = normalizeGateReconcile(input.reconcile);
     assertRequiredGateNote(item, outcome, note);
     const adoptionAudit = outcome === 'adopt_patch_manually'
       ? validateManualAdoptionAudit(input.adoptionAudit, item)
@@ -1312,6 +1329,7 @@ export class TaskControlPlaneApiService {
     const answer = {
       outcome,
       ...(note ? { note } : {}),
+      ...(reconcile ? { reconcile } : {}),
       ...(adoptionAudit ? { adoptionAudit } : {}),
       ...(mergeOverrideAudit ? { mergeOverrideAudit } : {}),
       resolvedBy,
@@ -1334,6 +1352,8 @@ export class TaskControlPlaneApiService {
     if (
       outcomes.length > 2
       || outcomes.includes('approve_anyway')
+      || outcomes.includes('retry')
+      || outcomes.includes('give_up')
       || outcomes.some((outcome) => isQuestionGateReasonOutcome(item, outcome))
     ) {
       throw new ControlPlaneError(
@@ -1410,6 +1430,7 @@ export class TaskControlPlaneApiService {
         }
         this.assertGateOutcome(item, outcome);
         const note = typeof answer?.note === 'string' ? answer.note.trim() : '';
+        const reconcile = normalizeGateReconcile(answer.reconcile);
         assertRequiredGateNote(item, outcome, note);
         const adoptionAudit = outcome === 'adopt_patch_manually'
           ? validateManualAdoptionAudit(answer.adoptionAudit, item)
@@ -1421,6 +1442,7 @@ export class TaskControlPlaneApiService {
           ...answer,
           outcome,
           ...(typeof answer.note === 'string' ? { note } : {}),
+          ...(reconcile ? { reconcile } : {}),
           ...(adoptionAudit ? { adoptionAudit } : {}),
           ...(mergeOverrideAudit ? { mergeOverrideAudit } : {}),
         };
@@ -1441,17 +1463,18 @@ export class TaskControlPlaneApiService {
     };
   }
 
-  private async signalGate(item: InboxItem, topic: 'plan' | 'merge' | 'question', answer: unknown, inboxId: string) {
+  private async signalGate(item: InboxItem, topic: GateTopic, answer: unknown, inboxId: string) {
+    const signalTopic = gateSignalTopic(item, topic);
     const eventBase = {
       runId: item.runId,
       taskId: item.taskId,
       stepId: item.stepId,
       stepKey: `gate:${topic}`,
       actor: 'mcp',
-      payload: { inboxId, topic },
+      payload: { inboxId, topic, ...(signalTopic !== topic ? { signalTopic } : {}) },
     };
     await this.runs.appendEvent({ ...eventBase, type: 'gate_signal_pending' });
-    await this.dbos.signal(item.runId, topic, answer, inboxId);
+    await this.dbos.signal(item.runId, signalTopic, answer, inboxId);
     await this.runs.appendEvent({ ...eventBase, type: 'gate_signaled' });
   }
 
