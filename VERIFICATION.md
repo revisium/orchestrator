@@ -23,6 +23,16 @@ crosses a public boundary: MCP tools, GraphQL, CLI, DBOS/Revisium workflow state
 installation, default pipelines, or real host lifecycle. Add focused unit tests after the e2e test to pin pure
 reducers, validators, classifiers, and edge cases.
 
+Pipeline and default-playbook test selection is governed by
+[docs/specs/pipeline-test-coverage-v1.spec.md](./docs/specs/pipeline-test-coverage-v1.spec.md). Do not duplicate unit
+classifier coverage in DSL e2e tests. Use unit tests for decision internals, static policy tests for graph shape,
+declarative DSL e2e tests for user-visible workflow edges, and only a small representative set of full integration e2e
+tests.
+
+Default-pipeline coverage claims require explicit matrix accounting. Every product template edge/outcome must be owned
+by a DSL scenario tag, static-policy diagnostic, unit-owned assertion, or documented waiver. Do not call a milestone
+"fully covered" while a hard-skip tied to that milestone remains.
+
 Do not accept tests that pass only because their fixtures are incomplete. Fixtures must be production-shaped for every
 field the code reads, including derived fields such as `readinessVerdict`, `nextAction`, workflow cursors, compacted
 MCP payloads, join arrivals, retry metadata, and default-playbook route bindings. If a test intentionally omits a
