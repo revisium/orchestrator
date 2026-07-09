@@ -592,6 +592,83 @@ test('TaskControlPlaneApiService.getRunWorkflow returns UI projection through se
   assert.equal(workflow.activity[0]?.summary, 'done');
 });
 
+test('TaskControlPlaneApiService.getRunWorkflow marks signaled question step payloads as succeeded', async () => {
+  const questionTemplate = {
+    specVersion: '1.0',
+    pipelineId: 'question-projection',
+    entry: 'analyst',
+    verdicts: { domain: ['answered'] },
+    nodes: {
+      analyst: { id: 'analyst', kind: 'agent', roleRef: 'role:developer', next: 'doneEnd', onFailure: 'abort' },
+      doneEnd: { id: 'doneEnd', kind: 'terminal', status: 'succeeded' },
+    },
+  };
+  const api = makeApi({
+    runService: {
+      async getRun() {
+        return {
+          rowId: 'run-1',
+          data: {
+            id: 'run-1',
+            title: 'Run',
+            route_decision: {
+              ...LOCAL_CHANGE_ROUTE,
+              pipelineId: 'question-projection',
+              pipelineRowId: 'pb-question-projection',
+              requestedPipelineId: 'question-projection',
+              basePipelineId: 'question-projection',
+              executionPolicy: { template_json: questionTemplate },
+              materializedTemplate: questionTemplate,
+              materializedTemplateHash: 'question-template-hash',
+            },
+          },
+        };
+      },
+      async listRunEvents() {
+        return [
+          {
+            eventId: 'event-question-pending',
+            type: 'question_signal_pending',
+            actor: 'mcp',
+            createdAt: '2026-06-13T00:00:59.000Z',
+            taskId: 'task-1',
+            stepId: '',
+            payload: {
+              inboxId: 'inbox-question',
+              topic: 'question',
+              signalTopic: 'question:agent-analyst',
+              stepKey: 'analyst',
+            },
+          },
+          {
+            eventId: 'event-question-signaled',
+            type: 'question_signaled',
+            actor: 'mcp',
+            createdAt: '2026-06-13T00:01:00.000Z',
+            taskId: 'task-1',
+            stepId: '',
+            payload: {
+              inboxId: 'inbox-question',
+              topic: 'question',
+              signalTopic: 'question:agent-analyst',
+              stepKey: 'analyst',
+            },
+          },
+        ];
+      },
+    },
+    inboxService: {
+      async listInbox() {
+        return [];
+      },
+    },
+  });
+
+  const workflow = await api.getRunWorkflow('run-1');
+
+  assert.equal(workflow.nodes.find((node) => node.id === 'analyst')?.status, 'succeeded');
+});
+
 test('TaskControlPlaneApiService.approveGate records retryable signal state around the DBOS signal', async () => {
   const calls: Array<
     | { kind: 'event'; type: string; stepKey: string; payload: unknown }
@@ -1418,9 +1495,14 @@ test('TaskControlPlaneApiService.answerQuestion records retryable signal state a
       type: 'question_signal_pending',
       runId: 'run-1',
       taskId: 'task-1',
-      stepKey: 'question:analyst',
+      stepKey: 'analyst',
       idempotencyKey: 'inbox-1',
-      payload: { inboxId: 'inbox-1', topic: 'question', signalTopic: 'question:agent-analyst' },
+      payload: {
+        inboxId: 'inbox-1',
+        topic: 'question',
+        signalTopic: 'question:agent-analyst',
+        stepKey: 'analyst',
+      },
     },
     {
       kind: 'signal',
@@ -1434,9 +1516,14 @@ test('TaskControlPlaneApiService.answerQuestion records retryable signal state a
       type: 'question_signaled',
       runId: 'run-1',
       taskId: 'task-1',
-      stepKey: 'question:analyst',
+      stepKey: 'analyst',
       idempotencyKey: 'inbox-1',
-      payload: { inboxId: 'inbox-1', topic: 'question', signalTopic: 'question:agent-analyst' },
+      payload: {
+        inboxId: 'inbox-1',
+        topic: 'question',
+        signalTopic: 'question:agent-analyst',
+        stepKey: 'analyst',
+      },
     },
   ]);
 });

@@ -64,7 +64,7 @@ import { PrReadinessService, type GetPrReadinessInput } from './pr-readiness.ser
 
 const execFileAsync = promisify(execFile);
 const GATE_TOPICS = new Set<string>(['plan', 'merge', 'question', 'retry']);
-const WORKFLOW_SUCCESS_EVENT_TYPES = new Set(['step_succeeded', 'gate_signaled']);
+const WORKFLOW_SUCCESS_EVENT_TYPES = new Set(['step_succeeded', 'gate_signaled', 'question_signaled']);
 const WORKFLOW_FAILURE_EVENT_TYPES = new Set(['step_failed', 'attempt_failed']);
 export const WORKFLOW_PROGRESS_EVENT_TYPES = new Set<string>([
   'pipeline_blocked',
@@ -201,7 +201,7 @@ function questionSignalTaskId(item: InboxItem): string {
 
 function questionSignalStepKey(item: InboxItem, signalTopic: string): string {
   const step = questionSummary(item)?.step;
-  if (typeof step === 'string' && step.length > 0) return `question:${step}`;
+  if (typeof step === 'string' && step.length > 0) return step;
   return signalTopic.startsWith('question:') ? signalTopic : `question:${signalTopic}`;
 }
 
@@ -1516,14 +1516,15 @@ export class TaskControlPlaneApiService {
   }
 
   private async signalQuestion(item: InboxItem, signalTopic: string, answer: unknown, inboxId: string, resolvedBy: string) {
+    const stepKey = questionSignalStepKey(item, signalTopic);
     const eventBase = {
       runId: item.runId,
       taskId: questionSignalTaskId(item),
       stepId: item.stepId,
-      stepKey: questionSignalStepKey(item, signalTopic),
+      stepKey,
       actor: 'mcp',
       idempotencyKey: inboxId,
-      payload: { inboxId, topic: 'question', signalTopic },
+      payload: { inboxId, topic: 'question', signalTopic, stepKey },
     };
     const signalPayload = { answer, resolvedBy, inboxId };
     await this.runs.appendEvent({ ...eventBase, type: 'question_signal_pending' });
