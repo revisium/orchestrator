@@ -1,4 +1,5 @@
 import type { Branch, Condition, Node, Template } from '../pipeline-core/types.js';
+import { PR_LIFECYCLE_NODES } from './run-profiles.js';
 
 export const DEFAULT_PLAYBOOK_POLICY_DIAGNOSTIC_CODES = [
   'DEFAULT_POLICY_WRONG_PIPELINE',
@@ -694,17 +695,9 @@ function checkLoopExhaustionEscalation(template: Template, sink: PolicySink): vo
 }
 
 function checkRecoverableCatches(template: Template, sink: PolicySink): void {
-  const recoverableNodes = [
-    'pollPr',
-    'mergeReadiness',
-    'mergeRecheck',
-    'mergeApproveReverify',
-    'overrideMerge',
-    'integrator',
-    'reviewIntegrator',
-    'questionReviewIntegrator',
-    'respondThreads',
-  ];
+  const recoverableNodes = PR_LIFECYCLE_NODES.filter(
+    (nodeId) => nodeId !== 'confirmMerge' && nodeId !== 'overrideConfirmMerge',
+  );
 
   for (const nodeId of recoverableNodes) {
     const node = effectNode(template, nodeId);

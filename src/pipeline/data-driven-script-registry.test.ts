@@ -4,6 +4,7 @@ import { buildSystemScriptRegistry } from './data-driven-task.workflow.js';
 import type { DataDrivenTaskDeps } from './data-driven-task.workflow.js';
 import type { AppendEventInput } from '../run/append-event.js';
 import type { RouteRoleBinding } from './route-contract.js';
+import { PR_LIFECYCLE_NODES } from '../control-plane/run-profiles.js';
 import type {
   IntegratorInput,
   IntegratorOutput,
@@ -256,6 +257,77 @@ test('registry: script:integrator passes GitHub account from node launch binding
   });
 
   assert.equal(seenInput?.githubAccount, 'profile-bot');
+});
+
+test('registry: PR lifecycle scripts receive GitHub account from their node launch binding', async () => {
+  const seen = new Map<string, string | undefined>();
+  const deps = buildDeps([], {
+    integrateFn: async (input): Promise<IntegratorOutput> => {
+      seen.set(input.title, input.githubAccount);
+      return { prUrl: 'https://r/pr/1', branch: 'feat/x', prNumber: 1 };
+    },
+    confirmMergeFn: async (input): Promise<ConfirmMergeOutput> => {
+      seen.set(input.title, input.githubAccount);
+      return { merged: true, prNumber: 1, prUrl: 'https://r/pr/1' };
+    },
+    pollPrFn: async (input): Promise<PrFeedback> => {
+      seen.set(input.title, input.githubAccount);
+      return { prNumber: 1, headSha: 'sha1', verdict: 'clean', evidence: ['ok'], ciFailures: [], reviewThreads: [] };
+    },
+    overrideMergeFn: async (input): Promise<MergeOverrideOutput> => {
+      seen.set(input.title, input.githubAccount);
+      return {
+        prNumber: 1,
+        headSha: 'sha1',
+        verdict: 'clean',
+        evidence: ['ok'],
+        ciFailures: [],
+        reviewThreads: [],
+        override: { accepted: true, actor: 'test', note: 'ok', source: { gate: 'mergeGate', inboxId: 'inbox' }, facts: [], replied: 0, resolved: 0 },
+      };
+    },
+    respondThreadsFn: async (input): Promise<RespondThreadsOutput> => {
+      seen.set(input.title, input.githubAccount);
+      return { replied: 0, resolved: 0 };
+    },
+  });
+  const registry = buildSystemScriptRegistry(deps);
+  const scriptRefByNode = new Map<string, string>([
+    ['integrator', 'script:integrator'],
+    ['reviewIntegrator', 'script:integrator'],
+    ['questionReviewIntegrator', 'script:integrator'],
+    ['pollPr', 'script:pollPr'],
+    ['mergeReadiness', 'script:pollPr'],
+    ['mergeRecheck', 'script:pollPr'],
+    ['mergeApproveReverify', 'script:pollPr'],
+    ['confirmMerge', 'script:confirmMerge'],
+    ['overrideConfirmMerge', 'script:confirmMerge'],
+    ['overrideMerge', 'script:overrideMerge'],
+    ['respondThreads', 'script:respondThreads'],
+  ]);
+  const launchBindings = PR_LIFECYCLE_NODES.map((nodeId) => ({
+    match: { nodeId },
+    accounts: { github: 'profile-bot' },
+  }));
+
+  for (const nodeId of PR_LIFECYCLE_NODES) {
+    const scriptRef = scriptRefByNode.get(nodeId);
+    assert.ok(scriptRef, `${nodeId} has a scriptRef mapping`);
+    const handler = registry.get(scriptRef)!;
+    await handler({
+      runId: RUN_ID,
+      decision: makeDecision(scriptRef, nodeId),
+      ctx: { ...CTX, title: nodeId },
+      bindingByRef: new Map(),
+      launchBindings,
+      stepKey: nodeId,
+      inputs: {},
+    });
+  }
+
+  for (const nodeId of PR_LIFECYCLE_NODES) {
+    assert.equal(seen.get(nodeId), 'profile-bot', `${nodeId} receives githubAccount`);
+  }
 });
 
 test('registry: script:integrator needsHuman → pipeline_blocked at stepKey pipeline with reason=integrate', async () => {

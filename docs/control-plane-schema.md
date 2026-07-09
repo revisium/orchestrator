@@ -103,6 +103,10 @@ row id and is not accepted as a launch alias. When a catalog removes a profile, 
 
 Top-level publishing identity is outside the current `run-profile/v1` shape. GitHub account aliases are accepted only as
 validated script-node launch bindings in `profile_json`, for example `bindings.slots.integrator.accounts.github`.
+For `feature-development`, `integrator.accounts.github` is the public publish identity and expands into the named PR
+lifecycle script nodes in the pinned route snapshot: `integrator`, `reviewIntegrator`, `questionReviewIntegrator`,
+`pollPr`, `mergeReadiness`, `mergeRecheck`, `mergeApproveReverify`, `confirmMerge`, `overrideConfirmMerge`,
+`overrideMerge`, and `respondThreads`. Explicit node-specific account bindings win over the expanded publish identity.
 
 ### `model_profiles`
 

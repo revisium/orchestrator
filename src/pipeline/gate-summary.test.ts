@@ -79,6 +79,55 @@ test('a missing producer omits the artifact (best-effort) and never throws', () 
   assert.deepEqual(summary.reviewerVerdict, { verdict: 'approved' });
 });
 
+test('recoveryGate prefers the latest blocked script lesson over stale configured artifact', () => {
+  const stalePoll = row('pollPr', { verdict: 'clean', headSha: 'old' });
+  const blockedConfirm = row('confirmMerge', {
+    reason: 'confirm-merge',
+    lesson: 'failed to mark PR #7 ready for review',
+    nodeId: 'confirmMerge',
+  });
+
+  const summary = buildGateSummary(
+    gate({
+      nodeId: 'recoveryGate',
+      reason: 'merge-recovery',
+      outcomes: ['recheck', 'cancel'],
+      gatedArtifact: { node: 'pollPr', as: 'prFeedback' },
+    }),
+    outputs(stalePoll, blockedConfirm),
+    'blocked',
+    blockedConfirm,
+    blockedConfirm,
+  );
+
+  assert.equal(summary.gatedArtifact?.nodeId, 'confirmMerge');
+  assert.deepEqual(summary.gatedArtifact?.payload, blockedConfirm.payload);
+});
+
+test('recoveryGate ignores a stale blocked script lesson after a non-blocked verdict', () => {
+  const stalePoll = row('pollPr', { verdict: 'clean', headSha: 'old' });
+  const blockedConfirm = row('confirmMerge', {
+    reason: 'confirm-merge',
+    lesson: 'failed to mark PR #7 ready for review',
+    nodeId: 'confirmMerge',
+  });
+
+  const summary = buildGateSummary(
+    gate({
+      nodeId: 'recoveryGate',
+      reason: 'merge-recovery',
+      outcomes: ['recheck', 'cancel'],
+      gatedArtifact: { node: 'pollPr', as: 'prFeedback' },
+    }),
+    outputs(stalePoll, blockedConfirm),
+    'failed',
+    blockedConfirm,
+  );
+
+  assert.equal(summary.gatedArtifact?.nodeId, 'pollPr');
+  assert.deepEqual(summary.gatedArtifact?.payload, stalePoll.payload);
+});
+
 test('an over-budget artifact becomes a head preview + an attempt locator (no full payload)', () => {
   const big = 'x'.repeat(GATE_ARTIFACT_MAX + 5_000);
   const out = outputs(row('analyst', { plan: big }, 2));

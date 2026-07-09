@@ -124,12 +124,18 @@ Stored `profileId` and inline `profile` are mutually exclusive in one launch req
 ### Publishing Identity
 
 GitHub publication identity is part of script-node launch configuration, not a top-level profile property. A profile may
-bind a GitHub account alias to a script node through `bindings.slots.<scriptNode>.accounts.github`. The schema continues
-to reject top-level `publishing` fields.
+bind a GitHub account alias to a script node through `bindings.slots.<scriptNode>.accounts.github`. For
+`feature-development`, `bindings.slots.integrator.accounts.github` is the public publish identity and expands into the
+named PR lifecycle script nodes in the pinned route snapshot. Explicit node-specific account bindings win over the
+expanded publish identity. The schema continues to reject top-level `publishing` fields.
 
 Profiles store only the account alias. Tokens are runtime host secrets and must not be stored in Revisium profiles,
 inline profiles, or Prisma route pins. Runtime GitHub commands resolve credentials from account-specific host state such
 as `GH_TOKEN_<ACCOUNT>` or `gh auth token --user <account>`.
+
+PR lifecycle script errors must fail loud. In particular, `pollPr` and `confirmMerge` must not swallow `gh pr ready`
+failures. Non-benign failures are converted into secret-redacted, actionable recovery evidence and routed to a human gate
+with at least `recheck` and `cancel`.
 
 ### Runtime Resolution
 
@@ -182,6 +188,8 @@ profile snapshot and launch bindings.
 - **Store only `profileId` in the run.** Rejected. Replay would change when a profile row changes.
 - **Default GitHub publication to a hardcoded org account.** Rejected. Local Revo runs may use a profile-bound
   `accounts.github`, `REVO_GH_ACCOUNT`, or the active host `gh` account, but must not silently use a hardcoded org.
+- **Require users to bind every internal PR script node separately.** Rejected. Users bind the public publish slot once;
+  the runtime expands it to the named PR lifecycle nodes in the route snapshot while allowing explicit node overrides.
 - **Store GitHub tokens in profiles.** Rejected. Profiles are versioned meaning and may be listed through control-plane
   APIs; tokens are host-local secrets.
 
@@ -212,5 +220,7 @@ Implementation PRs should verify:
 - catalog re-import preserves edited profiles and only updates or retires unchanged catalog-seeded rows;
 - write-capable GitHub behavior does not use a hardcoded default account;
 - profile-bound `accounts.github` is accepted only for script nodes and is included in the route/profile hash;
+- `integrator.accounts.github` expands to the named PR lifecycle nodes, and explicit node account overrides win;
+- `gh pr ready` failures in `pollPr` and `confirmMerge` are recoverable, redacted, and human-actionable;
 - top-level `publishing` fields are rejected in favor of script-node account bindings;
 - GitHub tokens are never stored in `profile_json`, inline `profile`, or Prisma route pins.

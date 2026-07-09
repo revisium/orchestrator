@@ -22,6 +22,7 @@ export type GhScenario =
   | 'review-comment' //     pollPr: one UNRESOLVED review thread until respondThreads resolves it; CI green (plan 0018)
   | 'gh-error' //           every gh call throws (rate-limit / network family) → DBOS retries the step
   | 'gh-token-leak' //      throws an error embedding a gho_ token → asserts redaction in the lesson
+  | 'ready-fails' //        `gh pr ready` fails after green checks → recoveryGate recheck/cancel
   | 'always-ci-red' //     pollPr rollup: all CI checks permanently failing → ciLoop exhaustion → recoveryGate (#246)
   | 'merge-unknown-then-clean' // pollPr: UNKNOWN×1 then CLEAN; bounded recheck loop converges to merge (#248)
   | 'merge-stale-at-reverify' // pollPr+mergeReadiness: CLEAN; mergeApproveReverify: DIRTY → classifyRecovery (#248)
@@ -218,6 +219,7 @@ function ghBehavior(scenario: GhScenario, args: string[], st: GhState): string {
       ]);
     }
     if (hasOpenPr(scenario, st, head)) {
+      if (head) st.createdBranches.add(head);
       return JSON.stringify([{ number: 7, url: PR_URL, baseRefName: BASE, state: 'OPEN' }]);
     }
     return JSON.stringify([]);
@@ -227,6 +229,9 @@ function ghBehavior(scenario: GhScenario, args: string[], st: GhState): string {
     return `${PR_URL}\n`;
   }
   if (args[0] === 'pr' && args[1] === 'ready') {
+    if (scenario === 'ready-fails') {
+      throw new Error('gh: cannot mark pull request ready for review: permission denied');
+    }
     st.readyBranches.add(branchArg(args));
     st.readyCount++;
     return '';
@@ -248,7 +253,8 @@ function ghBehavior(scenario: GhScenario, args: string[], st: GhState): string {
   }
   if (args[0] === 'pr' && args[1] === 'view') {
     if (scenario === 'pr-view-non-json') return 'not json — gh glitch';
-    const branch = branchArg(args);
+    const prRef = branchArg(args);
+    const branch = prRef.startsWith('feat/') ? prRef : (onlyBranch(st) || prRef);
     const wantsRollup = args.some((a) => a.includes('statusCheckRollup'));
     if (wantsRollup) {
       if (scenario === 'merged-externally') {
@@ -316,7 +322,7 @@ function ghBehavior(scenario: GhScenario, args: string[], st: GhState): string {
         number: 7,
         url: PR_URL,
         state: 'OPEN',
-        isDraft: false,
+        isDraft: !st.readyBranches.has(branch),
         baseRefName: BASE,
         headRefName: branch,
         headRefOid,
