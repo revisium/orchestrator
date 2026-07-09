@@ -14,7 +14,7 @@ import type { PipelineScenarioCoverage } from '../../control-plane/pipeline-cove
 
 type GateTopic = 'plan' | 'merge' | 'question' | 'retry';
 type GateStep =
-  | readonly [GateTopic, string]
+  | readonly [Exclude<GateTopic, 'question'>, string]
   | {
       topic: 'question';
       answer: unknown;
