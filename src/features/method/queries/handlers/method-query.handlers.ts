@@ -1,7 +1,7 @@
 import { Inject } from '@nestjs/common';
 import { IQueryHandler, QueryHandler } from '@nestjs/cqrs';
 import { TaskControlPlaneApiService } from '../../../../task-control-plane/task-control-plane-api.service.js';
-import { toConnection } from '../../../shared/connection.js';
+import { connectionFetchLimit, toConnection, toConnectionWithTotal } from '../../../shared/connection.js';
 import { GetRunProfileQuery } from '../impl/get-run-profile.query.js';
 import { GetPipelineQuery } from '../impl/get-pipeline.query.js';
 import { GetRoleQuery } from '../impl/get-role.query.js';
@@ -41,14 +41,18 @@ function mapPipeline<T extends PipelineLike>(pipeline: T) {
   };
 }
 
-function definedProfileListInput(data: ListRunProfilesQuery['data']) {
-  return Object.fromEntries(
-    Object.entries({
-      playbookId: data.playbookId,
-      pipelineId: data.pipelineId,
-      includeDeprecated: data.includeDeprecated,
-    }).filter(([, value]) => value !== undefined),
-  );
+function definedProfileListInput(data: ListRunProfilesQuery['data']): {
+  playbookId?: string;
+  pipelineId?: string;
+  includeDeprecated?: boolean;
+  first: number;
+} {
+  return {
+    ...(data.playbookId !== undefined ? { playbookId: data.playbookId } : {}),
+    ...(data.pipelineId !== undefined ? { pipelineId: data.pipelineId } : {}),
+    ...(data.includeDeprecated !== undefined ? { includeDeprecated: data.includeDeprecated } : {}),
+    first: connectionFetchLimit(data),
+  };
 }
 
 @QueryHandler(ListRolesQuery)
@@ -103,7 +107,8 @@ export class ListRunProfilesHandler implements IQueryHandler<ListRunProfilesQuer
   constructor(@Inject(TaskControlPlaneApiService) private readonly api: TaskControlPlaneApiService) {}
 
   async execute(query: ListRunProfilesQuery) {
-    return toConnection(await this.api.listProfiles(definedProfileListInput(query.data)), query.data);
+    const page = await this.api.listProfilesPage(definedProfileListInput(query.data));
+    return toConnectionWithTotal(page.profiles, page.totalCount, query.data);
   }
 }
 

@@ -4470,6 +4470,24 @@ test('listProfiles delegates to storage-backed playbook profiles', async () => {
   assert.deepEqual(profiles.map((profile) => profile.profileId), [STORED_PROFILE_ID]);
 });
 
+test('listProfilesPage delegates bounded profile pagination to playbook storage', async () => {
+  const calls: unknown[] = [];
+  const api = makeApi({
+    playbooksService: {
+      async listRunProfilesPage(input: unknown) {
+        calls.push(input);
+        return { profiles: [STORED_PROFILE_SUMMARY], totalCount: 3 } as never;
+      },
+    },
+  });
+
+  const page = await api.listProfilesPage({ pipelineId: 'feature-development', first: 2 });
+
+  assert.deepEqual(calls, [{ pipelineId: 'feature-development', first: 2 }]);
+  assert.equal(page.totalCount, 3);
+  assert.deepEqual(page.profiles.map((profile) => profile.profileId), [STORED_PROFILE_ID]);
+});
+
 test('createProfile validates the profile against the selected pipeline before writing storage', async () => {
   const calls: unknown[] = [];
   const api = makeApi({

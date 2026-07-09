@@ -28,7 +28,11 @@ export function connectionFetchLimit(input: ConnectionInput = {}): number {
   return start + normalizeFirst(input.first) + 1;
 }
 
-export function toConnection<T>(items: T[], input: ConnectionInput = {}): PaginatedShape<T> {
+export function toConnectionWithTotal<T>(
+  items: T[],
+  totalCount: number,
+  input: ConnectionInput = {},
+): PaginatedShape<T> {
   const first = normalizeFirst(input.first);
   const start = decodeCursor(input.after) + 1;
   const page = items.slice(start, start + first);
@@ -38,12 +42,16 @@ export function toConnection<T>(items: T[], input: ConnectionInput = {}): Pagina
   }));
   return {
     edges,
-    totalCount: items.length,
+    totalCount,
     pageInfo: {
       startCursor: edges[0]?.cursor,
       endCursor: edges.at(-1)?.cursor,
       hasPreviousPage: start > 0,
-      hasNextPage: start + first < items.length,
+      hasNextPage: start + first < totalCount,
     },
   };
+}
+
+export function toConnection<T>(items: T[], input: ConnectionInput = {}): PaginatedShape<T> {
+  return toConnectionWithTotal(items, items.length, input);
 }

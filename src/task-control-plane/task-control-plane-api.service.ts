@@ -1563,6 +1563,10 @@ export class TaskControlPlaneApiService {
     return this.playbooks.listRunProfiles(input);
   }
 
+  listProfilesPage(input: { playbookId?: string; pipelineId?: string; includeDeprecated?: boolean; first: number }) {
+    return this.playbooks.listRunProfilesPage(input);
+  }
+
   async getProfile(input: GetProfileInput) {
     const playbook = await this.playbooks.resolvePlaybook(input.playbookId);
     const pipeline = await this.playbooks.resolvePipeline({ playbookId: playbook.id, pipelineId: input.pipelineId });

@@ -52,10 +52,20 @@ function fakeHeadTransport(
     async listRows(table, options): Promise<TransportList> {
       listCalls.push({ table, options });
       let selected = sourceFor(table).filter((node) => matchesWhere(node, options?.where));
+      const totalCount = selected.length;
       const afterIndex = options?.after ? selected.findIndex((node) => node.id === options.after) : -1;
       const start = afterIndex >= 0 ? afterIndex + 1 : 0;
       selected = selected.slice(start, start + (options?.first ?? selected.length));
-      return { edges: selected.map((node) => ({ cursor: node.id, node })) };
+      return {
+        edges: selected.map((node) => ({ cursor: node.id, node })),
+        totalCount,
+        pageInfo: {
+          startCursor: selected[0]?.id,
+          endCursor: selected.at(-1)?.id,
+          hasPreviousPage: start > 0,
+          hasNextPage: start + selected.length < totalCount,
+        },
+      };
     },
     async getRow(table, rowId) {
       const source = sourceFor(table);
@@ -244,6 +254,56 @@ test('PlaybooksService.listRunProfiles filters profiles by playbook and pipeline
       orderBy: [{ field: 'id', direction: 'asc' }],
     },
   }]);
+});
+
+test('PlaybooksService.listRunProfilesPage returns bounded profiles with storage totalCount', async () => {
+  const head = fakeHeadTransport([], [
+    makeRow('pb', {
+      name: 'PB',
+      package_name: '@x/pb',
+      version: '1.0.0',
+      source: 'local:/pb',
+      schema_version: 2,
+    }),
+  ], [
+    makeRow('pb-19-feature-development-a', {
+      playbook_id: 'pb',
+      pipeline_id: 'feature-development',
+      profile_id: 'a',
+      schema_version: 'run-profile/v1',
+      version: '1',
+      display_name: 'A',
+      summary: '',
+      profile_json: JSON.stringify({ schemaVersion: 'run-profile/v1', topology: { stages: {} }, bindings: { slots: {} } }),
+      profile_hash: 'hash-a',
+      profile_revision_hash: 'revision-a',
+      status: 'active',
+    }),
+    makeRow('pb-19-feature-development-b', {
+      playbook_id: 'pb',
+      pipeline_id: 'feature-development',
+      profile_id: 'b',
+      schema_version: 'run-profile/v1',
+      version: '1',
+      display_name: 'B',
+      summary: '',
+      profile_json: JSON.stringify({ schemaVersion: 'run-profile/v1', topology: { stages: {} }, bindings: { slots: {} } }),
+      profile_hash: 'hash-b',
+      profile_revision_hash: 'revision-b',
+      status: 'active',
+    }),
+  ]);
+  const svc = new PlaybooksService(head);
+
+  const page = await svc.listRunProfilesPage({
+    playbookId: 'pb',
+    pipelineId: 'feature-development',
+    first: 1,
+  });
+
+  assert.deepEqual(page.profiles.map((profile) => profile.profileId), ['a']);
+  assert.equal(page.totalCount, 2);
+  assert.equal(head.listCalls.at(-1)?.options?.first, 1);
 });
 
 test('PlaybooksService.resolveRunProfile rejects scoped row ids as profileId', async () => {
@@ -598,6 +658,26 @@ test('PlaybooksService.updateRunProfile protects metadata-only edits with profil
     }),
     (err: ControlPlaneError) => err.code === 'ROW_CONFLICT',
   );
+});
+
+test('PlaybooksService.updateRunProfile rejects rows without profileRevisionHash', async () => {
+  const existing = mutableProfile('custom-standard', EMPTY_PROFILE, 'catalog-hash');
+  delete existing.data?.profile_revision_hash;
+  const head = fakeInvalidatableHead();
+  const deps = fakeWritableDeps([existing]);
+  const svc = new PlaybooksService(head, deps.engine as never, deps.prisma as never);
+
+  await assert.rejects(
+    () => svc.updateRunProfile({
+      playbookId: 'pb',
+      pipelineId: 'feature-development',
+      profileId: 'custom-standard',
+      expectedProfileRevisionHash: '',
+      displayName: 'Should not update',
+    }),
+    (err: ControlPlaneError) => err.code === 'ROW_CONFLICT',
+  );
+  assert.equal(deps.calls.some((call) => call.startsWith('updateRow:')), false);
 });
 
 test('PlaybooksService.deprecateRunProfile hides profiles from default listing but keeps get readable', async () => {

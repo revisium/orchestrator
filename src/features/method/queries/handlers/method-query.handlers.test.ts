@@ -51,9 +51,12 @@ test('method query handlers delegate and normalize method records', async () => 
       assert.equal(id, 'pipe_1');
       return pipeline;
     },
-    async listProfiles(input: unknown) {
-      assert.deepEqual(input, { pipelineId: 'local-change' });
-      return [{ id: 'row_1', playbookId: 'pb', pipelineId: 'local-change', profileId: 'custom', schemaVersion: 'run-profile/v1', version: '1', displayName: 'Custom', summary: '', profile: {}, profileHash: 'hash', status: 'active' }];
+    async listProfilesPage(input: unknown) {
+      assert.deepEqual(input, { pipelineId: 'local-change', first: 51 });
+      return {
+        profiles: [{ id: 'row_1', playbookId: 'pb', pipelineId: 'local-change', profileId: 'custom', schemaVersion: 'run-profile/v1', version: '1', displayName: 'Custom', summary: '', profile: {}, profileHash: 'hash', profileRevisionHash: 'revision-hash', status: 'active' }],
+        totalCount: 1,
+      };
     },
     async getProfile(input: unknown) {
       assert.deepEqual(input, { pipelineId: 'local-change', profileId: 'custom' });
@@ -73,4 +76,28 @@ test('method query handlers delegate and normalize method records', async () => 
   assert.equal((await new ListRunProfilesHandler(api).execute(new ListRunProfilesQuery({ pipelineId: 'local-change' }))).edges[0]?.node.profileId, 'custom');
   assert.equal((await new GetRunProfileHandler(api).execute(new GetRunProfileQuery({ pipelineId: 'local-change', profileId: 'custom' }))).profileId, 'custom');
   assert.deepEqual(await new ValidateRunProfileHandler(api).execute(new ValidateRunProfileQuery({ pipelineId: 'local-change', profile: {} })), { ok: true });
+});
+
+test('ListRunProfilesHandler keeps storage totalCount while fetching a bounded page', async () => {
+  const api = {
+    async listProfilesPage(input: unknown) {
+      assert.deepEqual(input, { pipelineId: 'feature-development', first: 2 });
+      return {
+        profiles: [
+          { profileId: 'a', pipelineId: 'feature-development' },
+          { profileId: 'b', pipelineId: 'feature-development' },
+        ],
+        totalCount: 4,
+      };
+    },
+  } as unknown as TaskControlPlaneApiService;
+
+  const connection = await new ListRunProfilesHandler(api).execute(new ListRunProfilesQuery({
+    pipelineId: 'feature-development',
+    first: 1,
+  }));
+
+  assert.deepEqual(connection.edges.map((edge) => edge.node.profileId), ['a']);
+  assert.equal(connection.totalCount, 4);
+  assert.equal(connection.pageInfo.hasNextPage, true);
 });

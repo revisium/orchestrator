@@ -57,6 +57,11 @@ export type RunProfileSummary = {
   status: 'active' | 'deprecated' | 'removed';
 };
 
+export type RunProfileListPage = {
+  profiles: RunProfileSummary[];
+  totalCount: number;
+};
+
 export type CreateRunProfileInput = {
   playbookId?: string;
   pipelineId: string;
@@ -417,6 +422,9 @@ export class PlaybooksService {
     includeDeprecated?: boolean;
     first?: number;
   } = {}): Promise<RunProfileSummary[]> {
+    if (input.first !== undefined) {
+      return (await this.listRunProfilesPage({ ...input, first: input.first })).profiles;
+    }
     const playbook = await this.resolvePlaybook(input.playbookId);
     const base = [
       dataEquals('playbook_id', playbook.id),
@@ -430,6 +438,32 @@ export class PlaybooksService {
     return rows
       .map((node) => runProfileFromRow({ id: node.id, data: node.data ?? {} }))
       .sort((left, right) => left.profileId.localeCompare(right.profileId));
+  }
+
+  async listRunProfilesPage(input: {
+    playbookId?: string;
+    pipelineId?: string;
+    includeDeprecated?: boolean;
+    first: number;
+  }): Promise<RunProfileListPage> {
+    const playbook = await this.resolvePlaybook(input.playbookId);
+    const base = [
+      dataEquals('playbook_id', playbook.id),
+      ...(input.pipelineId ? [dataEquals('pipeline_id', input.pipelineId)] : []),
+    ];
+    const statuses: Array<RunProfileSummary['status']> = input.includeDeprecated ? ['active', 'deprecated'] : ['active'];
+    const rows = await this.head.listRows('run_profiles', {
+      first: input.first,
+      where: andWhere(...base, { data: { path: 'status', in: statuses } }),
+      orderBy: [{ field: 'id', direction: 'asc' }],
+    });
+    const profiles = (rows.edges ?? [])
+      .flatMap((edge) => edge.node ? [runProfileFromRow({ id: edge.node.id, data: edge.node.data ?? {} })] : [])
+      .sort((left, right) => left.profileId.localeCompare(right.profileId));
+    return {
+      profiles,
+      totalCount: rows.totalCount ?? profiles.length,
+    };
   }
 
   async resolveRunProfile(input: {
@@ -502,6 +536,12 @@ export class PlaybooksService {
     });
     const existingData = existing.data ?? {};
     const currentHash = str(existingData.profile_revision_hash);
+    if (!currentHash) {
+      throw new ControlPlaneError(
+        'ROW_CONFLICT',
+        `run profile ${input.profileId} has no profileRevisionHash and cannot be updated`,
+      );
+    }
     if (currentHash !== input.expectedProfileRevisionHash) {
       throw new ControlPlaneError(
         'ROW_CONFLICT',
