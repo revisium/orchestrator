@@ -147,7 +147,10 @@ test('retry gates keep public topic but wait on a unique signal topic per gateKe
   assert.equal((pushInboxCalls[1]?.item.context as Record<string, unknown>).signalTopic, secondSignalTopic);
 });
 
-test('agent questions write question inbox rows and wait on a unique signal topic', async () => {
+test('agent questions write question inbox rows and wait on unique hashed signal topics', async () => {
+  const runId = 'run-ah-agent-question';
+  const firstGateKey = 'agentQuestion:analyst:attempt1';
+  const secondGateKey = 'agentQuestion:reviewer:attempt1';
   const answer = { provider: 'oauth' };
   const { deps, pushInboxCalls, appendEventCalls, awaitDecisionTopics } = makeDeps({
     decision: { answer, resolvedBy: 'human', inboxId: 'inbox-question' },
@@ -155,23 +158,43 @@ test('agent questions write question inbox rows and wait on a unique signal topi
   const awaitHuman = makeAwaitHuman(deps);
 
   const result = await awaitHuman(
-    'run-ah-agent-question',
+    runId,
     'question',
-    'agentQuestion:analyst',
+    firstGateKey,
     'Analyst question',
     { nodeId: 'analyst', lesson: 'which provider?' },
+    undefined,
+    'question',
+  );
+  await awaitHuman(
+    runId,
+    'question',
+    secondGateKey,
+    'Reviewer question',
+    { nodeId: 'reviewer', lesson: 'which risk?' },
     undefined,
     'question',
   );
 
   assert.deepEqual(result.answer, answer);
   assert.equal(pushInboxCalls[0]?.item.kind, 'question');
+  assert.equal(pushInboxCalls[1]?.item.kind, 'question');
   assert.deepEqual(pushInboxCalls[0]?.item.options, []);
+  assert.deepEqual(pushInboxCalls[1]?.item.options, []);
   assert.equal((pushInboxCalls[0]?.item.context as Record<string, unknown>).topic, 'question');
-  const signalTopic = (pushInboxCalls[0]?.item.context as Record<string, unknown>).signalTopic;
-  assert.equal(typeof signalTopic, 'string');
-  assert.deepEqual(awaitDecisionTopics, [signalTopic]);
+  assert.equal((pushInboxCalls[1]?.item.context as Record<string, unknown>).topic, 'question');
+  const firstSignalTopic = `question:${fnv1a64Hex(`${runId}|${firstGateKey}`)}`;
+  const secondSignalTopic = `question:${fnv1a64Hex(`${runId}|${secondGateKey}`)}`;
+  assert.notEqual(firstSignalTopic, secondSignalTopic);
+  assert.equal((pushInboxCalls[0]?.item.context as Record<string, unknown>).signalTopic, firstSignalTopic);
+  assert.equal((pushInboxCalls[1]?.item.context as Record<string, unknown>).signalTopic, secondSignalTopic);
+  assert.deepEqual(awaitDecisionTopics, [firstSignalTopic, secondSignalTopic]);
   assert.equal(appendEventCalls[0]?.type, 'agent_question_opened');
+  assert.equal(appendEventCalls[0]?.stepKey, `question:${firstGateKey}`);
+  assert.deepEqual(appendEventCalls[0]?.payload, { topic: 'question', signalTopic: firstSignalTopic });
+  assert.equal(appendEventCalls[1]?.type, 'agent_question_opened');
+  assert.equal(appendEventCalls[1]?.stepKey, `question:${secondGateKey}`);
+  assert.deepEqual(appendEventCalls[1]?.payload, { topic: 'question', signalTopic: secondSignalTopic });
 });
 
 test('A1 (merge gate): awaitHuman works for merge topic too', async () => {

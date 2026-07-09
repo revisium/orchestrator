@@ -68,6 +68,8 @@ const WORKFLOW_SUCCESS_EVENT_TYPES = new Set(['step_succeeded', 'gate_signaled']
 const WORKFLOW_FAILURE_EVENT_TYPES = new Set(['step_failed', 'attempt_failed']);
 export const WORKFLOW_PROGRESS_EVENT_TYPES = new Set<string>([
   'pipeline_blocked',
+  'question_signal_pending',
+  'question_signaled',
   'pr_polled',
   ...INTEGRATOR_PROGRESS_EVENT_TYPES,
 ]);
@@ -151,6 +153,10 @@ function asRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
+function nonEmptyString(value: unknown): string | null {
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
 function dateOrEpoch(value: Date | string | number | undefined): Date {
   if (value instanceof Date) return Number.isNaN(value.getTime()) ? new Date(0) : value;
   if (value === undefined || value === '') return new Date(0);
@@ -180,6 +186,27 @@ function questionSignalTopic(item: InboxItem): string | null {
   if (context?.topic !== 'question') return null;
   const signalTopic = context.signalTopic;
   return typeof signalTopic === 'string' && signalTopic.length > 0 ? signalTopic : null;
+}
+
+function questionSummary(item: InboxItem): Record<string, unknown> | null {
+  const context = asRecord(item.context);
+  return asRecord(context?.summary);
+}
+
+function questionSignalTaskId(item: InboxItem): string {
+  if (item.taskId) return item.taskId;
+  const taskId = questionSummary(item)?.taskId;
+  return typeof taskId === 'string' ? taskId : '';
+}
+
+function questionSignalStepKey(item: InboxItem, signalTopic: string): string {
+  const step = questionSummary(item)?.step;
+  if (typeof step === 'string' && step.length > 0) return `question:${step}`;
+  return signalTopic.startsWith('question:') ? signalTopic : `question:${signalTopic}`;
+}
+
+function questionSignalResolvedBy(item: InboxItem, answer: unknown, fallbackResolvedBy: string): string {
+  return nonEmptyString(item.resolvedBy) ?? nonEmptyString(asRecord(answer)?.resolvedBy) ?? fallbackResolvedBy;
 }
 
 function gateDeclaredOutcomes(item: InboxItem): string[] {
@@ -1402,11 +1429,9 @@ export class TaskControlPlaneApiService {
     const signalTopic = questionSignalTopic(item);
     const shouldSignal = signalTopic !== null;
     if (signalTopic) {
-      await this.dbos.signal(item.runId, signalTopic, {
-        answer: result.answer,
-        resolvedBy,
-        inboxId: input.inboxId,
-      }, input.inboxId);
+      const signalItem = result.status === 'pending' ? await this.getInboxItem(input.inboxId) : item;
+      const signalResolvedBy = questionSignalResolvedBy(signalItem, result.answer, resolvedBy);
+      await this.signalQuestion(signalItem, signalTopic, result.answer, input.inboxId, signalResolvedBy);
     }
     return {
       inboxId: input.inboxId,
@@ -1488,6 +1513,22 @@ export class TaskControlPlaneApiService {
     await this.runs.appendEvent({ ...eventBase, type: 'gate_signal_pending' });
     await this.dbos.signal(item.runId, signalTopic, answer, inboxId);
     await this.runs.appendEvent({ ...eventBase, type: 'gate_signaled' });
+  }
+
+  private async signalQuestion(item: InboxItem, signalTopic: string, answer: unknown, inboxId: string, resolvedBy: string) {
+    const eventBase = {
+      runId: item.runId,
+      taskId: questionSignalTaskId(item),
+      stepId: item.stepId,
+      stepKey: questionSignalStepKey(item, signalTopic),
+      actor: 'mcp',
+      idempotencyKey: inboxId,
+      payload: { inboxId, topic: 'question', signalTopic },
+    };
+    const signalPayload = { answer, resolvedBy, inboxId };
+    await this.runs.appendEvent({ ...eventBase, type: 'question_signal_pending' });
+    await this.dbos.signal(item.runId, signalTopic, signalPayload, inboxId);
+    await this.runs.appendEvent({ ...eventBase, type: 'question_signaled' });
   }
 
   async summarizeGateRisk(inboxId: string) {
