@@ -250,9 +250,9 @@ Binding fields:
 | `timeoutMs` | Positive timeout override. |
 | `accounts.github` | GitHub account alias for a script node, such as `integrator`; credentials are resolved from host runtime auth. |
 
-Runner/model/permission fields are valid for agent role/node bindings. `accounts.github` is valid only for script node
-bindings. A script binding MUST NOT declare `runnerId`, `modelLevel`, or `permissionMode`; the script implementation is
-selected by the pipeline node `scriptRef`.
+Runner/model/timeout/permission fields are valid for agent role/node bindings. `accounts.github` is valid only for script
+node bindings. A script binding MUST NOT declare `runnerId`, `modelLevel`, `timeoutMs`, or `permissionMode`; the script
+implementation is selected by the pipeline node `scriptRef`.
 
 Profile bindings are the public launch binding source.
 
@@ -473,6 +473,6 @@ Required automated coverage:
 - no separate profile-like launch object is exposed by MCP inputs, GraphQL inputs, route resolution, or Prisma
   `TaskRun` storage;
 - `accounts.github` is accepted only for script node bindings and changes the profile hash;
-- script node bindings reject runner/model/permission fields;
+- script node bindings reject runner/model/timeout/permission fields;
 - top-level `publishing` fields are rejected in stored and inline `run-profile/v1` payloads;
 - GitHub tokens are never stored in `profile_json`, inline `profile`, or `routeDecision`.

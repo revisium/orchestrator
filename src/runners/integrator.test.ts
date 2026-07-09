@@ -7,6 +7,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import path from 'node:path';
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import {
   integrate,
   confirmMerge,
@@ -19,6 +21,7 @@ import {
   captureProducedChange,
   resolveExecutable,
   parseOwnerRepo,
+  IntegratorService,
   type IntegratorInput,
   type IntegratorDeps,
   type PollPrDeps,
@@ -28,6 +31,7 @@ import {
   type ExecFn,
 } from './integrator.js';
 import { GITHUB_CHECK_ROLLUP_UNAVAILABLE, type ExecGhFn } from '../poller/pr-readiness.js';
+import type { RunService } from '../revisium/run.service.js';
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -914,6 +918,81 @@ test('issue-271: produced head equal to a foreign PR exposes author provenance o
     assert.ok(jsonFields.some((fields) => fields.split(',').includes('author')), 'PR list query must request author');
     assert.equal(pushCalled, false, 'already-pushed produced head must not push again');
     assert.deepEqual(edits, [], 'foreign noop adoption must not edit PR metadata');
+});
+
+test('issue-271: IntegratorService forwards env-resolved gh account into produced-change provenance', async () => {
+  const binDir = mkdtempSync(path.join(tmpdir(), 'revo-gh-identity-'));
+  const ghPath = path.join(binDir, 'gh');
+  writeFileSync(ghPath, `#!/bin/sh
+if [ "$1" = "pr" ] && [ "$2" = "list" ]; then
+  if [ "$GH_TOKEN" != "gho_profile" ]; then
+    echo "expected pinned GH_TOKEN" >&2
+    exit 7
+  fi
+  printf '%s\\n' '[{"number":42,"url":"https://github.com/o/r/pull/42","baseRefName":"master","headRefOid":"already-pushed-sha","title":"Add feature X","body":"","author":{"login":"developer-host"}}]'
+  exit 0
+fi
+if [ "$1" = "pr" ] && [ "$2" = "edit" ]; then
+  echo "foreign PR must not be edited" >&2
+  exit 8
+fi
+echo "unexpected gh $*" >&2
+exit 9
+`);
+  chmodSync(ghPath, 0o755);
+  const previousPath = process.env['PATH'];
+  const previousAccount = process.env['REVO_GH_ACCOUNT'];
+  const previousToken = process.env['GH_TOKEN_PROFILE_BOT'];
+  process.env['PATH'] = `${binDir}${path.delimiter}${previousPath ?? ''}`;
+  process.env['REVO_GH_ACCOUNT'] = 'profile-bot';
+  process.env['GH_TOKEN_PROFILE_BOT'] = 'gho_profile';
+
+  try {
+    let pushCalled = false;
+    const service = new IntegratorService({
+      makeResolveTaskCwd: () => async () => { throw new Error('shared checkout must not be inspected for a produced artifact'); },
+      makeResolveRunCwd: () => async () => { throw new Error('artifact worktree path should avoid resolver fallback'); },
+    } as unknown as RunService);
+    (service as unknown as { deps: Omit<IntegratorDeps, 'execGh'> }).deps = {
+      execGit: (args, cwd) => {
+        assert.equal(cwd, '/produced-worktree');
+        if (args[0] === 'remote' && args[2] === 'origin') return 'git@github.com:o/r.git\n';
+        if (args[0] === 'fetch') return '';
+        if (args[0] === 'push') {
+          pushCalled = true;
+          return '';
+        }
+        throw new Error(`unexpected git: ${args.join(' ')}`);
+      },
+      resolveTaskCwd: async () => { throw new Error('shared checkout must not be inspected for a produced artifact'); },
+      resolveRunCwd: async () => { throw new Error('artifact worktree path should avoid resolver fallback'); },
+    };
+
+    const result = await service.runIntegrate({
+      ...BASE_INPUT,
+      issueRef: { repo: 'o/r', number: 147, url: 'https://github.com/o/r/issues/147' },
+      change: {
+        branch: 'feat/produced',
+        headSha: 'already-pushed-sha',
+        worktreePath: '/produced-worktree',
+      },
+    });
+
+    assert.ok(!('needsHuman' in result));
+    assert.equal(result.status, 'noop');
+    assert.equal(result.foreignPr, true);
+    assert.equal(result.prAuthor, 'developer-host');
+    assert.equal(result.integratorAccount, 'profile-bot');
+    assert.equal(pushCalled, false, 'already-pushed produced head must not push again');
+  } finally {
+    if (previousPath === undefined) delete process.env['PATH'];
+    else process.env['PATH'] = previousPath;
+    if (previousAccount === undefined) delete process.env['REVO_GH_ACCOUNT'];
+    else process.env['REVO_GH_ACCOUNT'] = previousAccount;
+    if (previousToken === undefined) delete process.env['GH_TOKEN_PROFILE_BOT'];
+    else process.env['GH_TOKEN_PROFILE_BOT'] = previousToken;
+    rmSync(binDir, { recursive: true, force: true });
+  }
 });
 
 test('issue-271: produced change push to a foreign existing PR exposes author provenance', async () => {

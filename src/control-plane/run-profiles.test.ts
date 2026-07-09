@@ -83,6 +83,7 @@ for (const candidate of runProfiles) {
     const integrator = asRecord(slots.integrator);
     assert.equal(integrator.runnerId, undefined);
     assert.equal(integrator.modelLevel, undefined);
+    assert.equal(integrator.timeoutMs, undefined);
     assert.equal(integrator.permissionMode, undefined);
   });
 

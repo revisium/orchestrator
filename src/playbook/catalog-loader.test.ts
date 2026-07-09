@@ -265,7 +265,7 @@ test('loadPlaybookCatalogs: rejects invalid run profile JSON before import', () 
     join(root, 'catalog', 'run-profiles.json'),
     JSON.stringify([
       {
-        id: 'codex-consensus',
+        id: 'invalid-consensus-profile',
         pipelineId: 'feature-development',
         schemaVersion: 'run-profile/v1',
         version: '1',

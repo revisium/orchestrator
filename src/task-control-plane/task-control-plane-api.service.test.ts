@@ -4321,6 +4321,27 @@ test('PROFILE_SCHEMA_CLOSED: rejects permissionMode on script runner (not suppor
   );
 });
 
+test('PROFILE_SCHEMA_CLOSED: rejects timeoutMs on script node bindings', async () => {
+  const api = makeApiForStoredProfileTests();
+  await assert.rejects(
+    () => api.simulateRoute({
+      title: 'test',
+      pipeline: 'feature-development',
+      profile: {
+        schemaVersion: 'run-profile/v1',
+        topology: { stages: {} },
+        bindings: { slots: { integrator: { timeoutMs: 60000 } } },
+      },
+    }),
+    (err: ControlPlaneError) => {
+      assert.ok(err.message.includes('PROFILE_SCHEMA_CLOSED'), `expected PROFILE_SCHEMA_CLOSED in: ${err.message}`);
+      assert.ok(err.message.includes('script node'), `expected script node in: ${err.message}`);
+      assert.ok(err.message.includes('timeoutMs'), `expected timeoutMs in: ${err.message}`);
+      return true;
+    },
+  );
+});
+
 test('PROFILE_SCHEMA_CLOSED: validates permissionMode against profile-selected runner', async () => {
   const api = makeApi({
     rolesService: {

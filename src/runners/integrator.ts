@@ -1639,7 +1639,7 @@ export class IntegratorService {
       return Promise.resolve(pinned);
     }
     console.log(`[integrator] gh pinned to account '${pinned.account}' (GH_TOKEN, not ambient)`);
-    return integrate(input, { ...this.deps, execGh: pinned.execGh });
+    return integrate({ ...input, githubAccount: pinned.account }, { ...this.deps, execGh: pinned.execGh });
   };
 
 
@@ -1649,7 +1649,7 @@ export class IntegratorService {
       console.warn(`[confirm-merge] ${pinned.lesson}`);
       return Promise.resolve(pinned);
     }
-    return confirmMerge(input, { ...this.deps, execGh: pinned.execGh });
+    return confirmMerge({ ...input, githubAccount: pinned.account }, { ...this.deps, execGh: pinned.execGh });
   };
 
 
@@ -1670,7 +1670,7 @@ export class IntegratorService {
       console.warn(`[poll-pr] ${pinned.lesson}`);
       return Promise.resolve(pinned);
     }
-    return pollPr(input, { ...this.deps, execGh: pinned.execGh });
+    return pollPr({ ...input, githubAccount: pinned.account }, { ...this.deps, execGh: pinned.execGh });
   };
 
 
@@ -1680,7 +1680,7 @@ export class IntegratorService {
       console.warn(`[override-merge] ${pinned.lesson}`);
       return Promise.resolve(pinned);
     }
-    return overrideMerge(input, { ...this.deps, execGh: pinned.execGh });
+    return overrideMerge({ ...input, githubAccount: pinned.account }, { ...this.deps, execGh: pinned.execGh });
   };
 
   runRespondThreads = (input: IntegratorInput): Promise<RespondThreadsOutput | IntegratorBlocked> => {

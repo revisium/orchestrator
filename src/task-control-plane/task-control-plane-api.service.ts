@@ -1945,9 +1945,9 @@ export class TaskControlPlaneApiService {
   ): void {
     const nodeId = override.match.nodeId;
     if (!nodeId || nodes[nodeId]?.kind !== 'script') return;
-    if (override.runnerId || override.modelLevel || override.permissionMode) {
+    if (override.runnerId || override.modelLevel || override.timeoutMs !== undefined || override.permissionMode) {
       throw this.profileSchemaClosed(
-        `bindingOverride match ${matchLabel} targets script node "${nodeId}" and must not set runnerId, modelLevel, or permissionMode`,
+        `bindingOverride match ${matchLabel} targets script node "${nodeId}" and must not set runnerId, modelLevel, timeoutMs, or permissionMode`,
       );
     }
   }
