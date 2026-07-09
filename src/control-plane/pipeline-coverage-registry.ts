@@ -1,4 +1,5 @@
 import type { DefaultPlaybookPolicyDiagnosticCode } from './default-playbook-policy.js';
+import { PR_LIFECYCLE_NODES } from './run-profiles.js';
 import type { Branch, Condition, RevoErrorCode, Template } from '../pipeline-core/types.js';
 import { isDefaultBranch, isGuardedBranch } from '../pipeline-core/types.js';
 
@@ -421,17 +422,7 @@ export const PIPELINE_COVERAGE_OWNERSHIP: readonly PipelineCoverageOwnership[] =
     nodeDefault('codeReviewRouter'),
   ]),
   staticPolicy('DEFAULT_POLICY_RECOVERABLE_CATCH_TERMINAL', [
-    ...nodeCatches([
-      'pollPr',
-      'mergeReadiness',
-      'mergeRecheck',
-      'mergeApproveReverify',
-      'overrideMerge',
-      'integrator',
-      'reviewIntegrator',
-      'questionReviewIntegrator',
-      'respondThreads',
-    ]),
+    ...nodeCatches(PR_LIFECYCLE_NODES.filter((nodeId) => nodeId !== 'confirmMerge' && nodeId !== 'overrideConfirmMerge')),
   ]),
   staticPolicy('DEFAULT_POLICY_CONFIRM_MERGE_FAILURE_TERMINAL', [
     ...nodeCatches(['confirmMerge', 'overrideConfirmMerge']),

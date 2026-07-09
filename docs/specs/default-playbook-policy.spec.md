@@ -68,6 +68,11 @@ The bundled `feature-development` policy verifier reports errors for these stati
 | `confirmMerge` script catches (`revo.ScriptBlocked`, `revo.ScriptFailed`) MUST NOT route to a terminal node; base-drift and head-guard failures are recoverable. | `DEFAULT_POLICY_CONFIRM_MERGE_FAILURE_TERMINAL` |
 | `confirmMerge.next` MUST be `cleanupWorktree`; `cleanupWorktree` MUST be a `script:cleanupWorktree` node with `.next = mergedEnd`. No `confirmMerge -> mergedEnd` bypass is permitted. | `DEFAULT_POLICY_POST_MERGE_CLEANUP_MISSING` |
 | Every declared `humanGate` outcome MUST have a guarded (non-default) branch whose condition explicitly mentions that verdict. Defaults catch only out-of-menu or invalid verdicts. | `DEFAULT_POLICY_GATE_OUTCOMES_IMPLICIT` |
+
+`pollPr` and `confirmMerge` both may mark a draft PR ready for review. `gh pr ready` failures MUST NOT be swallowed:
+non-benign failures are surfaced as redacted recovery evidence and route through the existing recovery gate with
+`recheck,cancel`. A benign GitHub response that the PR is already ready/not draft is idempotent success.
+
 ## Profile-Materialized Templates
 
 The verifier can also be applied to materialized templates produced from stored run profile data. A seeded consensus

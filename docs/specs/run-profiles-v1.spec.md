@@ -132,7 +132,9 @@ Required catalog fields:
 The importer MUST reject duplicate profile ids and profiles referencing unknown pipeline ids.
 
 `publishing` is not part of the current `run-profile/v1` catalog shape. Importers MUST reject it as an additional
-property. GitHub account aliases belong under `bindings.slots.<scriptNode>.accounts.github`.
+property. GitHub account aliases belong under `bindings.slots.<scriptNode>.accounts.github`. For
+`feature-development`, `bindings.slots.integrator.accounts.github` is the public publish identity and is expanded into
+the named PR lifecycle script nodes in the pinned route snapshot.
 
 Stored catalog rows MUST include `id`, `pipelineId`, and `version` as catalog/storage metadata. Inline
 `create_run.profile` and `simulate_route.profile` inputs MUST NOT include persisted identity, pipeline, display, or
@@ -337,13 +339,21 @@ such as `GH_TOKEN_PROFILE_BOT` or `gh auth token --user profile-bot`.
 
 Resolution precedence for write-capable GitHub scripts is:
 
-1. `bindings.slots.<scriptNode>.accounts.github` from the pinned route/profile;
-2. `REVO_GH_ACCOUNT`;
-3. active `gh` account on the host.
+1. explicit `bindings.slots.<scriptNode>.accounts.github` from the pinned route/profile;
+2. the expanded publish identity from `bindings.slots.integrator.accounts.github` for PR lifecycle script nodes;
+3. `REVO_GH_ACCOUNT`;
+4. active `gh` account on the host.
 
 The runtime MUST fail loud when no account can be resolved and MUST NOT fall back to a hardcoded organization account.
 
-Top-level `publishing` remains invalid in `run-profile/v1`; account binding is scoped to the script node that needs it.
+Top-level `publishing` remains invalid in `run-profile/v1`; account binding is scoped to script nodes. The PR lifecycle
+node set is `integrator`, `reviewIntegrator`, `questionReviewIntegrator`, `pollPr`, `mergeReadiness`, `mergeRecheck`,
+`mergeApproveReverify`, `confirmMerge`, `overrideConfirmMerge`, `overrideMerge`, and `respondThreads`. Explicit
+node-specific account bindings win over the expanded publish identity. Profile edits after run creation do not affect
+the running workflow because the expanded launch bindings are pinned into the Prisma route snapshot.
+
+`gh pr ready` failures in `pollPr` and `confirmMerge` are recoverable script blocks. The surfaced evidence MUST be
+secret-redacted and actionable, and the workflow MUST route to human recovery with at least `recheck` and `cancel`.
 
 ## Runtime Resolution
 
@@ -473,6 +483,7 @@ Required automated coverage:
 - no separate profile-like launch object is exposed by MCP inputs, GraphQL inputs, route resolution, or Prisma
   `TaskRun` storage;
 - `accounts.github` is accepted only for script node bindings and changes the profile hash;
+- `integrator.accounts.github` expands to the named PR lifecycle nodes, with explicit node-specific accounts winning;
 - script node bindings reject runner/model/timeout/permission fields;
 - top-level `publishing` fields are rejected in stored and inline `run-profile/v1` payloads;
 - GitHub tokens are never stored in `profile_json`, inline `profile`, or `routeDecision`.
