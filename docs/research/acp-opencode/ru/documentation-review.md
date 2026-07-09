@@ -20,6 +20,8 @@
 | OpenCode source: ACP service | https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/acp/service.ts | Реализационные детали ACP, если публичная документация молчит |
 | OpenCode source: ACP config options | https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/acp/config-option.ts | Реализационные детали session config options |
 
+Ссылки на OpenCode source, которые используют изменяемую ветку `dev`, были просмотрены 2026-07-08. Это навигационные ссылки, а не неизменяемое доказательство; перед использованием поведения из source как стабильного контракта их нужно пересмотреть или закрепить на commit SHA.
+
 ## Документированные факты ACP
 
 ACP использует JSON-RPC. Официально описаны transport через `stdio` и черновой `Streamable HTTP`. `stdio` не единственный возможный transport, потому что спецификация допускает custom transports, но `stdio` является базовым рекомендуемым вариантом.

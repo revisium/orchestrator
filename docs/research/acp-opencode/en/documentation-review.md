@@ -20,6 +20,8 @@ Capture facts from ACP/OpenCode documentation before integrating it into Revo. R
 | OpenCode source: ACP service | https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/acp/service.ts | ACP implementation details when public docs are silent |
 | OpenCode source: ACP config options | https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/acp/config-option.ts | `session` config option implementation details |
 
+OpenCode source links that use the mutable `dev` branch were reviewed on 2026-07-08. They are navigational references, not immutable evidence; re-review or pin them before using source-level behavior as a stable contract.
+
 ## Documented ACP Facts
 
 ACP uses JSON-RPC. The official docs describe `stdio` transport and draft `Streamable HTTP`. `stdio` is not the only possible transport because the specification allows custom transports, but `stdio` is the baseline recommended option.

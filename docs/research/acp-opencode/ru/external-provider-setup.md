@@ -21,21 +21,23 @@ openrouter/cohere/north-mini-code:free
 - `different-models` с базовой и альтернативной моделями, обе установленными в `openrouter/cohere/north-mini-code:free`, завершил обе сессии после `session/set_config_option(model)` и `session/set_config_option(mode)`;
 - `two-sessions-parallel` завершил две параллельные сессии на той же внешней модели.
 
-Запуск одной ACP-сессии после подключения OpenRouter в OpenCode:
+Команды `pnpm run research:opencode-acp-sessions` ниже - команды из исследовательских экспериментов вне production-кода. Этот PR фиксирует результаты и операторские настройки, но не добавляет harness/script в `master`.
+
+Исследовательская команда вне production-кода для запуска одной ACP-сессии после подключения OpenRouter в OpenCode:
 
 ```bash
 REVO_ACP_RESEARCH_MODEL=openrouter/cohere/north-mini-code:free \
 REVO_ACP_RESEARCH_TIMEOUT_MS=180000 \
-pnpm run research:opencode-acp-sessions -- one-session
+pnpm run research:opencode-acp-sessions -- one-session # исследовательская команда вне production-кода; harness/script не добавляется в master
 ```
 
-Запуск smoke для config-option model/mode с той же отзывчивой моделью:
+Исследовательская команда вне production-кода для smoke config-option model/mode с той же отзывчивой моделью:
 
 ```bash
 REVO_ACP_RESEARCH_MODEL=openrouter/cohere/north-mini-code:free \
 REVO_ACP_RESEARCH_ALT_MODEL=openrouter/cohere/north-mini-code:free \
 REVO_ACP_RESEARCH_TIMEOUT_MS=180000 \
-pnpm run research:opencode-acp-sessions -- different-models
+pnpm run research:opencode-acp-sessions -- different-models # исследовательская команда вне production-кода; harness/script не добавляется в master
 ```
 
 Не используйте эту модель как первую цель smoke:
@@ -137,16 +139,16 @@ openrouter-free/cohere/north-mini-code:free
 openrouter-free/poolside/laguna-xs-2.1:free
 ```
 
-Запуск одной ACP-сессии с inline-конфигурацией провайдера:
+Исследовательская команда вне production-кода для одной ACP-сессии с inline-конфигурацией провайдера:
 
 ```bash
 REVO_ACP_RESEARCH_MODEL=openrouter-free/cohere/north-mini-code:free \
 REVO_ACP_RESEARCH_ALT_MODEL=llamacpp-fast/qwen-coder-7b \
 REVO_ACP_RESEARCH_TIMEOUT_MS=180000 \
-pnpm run research:opencode-acp-sessions -- one-session
+pnpm run research:opencode-acp-sessions -- one-session # исследовательская команда вне production-кода; harness/script не добавляется в master
 ```
 
-Запуск проверки ошибки внешнего `provider/model` после успешного валидного smoke:
+Исследовательская команда вне production-кода для проверки ошибки внешнего `provider/model` после успешного валидного smoke:
 
 ```bash
 export OPENCODE_CONFIG_CONTENT='{
@@ -170,7 +172,7 @@ export OPENCODE_CONFIG_CONTENT='{
 
 REVO_ACP_RESEARCH_MODEL=openrouter-free/definitely-missing-model \
 REVO_ACP_RESEARCH_TIMEOUT_MS=60000 \
-pnpm run research:opencode-acp-sessions -- model-error
+pnpm run research:opencode-acp-sessions -- model-error # исследовательская команда вне production-кода; harness/script не добавляется в master
 ```
 
 ## Текущие ограничения

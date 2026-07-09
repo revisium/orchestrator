@@ -21,21 +21,23 @@ Evidence:
 - `different-models` with base and alt both set to `openrouter/cohere/north-mini-code:free` completed both sessions after `session/set_config_option(model)` and `session/set_config_option(mode)`;
 - `two-sessions-parallel` completed two concurrent sessions against the same external model.
 
-Run one ACP session after connecting OpenRouter in OpenCode:
+The `pnpm run research:opencode-acp-sessions` commands below are research commands used during non-production research experiments outside production code. This PR documents the observed outcomes and operator setup; it does not add the research harness/script to `master`.
+
+Non-production research command for one ACP session after connecting OpenRouter in OpenCode:
 
 ```bash
 REVO_ACP_RESEARCH_MODEL=openrouter/cohere/north-mini-code:free \
 REVO_ACP_RESEARCH_TIMEOUT_MS=180000 \
-pnpm run research:opencode-acp-sessions -- one-session
+pnpm run research:opencode-acp-sessions -- one-session # non-production research command; harness/script is not added to master
 ```
 
-Run model/mode config-option smoke with the same responsive model:
+Non-production research command for model/mode config-option smoke with the same responsive model:
 
 ```bash
 REVO_ACP_RESEARCH_MODEL=openrouter/cohere/north-mini-code:free \
 REVO_ACP_RESEARCH_ALT_MODEL=openrouter/cohere/north-mini-code:free \
 REVO_ACP_RESEARCH_TIMEOUT_MS=180000 \
-pnpm run research:opencode-acp-sessions -- different-models
+pnpm run research:opencode-acp-sessions -- different-models # non-production research command; harness/script is not added to master
 ```
 
 Do not use this model as the first smoke target:
@@ -137,16 +139,16 @@ openrouter-free/cohere/north-mini-code:free
 openrouter-free/poolside/laguna-xs-2.1:free
 ```
 
-Run one ACP session with inline provider config:
+Non-production research command for one ACP session with inline provider config:
 
 ```bash
 REVO_ACP_RESEARCH_MODEL=openrouter-free/cohere/north-mini-code:free \
 REVO_ACP_RESEARCH_ALT_MODEL=llamacpp-fast/qwen-coder-7b \
 REVO_ACP_RESEARCH_TIMEOUT_MS=180000 \
-pnpm run research:opencode-acp-sessions -- one-session
+pnpm run research:opencode-acp-sessions -- one-session # non-production research command; harness/script is not added to master
 ```
 
-Run an external provider/model error probe after the valid smoke succeeds:
+Non-production research command for an external provider/model error probe after the valid smoke succeeds:
 
 ```bash
 export OPENCODE_CONFIG_CONTENT='{
@@ -170,7 +172,7 @@ export OPENCODE_CONFIG_CONTENT='{
 
 REVO_ACP_RESEARCH_MODEL=openrouter-free/definitely-missing-model \
 REVO_ACP_RESEARCH_TIMEOUT_MS=60000 \
-pnpm run research:opencode-acp-sessions -- model-error
+pnpm run research:opencode-acp-sessions -- model-error # non-production research command; harness/script is not added to master
 ```
 
 ## Current guardrails
