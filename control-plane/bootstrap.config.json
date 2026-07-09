@@ -41,7 +41,7 @@
           "runner_id": {
             "type": "string",
             "default": "",
-            "description": "Portable playbook runner binding, for example claude-code or revo-integrator"
+            "description": "Portable playbook runner binding, for example claude-code, codex, or script"
           },
           "allowed_tools": {
             "type": "array",

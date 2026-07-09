@@ -7,7 +7,6 @@ import {
   respondThreads,
   captureProducedChange,
   triageForRespondThreads,
-  stubIntegrate,
   type CaptureProducedChangeInput,
   type ConfirmMergeOutput,
   type IntegratorBlocked,
@@ -25,8 +24,8 @@ import { execGit } from './git-target-repo.js';
 import type { RunCase } from './scenario.js';
 
 /**
- * Build an `IntegratorService`-shaped object wired to the real `integrate`/`preflightLive`/
- * `stubIntegrate` with a real git (on a temp repo) and a fake `gh`.
+ * Build an `IntegratorService`-shaped object wired to the real script functions with a real git
+ * (on a temp repo) and a fake `gh`.
  *
  * Deliberately bypasses `IntegratorService.runIntegrate`'s `resolvePinnedGh()` step — tests have no
  * real gh identity to pin. Scenarios that must exercise the fail-loud gh-account pinning (D7) should
@@ -41,9 +40,7 @@ export function createFakeIntegrator(runs: RunService, execGh: ExecGhFn): Integr
   };
   return {
     runIntegrate: (input: IntegratorInput): Promise<IntegratorOutput | IntegratorBlocked> => integrate(input, deps),
-    runStub: (input: IntegratorInput): IntegratorOutput => stubIntegrate(input),
     runConfirmMerge: (input: IntegratorInput): Promise<ConfirmMergeOutput | IntegratorBlocked> => confirmMerge(input, deps),
-    runConfirmStub: (input: IntegratorInput): ConfirmMergeOutput => ({ merged: true, prNumber: 0, prUrl: `stub://pr/${input.taskId}/merged` }),
     runPreflight: (taskId: string, base: string): Promise<{ ok: true } | IntegratorBlocked> =>
       preflightLive(taskId, base, deps),
     runCaptureProducedChange: (input: CaptureProducedChangeInput) => captureProducedChange(input, deps),
@@ -51,40 +48,14 @@ export function createFakeIntegrator(runs: RunService, execGh: ExecGhFn): Integr
     // so the e2e gh emulator converges fast (CI/threads flip deterministically per call).
     runPollPr: (input: IntegratorInput): Promise<PrFeedback | IntegratorBlocked> =>
       pollPr(input, { ...deps, sleep: () => Promise.resolve(), maxPolls: 30 }),
-    runPollStub: (_input: IntegratorInput): PrFeedback => ({
-      prNumber: null,
-      headSha: 'stub',
-      evidence: ['stub pollPr readiness: clean'],
-      verdict: 'clean',
-      ciFailures: [],
-      reviewThreads: [],
-    }),
     runOverrideMerge: (input: IntegratorInput): Promise<MergeOverrideOutput | IntegratorBlocked> =>
       overrideMerge(input, deps),
-    runOverrideStub: (_input: IntegratorInput): MergeOverrideOutput => ({
-      prNumber: null,
-      headSha: 'stub',
-      evidence: ['stub overrideMerge readiness: clean'],
-      verdict: 'clean',
-      ciFailures: [],
-      reviewThreads: [],
-      override: {
-        accepted: true,
-        actor: 'stub',
-        note: 'stub override',
-        source: { gate: 'mergeGate', inboxId: '' },
-        facts: [],
-        replied: 0,
-        resolved: 0,
-      },
-    }),
     runRespondThreads: (input: IntegratorInput): Promise<RespondThreadsOutput | IntegratorBlocked> =>
       respondThreads(triageForRespondThreads(input), deps),
-    runRespondStub: (_input: IntegratorInput): RespondThreadsOutput => ({ replied: 0, resolved: 0 }),
   } as unknown as IntegratorService;
 }
 
-/** Per-run mocked integrate outcomes. preflight/stub still delegate to the real fake integrator. */
+/** Per-run mocked integrate outcomes. Other script functions still delegate to the real fake integrator. */
 export type IntegratorOutcome =
   | { kind: 'needsHuman'; lesson: string } // integrate → blocked (fail-loud gh identity D7; token-leak lesson D15)
   | { kind: 'throw'; message: string }; //    integrate throws → workflow's top-level catch failRuns it (D13)
@@ -105,16 +76,11 @@ export function routedIntegrator(
       if (outcome?.kind === 'needsHuman') return Promise.resolve({ needsHuman: true, lesson: outcome.lesson });
       return base.runIntegrate(input);
     },
-    runStub: base.runStub,
     runConfirmMerge: base.runConfirmMerge,
-    runConfirmStub: base.runConfirmStub,
     runPreflight: base.runPreflight,
     runCaptureProducedChange: base.runCaptureProducedChange,
     runPollPr: base.runPollPr,
-    runPollStub: base.runPollStub,
     runOverrideMerge: base.runOverrideMerge,
-    runOverrideStub: base.runOverrideStub,
     runRespondThreads: base.runRespondThreads,
-    runRespondStub: base.runRespondStub,
   } as unknown as IntegratorService;
 }

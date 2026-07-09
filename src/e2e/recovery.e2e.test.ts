@@ -6,6 +6,8 @@ import {
   createRunHarness,
   type RunHarness,
   crashRunAt,
+  routedGhEmulator,
+  type RunCase,
   waitForGate,
   waitState,
   approveUntilTerminal,
@@ -29,6 +31,8 @@ const crashed: { planResume: string; mergeResume: string; planReject: string } =
   mergeResume: '',
   planReject: '',
 };
+const crashedRepos = new Map<string, string>();
+const runCases = new Map<string, RunCase>();
 
 function isolateRecoveryProject(): void {
   process.env['REVO_PROJECT'] = 'agent-orchestrator-e2e-recovery';
@@ -40,10 +44,23 @@ before(async () => {
   if (!RUN_REAL_E2E) return;
   isolateRecoveryProject();
   // Crash three runs at their durable points, THEN launch one host that recovers all of them.
-  crashed.planResume = (await crashRunAt('plan-gate')).runId;
-  crashed.mergeResume = (await crashRunAt('merge-gate')).runId;
-  crashed.planReject = (await crashRunAt('plan-gate')).runId;
-  h = await createRunHarness(); // single DBOS.launch() recovers every PENDING workflow above
+  const planResume = await crashRunAt('plan-gate');
+  crashed.planResume = planResume.runId;
+  crashedRepos.set(planResume.runId, planResume.repo);
+  const mergeResume = await crashRunAt('merge-gate');
+  crashed.mergeResume = mergeResume.runId;
+  crashedRepos.set(mergeResume.runId, mergeResume.repo);
+  runCases.set(mergeResume.runId, {
+    runId: mergeResume.runId,
+    taskId: mergeResume.taskId,
+    title: 'E2E recovery feature run',
+    gh: 'pr-already-exists',
+  });
+  const planReject = await crashRunAt('plan-gate');
+  crashed.planReject = planReject.runId;
+  crashedRepos.set(planReject.runId, planReject.repo);
+  h = await createRunHarness({ gh: (calls) => routedGhEmulator(runCases, calls) }); // single DBOS.launch() recovers every PENDING workflow above
+  for (const [runId, repo] of crashedRepos) h.developerWrites.set(runId, repo);
 });
 
 after(async () => {

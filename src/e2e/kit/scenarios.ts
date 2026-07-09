@@ -21,11 +21,12 @@ export const DEFAULT_PLAYBOOK_ID = 'revisium-default';
 
 /**
  * Create + start a run on the SEEDED DEFAULT playbook's `feature-development` pipeline (slice 5). Both
- * the agent and the integrator are stubbed so the run reaches the plan + merge gates without real
- * claude/git/gh; the default `feature-development` routes top-level domain verdicts past both the
- * code-review and post-integrator-watcher routers, so the deterministic agent drives it to completion.
+ * agent roles are deterministic and GitHub is emulated by the harness, so the run reaches the plan +
+ * merge gates without real claude/gh; the default `feature-development` routes top-level domain verdicts
+ * past both the code-review and post-integrator-watcher routers, so the deterministic agent drives it to
+ * completion.
  */
-export async function startDefaultFeatureRun(h: RunHarness, repo: string = process.cwd()) {
+export async function startDefaultFeatureRun(h: RunHarness, repo: string) {
   const created = await h.api.createRun({
     repo,
     title: 'E2E seeded default feature-development run',
@@ -34,10 +35,11 @@ export async function startDefaultFeatureRun(h: RunHarness, repo: string = proce
     playbookId: DEFAULT_PLAYBOOK_ID,
     pipelineId: 'feature-development',
     profile: stubDefaultFullProfile(),
-    start: true,
+    start: false,
   });
-  if (!('workflow' in created)) throw new Error('start:true must return workflow metadata');
-  return created;
+  h.developerWrites.set(created.runId, repo);
+  const workflow = await h.api.startRun({ runId: created.runId });
+  return { ...created, workflow };
 }
 
 /** Create + start a run on the SEEDED DEFAULT playbook's `local-change` pipeline (developer-only, no gate). */
@@ -135,23 +137,23 @@ export async function startFeatureRun(h: RunHarness, target: TargetRepo) {
 }
 
 /**
- * Create + start a feature run with BOTH the agent and the integrator stubbed (script mode — no git
- * or gh). Used by the durability/recovery suite where integration is irrelevant and the run must
- * reach plan + merge gates and complete without external effects. `target` is only a valid repo path
- * (the stub integrator never touches it). Does NOT register a developer write (stub integrate ignores it).
+ * Create + start a feature run with deterministic agents and fake GitHub. Used by the
+ * durability/recovery suite where integration details are irrelevant and the run must reach plan +
+ * merge gates and complete without external network effects.
  */
 export async function startStubbedFeatureRun(h: RunHarness, target: TargetRepo) {
   const created = await h.api.createRun({
     repo: target.worktree,
     title: 'E2E recovery feature run',
-    description: 'Group F — durability/crash-recovery (stubbed agent + integrator).',
+    description: 'Group F — durability/crash-recovery (deterministic agent + fake GitHub).',
     scope: 'recovery e2e',
     playbookId: PLAYBOOK_ID,
     pipelineId: 'feature-development',
     profile: stubFixtureFullProfile(),
-    start: true,
+    start: false,
   });
-  if (!('workflow' in created)) throw new Error('start:true must return workflow metadata');
+  h.developerWrites.set(created.runId, target.worktree);
+  await h.api.startRun({ runId: created.runId });
   return { runId: created.runId, taskId: created.taskId };
 }
 
@@ -160,8 +162,8 @@ export const DATA_DRIVEN_PIPELINE = 'feature-development-dd';
 
 /**
  * Create + start a DATA-DRIVEN feature run (0015 slice 2) against `target`. Routes to the
- * data-driven DBOS adapter (the pipeline carries a template_json), with the agent + integrator stubbed
- * so the run reaches the plan + merge gates without real git/gh. `spec` is registered (when provided)
+ * data-driven DBOS adapter (the pipeline carries a template_json), with deterministic agents and fake
+ * GitHub so the run reaches the plan + merge gates without external network effects. `spec` is registered (when provided)
  * BEFORE start so the scripted agent reads this run's per-node verdicts (needs a routedScriptedAgent
  * harness). The data-driven watcher node routes on a `clean` DOMAIN verdict — the caller scripts it.
  */
@@ -182,6 +184,7 @@ export async function startDataDrivenRun(
     start: false,
   });
   if (specs && spec) specs.set(created.runId, spec);
+  h.developerWrites.set(created.runId, target.worktree);
   const started = await h.api.startRun({ runId: created.runId });
   return { runId: created.runId, taskId: created.taskId, started };
 }

@@ -13,7 +13,7 @@
 ADR-0002 made the engine generic: `src/pipeline-core/` knows no role ids or pipeline shapes, and runner choice is
 meant to hide behind `role.runner`. That boundary does not hold today. Runner conventions leak into the generic
 engine as hardcoded branches on literal runner ids — roughly five synchronized decision sites across two files
-(for example, `dispatchRunnerId` branching on `'stub-agent'`/`'claude-code'`/`'codex'`/`'script'`/`'revo-'` in
+(for example, `dispatchRunnerId` branching on `'stub-agent'`/`'claude-code'`/`'codex'`/`'script'` in
 `src/pipeline/route-contract.ts`), plus a Codex adapter that rejects any non-OpenAI-compatible provider with a hard
 throw. The remaining sites are enumerated in the linked specs and the implementing PR.
 

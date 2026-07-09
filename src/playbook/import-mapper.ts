@@ -110,8 +110,7 @@ function mapRole(root: string, playbookId: string, role: RoleCatalogRecord, now:
       `Production playbook role ${role.id} must not bind runner_id stub-agent; use a run profile binding for test stubs`,
     );
   }
-  const requiredPrompt = !role.runnerId.startsWith('revo-');
-  const prompt = composeRolePrompt(root, role, requiredPrompt);
+  const prompt = composeRolePrompt(root, role, true);
   const importedRoleId = scopedImportRowId(playbookId, role.id);
   return {
     table: 'roles',

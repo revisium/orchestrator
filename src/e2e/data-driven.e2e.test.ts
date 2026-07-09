@@ -29,9 +29,10 @@ import {
 // driving plan→merge gates to completion, surviving crash-recovery, and enforcing the bounded rework cap to
 // `blocked`. Since the plan-0015 cutover the data-driven engine is the SOLE pipeline engine.
 //
-// The agent + integrator are stubbed through inline run profiles so no real claude/git/gh runs. The agent is
-// scripted per-run so a test can choose each node's DOMAIN verdict (the watcher must emit `clean` to
-// reach the merge gate; the reviewer emits `blocker` to drive the rework loop).
+// Agent roles are routed through deterministic test profiles and GitHub is emulated by the harness. The
+// integrator remains a system script node. The agent is scripted per-run so a test can choose each node's
+// DOMAIN verdict (the watcher must emit `clean` to reach the merge gate; the reviewer emits `blocker`
+// to drive the rework loop).
 
 let h: RunHarness;
 let target: TargetRepo;
@@ -44,7 +45,7 @@ before(async () => {
   if (!RUN_REAL_E2E) return;
   h = await createRunHarness({ agent: (sink) => routedScriptedAgent(specs, sink) });
   await givenInstalledPlaybook(h);
-  target = createTargetRepo(); // clean repo so any preflight passes (stub integrator never writes)
+  target = createTargetRepo(); // clean repo so any preflight passes
 });
 
 after(async () => {
@@ -83,7 +84,7 @@ test('L1: a data-driven run drives plan→merge gates to completed on real DBOS/
   assert.equal(terminal.state, 'completed');
   assert.deepEqual(terminal.approvedTopics, ['plan', 'merge'], 'both data-driven humanGate nodes opened in order');
 
-  // The integrator script node ran (stub → integrate_succeeded) and the run completed — both via the adapter.
+  // The integrator script node ran and the run completed — both via the adapter.
   await assertEventsPresent(h.api, run.runId, ['integrate_succeeded', 'run_completed']);
 
   // The agent/script effects were dispatched through the SAME runner machinery (generic capabilities):

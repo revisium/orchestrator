@@ -33,19 +33,21 @@ const CLEAN_WATCHER: AgentSpec = { byRole: { watcher: { kind: 'domainVerdict', v
 
 const h = await createRunHarness({ agent: (sink) => scriptedAgent(CLEAN_WATCHER, sink) });
 await givenInstalledPlaybook(h);
-const target = createTargetRepo(); // clean throwaway repo; the stub integrator never touches it
+const target = createTargetRepo(); // clean throwaway repo for the parked run
 
 const created = await h.api.createRun({
   repo: target.worktree,
   title: 'E2E data-driven recovery run',
-  description: 'Group L — data-driven crash-recovery (stubbed agent + integrator).',
+  description: 'Group L — data-driven crash-recovery (deterministic agent + fake GitHub).',
   scope: 'data-driven recovery e2e',
   playbookId: 'revisium-agent-playbook',
   pipelineId: DATA_DRIVEN_PIPELINE,
   profile: stubFixtureFullProfile(),
-  start: true,
+  start: false,
 });
 const runId = created.runId;
+h.developerWrites.set(runId, target.worktree);
+await h.api.startRun({ runId });
 
 const plan = await waitForGate(h.api, runId, 'plan');
 if (stopAt === 'merge-gate') {
@@ -54,4 +56,4 @@ if (stopAt === 'merge-gate') {
 }
 
 // Flush the run id, then exit WITHOUT h.close() — no DBOS drain → the workflow stays PENDING (the crash).
-process.stdout.write(`RUNID=${runId}\n`, () => process.exit(0));
+process.stdout.write(`RUNID=${runId}\nTASKID=${created.taskId}\nREPO=${target.worktree}\n`, () => process.exit(0));

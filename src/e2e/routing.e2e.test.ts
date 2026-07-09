@@ -22,9 +22,22 @@ type Route = {
   source: string;
   roles: string[];
   routeGates: string[];
-  launchBindings: unknown[];
+  launchBindings: LaunchBinding[];
   roleBindings: Binding[];
   params: Record<string, unknown>;
+};
+type LaunchBinding = {
+  match: {
+    roleId?: string;
+    nodeId?: string;
+    runnerId?: string;
+  };
+  runnerId?: string;
+  modelLevel?: string;
+  permissionMode?: string;
+  accounts?: {
+    github?: string;
+  };
 };
 
 let h: RunHarness;
@@ -89,7 +102,7 @@ test('I3: every required role binds a runner + model level (default: resolved fr
     assert.equal(b.runnerSource, 'playbook', `${roleId} default runner comes from the playbook`);
   }
   const integrator = r.roleBindings.find((x) => x.roleId === 'integrator');
-  if (integrator) assert.equal(integrator.runnerId, 'revo-integrator', 'integrator binds the real integrator runner');
+  if (integrator) assert.equal(integrator.runnerId, 'script', 'integrator binds the script runner');
 });
 
 test('I4: public params cannot smuggle launch bindings', { skip: e2eSkip }, async () => {
@@ -264,6 +277,38 @@ test('I10: profile permissionMode mismatched for runner is rejected (PROFILE_SCH
       assert.ok((err as { message?: string }).message?.includes('workspace-write'), 'error names the bad permissionMode');
       return true;
     },
+  );
+});
+
+test('I10b: inline profile binds GitHub account to an integrator script node', { skip: e2eSkip }, async () => {
+  const profile = {
+    ...emptyProfile(),
+    bindings: {
+      slots: {
+        integrator: { accounts: { github: 'profile-bot' } },
+      },
+    },
+  };
+
+  const simulated = await route({ title: 'github-account-binding', pipeline: 'feature-development', profile });
+  const integratorBinding = simulated.launchBindings.find((binding) => binding.match.nodeId === 'integrator');
+  assert.deepEqual(
+    integratorBinding,
+    { match: { nodeId: 'integrator' }, accounts: { github: 'profile-bot' } },
+    'GitHub account is a script-node binding, not a runner binding',
+  );
+
+  const created = (await h.api.createRun({
+    title: 'github-account-binding',
+    repo: process.cwd(),
+    pipelineId: 'feature-development',
+    profile,
+    start: false,
+  })) as { route: Route };
+  assert.deepEqual(
+    created.route.launchBindings.find((binding) => binding.match.nodeId === 'integrator'),
+    integratorBinding,
+    'createRun pins the same GitHub account launch binding as simulateRoute',
   );
 });
 

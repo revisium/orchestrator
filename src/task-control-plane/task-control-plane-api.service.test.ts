@@ -3504,7 +3504,7 @@ test('TaskControlPlaneApiService.simulateRoute binds canonical feature-developme
             id: 'pb-integrator',
             name: 'integrator',
             modelLevel: 'standard',
-            runner: 'revo-integrator',
+            runner: 'script',
             surface: 'repo',
             rights: 'git and GitHub writes',
             playbookId: 'pb',
@@ -3603,7 +3603,7 @@ test('TaskControlPlaneApiService.simulateRoute binds the bugfix defect-analysis 
             id: 'pb-integrator',
             name: 'integrator',
             modelLevel: 'standard',
-            runner: 'revo-integrator',
+            runner: 'script',
             surface: 'repo',
             rights: 'git and GitHub writes',
             playbookId: 'pb',
@@ -4321,6 +4321,27 @@ test('PROFILE_SCHEMA_CLOSED: rejects permissionMode on script runner (not suppor
   );
 });
 
+test('PROFILE_SCHEMA_CLOSED: rejects timeoutMs on script node bindings', async () => {
+  const api = makeApiForStoredProfileTests();
+  await assert.rejects(
+    () => api.simulateRoute({
+      title: 'test',
+      pipeline: 'feature-development',
+      profile: {
+        schemaVersion: 'run-profile/v1',
+        topology: { stages: {} },
+        bindings: { slots: { integrator: { timeoutMs: 60000 } } },
+      },
+    }),
+    (err: ControlPlaneError) => {
+      assert.ok(err.message.includes('PROFILE_SCHEMA_CLOSED'), `expected PROFILE_SCHEMA_CLOSED in: ${err.message}`);
+      assert.ok(err.message.includes('script node'), `expected script node in: ${err.message}`);
+      assert.ok(err.message.includes('timeoutMs'), `expected timeoutMs in: ${err.message}`);
+      return true;
+    },
+  );
+});
+
 test('PROFILE_SCHEMA_CLOSED: validates permissionMode against profile-selected runner', async () => {
   const api = makeApi({
     rolesService: {
@@ -4428,7 +4449,8 @@ const FEATURE_DEV_TEMPLATE = {
     analyst: { id: 'analyst', kind: 'agent', roleRef: 'role:analyst', next: 'planReviewer', resultSchema: 'schema:plan', produces: { name: 'plan' } },
     planReviewer: { id: 'planReviewer', kind: 'agent', roleRef: 'role:reviewer', next: 'developer', resultSchema: 'schema:review', produces: { name: 'planReview' } },
     developer: { id: 'developer', kind: 'agent', roleRef: 'role:developer', next: 'codeReview', resultSchema: 'schema:change', produces: { name: 'change' }, consumes: [] },
-    codeReview: { id: 'codeReview', kind: 'agent', roleRef: 'role:reviewer', next: 'doneEnd', resultSchema: 'schema:review', produces: { name: 'review' }, consumes: [{ node: 'developer', as: 'developerChange', staleOk: true }] },
+    codeReview: { id: 'codeReview', kind: 'agent', roleRef: 'role:reviewer', next: 'integrator', resultSchema: 'schema:review', produces: { name: 'review' }, consumes: [{ node: 'developer', as: 'developerChange', staleOk: true }] },
+    integrator: { id: 'integrator', kind: 'script', scriptRef: 'script:integrator', next: 'doneEnd', consumes: [{ node: 'developer', as: 'change' }] },
     doneEnd: { id: 'doneEnd', kind: 'terminal', status: 'succeeded' },
   },
 };
@@ -4447,7 +4469,7 @@ const STORED_PROFILE = {
       orchestrator: { runnerId: 'codex', modelLevel: 'codex-deep' },
       analyst: { runnerId: 'codex', modelLevel: 'codex-deep', permissionMode: 'workspace-write' },
       developer: { runnerId: 'codex', modelLevel: 'codex-standard', permissionMode: 'workspace-write' },
-      integrator: { runnerId: 'revo-integrator', modelLevel: 'standard' },
+      integrator: { accounts: { github: 'profile-bot' } },
       triager: { runnerId: 'codex', modelLevel: 'codex-deep' },
       watcher: { runnerId: 'codex', modelLevel: 'codex-standard' },
       planReviewPrimary: { runnerId: 'codex', modelLevel: 'codex-deep' },
@@ -4492,7 +4514,7 @@ const CANONICAL_ROLES = [
   { id: 'pb-reviewer', name: 'reviewer', modelLevel: 'deep', runner: 'claude-code', surface: 'any', rights: 'read-only', playbookId: 'pb', playbookRoleId: 'reviewer' },
   { id: 'pb-triager', name: 'triager', modelLevel: 'deep', runner: 'claude-code', surface: 'any', rights: 'write-working-tree', playbookId: 'pb', playbookRoleId: 'triager' },
   { id: 'pb-developer', name: 'developer', modelLevel: 'standard', runner: 'claude-code', surface: 'any', rights: 'write-working-tree', playbookId: 'pb', playbookRoleId: 'developer' },
-  { id: 'pb-integrator', name: 'integrator', modelLevel: 'standard', runner: 'revo-integrator', surface: 'any', rights: 'write-working-tree', playbookId: 'pb', playbookRoleId: 'integrator' },
+  { id: 'pb-integrator', name: 'integrator', modelLevel: 'standard', runner: 'script', surface: 'any', rights: 'write-working-tree', playbookId: 'pb', playbookRoleId: 'integrator' },
   { id: 'pb-watcher', name: 'watcher', modelLevel: 'cheap', runner: 'claude-code', surface: 'any', rights: 'read-only', playbookId: 'pb', playbookRoleId: 'watcher' },
 ];
 
@@ -4639,7 +4661,7 @@ test('resolveRouteDecision: stored run profile role and node bindings affect lau
   assert.equal(byRole.get('developer')?.resolvedModelLevel, 'codex-standard');
   assert.equal(byRole.get('developer')?.modelSource, 'profile');
   assert.equal(byRole.get('reviewer')?.resolvedRunnerId, 'claude-code', 'reviewer role stays generic; branch nodes carry runner overrides');
-  assert.equal(byRole.get('integrator')?.resolvedRunnerId, 'revo-integrator', 'integrator stays on revo-integrator');
+  assert.equal(byRole.get('integrator')?.resolvedRunnerId, 'script', 'integrator role stays catalog-backed as a script binding');
 
   const byNodeOverride = new Map(
     route.launchBindings
@@ -4649,6 +4671,7 @@ test('resolveRouteDecision: stored run profile role and node bindings affect lau
   assert.equal(byNodeOverride.get('planReviewPrimary')?.runnerId, 'codex');
   assert.equal(byNodeOverride.get('planReviewSecondary')?.runnerId, 'claude-code');
   assert.equal(byNodeOverride.get('codeReviewPrimary')?.modelLevel, 'codex-deep');
+  assert.deepEqual(byNodeOverride.get('integrator')?.accounts, { github: 'profile-bot' });
 });
 
 test('resolveRouteDecision: profileId and inline profile are mutually exclusive', async () => {
@@ -4863,7 +4886,7 @@ function makePinnedMaterializedProfileRoute(): RouteDecision {
     launchBindings: [],
     roleBindings: roles.map((roleId) =>
       roleId === 'integrator'
-        ? { roleId, rowId: roleId, modelLevel: 'standard', runnerId: 'revo-integrator', resolvedRunnerId: 'revo-integrator', runnerSource: 'playbook' as const }
+        ? { roleId, rowId: roleId, modelLevel: 'standard', runnerId: 'script', resolvedRunnerId: 'script', runnerSource: 'playbook' as const }
         : { roleId, rowId: roleId, modelLevel: 'standard', runnerId: 'claude-code', resolvedRunnerId: 'claude-code', runnerSource: 'playbook' as const },
     ),
     params: {},

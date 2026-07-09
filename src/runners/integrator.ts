@@ -33,7 +33,7 @@ import {
   type IssueAction,
   type IssueRef,
 } from '../run/issue-ref.js';
-import { resolveGhAccount, resolvePinnedGh } from './gh-identity.js';
+import { resolvePinnedGh } from './gh-identity.js';
 import type { ExecFn, IntegratorBlocked } from './integrator-types.js';
 import { gitAbsPath, branchExists, countAhead } from './integrator-git.js';
 import { resolveOwnerRepo } from './integrator-remote.js';
@@ -82,6 +82,7 @@ export type IntegratorInput = {
   taskId: string;
   title: string;
   base: string;
+  githubAccount?: string;
   issueRef?: IssueRef;
   issueAction?: IssueAction;
 
@@ -320,8 +321,8 @@ function findExistingPrWithHead(
   return matchingOpenPr(ownerRepo, branch, base, execGh, 'number,url,baseRefName,headRefOid,title,body,author');
 }
 
-function foreignPrProvenance(author: string | undefined): ForeignPrProvenance {
-  const integratorAccount = resolveGhAccount();
+function foreignPrProvenance(author: string | undefined, integratorAccount: string | undefined): ForeignPrProvenance {
+  if (!integratorAccount) return {};
   if (!author || author.toLowerCase() === integratorAccount.toLowerCase()) return {};
   return { foreignPr: true, prAuthor: author, integratorAccount };
 }
@@ -330,6 +331,7 @@ type ProducedChangePrContext = {
   ownerRepo: string;
   branch: string;
   title: string;
+  integratorAccount?: string;
   issueRef?: IssueRef;
   issueAction?: IssueAction;
   change: ProducedChangeArtifact;
@@ -375,13 +377,13 @@ function existingProducedChangeOutput(
 
 function reuseExistingProducedChangePr(context: ProducedChangePrContext, existing: PrSummary): IntegratorOutput | null {
   if (existing.headSha !== context.change.headSha) return null;
-  const provenance = foreignPrProvenance(existing.author);
+  const provenance = foreignPrProvenance(existing.author, context.integratorAccount);
   repairProducedChangePr(context, existing, provenance);
   return existingProducedChangeOutput(context, existing, provenance, 'noop');
 }
 
 function updateExistingProducedChangePr(context: ProducedChangePrContext, existing: PrSummary): IntegratorOutput {
-  const provenance = foreignPrProvenance(existing.author);
+  const provenance = foreignPrProvenance(existing.author, context.integratorAccount);
   repairProducedChangePr(context, existing, provenance);
   return existingProducedChangeOutput(context, existing, provenance, 'pushed');
 }
@@ -462,15 +464,6 @@ export async function preflightLive(
 
 
 
-
-export function stubIntegrate(input: IntegratorInput): IntegratorOutput {
-  return {
-    prUrl: 'stub://pr/placeholder',
-    branch: `feat/${input.taskId}-stub`,
-    prNumber: 0,
-    ...(input.issueRef ? { issueRef: input.issueRef } : {}),
-  };
-}
 
 export async function captureProducedChange(
   input: CaptureProducedChangeInput,
@@ -592,7 +585,7 @@ async function integrateProducedChange(
 
   const existing = findExistingPrWithHead(ownerRepo, branch, input.base, gh);
   if (existing && 'needsHuman' in existing) return existing;
-  const prContext = { ownerRepo, branch, title: input.title, issueRef, issueAction, change, execGh: gh };
+  const prContext = { ownerRepo, branch, title: input.title, integratorAccount: input.githubAccount, issueRef, issueAction, change, execGh: gh };
   if (existing) {
     const reused = reuseExistingProducedChangePr(prContext, existing);
     if (reused) return reused;
@@ -1640,34 +1633,23 @@ export class IntegratorService {
 
 
   runIntegrate = (input: IntegratorInput): Promise<IntegratorOutput | IntegratorBlocked> => {
-    const pinned = resolvePinnedGh();
+    const pinned = resolvePinnedGh({ account: input.githubAccount });
     if ('needsHuman' in pinned) {
       console.warn(`[integrator] ${pinned.lesson}`);
       return Promise.resolve(pinned);
     }
-    console.log(`[integrator] gh pinned to account '${resolveGhAccount()}' (GH_TOKEN, not ambient)`);
-    return integrate(input, { ...this.deps, execGh: pinned.execGh });
+    console.log(`[integrator] gh pinned to account '${pinned.account}' (GH_TOKEN, not ambient)`);
+    return integrate({ ...input, githubAccount: pinned.account }, { ...this.deps, execGh: pinned.execGh });
   };
-
-
-  runStub = (input: IntegratorInput): IntegratorOutput => {
-    return stubIntegrate(input);
-  };
-
 
 
   runConfirmMerge = (input: IntegratorInput): Promise<ConfirmMergeOutput | IntegratorBlocked> => {
-    const pinned = resolvePinnedGh();
+    const pinned = resolvePinnedGh({ account: input.githubAccount });
     if ('needsHuman' in pinned) {
       console.warn(`[confirm-merge] ${pinned.lesson}`);
       return Promise.resolve(pinned);
     }
-    return confirmMerge(input, { ...this.deps, execGh: pinned.execGh });
-  };
-
-
-  runConfirmStub = (input: IntegratorInput): ConfirmMergeOutput => {
-    return { merged: true, prNumber: 0, prUrl: `stub://pr/${input.taskId}/merged` };
+    return confirmMerge({ ...input, githubAccount: pinned.account }, { ...this.deps, execGh: pinned.execGh });
   };
 
 
@@ -1683,72 +1665,30 @@ export class IntegratorService {
 
 
   runPollPr = (input: IntegratorInput): Promise<PrFeedback | IntegratorBlocked> => {
-    const pinned = resolvePinnedGh();
+    const pinned = resolvePinnedGh({ account: input.githubAccount });
     if ('needsHuman' in pinned) {
       console.warn(`[poll-pr] ${pinned.lesson}`);
       return Promise.resolve(pinned);
     }
-    return pollPr(input, { ...this.deps, execGh: pinned.execGh });
+    return pollPr({ ...input, githubAccount: pinned.account }, { ...this.deps, execGh: pinned.execGh });
   };
 
-
-  runPollStub = (_input: IntegratorInput): PrFeedback => {
-    return { prNumber: null, headSha: 'stub', evidence: ['stub pollPr readiness: clean'], verdict: 'clean', ciFailures: [], reviewThreads: [] };
-  };
 
   runOverrideMerge = (input: IntegratorInput): Promise<MergeOverrideOutput | IntegratorBlocked> => {
-    const pinned = resolvePinnedGh();
+    const pinned = resolvePinnedGh({ account: input.githubAccount });
     if ('needsHuman' in pinned) {
       console.warn(`[override-merge] ${pinned.lesson}`);
       return Promise.resolve(pinned);
     }
-    return overrideMerge(input, { ...this.deps, execGh: pinned.execGh });
+    return overrideMerge({ ...input, githubAccount: pinned.account }, { ...this.deps, execGh: pinned.execGh });
   };
-
-  runOverrideStub = (input: IntegratorInput): MergeOverrideOutput => {
-    const gate = mergeOverrideGate(input);
-    if ('needsHuman' in gate) {
-      return {
-        prNumber: null,
-        headSha: 'stub',
-        evidence: [gate.lesson, 'overrideMerge verdict=recheck'],
-        verdict: 'recheck',
-        ciFailures: [],
-        reviewThreads: [],
-        override: {
-          accepted: false,
-          actor: 'stub',
-          note: '',
-          source: { gate: 'mergeGate', inboxId: '' },
-          facts: [{ severity: 'hard', kind: 'override_input_missing', summary: gate.lesson }],
-          replied: 0,
-          resolved: 0,
-          reason: gate.lesson,
-        },
-      };
-    }
-    return mergeOverrideOutput({
-      gate,
-      verdict: 'clean',
-      facts: [],
-      accepted: true,
-      fallbackHeadSha: gate.audit.headSha || 'stub',
-    });
-  };
-
-
 
   runRespondThreads = (input: IntegratorInput): Promise<RespondThreadsOutput | IntegratorBlocked> => {
-    const pinned = resolvePinnedGh();
+    const pinned = resolvePinnedGh({ account: input.githubAccount });
     if ('needsHuman' in pinned) {
       console.warn(`[respond-threads] ${pinned.lesson}`);
       return Promise.resolve(pinned);
     }
     return respondThreads(triageForRespondThreads(input), { execGh: pinned.execGh });
-  };
-
-
-  runRespondStub = (_input: IntegratorInput): RespondThreadsOutput => {
-    return { replied: 0, resolved: 0 };
   };
 }

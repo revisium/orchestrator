@@ -17,9 +17,6 @@ import { execFileSync } from 'node:child_process';
 import type { ExecGhFn } from '../poller/pr-readiness.js';
 
 
-export const DEFAULT_GH_ACCOUNT = 'revisium-io';
-
-
 export type ExecFileFn = (
   file: string,
   args: string[],
@@ -30,10 +27,28 @@ const defaultExecFile: ExecFileFn = (file, args, opts) => execFileSync(file, arg
 
 
 
-export function resolveGhAccount(env: NodeJS.ProcessEnv = process.env): string {
-  const raw = env['REVO_GH_ACCOUNT'];
-  const account = typeof raw === 'string' ? raw.trim() : '';
-  return account.length > 0 ? account : DEFAULT_GH_ACCOUNT;
+export function resolveGhAccount(input: {
+  account?: string;
+  env?: NodeJS.ProcessEnv;
+  execFile?: ExecFileFn;
+} = {}): string | undefined {
+  const explicit = input.account?.trim();
+  if (explicit) return explicit;
+
+  const env = input.env ?? process.env;
+  const envAccount = env['REVO_GH_ACCOUNT']?.trim();
+  if (envAccount) return envAccount;
+
+  const execFile = input.execFile ?? defaultExecFile;
+  try {
+    const out = execFile('gh', ['api', 'user', '--jq', '.login'], {
+      encoding: 'utf8',
+      timeout: 15_000,
+    }).trim();
+    return out.length > 0 ? out : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 
@@ -86,7 +101,7 @@ export function makeExecGh(opts?: {
 }
 
 
-export type PinnedGhResult = { execGh: ExecGhFn } | { needsHuman: true; lesson: string };
+export type PinnedGhResult = { account: string; execGh: ExecGhFn } | { needsHuman: true; lesson: string };
 
 
 
@@ -97,9 +112,18 @@ export type PinnedGhResult = { execGh: ExecGhFn } | { needsHuman: true; lesson: 
 
 
 
-export function resolvePinnedGh(deps?: { env?: NodeJS.ProcessEnv; execFile?: ExecFileFn }): PinnedGhResult {
+export function resolvePinnedGh(deps?: { account?: string; env?: NodeJS.ProcessEnv; execFile?: ExecFileFn }): PinnedGhResult {
   const env = deps?.env ?? process.env;
-  const account = resolveGhAccount(env);
+  const account = resolveGhAccount({ account: deps?.account, env, execFile: deps?.execFile });
+  if (!account) {
+    return {
+      needsHuman: true,
+      lesson:
+        'could not resolve a gh account from the run profile, REVO_GH_ACCOUNT, or active gh auth — REFUSING to ' +
+        'fall back to an ambient or hardcoded account. Fix: set accounts.github in the run profile, set ' +
+        'REVO_GH_ACCOUNT, or authenticate gh on this host.',
+    };
+  }
   const token = resolveGhToken(account, { env, execFile: deps?.execFile });
   if (!token) {
     return {
@@ -111,7 +135,7 @@ export function resolvePinnedGh(deps?: { env?: NodeJS.ProcessEnv; execFile?: Exe
         `reach the keychain.`,
     };
   }
-  return { execGh: makeExecGh({ token, env, execFile: deps?.execFile }) };
+  return { account, execGh: makeExecGh({ token, env, execFile: deps?.execFile }) };
 }
 
 const TOKEN_PATTERN = /\b(?:gh[opsru]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})\b/g;

@@ -53,8 +53,9 @@ recoveryScenario('RG-B: mergeGate cancel -> cancelledEnd -> cancelled', coverage
   expect: { terminal: 'cancelled' },
 });
 
-recoveryScenario('RG-C: mergeGate override_merge -> mergeApproveReverify(stub:clean) -> confirmMerge -> completed', coverageForScenario('RG-C-merge-override'), {
+recoveryScenario('RG-C: mergeGate override_merge over advisory thread -> confirmMerge -> completed', coverageForScenario('RG-C-merge-override'), {
   profile: stubDefaultFullProfile(),
+  gh: 'force-advisory-thread',
   gates: [
     ['plan', 'approved'],
     {
@@ -63,16 +64,16 @@ recoveryScenario('RG-C: mergeGate override_merge -> mergeApproveReverify(stub:cl
       nodeId: 'mergeGate',
       note: 'e2e override: reviewed and accepting the open thread',
       mergeOverrideAudit: {
-        threadIds: ['PRRT_OVERRIDE'],
+        threadIds: ['PRRT_T1'],
         actor: 'e2e',
         reason: 'e2e override: reviewed and accepting the open thread',
         risk: 'low: synthetic stub run, no real merge side effects',
         verificationResponsibility: 'e2e harness',
-        headSha: 'e2e-stub-head',
+        headSha: 'deadbeefcafe',
       },
     },
   ],
-  expect: { terminal: 'completed', path: ['merge_confirmed'] },
+  expect: { terminal: 'completed', path: ['merge_overridden', 'merge_confirmed'] },
 });
 
 test('RG-D: mergeGate recheck -> mergeRecheck(stub:clean) -> mergeGate cancel -> cancelled (#276)', {
