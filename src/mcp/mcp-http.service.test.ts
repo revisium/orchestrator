@@ -65,3 +65,37 @@ test('McpHttpService: a client disconnect mid-long-poll aborts the in-flight too
     httpServer.close();
   }
 });
+
+test('McpHttpService: tool handler application errors are surfaced as MCP tool errors', async () => {
+  const facade = {
+    async validateProfile() {
+      throw new Error('PROFILE_SCHEMA_CLOSED: topology stage "bad" does not exist');
+    },
+  } as unknown as McpFacadeService;
+
+  const httpServer = await new McpHttpService(facade).start(0);
+  const port = (httpServer.address() as AddressInfo).port;
+  const client = new Client({ name: 'mcp-http-error-test', version: '0.0.0' });
+  await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`)));
+
+  try {
+    const result = await client.callTool({
+      name: 'validate_profile',
+      arguments: {
+        pipelineId: 'analysis-only',
+        profile: {
+          schemaVersion: 'run-profile/v1',
+          topology: { stages: { analyst: { mode: 'single' } } },
+          bindings: { slots: { analyst: { runnerId: 'codex', modelLevel: 'codex-deep' } } },
+        },
+      },
+    });
+
+    assert.equal(result.isError, true, 'application failures must be marked as MCP tool errors');
+    const content = result.content as Array<{ type: string; text?: string }>;
+    assert.match(content.find((part) => part.type === 'text')?.text ?? '', /PROFILE_SCHEMA_CLOSED/);
+  } finally {
+    await client.close().catch(() => undefined);
+    httpServer.close();
+  }
+});
