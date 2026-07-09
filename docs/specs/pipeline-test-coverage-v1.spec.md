@@ -1,8 +1,10 @@
 # Pipeline test coverage v1 spec
 
-- **Status:** Accepted policy; partially implemented.
+- **Status:** Implemented policy.
 - **Source files:** `VERIFICATION.md`, `src/e2e/kit/scenario.ts`, `src/e2e/*.e2e.test.ts`,
   `src/control-plane/default-playbook-policy.test.ts`, `src/control-plane/seed-default-playbook.test.ts`,
+  `src/control-plane/pipeline-coverage-registry.ts`,
+  `src/control-plane/pipeline-coverage-registry.test.ts`, `src/e2e/hard-skip-issue-ref.test.ts`,
   `src/poller/pr-readiness.test.ts`.
 - **Related specs:** [pipeline-state-machine-v1.spec.md](./pipeline-state-machine-v1.spec.md),
   [default-playbook-policy.spec.md](./default-playbook-policy.spec.md),
@@ -54,8 +56,8 @@ workflow effect.
 
 ## Coverage Matrix
 
-The target coverage model is a registry-backed matrix. Each declarative scenario SHOULD carry stable coverage tags.
-The final meta-test MUST be cheap enough to run outside the real e2e lane.
+The coverage model is a registry-backed matrix. Each declarative scenario SHOULD carry stable coverage tags. The
+meta-test MUST be cheap enough to run outside the real e2e lane, and MUST run in the required CI verification lane.
 
 Coverage tags use stable ids:
 
@@ -71,6 +73,10 @@ The graph-coverage meta-test MUST verify:
 - every DSL tag references a defined edge/outcome or profile signature;
 - no scenario uses an undefined tag;
 - every waiver has a short reason and an owner surface.
+
+The shipped registry currently carries no waivers. If a future waiver is introduced, it MUST be deliberate,
+source-owned, and visible through the registry meta-test; waivers MUST NOT be used to close an audit milestone while the
+covered behavior still belongs to that milestone.
 
 Defensive edges, catch routes, default branches, and counter-bound conjuncts MAY be covered by static-policy diagnostics
 instead of a runtime DSL scenario when a runtime scenario would duplicate lower-level proof or create low-value e2e
@@ -98,6 +104,20 @@ Hard skips in e2e tests are allowed only for tracked open work. A milestone cann
 while a hard skip for that milestone remains. If a behavior is deferred, the GitHub issue or milestone umbrella MUST
 record the deferral explicitly.
 
+Hard-skip enforcement itself is a required verification concern: the guard test scans e2e test sources and fails on
+untracked hard skips. The shared `e2eSkip` environment gate is not a backlog waiver; required CI runs real e2e with
+`REVO_E2E_REAL=1`, where that gate resolves to `false`.
+
+## CI Gate
+
+Required CI MUST run both:
+
+- the cheap verification lane (`pnpm run verify`), including the graph-coverage registry meta-test and hard-skip guard;
+- the real e2e lane (`pnpm run test:e2e`) with `REVO_E2E_REAL=1`.
+
+The required-checks job MUST depend on both lanes. A change that removes graph ownership, introduces an untracked hard
+skip, or leaves required real e2e failing is not mergeable under this contract.
+
 ## Bounded Loops
 
 Loop coverage is not satisfied by saying that the graph is not acyclic. Static tests MUST prove an actual bounding
@@ -108,3 +128,5 @@ least one cap-exhaustion path for every user-visible recovery loop family.
 
 - 2026-07-08: Added test-layer ownership, declarative DSL coverage matrix policy, profile coverage rules, and
   hard-skip/milestone guidance after the default-pipeline audit remediation work.
+- 2026-07-09: Marked the policy implemented after the default-pipeline audit remediation close-out: graph coverage is
+  registry-backed in required CI, the waiver registry is empty, and hard skips are guarded.
