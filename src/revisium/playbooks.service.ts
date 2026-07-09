@@ -436,8 +436,7 @@ export class PlaybooksService {
       orderBy: [{ field: 'id', direction: 'asc' }],
     }, input.first);
     return rows
-      .map((node) => runProfileFromRow({ id: node.id, data: node.data ?? {} }))
-      .sort((left, right) => left.profileId.localeCompare(right.profileId));
+      .map((node) => runProfileFromRow({ id: node.id, data: node.data ?? {} }));
   }
 
   async listRunProfilesPage(input: {
@@ -457,12 +456,17 @@ export class PlaybooksService {
       where: andWhere(...base, { data: { path: 'status', in: statuses } }),
       orderBy: [{ field: 'id', direction: 'asc' }],
     });
+    if (rows.totalCount === undefined) {
+      throw new ControlPlaneError(
+        'VALIDATION_FAILURE',
+        'run_profiles pagination requires transport totalCount',
+      );
+    }
     const profiles = (rows.edges ?? [])
-      .flatMap((edge) => edge.node ? [runProfileFromRow({ id: edge.node.id, data: edge.node.data ?? {} })] : [])
-      .sort((left, right) => left.profileId.localeCompare(right.profileId));
+      .flatMap((edge) => edge.node ? [runProfileFromRow({ id: edge.node.id, data: edge.node.data ?? {} })] : []);
     return {
       profiles,
-      totalCount: rows.totalCount ?? profiles.length,
+      totalCount: rows.totalCount,
     };
   }
 

@@ -52,6 +52,15 @@ function fakeHeadTransport(
     async listRows(table, options): Promise<TransportList> {
       listCalls.push({ table, options });
       let selected = sourceFor(table).filter((node) => matchesWhere(node, options?.where));
+      for (const order of [...(options?.orderBy ?? [])].reverse()) {
+        if (order.field === 'id') {
+          selected = [...selected].sort((left, right) =>
+            order.direction === 'asc'
+              ? left.id.localeCompare(right.id)
+              : right.id.localeCompare(left.id),
+          );
+        }
+      }
       const totalCount = selected.length;
       const afterIndex = options?.after ? selected.findIndex((node) => node.id === options.after) : -1;
       const start = afterIndex >= 0 ? afterIndex + 1 : 0;
@@ -304,6 +313,97 @@ test('PlaybooksService.listRunProfilesPage returns bounded profiles with storage
   assert.deepEqual(page.profiles.map((profile) => profile.profileId), ['a']);
   assert.equal(page.totalCount, 2);
   assert.equal(head.listCalls.at(-1)?.options?.first, 1);
+});
+
+test('PlaybooksService.listRunProfilesPage does not client-sort after storage pagination', async () => {
+  const head = fakeHeadTransport([], [
+    makeRow('pb', {
+      name: 'PB',
+      package_name: '@x/pb',
+      version: '1.0.0',
+      source: 'local:/pb',
+      schema_version: 2,
+    }),
+  ], [
+    makeRow('row-a', {
+      playbook_id: 'pb',
+      pipeline_id: 'feature-development',
+      profile_id: 'z-profile',
+      schema_version: 'run-profile/v1',
+      version: '1',
+      display_name: 'Z',
+      summary: '',
+      profile_json: JSON.stringify({ schemaVersion: 'run-profile/v1', topology: { stages: {} }, bindings: { slots: {} } }),
+      profile_hash: 'hash-z',
+      profile_revision_hash: 'revision-z',
+      status: 'active',
+    }),
+    makeRow('row-b', {
+      playbook_id: 'pb',
+      pipeline_id: 'feature-development',
+      profile_id: 'a-profile',
+      schema_version: 'run-profile/v1',
+      version: '1',
+      display_name: 'A',
+      summary: '',
+      profile_json: JSON.stringify({ schemaVersion: 'run-profile/v1', topology: { stages: {} }, bindings: { slots: {} } }),
+      profile_hash: 'hash-a',
+      profile_revision_hash: 'revision-a',
+      status: 'active',
+    }),
+  ]);
+  const svc = new PlaybooksService(head);
+
+  const page = await svc.listRunProfilesPage({
+    playbookId: 'pb',
+    pipelineId: 'feature-development',
+    first: 1,
+  });
+
+  assert.deepEqual(page.profiles.map((profile) => profile.profileId), ['z-profile']);
+  assert.equal(page.totalCount, 2);
+});
+
+test('PlaybooksService.listRunProfilesPage rejects transport pages without totalCount', async () => {
+  const head = fakeHeadTransport([], [
+    makeRow('pb', {
+      name: 'PB',
+      package_name: '@x/pb',
+      version: '1.0.0',
+      source: 'local:/pb',
+      schema_version: 2,
+    }),
+  ], [
+    makeRow('pb-19-feature-development-a', {
+      playbook_id: 'pb',
+      pipeline_id: 'feature-development',
+      profile_id: 'a',
+      schema_version: 'run-profile/v1',
+      version: '1',
+      display_name: 'A',
+      summary: '',
+      profile_json: JSON.stringify({ schemaVersion: 'run-profile/v1', topology: { stages: {} }, bindings: { slots: {} } }),
+      profile_hash: 'hash-a',
+      profile_revision_hash: 'revision-a',
+      status: 'active',
+    }),
+  ]);
+  const originalListRows = head.listRows.bind(head);
+  head.listRows = async (table, options) => {
+    const page = await originalListRows(table, options);
+    if (table === 'run_profiles') delete page.totalCount;
+    return page;
+  };
+  const svc = new PlaybooksService(head);
+
+  await assert.rejects(
+    () => svc.listRunProfilesPage({
+      playbookId: 'pb',
+      pipelineId: 'feature-development',
+      first: 1,
+    }),
+    /transport totalCount/,
+  );
 });
 
 test('PlaybooksService.resolveRunProfile rejects scoped row ids as profileId', async () => {
