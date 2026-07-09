@@ -41,7 +41,7 @@ const runProfileSlotBindingSchema = z.object({
     value.permissionMode !== undefined,
   { message: 'run profile slot binding must set at least one launch field' },
 );
-const runProfileSchema = z.object({
+const runProfileBodySchema = z.object({
   schemaVersion: z.literal('run-profile/v1'),
   topology: z.object({
     stages: z.record(z.string(), runProfileStageSchema),
@@ -49,7 +49,9 @@ const runProfileSchema = z.object({
   bindings: z.object({
     slots: z.record(z.string(), runProfileSlotBindingSchema),
   }).strict(),
-}).strict().optional();
+}).strict();
+const runProfileSchema = runProfileBodySchema.optional();
+const profileStatusSchema = z.enum(['active', 'deprecated']);
 const manualAdoptionAuditSchema = z.object({
   runId: z.string().trim().min(1),
   step: z.string().trim().min(1),
@@ -637,6 +639,91 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
       annotations: { readOnlyHint: true },
     },
     async (input) => json(await facade.listProfiles(input)),
+  );
+
+  server.registerTool(
+    'get_profile',
+    {
+      description: 'Get a stored run profile from control-plane storage. Compact by default; pass includeDetails:true to include full profile JSON.',
+      inputSchema: {
+        playbookId: z.string().min(1).optional(),
+        pipelineId: z.string().min(1),
+        profileId: z.string().min(1),
+        includeDetails: z.boolean().optional(),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async (input) => json(await facade.getProfile(input)),
+  );
+
+  server.registerTool(
+    'validate_profile',
+    {
+      description: 'Validate an inline run-profile/v1 body against the selected playbook pipeline without writing storage.',
+      inputSchema: {
+        playbookId: z.string().min(1).optional(),
+        pipelineId: z.string().min(1),
+        profile: runProfileBodySchema,
+        includeDetails: z.boolean().optional(),
+      },
+      annotations: { readOnlyHint: true },
+    },
+    async (input) => json(await facade.validateProfile(input)),
+  );
+
+  server.registerTool(
+    'create_profile',
+    {
+      description: 'Create a user-managed run profile after validating it against the selected playbook pipeline.',
+      inputSchema: {
+        playbookId: z.string().min(1).optional(),
+        pipelineId: z.string().min(1),
+        profileId: z.string().min(1),
+        displayName: z.string().min(1),
+        summary: z.string().optional(),
+        profile: runProfileBodySchema,
+        status: profileStatusSchema.optional(),
+        includeDetails: z.boolean().optional(),
+      },
+      annotations: { readOnlyHint: false },
+    },
+    async (input) => json(await facade.createProfile(input)),
+  );
+
+  server.registerTool(
+    'update_profile',
+    {
+      description: 'Update a user-managed run profile in place. expectedProfileRevisionHash is required as an optimistic lock; new profile bodies are validated before write.',
+      inputSchema: {
+        playbookId: z.string().min(1).optional(),
+        pipelineId: z.string().min(1),
+        profileId: z.string().min(1),
+        expectedProfileRevisionHash: z.string().min(1),
+        displayName: z.string().min(1).optional(),
+        summary: z.string().optional(),
+        profile: runProfileSchema,
+        status: profileStatusSchema.optional(),
+        includeDetails: z.boolean().optional(),
+      },
+      annotations: { readOnlyHint: false },
+    },
+    async (input) => json(await facade.updateProfile(input)),
+  );
+
+  server.registerTool(
+    'deprecate_profile',
+    {
+      description: 'Mark a run profile deprecated using expectedProfileRevisionHash as an optimistic lock. Deprecated profiles remain readable and are hidden from default list_profiles.',
+      inputSchema: {
+        playbookId: z.string().min(1).optional(),
+        pipelineId: z.string().min(1),
+        profileId: z.string().min(1),
+        expectedProfileRevisionHash: z.string().min(1),
+        includeDetails: z.boolean().optional(),
+      },
+      annotations: { readOnlyHint: false },
+    },
+    async (input) => json(await facade.deprecateProfile(input)),
   );
 
   server.registerTool(

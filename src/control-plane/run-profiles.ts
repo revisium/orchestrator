@@ -22,6 +22,17 @@ type RunProfileContext = {
   schemaVersion?: string;
 };
 
+type RunProfileRevisionContext = {
+  playbookId: string;
+  pipelineId: string;
+  profileId: string;
+  schemaVersion: string;
+  version: string;
+  displayName: string;
+  summary: string;
+  status: string;
+};
+
 const ROLE_SLOTS = new Set([
   'orchestrator',
   'analyst',
@@ -69,6 +80,26 @@ export function canonicalRunProfilePayload(
 
 export function runProfileHash(profile: Record<string, unknown>, context: RunProfileContext = {}): string {
   return createHash('sha256').update(stableStringify(canonicalRunProfilePayload(profile, context))).digest('hex');
+}
+
+export function runProfileRevisionHash(
+  profile: Record<string, unknown>,
+  context: RunProfileRevisionContext,
+): string {
+  return createHash('sha256').update(stableStringify({
+    playbookId: context.playbookId,
+    pipelineId: context.pipelineId,
+    profileId: context.profileId,
+    schemaVersion: context.schemaVersion,
+    version: context.version,
+    displayName: context.displayName,
+    summary: context.summary,
+    status: context.status,
+    profileHash: runProfileHash(profile, {
+      pipelineId: context.pipelineId,
+      schemaVersion: context.schemaVersion,
+    }),
+  })).digest('hex');
 }
 
 function stageConfigs(profile: Record<string, unknown>): Record<string, StageConfig> {

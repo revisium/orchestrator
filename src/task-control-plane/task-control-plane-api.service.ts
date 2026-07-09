@@ -49,7 +49,13 @@ import {
 import { assertValidInlineRunProfile } from '../playbook/catalog-schema-validator.js';
 import { InboxService } from '../revisium/inbox.service.js';
 import { PlaybooksService } from '../revisium/playbooks.service.js';
-import type { PipelineSummary, RunProfileSummary } from '../revisium/playbooks.service.js';
+import type {
+  CreateRunProfileInput,
+  DeprecateRunProfileInput,
+  PipelineSummary,
+  RunProfileSummary,
+  UpdateRunProfileInput,
+} from '../revisium/playbooks.service.js';
 import { RolesService, type RoleSummary } from '../revisium/roles.service.js';
 import { RunService } from '../revisium/run.service.js';
 import {
@@ -100,6 +106,30 @@ export type RunProgress = {
   workflowStatus: string;
   graphCursor: DataDrivenProgressCursor | null;
   updatedAt: Date;
+};
+
+export type CreateProfileInput = Omit<CreateRunProfileInput, 'playbookId' | 'profile'> & {
+  playbookId?: string;
+  profile: unknown;
+};
+
+export type UpdateProfileInput = Omit<UpdateRunProfileInput, 'playbookId' | 'profile'> & {
+  playbookId?: string;
+  profile?: unknown;
+};
+
+export type GetProfileInput = {
+  playbookId?: string;
+  pipelineId: string;
+  profileId: string;
+};
+
+export type DeprecateProfileInput = DeprecateRunProfileInput;
+
+export type ValidateProfileInput = {
+  playbookId?: string;
+  pipelineId: string;
+  profile: unknown;
 };
 
 
@@ -1571,8 +1601,85 @@ export class TaskControlPlaneApiService {
     return this.playbooks.listPipelines();
   }
 
-  listProfiles(input: { playbookId?: string; pipelineId?: string; includeDeprecated?: boolean } = {}) {
+  listProfiles(input: { playbookId?: string; pipelineId?: string; includeDeprecated?: boolean; first?: number } = {}) {
     return this.playbooks.listRunProfiles(input);
+  }
+
+  listProfilesPage(input: { playbookId?: string; pipelineId?: string; includeDeprecated?: boolean; first: number }) {
+    return this.playbooks.listRunProfilesPage(input);
+  }
+
+  async getProfile(input: GetProfileInput) {
+    const playbook = await this.playbooks.resolvePlaybook(input.playbookId);
+    const pipeline = await this.playbooks.resolvePipeline({ playbookId: playbook.id, pipelineId: input.pipelineId });
+    return this.playbooks.resolveRunProfile({
+      playbookId: playbook.id,
+      pipelineId: pipeline.pipelineId,
+      profileId: input.profileId,
+      includeDeprecated: true,
+    });
+  }
+
+  validateProfile(input: ValidateProfileInput) {
+    return this.validateRunProfileForPipeline(input);
+  }
+
+  async createProfile(input: CreateProfileInput) {
+    const route = await this.validateRunProfileForPipeline(input);
+    const profile = asRecord(route.profileSnapshot);
+    if (!profile) throw new ControlPlaneError('VALIDATION_FAILURE', 'validated profile snapshot is missing');
+    return this.playbooks.createRunProfile({
+      playbookId: route.playbookId,
+      pipelineId: route.basePipelineId ?? route.pipelineId,
+      profileId: input.profileId,
+      displayName: input.displayName,
+      summary: input.summary,
+      profile,
+      status: input.status,
+    });
+  }
+
+  async updateProfile(input: UpdateProfileInput) {
+    let playbookId: string;
+    let pipelineId = input.pipelineId;
+    let profile: Record<string, unknown> | undefined;
+    if (input.profile !== undefined) {
+      const route = await this.validateRunProfileForPipeline({
+        playbookId: input.playbookId,
+        pipelineId: input.pipelineId,
+        profile: input.profile,
+      });
+      playbookId = route.playbookId;
+      pipelineId = route.basePipelineId ?? route.pipelineId;
+      profile = asRecord(route.profileSnapshot) ?? undefined;
+      if (!profile) throw new ControlPlaneError('VALIDATION_FAILURE', 'validated profile snapshot is missing');
+    } else {
+      const playbook = await this.playbooks.resolvePlaybook(input.playbookId);
+      const pipeline = await this.playbooks.resolvePipeline({ playbookId: playbook.id, pipelineId: input.pipelineId });
+      playbookId = playbook.id;
+      pipelineId = pipeline.pipelineId;
+    }
+    return this.playbooks.updateRunProfile({
+      playbookId,
+      pipelineId,
+      profileId: input.profileId,
+      expectedProfileRevisionHash: input.expectedProfileRevisionHash,
+      displayName: input.displayName,
+      summary: input.summary,
+      profile,
+      status: input.status,
+    });
+  }
+
+  async deprecateProfile(input: DeprecateProfileInput) {
+    const playbook = await this.playbooks.resolvePlaybook(input.playbookId);
+    const pipeline = await this.playbooks.resolvePipeline({ playbookId: playbook.id, pipelineId: input.pipelineId });
+    return this.playbooks.deprecateRunProfile({
+      playbookId: playbook.id,
+      pipelineId: pipeline.pipelineId,
+      profileId: input.profileId,
+      expectedProfileRevisionHash: input.expectedProfileRevisionHash,
+    });
   }
 
   async getPipeline(pipelineId: string) {
@@ -1751,6 +1858,17 @@ export class TaskControlPlaneApiService {
       policyVersion: POLICY_VERSION,
       ...provenanceFields,
     };
+  }
+
+  private async validateRunProfileForPipeline(input: ValidateProfileInput): Promise<RouteDecision> {
+    return this.resolveRouteDecision({
+      title: 'Run profile validation',
+      repo: '',
+      playbookId: input.playbookId,
+      pipelineId: input.pipelineId,
+      profile: input.profile,
+      source: 'explicit',
+    });
   }
 
   private assertStoredRunProfileValid(storedProfile: RunProfileSummary): void {

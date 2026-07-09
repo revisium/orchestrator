@@ -48,6 +48,46 @@ type ListProfilesMcpInput = {
   includeDetails?: boolean;
   includeDeprecated?: boolean;
 };
+type GetProfileMcpInput = {
+  playbookId?: string;
+  pipelineId: string;
+  profileId: string;
+  includeDetails?: boolean;
+};
+type ValidateProfileMcpInput = {
+  playbookId?: string;
+  pipelineId: string;
+  profile: unknown;
+  includeDetails?: boolean;
+};
+type CreateProfileMcpInput = {
+  playbookId?: string;
+  pipelineId: string;
+  profileId: string;
+  displayName: string;
+  summary?: string;
+  profile: unknown;
+  status?: 'active' | 'deprecated';
+  includeDetails?: boolean;
+};
+type UpdateProfileMcpInput = {
+  playbookId?: string;
+  pipelineId: string;
+  profileId: string;
+  expectedProfileRevisionHash: string;
+  displayName?: string;
+  summary?: string;
+  profile?: unknown;
+  status?: 'active' | 'deprecated';
+  includeDetails?: boolean;
+};
+type DeprecateProfileMcpInput = {
+  playbookId?: string;
+  pipelineId: string;
+  profileId: string;
+  expectedProfileRevisionHash: string;
+  includeDetails?: boolean;
+};
 
 function formatCause(error: unknown): string {
   if (error instanceof ControlPlaneError) {
@@ -194,6 +234,7 @@ function compactRunProfile(value: unknown): unknown {
     displayName: asString(profile.displayName),
     summary: compactText(profile.summary),
     profileHash: asString(profile.profileHash),
+    profileRevisionHash: asString(profile.profileRevisionHash),
     status: asString(profile.status),
   });
 }
@@ -649,6 +690,36 @@ export class McpFacadeService {
   async listProfiles(input: ListProfilesMcpInput = {}) {
     const profiles = await this.api.listProfiles(input);
     return input.includeDetails ? profiles : profiles.map(compactRunProfile);
+  }
+
+  async getProfile(input: GetProfileMcpInput) {
+    const { includeDetails, ...apiInput } = input;
+    const profile = await this.api.getProfile(apiInput);
+    return includeDetails ? profile : compactRunProfile(profile);
+  }
+
+  async validateProfile(input: ValidateProfileMcpInput) {
+    const { includeDetails, ...apiInput } = input;
+    const route = await this.api.validateProfile(apiInput);
+    return includeDetails ? route : compactRouteDecision(route);
+  }
+
+  async createProfile(input: CreateProfileMcpInput) {
+    const { includeDetails, ...apiInput } = input;
+    const profile = await this.api.createProfile(apiInput);
+    return includeDetails ? profile : compactRunProfile(profile);
+  }
+
+  async updateProfile(input: UpdateProfileMcpInput) {
+    const { includeDetails, ...apiInput } = input;
+    const profile = await this.api.updateProfile(apiInput);
+    return includeDetails ? profile : compactRunProfile(profile);
+  }
+
+  async deprecateProfile(input: DeprecateProfileMcpInput) {
+    const { includeDetails, ...apiInput } = input;
+    const profile = await this.api.deprecateProfile(apiInput);
+    return includeDetails ? profile : compactRunProfile(profile);
   }
 
   async simulateRoute(input: SimulateRouteMcpInput) {

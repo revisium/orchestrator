@@ -1,12 +1,15 @@
 import { Inject } from '@nestjs/common';
 import { IQueryHandler, QueryHandler } from '@nestjs/cqrs';
 import { TaskControlPlaneApiService } from '../../../../task-control-plane/task-control-plane-api.service.js';
-import { toConnection } from '../../../shared/connection.js';
+import { connectionFetchLimit, toConnection, toConnectionWithTotal } from '../../../shared/connection.js';
+import { GetRunProfileQuery } from '../impl/get-run-profile.query.js';
 import { GetPipelineQuery } from '../impl/get-pipeline.query.js';
 import { GetRoleQuery } from '../impl/get-role.query.js';
+import { ListRunProfilesQuery } from '../impl/list-run-profiles.query.js';
 import { ListPipelinesQuery } from '../impl/list-pipelines.query.js';
 import { ListPlaybooksQuery } from '../impl/list-playbooks.query.js';
 import { ListRolesQuery } from '../impl/list-roles.query.js';
+import { ValidateRunProfileQuery } from '../impl/validate-run-profile.query.js';
 
 type RoleLike = {
   id?: string;
@@ -35,6 +38,20 @@ function mapPipeline<T extends PipelineLike>(pipeline: T) {
       roles: group.roles,
       resolution: group.resolution,
     })),
+  };
+}
+
+function definedProfileListInput(data: ListRunProfilesQuery['data']): {
+  playbookId?: string;
+  pipelineId?: string;
+  includeDeprecated?: boolean;
+  first: number;
+} {
+  return {
+    ...(data.playbookId !== undefined ? { playbookId: data.playbookId } : {}),
+    ...(data.pipelineId !== undefined ? { pipelineId: data.pipelineId } : {}),
+    ...(data.includeDeprecated !== undefined ? { includeDeprecated: data.includeDeprecated } : {}),
+    first: connectionFetchLimit(data),
   };
 }
 
@@ -82,5 +99,33 @@ export class GetPipelineHandler implements IQueryHandler<GetPipelineQuery> {
 
   async execute(query: GetPipelineQuery) {
     return mapPipeline(await this.api.getPipeline(query.data.pipelineId));
+  }
+}
+
+@QueryHandler(ListRunProfilesQuery)
+export class ListRunProfilesHandler implements IQueryHandler<ListRunProfilesQuery> {
+  constructor(@Inject(TaskControlPlaneApiService) private readonly api: TaskControlPlaneApiService) {}
+
+  async execute(query: ListRunProfilesQuery) {
+    const page = await this.api.listProfilesPage(definedProfileListInput(query.data));
+    return toConnectionWithTotal(page.profiles, page.totalCount, query.data);
+  }
+}
+
+@QueryHandler(GetRunProfileQuery)
+export class GetRunProfileHandler implements IQueryHandler<GetRunProfileQuery> {
+  constructor(@Inject(TaskControlPlaneApiService) private readonly api: TaskControlPlaneApiService) {}
+
+  execute(query: GetRunProfileQuery) {
+    return this.api.getProfile(query.data);
+  }
+}
+
+@QueryHandler(ValidateRunProfileQuery)
+export class ValidateRunProfileHandler implements IQueryHandler<ValidateRunProfileQuery> {
+  constructor(@Inject(TaskControlPlaneApiService) private readonly api: TaskControlPlaneApiService) {}
+
+  execute(query: ValidateRunProfileQuery) {
+    return this.api.validateProfile(query.data);
   }
 }

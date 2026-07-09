@@ -177,7 +177,7 @@ test('seed (0009): playbook import schema is declared as versioned meaning', () 
     assert.ok(field in roles, `roles.${field} must be declared`);
   }
   assert.ok('runner_id' in roles, 'roles.runner_id must be declared');
-  for (const field of ['playbook_id', 'pipeline_id', 'profile_id', 'profile_json', 'profile_hash', 'status', 'retired_at']) {
+  for (const field of ['playbook_id', 'pipeline_id', 'profile_id', 'profile_json', 'profile_hash', 'profile_revision_hash', 'status', 'retired_at']) {
     assert.ok(field in runProfiles, `run_profiles.${field} must be declared`);
   }
 });
