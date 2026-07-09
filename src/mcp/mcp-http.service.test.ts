@@ -3,10 +3,32 @@ import assert from 'node:assert/strict';
 import type { AddressInfo } from 'node:net';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { McpHttpService } from './mcp-http.service.js';
 import type { McpFacadeService } from './mcp-facade.service.js';
+import { assertMcpToolSuccess, McpToolError, mcpToolText } from './mcp-tool-result.js';
 
 const tick = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+const profileBody = {
+  schemaVersion: 'run-profile/v1',
+  topology: { stages: { developer: { mode: 'single' } } },
+  bindings: { slots: { developer: { runnerId: 'codex', modelLevel: 'codex-standard' } } },
+};
+
+async function withMcpClient<T>(facade: McpFacadeService, fn: (client: Client) => Promise<T>): Promise<T> {
+  const httpServer = await new McpHttpService(facade).start(0);
+  const port = (httpServer.address() as AddressInfo).port;
+  const client = new Client({ name: 'mcp-http-profile-test', version: '0.0.0' });
+  await client.connect(new StreamableHTTPClientTransport(new URL(`http://127.0.0.1:${port}/mcp`)));
+
+  try {
+    return await fn(client);
+  } finally {
+    await client.close().catch(() => undefined);
+    httpServer.close();
+  }
+}
 
 /**
  * The full production abort chain, end to end over a real socket: a held long-poll tool call
@@ -92,10 +114,130 @@ test('McpHttpService: tool handler application errors are surfaced as MCP tool e
     });
 
     assert.equal(result.isError, true, 'application failures must be marked as MCP tool errors');
-    const content = result.content as Array<{ type: string; text?: string }>;
-    assert.match(content.find((part) => part.type === 'text')?.text ?? '', /PROFILE_SCHEMA_CLOSED/);
+    const toolResult = result as CallToolResult;
+    assert.throws(() => assertMcpToolSuccess(toolResult, 'validate_profile'), McpToolError);
+    assert.match(mcpToolText(toolResult), /PROFILE_SCHEMA_CLOSED/);
   } finally {
     await client.close().catch(() => undefined);
     httpServer.close();
   }
+});
+
+test('McpHttpService: profile management tools work over the real MCP HTTP transport', async () => {
+  const calls: Array<[string, unknown]> = [];
+  const compactProfile = {
+    profileId: 'custom-standard',
+    pipelineId: 'local-change',
+    version: '1',
+    displayName: 'Custom standard',
+    summary: 'Custom profile',
+    profileHash: 'profile-hash',
+    profileRevisionHash: 'revision-hash',
+    status: 'active',
+  };
+  const facade = {
+    async listProfiles(input: unknown) {
+      calls.push(['list', input]);
+      return [compactProfile];
+    },
+    async getProfile(input: unknown) {
+      calls.push(['get', input]);
+      return compactProfile;
+    },
+    async createProfile(input: unknown) {
+      calls.push(['create', input]);
+      return compactProfile;
+    },
+    async updateProfile(input: unknown) {
+      calls.push(['update', input]);
+      return { ...compactProfile, profileRevisionHash: 'revision-hash-2' };
+    },
+    async deprecateProfile(input: unknown) {
+      calls.push(['deprecate', input]);
+      return { ...compactProfile, status: 'deprecated' };
+    },
+  } as unknown as McpFacadeService;
+
+  await withMcpClient(facade, async (client) => {
+    const list = await client.callTool({ name: 'list_profiles', arguments: { pipelineId: 'local-change' } });
+    const get = await client.callTool({ name: 'get_profile', arguments: { pipelineId: 'local-change', profileId: 'custom-standard' } });
+    const create = await client.callTool({
+      name: 'create_profile',
+      arguments: { pipelineId: 'local-change', profileId: 'custom-standard', displayName: 'Custom standard', profile: profileBody },
+    });
+    const update = await client.callTool({
+      name: 'update_profile',
+      arguments: { pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileRevisionHash: 'revision-hash', profile: profileBody },
+    });
+    const deprecate = await client.callTool({
+      name: 'deprecate_profile',
+      arguments: { pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileRevisionHash: 'revision-hash-2' },
+    });
+
+    for (const result of [list, get, create, update, deprecate]) {
+      const toolResult = result as CallToolResult;
+      assertMcpToolSuccess(toolResult);
+      assert.ok(mcpToolText(toolResult).includes('custom-standard'));
+    }
+  });
+
+  assert.deepEqual(calls, [
+    ['list', { pipelineId: 'local-change' }],
+    ['get', { pipelineId: 'local-change', profileId: 'custom-standard' }],
+    ['create', { pipelineId: 'local-change', profileId: 'custom-standard', displayName: 'Custom standard', profile: profileBody }],
+    ['update', { pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileRevisionHash: 'revision-hash', profile: profileBody }],
+    ['deprecate', { pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileRevisionHash: 'revision-hash-2' }],
+  ]);
+});
+
+test('McpHttpService: invalid profile management requests are MCP tool errors and keep the session usable', async () => {
+  const calls: string[] = [];
+  const facade = {
+    async createProfile() {
+      calls.push('create');
+      return { ok: true };
+    },
+    async updateProfile() {
+      calls.push('update');
+      return { ok: true };
+    },
+    async listProfiles(input: unknown) {
+      calls.push('list');
+      return [{ profileId: 'custom-standard', pipelineId: (input as { pipelineId?: string }).pipelineId ?? 'local-change' }];
+    },
+  } as unknown as McpFacadeService;
+
+  await withMcpClient(facade, async (client) => {
+    const invalidCreate = await client.callTool({
+      name: 'create_profile',
+      arguments: {
+        pipelineId: 'local-change',
+        profileId: 'custom-standard',
+        displayName: 'Custom standard',
+        profile: { ...profileBody, pipelineId: 'local-change' },
+      },
+    });
+    assert.equal(invalidCreate.isError, true, 'schema failures must be returned as MCP tool errors');
+    const invalidCreateResult = invalidCreate as CallToolResult;
+    assert.throws(() => assertMcpToolSuccess(invalidCreateResult, 'create_profile'), McpToolError);
+    assert.match(mcpToolText(invalidCreateResult), /pipelineId|unrecognized/i);
+
+    const invalidUpdate = await client.callTool({
+      name: 'update_profile',
+      arguments: {
+        pipelineId: 'local-change',
+        profileId: 'custom-standard',
+        profile: profileBody,
+      },
+    });
+    assert.equal(invalidUpdate.isError, true, 'missing optimistic lock must be returned as a MCP tool error');
+    const invalidUpdateResult = invalidUpdate as CallToolResult;
+    assert.throws(() => assertMcpToolSuccess(invalidUpdateResult, 'update_profile'), McpToolError);
+    assert.match(mcpToolText(invalidUpdateResult), /expectedProfileRevisionHash/i);
+
+    const afterError = await client.callTool({ name: 'list_profiles', arguments: { pipelineId: 'local-change' } });
+    assertMcpToolSuccess(afterError as CallToolResult, 'list_profiles');
+  });
+
+  assert.deepEqual(calls, ['list'], 'invalid schema calls must not reach profile mutation handlers');
 });
