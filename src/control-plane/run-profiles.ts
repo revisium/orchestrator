@@ -19,6 +19,20 @@ type SlotBinding = {
 
 const HASHED_PROFILE_FIELDS = new Set(['pipelineId', 'schemaVersion', 'topology', 'bindings']);
 
+export const PR_LIFECYCLE_NODES = [
+  'confirmMerge',
+  'integrator',
+  'mergeApproveReverify',
+  'mergeReadiness',
+  'mergeRecheck',
+  'overrideConfirmMerge',
+  'overrideMerge',
+  'pollPr',
+  'questionReviewIntegrator',
+  'respondThreads',
+  'reviewIntegrator',
+] as const;
+
 type RunProfileContext = {
   pipelineId?: string;
   profileId?: string;
@@ -182,11 +196,40 @@ function bindingOverride(slot: string, binding: SlotBinding): BindingOverride | 
   return Object.keys(override).length > 1 ? override : null;
 }
 
-export function launchBindingsFromRunProfile(profile: Record<string, unknown>): BindingOverride[] {
+function overrideKey(override: BindingOverride): string {
+  if (override.match.roleId) return `role:${override.match.roleId}`;
+  if (override.match.nodeId) return `node:${override.match.nodeId}`;
+  return `runner:${override.match.runnerId ?? ''}`;
+}
+
+export function launchBindingsFromRunProfile(
+  profile: Record<string, unknown>,
+  options: { lifecycleNodeIds?: Iterable<string> } = {},
+): BindingOverride[] {
   const bindings = asRecord(profile.bindings);
   const slots = asRecord(bindings.slots);
-  return Object.entries(slots)
+  const explicit = Object.entries(slots)
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([slot, raw]) => bindingOverride(slot, asRecord(raw) as SlotBinding))
     .filter((override): override is BindingOverride => override !== null);
+
+  const byKey = new Map(explicit.map((override) => [overrideKey(override), override]));
+  const publishAccount = byKey.get('node:integrator')?.accounts?.github;
+  if (!publishAccount) return explicit;
+
+  const lifecycleNodeIds = options.lifecycleNodeIds
+    ? [...options.lifecycleNodeIds].filter((nodeId): nodeId is typeof PR_LIFECYCLE_NODES[number] =>
+      (PR_LIFECYCLE_NODES as readonly string[]).includes(nodeId))
+    : [...PR_LIFECYCLE_NODES];
+
+  for (const nodeId of lifecycleNodeIds) {
+    const key = `node:${nodeId}`;
+    const explicitOverride = byKey.get(key);
+    byKey.set(key, {
+      ...explicitOverride,
+      match: { nodeId },
+      accounts: { github: explicitOverride?.accounts?.github ?? publishAccount },
+    });
+  }
+  return [...byKey.values()].sort((left, right) => overrideKey(left).localeCompare(overrideKey(right)));
 }

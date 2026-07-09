@@ -307,6 +307,29 @@ test('D14: a gh error during integrate opens recoveryGate with recheck/cancel ou
   }
 });
 
+test('D14b: gh pr ready failure opens recoveryGate with recheck/cancel and actionable lesson', { skip: e2eSkip }, async () => {
+  const target = createTargetRepo();
+  try {
+    const run = await startFeature(target, { gh: 'ready-fails' });
+    const plan = await waitForGate(h.api, run.runId, 'plan');
+    await h.api.resolveGate({ inboxId: plan.inboxId, outcome: 'approved', resolvedBy: 'e2e' });
+
+    const recovery = await waitForGate(h.api, run.runId, 'merge');
+    const pending = await h.api.getPendingDecisions(run.runId);
+    const recoveryItem = pending.find((item) => item.id === recovery.inboxId);
+    const context = recoveryItem?.context as { summary?: { outcomes?: unknown; gatedArtifact?: unknown } } | undefined;
+    assert.deepEqual(context?.summary?.outcomes, ['recheck', 'cancel']);
+    assert.match(JSON.stringify(context?.summary), /failed to mark PR #7 ready for review/);
+    assert.match(JSON.stringify(context?.summary), /permission denied/);
+
+    await h.api.resolveGate({ inboxId: recovery.inboxId, outcome: 'cancel', resolvedBy: 'e2e' });
+    const terminal = await waitState(h.api, run.runId);
+    assert.equal(terminal.state, 'cancelled');
+  } finally {
+    target.cleanup();
+  }
+});
+
 // ── Mocked integrate outcomes (external git/gh boundary faked; workflow real) ─
 // D7/D13/D15 inject the integrator's RESULT — the external boundary is exactly what we mock — and
 // assert the workflow's handling: needsHuman → block + surface the reason; throw → recovery → blocked

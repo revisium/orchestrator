@@ -824,6 +824,19 @@ function freshMergeGateArtifact(
   return undefined;
 }
 
+function latestBlockedScriptArtifact(
+  decision: Extract<Decision, { type: 'awaitGate' }>,
+  lastVerdict: string,
+  lastProducedOutput?: RunOutputRow,
+): RunOutputRow | undefined {
+  if (decision.nodeId !== 'recoveryGate') return undefined;
+  if (lastVerdict !== 'blocked') return undefined;
+  const payload = lastProducedOutput?.payload;
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
+  const record = payload as Record<string, unknown>;
+  return typeof record.lesson === 'string' && typeof record.reason === 'string' ? lastProducedOutput : undefined;
+}
+
 
 
 
@@ -835,7 +848,8 @@ export function buildGateSummary(
   lastProducedOutput?: RunOutputRow,
 ): GateSummary {
   const summary: GateSummary = { nodeId: decision.nodeId, outcomes: decision.outcomes };
-  const artRow = freshMergeGateArtifact(decision, lastVerdict, lastProducedOutput)
+  const artRow = latestBlockedScriptArtifact(decision, lastVerdict, lastProducedOutput)
+    ?? freshMergeGateArtifact(decision, lastVerdict, lastProducedOutput)
     ?? resolveGateRow(decision.gatedArtifact, outputsByNode);
   if (artRow) summary.gatedArtifact = gateArtifactView(artRow, decision.gatedArtifact?.as);
   const verdictRow = resolveGateRow(decision.verdictFrom, outputsByNode);
@@ -893,7 +907,7 @@ function reopenNodeState(state: RunState, nodeId: string): RunState {
 
 export type ScriptResult =
   | { outcome: 'ok'; pointer: unknown; verdict?: string }
-  | { outcome: 'blocked' }
+  | { outcome: 'blocked'; pointer?: unknown }
   | { outcome: 'failed'; reason?: string };
 
 type SystemScriptInvocation = {
@@ -1026,12 +1040,17 @@ export function buildSystemScriptRegistry(deps: ScriptRegistryDeps): Map<string,
         return { outcome: 'failed', reason };
       }
       if ('needsHuman' in (result as object)) {
+        const pointer = {
+          reason: desc.blockedReason,
+          lesson: (result as IntegratorBlocked).lesson,
+          nodeId: decision.nodeId,
+        };
         await appendEvent({
           runId, taskId: ctx.taskId, stepId: '', stepKey: 'pipeline',
           type: 'pipeline_blocked',
-          payload: { reason: desc.blockedReason, lesson: (result as IntegratorBlocked).lesson, nodeId: decision.nodeId },
+          payload: pointer,
         });
-        return { outcome: 'blocked' };
+        return { outcome: 'blocked', pointer };
       }
       const { eventType, payload, pointer, verdict } = desc.mapSuccess(result as TSuccess);
       await appendEvent({ runId, taskId: ctx.taskId, stepId: '', stepKey, type: eventType, payload });
@@ -1138,12 +1157,13 @@ export function buildSystemScriptRegistry(deps: ScriptRegistryDeps): Map<string,
       return { outcome: 'failed', reason };
     }
     if ('needsHuman' in result) {
+      const pointer = { reason: 'override-merge', lesson: result.lesson, nodeId: decision.nodeId };
       await appendEvent({
         runId, taskId: ctx.taskId, stepId: '', stepKey: 'pipeline',
         type: 'pipeline_blocked',
-        payload: { reason: 'override-merge', lesson: result.lesson, nodeId: decision.nodeId },
+        payload: pointer,
       });
-      return { outcome: 'blocked' };
+      return { outcome: 'blocked', pointer };
     }
     if (result.override.replied > 0 || result.override.resolved > 0) {
       await appendEvent({
@@ -1649,7 +1669,15 @@ export function makeDataDrivenTask(
         }
         const scriptResult = await invokeScript(runId, decision, { taskId, title, base, issueRef: ctx.issueRef, issueAction: ctx.issueAction }, bindingByRef, ctx.launchBindings, stepKeyFor(node.id, ordinal), resolved.inputs);
         if (scriptResult.outcome === 'blocked') {
-          return { lastResult: { outcome: 'failed', errorCode: REVO_SCRIPT_BLOCKED }, lastVerdict: 'blocked', stepDelta: 1 };
+          const producedOutput = scriptResult.pointer === undefined
+            ? undefined
+            : await recordOutput(runId, node, ordinal, stepKeyFor(node.id, ordinal), scriptResult.pointer, ctx.outputsByNode);
+          return {
+            lastResult: { outcome: 'failed', errorCode: REVO_SCRIPT_BLOCKED },
+            lastVerdict: 'blocked',
+            ...(producedOutput ? { producedOutput } : {}),
+            stepDelta: 1,
+          };
         }
         if (scriptResult.outcome === 'failed') {
           const reason = scriptResult.reason ? `${REVO_SCRIPT_FAILED}: ${scriptResult.reason}` : REVO_SCRIPT_FAILED;

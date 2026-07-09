@@ -1830,7 +1830,11 @@ export class TaskControlPlaneApiService {
     }
 
     const executionPolicy = { ...asRecord(pipeline.executionPolicy), template_json: materializedTemplate };
-    const launchBindings = launchBindingsFromRunProfile(profileSnapshot);
+    const launchBindings = launchBindingsFromRunProfile(profileSnapshot, {
+      lifecycleNodeIds: Object.entries(materializedTemplate.nodes)
+        .filter(([, node]) => node.kind === 'script')
+        .map(([nodeId]) => nodeId),
+    });
     const allRoles = (await this.roles.listRoles()).filter((role) => role.playbookId === playbook.id);
     await this.assertLaunchBindingsClosed(launchBindings, allRoles, materializedTemplate);
     const roleBindings = await this.resolveRouteRoles(playbook.id, pipeline, launchBindings, allRoles);

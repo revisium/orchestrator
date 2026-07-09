@@ -1835,6 +1835,28 @@ test('confirmMerge: OPEN + CLEAN draft → marks ready, squash-merges, confirms 
   );
 });
 
+test('confirmMerge: gh pr ready failure blocks with sanitized recovery lesson', async () => {
+  const rawToken = `gho_${'A'.repeat(36)}`;
+  const calls: string[][] = [];
+  const gh: ExecGhFn = (a) => {
+    calls.push(a);
+    if (a[1] === 'view') return prView('OPEN', 'CLEAN', true);
+    if (a[1] === 'ready') throw new Error(`gh: forbidden using token ${rawToken}`);
+    throw new Error(`unexpected gh call: ${a.join(' ')}`);
+  };
+
+  const r = await confirmMerge({ ...MERGE_INPUT, githubAccount: 'profile-bot' }, confirmDeps(gh));
+
+  assert.ok('needsHuman' in r, 'ready failure must route through human recovery');
+  if ('needsHuman' in r) {
+    assert.match(r.lesson, /failed to mark PR #7 ready for review/);
+    assert.match(r.lesson, /githubAccount=profile-bot/);
+    assert.match(r.lesson, /\[REDACTED\]/);
+    assert.ok(!r.lesson.includes(rawToken), 'raw GitHub token must be redacted');
+  }
+  assert.ok(!calls.some((a) => a[1] === 'merge'), 'must not merge after ready failure');
+});
+
 test('confirmMerge: issueAction close blocks when GitHub does not report closing linkage', async () => {
   const issueRef = {
     repo: 'e2e/repo',
@@ -1975,6 +1997,7 @@ function readiness(opts: {
   list?: Array<{ name: string; result: string }>;
   threads?: PollPrReadiness['reviewThreads']['items'];
   pending?: string[];
+  draft?: boolean;
   headSha?: string;
   evidence?: string[];
   readinessVerdict?: PollPrReadiness['readinessVerdict'];
@@ -1991,6 +2014,7 @@ function readiness(opts: {
     evidence: opts.evidence ?? [`PR head ${opts.headSha ?? 'sha5'}`],
     mergeStateStatus: opts.mergeStateStatus ?? 'CLEAN',
     mergeable: opts.mergeable ?? 'MERGEABLE',
+    ...(opts.draft !== undefined ? { draft: opts.draft } : {}),
   };
 }
 
@@ -1999,7 +2023,7 @@ function pollDeps(collect: PollPrDeps['collect'], extra: Partial<PollPrDeps> = {
   const execGit: ExecFn = (args) => (args[0] === 'remote' && args[1] === 'get-url' ? 'git@github.com:e2e/repo.git\n' : '');
   return {
     execGit,
-    execGh: neverGh,
+    execGh: () => '',
     resolveTaskCwd: makeResolveTaskCwd(),
     resolveRunCwd: makeResolveRunCwd(),
     collect,
@@ -2397,6 +2421,32 @@ test('pollPr: externally closed readiness bypasses grace polling and returns clo
   assert.deepEqual(ghCalls, [], 'terminal closed PR must not call gh pr ready');
 });
 
+test('pollPr: externally closed draft readiness bypasses gh pr ready and returns closed reason', async () => {
+  const ghCalls: string[][] = [];
+  const collect = async (): Promise<PollPrReadiness> =>
+    readiness({
+      draft: true,
+      readinessVerdict: 'closed',
+      nextAction: 'human_decision',
+      evidence: ['pr_closed_externally: PR #5 was closed without merging - manual review needed'],
+    });
+
+  const r = await pollPr(POLL_INPUT, pollDeps(collect, {
+    execGh: (args) => {
+      ghCalls.push(args);
+      throw new Error('cannot mark pull request ready for review: it was closed');
+    },
+    reviewGracePolls: 4,
+  }));
+
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) {
+    assert.equal(r.verdict, 'closed');
+    assert.ok(r.evidence.some((item) => item.includes('pr_closed_externally')));
+  }
+  assert.deepEqual(ghCalls, [], 'terminal closed draft PR must not call gh pr ready');
+});
+
 test('pollPr: externally merged during review grace returns merged, not clean', async () => {
   let collects = 0;
   const collect = async (): Promise<PollPrReadiness> => {
@@ -2610,6 +2660,78 @@ test('pollPr: CI green flips the draft PR to ready-for-review (slice 142)', asyn
     ghCalls.some((a) => a[0] === 'pr' && a[1] === 'ready'),
     'CI green readies the draft PR so reviewers engage',
   );
+});
+
+test('pollPr: draft waiting snapshot is readied before it can time out into recovery', async () => {
+  const ghCalls: string[][] = [];
+  let reads = 0;
+  const collect = async (): Promise<PollPrReadiness> => {
+    reads++;
+    return reads === 1
+      ? readiness({
+          draft: true,
+          pending: ['draft'],
+          evidence: ['PR #5 is still draft.'],
+          readinessVerdict: 'waiting',
+          nextAction: 'watcher_wait',
+        })
+      : readiness({ draft: false, evidence: ['PR #5 is ready for review.'] });
+  };
+  const deps = pollDeps(collect, {
+    maxPolls: 1,
+    reviewGracePolls: 0,
+    execGh: (args) => {
+      ghCalls.push(args);
+      return '';
+    },
+  });
+
+  const r = await pollPr(POLL_INPUT, deps);
+
+  assert.equal(reads, 2, 'pollPr must re-read readiness after marking a draft PR ready');
+  assert.ok(ghCalls.some((a) => a[0] === 'pr' && a[1] === 'ready'), 'draft PR is marked ready before timeout');
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) assert.equal(r.verdict, 'clean');
+});
+
+test('pollPr: gh pr ready failure blocks with sanitized recovery lesson', async () => {
+  const rawToken = `gho_${'B'.repeat(36)}`;
+  const collect = async (): Promise<PollPrReadiness> => readiness({});
+  const deps = pollDeps(collect, {
+    reviewGracePolls: 0,
+    execGh: (args) => {
+      if (args[0] === 'pr' && args[1] === 'ready') {
+        throw new Error(`gh: cannot mark pull request ready for review: permission denied using token ${rawToken}`);
+      }
+      return '';
+    },
+  });
+
+  const r = await pollPr({ ...POLL_INPUT, githubAccount: 'profile-bot' }, deps);
+
+  assert.ok('needsHuman' in r, 'ready failure must route through human recovery');
+  if ('needsHuman' in r) {
+    assert.match(r.lesson, /failed to mark PR #5 ready for review/);
+    assert.match(r.lesson, /githubAccount=profile-bot/);
+    assert.match(r.lesson, /\[REDACTED\]/);
+    assert.ok(!r.lesson.includes(rawToken), 'raw GitHub token must be redacted');
+  }
+});
+
+test('pollPr: gh pr ready already-ready response is idempotent success', async () => {
+  const collect = async (): Promise<PollPrReadiness> => readiness({});
+  const deps = pollDeps(collect, {
+    reviewGracePolls: 0,
+    execGh: (args) => {
+      if (args[0] === 'pr' && args[1] === 'ready') throw new Error('GraphQL: Pull request is not a draft');
+      return '';
+    },
+  });
+
+  const r = await pollPr(POLL_INPUT, deps);
+
+  assert.ok(!('needsHuman' in r));
+  if (!('needsHuman' in r)) assert.equal(r.verdict, 'clean');
 });
 
 test('pollPr: CI red does NOT ready the PR (no review of broken code) → ci_changes', async () => {

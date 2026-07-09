@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { materializeTemplate } from '../pipeline-core/materialize.js';
 import { templateFromExecutionPolicy } from '../pipeline/data-driven-template.js';
 import type { BindingOverride } from '../pipeline/route-contract.js';
-import { launchBindingsFromRunProfile, runProfileHash, topologyProfileFromRunProfile } from './run-profiles.js';
+import { PR_LIFECYCLE_NODES, launchBindingsFromRunProfile, runProfileHash, topologyProfileFromRunProfile } from './run-profiles.js';
 
 type PipelineCatalogEntry = {
   id: string;
@@ -258,6 +258,81 @@ test('run profiles: GitHub account bindings are launch config and hash input', (
   };
 
   assert.notEqual(runProfileHash(left), runProfileHash(right));
-  const [binding] = launchBindingsFromRunProfile(left);
-  assert.deepEqual(binding, { match: { nodeId: 'integrator' }, accounts: { github: 'profile-bot' } });
+  const bindings = launchBindingsFromRunProfile(left).filter((binding) => binding.accounts?.github);
+  assert.deepEqual(
+    bindings.map((binding) => overrideKey(binding)),
+    [...PR_LIFECYCLE_NODES].sort((left, right) => left.localeCompare(right)).map((nodeId) => `node:${nodeId}`),
+  );
+  assert.ok(bindings.every((binding) => binding.accounts?.github === 'profile-bot'));
+});
+
+test('run profiles: integrator GitHub account fans out to PR lifecycle nodes with explicit node override winning', () => {
+  const profile = {
+    schemaVersion: 'run-profile/v1',
+    topology: { stages: {} },
+    bindings: {
+      slots: {
+        integrator: { accounts: { github: 'profile-bot' } },
+        pollPr: { accounts: { github: 'poller-bot' } },
+        developer: { runnerId: 'codex', modelLevel: 'codex-standard' },
+      },
+    },
+  };
+
+  const byNode = new Map(
+    launchBindingsFromRunProfile(profile)
+      .filter((binding) => 'nodeId' in binding.match)
+      .map((binding) => [(binding.match as { nodeId: string }).nodeId, binding]),
+  );
+
+  for (const nodeId of PR_LIFECYCLE_NODES) {
+    assert.equal(
+      byNode.get(nodeId)?.accounts?.github,
+      nodeId === 'pollPr' ? 'poller-bot' : 'profile-bot',
+      `${nodeId} receives the publish GitHub account`,
+    );
+  }
+  assert.equal(byNode.has('developer'), false, 'agent role binding must not become a GitHub script account binding');
+});
+
+test('run profiles: GitHub account fan-out only uses lifecycle ids provided by materialized script nodes', () => {
+  const profile = {
+    schemaVersion: 'run-profile/v1',
+    topology: { stages: {} },
+    bindings: {
+      slots: {
+        integrator: { accounts: { github: 'profile-bot' } },
+      },
+    },
+  };
+
+  const bindings = launchBindingsFromRunProfile(profile, { lifecycleNodeIds: ['integrator', 'pollPr'] })
+    .filter((binding) => binding.accounts?.github);
+
+  assert.deepEqual(
+    bindings.map((binding) => overrideKey(binding)),
+    ['node:integrator', 'node:pollPr'],
+  );
+});
+
+test('run profiles: duplicate integrator slot spellings fan out from the deduplicated node binding', () => {
+  const profile = {
+    schemaVersion: 'run-profile/v1',
+    topology: { stages: {} },
+    bindings: {
+      slots: {
+        integrator: { accounts: { github: 'legacy-spelling-bot' } },
+        'node:integrator': { accounts: { github: 'node-spelling-bot' } },
+      },
+    },
+  };
+
+  const byNode = new Map(
+    launchBindingsFromRunProfile(profile, { lifecycleNodeIds: ['integrator', 'pollPr'] })
+      .filter((binding) => 'nodeId' in binding.match)
+      .map((binding) => [(binding.match as { nodeId: string }).nodeId, binding]),
+  );
+
+  assert.equal(byNode.get('integrator')?.accounts?.github, 'node-spelling-bot');
+  assert.equal(byNode.get('pollPr')?.accounts?.github, 'node-spelling-bot');
 });

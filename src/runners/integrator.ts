@@ -33,7 +33,7 @@ import {
   type IssueAction,
   type IssueRef,
 } from '../run/issue-ref.js';
-import { resolvePinnedGh } from './gh-identity.js';
+import { redactTokens, resolvePinnedGh } from './gh-identity.js';
 import type { ExecFn, IntegratorBlocked } from './integrator-types.js';
 import { gitAbsPath, branchExists, countAhead } from './integrator-git.js';
 import { resolveOwnerRepo } from './integrator-remote.js';
@@ -646,6 +646,33 @@ function mergeabilityForConfirmMerge(pr: PrMergeView, overrideAccepted: boolean)
   return mergeSignal(pr.mergeStateStatus, mergeable);
 }
 
+function readyFailureIsBenign(message: string): boolean {
+  return /not a draft|already ready(?: for review)?/i.test(message);
+}
+
+function markPrReadyForReview(input: {
+  gh: ExecGhFn;
+  branch: string;
+  ownerRepo: string;
+  prNumber: number | null;
+  githubAccount?: string;
+}): IntegratorBlocked | undefined {
+  try {
+    input.gh(['pr', 'ready', input.branch, '--repo', input.ownerRepo]);
+    return undefined;
+  } catch (err) {
+    const raw = err instanceof Error ? err.message : String(err);
+    if (readyFailureIsBenign(raw)) return undefined;
+    const account = input.githubAccount ?? 'resolved-host-account';
+    return {
+      needsHuman: true,
+      lesson:
+        `failed to mark PR #${input.prNumber ?? 'unknown'} ready for review ` +
+        `(githubAccount=${account}, repo=${input.ownerRepo}, branch=${input.branch}): ${redactTokens(raw || 'gh pr ready failed')}`,
+    };
+  }
+}
+
 export async function confirmMerge(
   input: IntegratorInput,
   deps: IntegratorDeps,
@@ -699,7 +726,14 @@ export async function confirmMerge(
   }
 
   if (pr.isDraft) {
-    gh(['pr', 'ready', branch, '--repo', ownerRepo]);
+    const readyFailure = markPrReadyForReview({
+      gh,
+      branch,
+      ownerRepo,
+      prNumber: pr.number,
+      ...(input.githubAccount ? { githubAccount: input.githubAccount } : {}),
+    });
+    if (readyFailure) return readyFailure;
   }
 
   try {
@@ -1339,8 +1373,26 @@ export async function pollPr(
 
   let readiness: PollPrReadiness | undefined;
   let lastReadiness: PollPrReadiness | undefined;
+  let markedReadyForReview = false;
   for (let i = 0; i < maxPolls; i++) {
     readiness = await collect(ownerRepo, branch, input.base, gh, input.issueRef, input.issueAction);
+    if (
+      readiness.draft === true
+      && readiness.readinessVerdict !== 'merged'
+      && readiness.readinessVerdict !== 'closed'
+      && ciFailuresFrom(readiness).length === 0
+    ) {
+      const readyFailure = markPrReadyForReview({
+        gh,
+        branch,
+        ownerRepo,
+        prNumber: readiness.pr.number,
+        ...(input.githubAccount ? { githubAccount: input.githubAccount } : {}),
+      });
+      if (readyFailure) return readyFailure;
+      markedReadyForReview = true;
+      readiness = await collect(ownerRepo, branch, input.base, gh, input.issueRef, input.issueAction);
+    }
     lastReadiness = readiness;
     if (readiness.checks.pending.length === 0) break;
     readiness = undefined;
@@ -1421,9 +1473,15 @@ export async function pollPr(
   const initialCiFailures = ciFailuresFrom(settled);
 
   if (initialCiFailures.length === 0) {
-    try {
-      gh(['pr', 'ready', branch, '--repo', ownerRepo]);
-    } catch {
+    if (!markedReadyForReview) {
+      const readyFailure = markPrReadyForReview({
+        gh,
+        branch,
+        ownerRepo,
+        prNumber: settled.pr.number,
+        ...(input.githubAccount ? { githubAccount: input.githubAccount } : {}),
+      });
+      if (readyFailure) return readyFailure;
     }
     const reviewGracePolls = deps.reviewGracePolls ?? envInt('REVO_POLL_PR_REVIEW_GRACE_POLLS', 4);
     for (let i = 0; i < reviewGracePolls && settled.reviewThreads.items.length === 0; i++) {
