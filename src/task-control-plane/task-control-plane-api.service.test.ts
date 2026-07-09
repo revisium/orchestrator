@@ -592,6 +592,83 @@ test('TaskControlPlaneApiService.getRunWorkflow returns UI projection through se
   assert.equal(workflow.activity[0]?.summary, 'done');
 });
 
+test('TaskControlPlaneApiService.getRunWorkflow marks signaled question step payloads as succeeded', async () => {
+  const questionTemplate = {
+    specVersion: '1.0',
+    pipelineId: 'question-projection',
+    entry: 'analyst',
+    verdicts: { domain: ['answered'] },
+    nodes: {
+      analyst: { id: 'analyst', kind: 'agent', roleRef: 'role:developer', next: 'doneEnd', onFailure: 'abort' },
+      doneEnd: { id: 'doneEnd', kind: 'terminal', status: 'succeeded' },
+    },
+  };
+  const api = makeApi({
+    runService: {
+      async getRun() {
+        return {
+          rowId: 'run-1',
+          data: {
+            id: 'run-1',
+            title: 'Run',
+            route_decision: {
+              ...LOCAL_CHANGE_ROUTE,
+              pipelineId: 'question-projection',
+              pipelineRowId: 'pb-question-projection',
+              requestedPipelineId: 'question-projection',
+              basePipelineId: 'question-projection',
+              executionPolicy: { template_json: questionTemplate },
+              materializedTemplate: questionTemplate,
+              materializedTemplateHash: 'question-template-hash',
+            },
+          },
+        };
+      },
+      async listRunEvents() {
+        return [
+          {
+            eventId: 'event-question-pending',
+            type: 'question_signal_pending',
+            actor: 'mcp',
+            createdAt: '2026-06-13T00:00:59.000Z',
+            taskId: 'task-1',
+            stepId: '',
+            payload: {
+              inboxId: 'inbox-question',
+              topic: 'question',
+              signalTopic: 'question:agent-analyst',
+              stepKey: 'analyst',
+            },
+          },
+          {
+            eventId: 'event-question-signaled',
+            type: 'question_signaled',
+            actor: 'mcp',
+            createdAt: '2026-06-13T00:01:00.000Z',
+            taskId: 'task-1',
+            stepId: '',
+            payload: {
+              inboxId: 'inbox-question',
+              topic: 'question',
+              signalTopic: 'question:agent-analyst',
+              stepKey: 'analyst',
+            },
+          },
+        ];
+      },
+    },
+    inboxService: {
+      async listInbox() {
+        return [];
+      },
+    },
+  });
+
+  const workflow = await api.getRunWorkflow('run-1');
+
+  assert.equal(workflow.nodes.find((node) => node.id === 'analyst')?.status, 'succeeded');
+});
+
 test('TaskControlPlaneApiService.approveGate records retryable signal state around the DBOS signal', async () => {
   const calls: Array<
     | { kind: 'event'; type: string; stepKey: string; payload: unknown }
@@ -1363,18 +1440,22 @@ test('TaskControlPlaneApiService.answerQuestion resolves non-gate questions with
   assert.equal(signaled, false);
 });
 
-test('TaskControlPlaneApiService.answerQuestion signals workflow-owned agent questions', async () => {
-  const signals: Array<{ workflowId: string; topic: string; payload: unknown; key?: string }> = [];
+test('TaskControlPlaneApiService.answerQuestion records retryable signal state around workflow-owned agent questions', async () => {
+  const calls: Array<
+    | { kind: 'event'; type: string; runId: string; taskId: string; stepKey: string; idempotencyKey?: string; payload: unknown }
+    | { kind: 'signal'; workflowId: string; topic: string; payload: unknown; key?: string }
+  > = [];
   const answer = { provider: 'oauth' };
   const api = makeApi({
     inboxService: {
       async getInbox() {
         return makeInboxItem({
           kind: 'question',
+          taskId: '',
           context: {
             topic: 'question',
             signalTopic: 'question:agent-analyst',
-            summary: { kind: 'agent_question', nodeId: 'analyst' },
+            summary: { kind: 'agent_question', nodeId: 'analyst', step: 'analyst', taskId: 'task-1' },
           },
           runId: 'run-1',
         });
@@ -1384,9 +1465,22 @@ test('TaskControlPlaneApiService.answerQuestion signals workflow-owned agent que
         return { status: 'pending' as const, answer: value };
       },
     },
+    runService: {
+      async appendEvent(input) {
+        calls.push({
+          kind: 'event',
+          type: input.type,
+          runId: input.runId,
+          taskId: input.taskId,
+          stepKey: input.stepKey,
+          idempotencyKey: input.idempotencyKey,
+          payload: input.payload,
+        });
+      },
+    },
     dbosService: {
       async signal(workflowId, topic, payload, key) {
-        signals.push({ workflowId, topic, payload, key });
+        calls.push({ kind: 'signal', workflowId, topic, payload, key });
       },
     },
   });
@@ -1395,6 +1489,127 @@ test('TaskControlPlaneApiService.answerQuestion signals workflow-owned agent que
 
   assert.equal(result.signaled, true);
   assert.equal(result.topic, 'question');
+  assert.deepEqual(calls, [
+    {
+      kind: 'event',
+      type: 'question_signal_pending',
+      runId: 'run-1',
+      taskId: 'task-1',
+      stepKey: 'analyst',
+      idempotencyKey: 'inbox-1',
+      payload: {
+        inboxId: 'inbox-1',
+        topic: 'question',
+        signalTopic: 'question:agent-analyst',
+        stepKey: 'analyst',
+      },
+    },
+    {
+      kind: 'signal',
+      workflowId: 'run-1',
+      topic: 'question:agent-analyst',
+      payload: { answer, resolvedBy: 'human', inboxId: 'inbox-1' },
+      key: 'inbox-1',
+    },
+    {
+      kind: 'event',
+      type: 'question_signaled',
+      runId: 'run-1',
+      taskId: 'task-1',
+      stepKey: 'analyst',
+      idempotencyKey: 'inbox-1',
+      payload: {
+        inboxId: 'inbox-1',
+        topic: 'question',
+        signalTopic: 'question:agent-analyst',
+        stepKey: 'analyst',
+      },
+    },
+  ]);
+});
+
+test('TaskControlPlaneApiService.answerQuestion leaves pending signal state when workflow question signaling fails', async () => {
+  const events: string[] = [];
+  const api = makeApi({
+    inboxService: {
+      async getInbox() {
+        return makeInboxItem({
+          kind: 'question',
+          context: {
+            topic: 'question',
+            signalTopic: 'question:agent-analyst',
+            summary: { kind: 'agent_question', nodeId: 'analyst', step: 'analyst', taskId: 'task-1' },
+          },
+          runId: 'run-1',
+        });
+      },
+    },
+    runService: {
+      async appendEvent(input) {
+        events.push(input.type);
+      },
+    },
+    dbosService: {
+      async signal() {
+        throw new Error('question signal failed');
+      },
+    },
+  });
+
+  await assert.rejects(() => api.answerQuestion({ inboxId: 'inbox-1', answer: 'answer' }), /question signal failed/);
+  assert.deepEqual(events, ['question_signal_pending']);
+});
+
+test('TaskControlPlaneApiService.answerQuestion retries failed workflow question signal with stored resolver', async () => {
+  const answer = { provider: 'oauth' };
+  const signals: Array<{ workflowId: string; topic: string; payload: unknown; key?: string }> = [];
+  let signalAttempts = 0;
+  let inbox = makeInboxItem({
+    kind: 'question',
+    context: {
+      topic: 'question',
+      signalTopic: 'question:agent-analyst',
+      summary: { kind: 'agent_question', nodeId: 'analyst', step: 'analyst', taskId: 'task-1' },
+    },
+    runId: 'run-1',
+  });
+  const api = makeApi({
+    inboxService: {
+      async getInbox() {
+        return inbox;
+      },
+      async resolveInbox(_id, value, resolvedBy) {
+        if (inbox.status === 'pending') {
+          inbox = {
+            ...inbox,
+            status: 'resolved',
+            answer: value,
+            resolvedBy,
+            resolvedAt: '2026-06-13T00:01:00.000Z',
+          };
+          return { status: 'pending' as const, answer: value };
+        }
+        return { status: 'resolved' as const, answer: inbox.answer };
+      },
+    },
+    dbosService: {
+      async signal(workflowId, topic, payload, key) {
+        signalAttempts += 1;
+        if (signalAttempts === 1) {
+          throw new Error('question signal failed');
+        }
+        signals.push({ workflowId, topic, payload, key });
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => api.answerQuestion({ inboxId: 'inbox-1', answer, resolvedBy: 'human' }),
+    /question signal failed/,
+  );
+  const result = await api.answerQuestion({ inboxId: 'inbox-1', answer: { provider: 'retry-default' } });
+
+  assert.equal(result.previousStatus, 'resolved');
   assert.deepEqual(signals, [
     {
       workflowId: 'run-1',
