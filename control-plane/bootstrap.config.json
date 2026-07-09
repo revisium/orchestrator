@@ -346,6 +346,10 @@
             "type": "string",
             "default": ""
           },
+          "profile_revision_hash": {
+            "type": "string",
+            "default": ""
+          },
           "status": {
             "type": "string",
             "default": "active",

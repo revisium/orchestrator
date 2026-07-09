@@ -13,6 +13,13 @@ export type TransportRow = {
 
 export type TransportList = {
   edges?: Array<{ cursor?: string; node?: TransportRow }>;
+  totalCount?: number;
+  pageInfo?: {
+    startCursor?: string;
+    endCursor?: string;
+    hasNextPage?: boolean;
+    hasPreviousPage?: boolean;
+  };
 };
 
 export type ControlPlaneTransport = {

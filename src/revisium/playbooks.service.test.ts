@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import type { ControlPlaneTransport, TransportList, TransportRow } from '../control-plane/transport.js';
 import type { ListRowsOptions } from '../control-plane/data-access.js';
 import { ControlPlaneError } from '../control-plane/errors.js';
+import { runProfileHash, runProfileRevisionHash } from '../control-plane/run-profiles.js';
+import { scopedRunProfileRowId } from '../playbook/import-mapper.js';
 import { PlaybookInstaller, type PlaybookInstallResult } from '../playbook/playbook-installer.js';
 import { PlaybooksService } from './playbooks.service.js';
 
@@ -50,10 +52,29 @@ function fakeHeadTransport(
     async listRows(table, options): Promise<TransportList> {
       listCalls.push({ table, options });
       let selected = sourceFor(table).filter((node) => matchesWhere(node, options?.where));
+      for (const order of [...(options?.orderBy ?? [])].reverse()) {
+        if (order.field === 'id') {
+          selected = [...selected].sort((left, right) =>
+            order.direction === 'asc'
+              ? left.id.localeCompare(right.id)
+              : right.id.localeCompare(left.id),
+          );
+        }
+      }
+      const totalCount = selected.length;
       const afterIndex = options?.after ? selected.findIndex((node) => node.id === options.after) : -1;
       const start = afterIndex >= 0 ? afterIndex + 1 : 0;
       selected = selected.slice(start, start + (options?.first ?? selected.length));
-      return { edges: selected.map((node) => ({ cursor: node.id, node })) };
+      return {
+        edges: selected.map((node) => ({ cursor: node.id, node })),
+        totalCount,
+        pageInfo: {
+          startCursor: selected[0]?.id,
+          endCursor: selected.at(-1)?.id,
+          hasPreviousPage: start > 0,
+          hasNextPage: start + selected.length < totalCount,
+        },
+      };
     },
     async getRow(table, rowId) {
       const source = sourceFor(table);
@@ -183,7 +204,7 @@ test('PlaybooksService.listRunProfiles filters profiles by playbook and pipeline
       schema_version: 2,
     }),
   ], [
-    makeRow('pb-codex-standard', {
+    makeRow('pb-feature-development-codex-standard', {
       playbook_id: 'pb',
       pipeline_id: 'feature-development',
       profile_id: 'codex-standard',
@@ -236,15 +257,16 @@ test('PlaybooksService.listRunProfiles filters profiles by playbook and pipeline
         AND: [
           { data: { path: 'playbook_id', equals: 'pb' } },
           { data: { path: 'pipeline_id', equals: 'feature-development' } },
-          { data: { path: 'status', equals: 'active' } },
+          { data: { path: 'status', in: ['active'] } },
         ],
       },
+      orderBy: [{ field: 'id', direction: 'asc' }],
     },
   }]);
 });
 
-test('PlaybooksService.resolveRunProfile rejects scoped row ids as profileId', async () => {
-  const svc = new PlaybooksService(fakeHeadTransport([], [
+test('PlaybooksService.listRunProfilesPage returns bounded profiles with storage totalCount', async () => {
+  const head = fakeHeadTransport([], [
     makeRow('pb', {
       name: 'PB',
       package_name: '@x/pb',
@@ -253,7 +275,148 @@ test('PlaybooksService.resolveRunProfile rejects scoped row ids as profileId', a
       schema_version: 2,
     }),
   ], [
-    makeRow('pb-codex-standard', {
+    makeRow('pb-19-feature-development-a', {
+      playbook_id: 'pb',
+      pipeline_id: 'feature-development',
+      profile_id: 'a',
+      schema_version: 'run-profile/v1',
+      version: '1',
+      display_name: 'A',
+      summary: '',
+      profile_json: JSON.stringify({ schemaVersion: 'run-profile/v1', topology: { stages: {} }, bindings: { slots: {} } }),
+      profile_hash: 'hash-a',
+      profile_revision_hash: 'revision-a',
+      status: 'active',
+    }),
+    makeRow('pb-19-feature-development-b', {
+      playbook_id: 'pb',
+      pipeline_id: 'feature-development',
+      profile_id: 'b',
+      schema_version: 'run-profile/v1',
+      version: '1',
+      display_name: 'B',
+      summary: '',
+      profile_json: JSON.stringify({ schemaVersion: 'run-profile/v1', topology: { stages: {} }, bindings: { slots: {} } }),
+      profile_hash: 'hash-b',
+      profile_revision_hash: 'revision-b',
+      status: 'active',
+    }),
+  ]);
+  const svc = new PlaybooksService(head);
+
+  const page = await svc.listRunProfilesPage({
+    playbookId: 'pb',
+    pipelineId: 'feature-development',
+    first: 1,
+  });
+
+  assert.deepEqual(page.profiles.map((profile) => profile.profileId), ['a']);
+  assert.equal(page.totalCount, 2);
+  assert.equal(head.listCalls.at(-1)?.options?.first, 1);
+});
+
+test('PlaybooksService.listRunProfilesPage does not client-sort after storage pagination', async () => {
+  const head = fakeHeadTransport([], [
+    makeRow('pb', {
+      name: 'PB',
+      package_name: '@x/pb',
+      version: '1.0.0',
+      source: 'local:/pb',
+      schema_version: 2,
+    }),
+  ], [
+    makeRow('row-a', {
+      playbook_id: 'pb',
+      pipeline_id: 'feature-development',
+      profile_id: 'z-profile',
+      schema_version: 'run-profile/v1',
+      version: '1',
+      display_name: 'Z',
+      summary: '',
+      profile_json: JSON.stringify({ schemaVersion: 'run-profile/v1', topology: { stages: {} }, bindings: { slots: {} } }),
+      profile_hash: 'hash-z',
+      profile_revision_hash: 'revision-z',
+      status: 'active',
+    }),
+    makeRow('row-b', {
+      playbook_id: 'pb',
+      pipeline_id: 'feature-development',
+      profile_id: 'a-profile',
+      schema_version: 'run-profile/v1',
+      version: '1',
+      display_name: 'A',
+      summary: '',
+      profile_json: JSON.stringify({ schemaVersion: 'run-profile/v1', topology: { stages: {} }, bindings: { slots: {} } }),
+      profile_hash: 'hash-a',
+      profile_revision_hash: 'revision-a',
+      status: 'active',
+    }),
+  ]);
+  const svc = new PlaybooksService(head);
+
+  const page = await svc.listRunProfilesPage({
+    playbookId: 'pb',
+    pipelineId: 'feature-development',
+    first: 1,
+  });
+
+  assert.deepEqual(page.profiles.map((profile) => profile.profileId), ['z-profile']);
+  assert.equal(page.totalCount, 2);
+});
+
+test('PlaybooksService.listRunProfilesPage rejects transport pages without totalCount', async () => {
+  const head = fakeHeadTransport([], [
+    makeRow('pb', {
+      name: 'PB',
+      package_name: '@x/pb',
+      version: '1.0.0',
+      source: 'local:/pb',
+      schema_version: 2,
+    }),
+  ], [
+    makeRow('pb-19-feature-development-a', {
+      playbook_id: 'pb',
+      pipeline_id: 'feature-development',
+      profile_id: 'a',
+      schema_version: 'run-profile/v1',
+      version: '1',
+      display_name: 'A',
+      summary: '',
+      profile_json: JSON.stringify({ schemaVersion: 'run-profile/v1', topology: { stages: {} }, bindings: { slots: {} } }),
+      profile_hash: 'hash-a',
+      profile_revision_hash: 'revision-a',
+      status: 'active',
+    }),
+  ]);
+  const originalListRows = head.listRows.bind(head);
+  head.listRows = async (table, options) => {
+    const page = await originalListRows(table, options);
+    if (table === 'run_profiles') delete page.totalCount;
+    return page;
+  };
+  const svc = new PlaybooksService(head);
+
+  await assert.rejects(
+    () => svc.listRunProfilesPage({
+      playbookId: 'pb',
+      pipelineId: 'feature-development',
+      first: 1,
+    }),
+    /transport totalCount/,
+  );
+});
+
+test('PlaybooksService.resolveRunProfile rejects scoped row ids as profileId', async () => {
+  const head = fakeHeadTransport([], [
+    makeRow('pb', {
+      name: 'PB',
+      package_name: '@x/pb',
+      version: '1.0.0',
+      source: 'local:/pb',
+      schema_version: 2,
+    }),
+  ], [
+    makeRow('pb-feature-development-codex-standard', {
       playbook_id: 'pb',
       pipeline_id: 'feature-development',
       profile_id: 'codex-standard',
@@ -265,16 +428,32 @@ test('PlaybooksService.resolveRunProfile rejects scoped row ids as profileId', a
       profile_hash: 'hash-1',
       status: 'active',
     }),
-  ]));
+  ]);
+  const svc = new PlaybooksService(head);
 
   await assert.rejects(
     () => svc.resolveRunProfile({
       playbookId: 'pb',
       pipelineId: 'feature-development',
-      profileId: 'pb-codex-standard',
+      profileId: 'pb-feature-development-codex-standard',
     }),
     (err: ControlPlaneError) => err.code === 'ROW_NOT_FOUND',
   );
+  assert.deepEqual(head.listCalls, [{
+    table: 'run_profiles',
+    options: {
+      first: 500,
+      after: undefined,
+      where: {
+        AND: [
+          { data: { path: 'playbook_id', equals: 'pb' } },
+          { data: { path: 'pipeline_id', equals: 'feature-development' } },
+          { data: { path: 'profile_id', equals: 'pb-feature-development-codex-standard' } },
+          { data: { path: 'status', equals: 'active' } },
+        ],
+      },
+    },
+  }]);
 });
 
 test('PlaybooksService.resolveRunProfile rejects profiles outside the selected pipeline', async () => {
@@ -353,4 +532,292 @@ test('PlaybooksService.install does not invalidate when nothing was committed', 
   await new PlaybooksService(head, {} as never, {} as never).install({ source: '/tmp/pb', dryRun: true });
 
   assert.equal(head.invalidations, 0, 'dry-run/non-commit must not churn the cached scope');
+});
+
+function mutableProfile(profileId: string, profile: Record<string, unknown>, sourceHash = ''): TransportRow {
+  const rowId = scopedRunProfileRowId('pb', 'feature-development', profileId);
+  const profileHash = runProfileHash(profile, { pipelineId: 'feature-development', schemaVersion: 'run-profile/v1' });
+  const profileRevisionHash = runProfileRevisionHash(profile, {
+    playbookId: 'pb',
+    pipelineId: 'feature-development',
+    profileId,
+    schemaVersion: 'run-profile/v1',
+    version: '1',
+    displayName: profileId,
+    summary: `${profileId} summary`,
+    status: 'active',
+  });
+  return makeRow(rowId, {
+    id: rowId,
+    playbook_id: 'pb',
+    pipeline_id: 'feature-development',
+    profile_id: profileId,
+    schema_version: 'run-profile/v1',
+    version: '1',
+    display_name: profileId,
+    summary: `${profileId} summary`,
+    profile_json: JSON.stringify(profile),
+    profile_hash: profileHash,
+    profile_revision_hash: profileRevisionHash,
+    status: 'active',
+    source_path: sourceHash ? 'catalog/run-profiles.json' : '',
+    source_hash: sourceHash,
+    updated_at: '2026-07-07T00:00:00.000Z',
+  });
+}
+
+function fakeWritableDeps(initialRows: TransportRow[]) {
+  const rows = new Map(initialRows.map((row) => [`run_profiles/${row.id}`, row]));
+  const calls: string[] = [];
+  const engine = {
+    async getBranch() {
+      calls.push('getBranch');
+      return { id: 'branch-1' };
+    },
+    async getDraftRevision() {
+      calls.push('getDraftRevision');
+      return { id: 'draft-1' };
+    },
+    async getRow({ tableId, rowId }: { tableId: string; rowId: string }) {
+      calls.push(`getRow:${tableId}/${rowId}`);
+      const row = rows.get(`${tableId}/${rowId}`);
+      if (!row) throw Object.assign(new Error('not found'), { statusCode: 404 });
+      return { id: row.id, data: row.data };
+    },
+    async getRows({ tableId }: { tableId: string }) {
+      calls.push(`getRows:${tableId}`);
+      return {
+        edges: [...rows.entries()].flatMap(([key, row]) =>
+          key.startsWith(`${tableId}/`) ? [{ cursor: row.id, node: { id: row.id, data: row.data } }] : [],
+        ),
+      };
+    },
+    async createRow({ tableId, rowId, data }: { tableId: string; rowId: string; data: Record<string, unknown> }) {
+      calls.push(`createRow:${tableId}/${rowId}`);
+      if (rows.has(`${tableId}/${rowId}`)) throw Object.assign(new Error('conflict'), { statusCode: 409 });
+      const row = makeRow(rowId, data);
+      rows.set(`${tableId}/${rowId}`, row);
+      return { row: { id: rowId, data } };
+    },
+    async updateRow({ tableId, rowId, data }: { tableId: string; rowId: string; data: Record<string, unknown> }) {
+      calls.push(`updateRow:${tableId}/${rowId}`);
+      if (!rows.has(`${tableId}/${rowId}`)) throw Object.assign(new Error('not found'), { statusCode: 404 });
+      const row = makeRow(rowId, data);
+      rows.set(`${tableId}/${rowId}`, row);
+      return { row: { id: rowId, data } };
+    },
+    async createRevision({ comment }: { comment?: string }) {
+      calls.push(`commit:${comment}`);
+      return { id: 'revision-1' };
+    },
+  };
+  const prisma = {
+    revoProject: { async upsert() {} },
+    branch: {
+      async findUnique() {
+        return { id: 'branch-1' };
+      },
+    },
+  };
+  return { engine, prisma, rows, calls };
+}
+
+const EMPTY_PROFILE = {
+  schemaVersion: 'run-profile/v1',
+  topology: { stages: {} },
+  bindings: { slots: {} },
+};
+
+test('PlaybooksService.createRunProfile writes a profile row and rejects duplicate public profile ids', async () => {
+  const head = fakeInvalidatableHead();
+  const deps = fakeWritableDeps([]);
+  const svc = new PlaybooksService(head, deps.engine as never, deps.prisma as never);
+
+  const created = await svc.createRunProfile({
+    playbookId: 'pb',
+    pipelineId: 'feature-development',
+    profileId: 'custom-standard',
+    displayName: 'Custom standard',
+    summary: 'Custom launch profile',
+    profile: EMPTY_PROFILE,
+  });
+
+  assert.equal(created.profileId, 'custom-standard');
+  assert.equal(created.status, 'active');
+  assert.equal(created.profileHash, runProfileHash(EMPTY_PROFILE, { pipelineId: 'feature-development', schemaVersion: 'run-profile/v1' }));
+  assert.match(created.profileRevisionHash, /^[a-f0-9]{64}$/);
+  assert.equal(created.id, 'pb-19-feature-development-custom-standard');
+  assert.equal(head.invalidations, 1);
+  assert.ok(deps.calls.includes('createRow:run_profiles/pb-19-feature-development-custom-standard'));
+  assert.ok(deps.calls.includes('commit:Create run profile custom-standard'));
+  await assert.rejects(
+    () => svc.createRunProfile({
+      playbookId: 'pb',
+      pipelineId: 'feature-development',
+      profileId: 'custom-standard',
+      displayName: 'Duplicate',
+      summary: 'Duplicate profile',
+      profile: EMPTY_PROFILE,
+    }),
+    (err: ControlPlaneError) => err.code === 'ROW_CONFLICT',
+  );
+});
+
+test('PlaybooksService.createRunProfile rejects invalid public status values defensively', async () => {
+  const head = fakeInvalidatableHead();
+  const deps = fakeWritableDeps([]);
+  const svc = new PlaybooksService(head, deps.engine as never, deps.prisma as never);
+
+  await assert.rejects(
+    () => svc.createRunProfile({
+      playbookId: 'pb',
+      pipelineId: 'feature-development',
+      profileId: 'custom-standard',
+      displayName: 'Custom standard',
+      profile: EMPTY_PROFILE,
+      status: 'removed' as never,
+    }),
+    /status must be active or deprecated/,
+  );
+  assert.deepEqual(deps.calls.filter((call) => call.startsWith('createRow:')), []);
+});
+
+test('PlaybooksService.updateRunProfile overwrites the same row with expectedProfileRevisionHash lock', async () => {
+  const existingProfile = {
+    schemaVersion: 'run-profile/v1',
+    topology: { stages: {} },
+    bindings: { slots: { developer: { runnerId: 'codex', modelLevel: 'codex-standard' } } },
+  };
+  const updatedProfile = {
+    schemaVersion: 'run-profile/v1',
+    topology: { stages: {} },
+    bindings: { slots: { developer: { runnerId: 'claude-code', modelLevel: 'deep' } } },
+  };
+  const existing = mutableProfile('custom-standard', existingProfile, 'catalog-hash');
+  const head = fakeInvalidatableHead();
+  const deps = fakeWritableDeps([existing]);
+  const svc = new PlaybooksService(head, deps.engine as never, deps.prisma as never);
+  const expectedProfileRevisionHash = String(existing.data?.profile_revision_hash);
+
+  await assert.rejects(
+    () => svc.updateRunProfile({
+      playbookId: 'pb',
+      pipelineId: 'feature-development',
+      profileId: 'custom-standard',
+      expectedProfileRevisionHash: 'stale-hash',
+      profile: updatedProfile,
+    }),
+    (err: ControlPlaneError) => err.code === 'ROW_CONFLICT',
+  );
+  assert.equal(deps.calls.some((call) => call.startsWith('updateRow:')), false);
+
+  const updated = await svc.updateRunProfile({
+    playbookId: 'pb',
+    pipelineId: 'feature-development',
+    profileId: 'custom-standard',
+    expectedProfileRevisionHash,
+    displayName: 'Custom updated',
+    summary: 'Updated profile',
+    profile: updatedProfile,
+  });
+
+  assert.equal(updated.id, existing.id);
+  assert.equal(updated.profileId, 'custom-standard');
+  assert.equal(updated.displayName, 'Custom updated');
+  assert.equal(updated.profileHash, runProfileHash(updatedProfile, { pipelineId: 'feature-development', schemaVersion: 'run-profile/v1' }));
+  assert.notEqual(updated.profileRevisionHash, expectedProfileRevisionHash);
+  assert.equal(deps.rows.size, 1, 'update must not create a second profile row');
+  assert.equal(deps.rows.get(`run_profiles/${existing.id}`)?.data?.source_hash, '', 'user edit must no longer be catalog-clean');
+  assert.ok(deps.calls.includes(`updateRow:run_profiles/${existing.id}`));
+});
+
+test('PlaybooksService.updateRunProfile protects metadata-only edits with profileRevisionHash', async () => {
+  const existing = mutableProfile('custom-standard', EMPTY_PROFILE, 'catalog-hash');
+  const head = fakeInvalidatableHead();
+  const deps = fakeWritableDeps([existing]);
+  const svc = new PlaybooksService(head, deps.engine as never, deps.prisma as never);
+  const expectedProfileRevisionHash = String(existing.data?.profile_revision_hash);
+
+  const updated = await svc.updateRunProfile({
+    playbookId: 'pb',
+    pipelineId: 'feature-development',
+    profileId: 'custom-standard',
+    expectedProfileRevisionHash,
+    displayName: 'Renamed profile',
+  });
+
+  assert.equal(updated.profileHash, existing.data?.profile_hash);
+  assert.notEqual(updated.profileRevisionHash, expectedProfileRevisionHash);
+  await assert.rejects(
+    () => svc.updateRunProfile({
+      playbookId: 'pb',
+      pipelineId: 'feature-development',
+      profileId: 'custom-standard',
+      expectedProfileRevisionHash,
+      summary: 'stale metadata edit',
+    }),
+    (err: ControlPlaneError) => err.code === 'ROW_CONFLICT',
+  );
+});
+
+test('PlaybooksService.updateRunProfile rejects rows without profileRevisionHash', async () => {
+  const existing = mutableProfile('custom-standard', EMPTY_PROFILE, 'catalog-hash');
+  delete existing.data?.profile_revision_hash;
+  const head = fakeInvalidatableHead();
+  const deps = fakeWritableDeps([existing]);
+  const svc = new PlaybooksService(head, deps.engine as never, deps.prisma as never);
+
+  await assert.rejects(
+    () => svc.updateRunProfile({
+      playbookId: 'pb',
+      pipelineId: 'feature-development',
+      profileId: 'custom-standard',
+      expectedProfileRevisionHash: '',
+      displayName: 'Should not update',
+    }),
+    (err: ControlPlaneError) => err.code === 'ROW_CONFLICT',
+  );
+  assert.equal(deps.calls.some((call) => call.startsWith('updateRow:')), false);
+});
+
+test('PlaybooksService.deprecateRunProfile hides profiles from default listing but keeps get readable', async () => {
+  const existing = mutableProfile('custom-standard', EMPTY_PROFILE, String(runProfileHash(EMPTY_PROFILE, { pipelineId: 'feature-development', schemaVersion: 'run-profile/v1' })));
+  const playbooks = [
+    makeRow('pb', {
+      name: 'PB',
+      package_name: '@x/pb',
+      version: '1.0.0',
+      source: 'local:/pb',
+      schema_version: 2,
+    }),
+  ];
+  const head = fakeHeadTransport([], playbooks, [existing]);
+  const deps = fakeWritableDeps([existing]);
+  const svc = new PlaybooksService(head, deps.engine as never, deps.prisma as never);
+
+  const deprecated = await svc.deprecateRunProfile({
+    playbookId: 'pb',
+    pipelineId: 'feature-development',
+    profileId: 'custom-standard',
+    expectedProfileRevisionHash: String(existing.data?.profile_revision_hash),
+  });
+
+  assert.equal(deprecated.status, 'deprecated');
+  assert.equal(deprecated.profileHash, existing.data?.profile_hash);
+  assert.notEqual(deprecated.profileRevisionHash, existing.data?.profile_revision_hash);
+  assert.equal(deps.rows.get(`run_profiles/${existing.id}`)?.data?.source_hash, '', 'deprecation must no longer be catalog-clean');
+  assert.ok(deps.calls.includes(`updateRow:run_profiles/${existing.id}`));
+
+  const updatedHead = fakeHeadTransport([], playbooks, [...deps.rows.values()]);
+  const readSvc = new PlaybooksService(updatedHead);
+  assert.deepEqual(await readSvc.listRunProfiles({ playbookId: 'pb', pipelineId: 'feature-development' }), []);
+  assert.equal(
+    (await readSvc.resolveRunProfile({
+      playbookId: 'pb',
+      pipelineId: 'feature-development',
+      profileId: 'custom-standard',
+      includeDeprecated: true,
+    })).status,
+    'deprecated',
+  );
 });

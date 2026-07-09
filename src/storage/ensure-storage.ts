@@ -98,7 +98,8 @@ async function startEmbeddedPostgres(pgPort: number, dataDir: string): Promise<v
 
 async function ensureStorageUncached(): Promise<StorageRuntime> {
   const config = getConfig();
-  const pgPort = await canConnect(config.preferredPgPort)
+  const explicitPgPort = Number.isInteger(Number.parseInt(process.env['REVO_PG_PORT'] ?? '', 10));
+  const pgPort = explicitPgPort || (await canConnect(config.preferredPgPort))
     ? config.preferredPgPort
     : await findFreePort(config.preferredPgPort);
   await startEmbeddedPostgres(pgPort, config.dataDir);

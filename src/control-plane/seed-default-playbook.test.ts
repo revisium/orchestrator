@@ -34,6 +34,7 @@ import {
   type DefaultPlaybookInstaller,
 } from './seed-default-playbook.js';
 import type { PlaybookInstallResult } from '../playbook/playbook-installer.js';
+import { scopedRunProfileRowId } from '../playbook/import-mapper.js';
 import { topologyProfileFromRunProfile } from './run-profiles.js';
 
 // ---------------------------------------------------------------------------
@@ -92,16 +93,10 @@ test('default playbook: installs as revisium-default with launchable pipelines a
   );
 
   const profileRowIds = fake.rows.filter((r) => r.table === 'run_profiles').map((r) => r.rowId);
-  assert.deepEqual(profileRowIds.sort(), [
-    'revisium-default-analysis-only-claude-standard',
-    'revisium-default-analysis-only-codex-standard',
-    'revisium-default-claude-primary-codex-review-consensus',
-    'revisium-default-claude-standard',
-    'revisium-default-codex-primary-claude-review-consensus',
-    'revisium-default-codex-standard',
-    'revisium-default-local-change-claude-standard',
-    'revisium-default-local-change-codex-standard',
-  ]);
+  const expectedProfileRowIds = runProfiles.map((profile) =>
+    scopedRunProfileRowId(DEFAULT_PLAYBOOK_ID, profile.pipelineId, profile.id),
+  );
+  assert.deepEqual(profileRowIds.sort(), expectedProfileRowIds.sort());
 });
 
 // ---------------------------------------------------------------------------

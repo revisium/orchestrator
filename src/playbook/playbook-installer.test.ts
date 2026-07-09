@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PlaybookInstaller } from './playbook-installer.js';
+import { scopedRunProfileRowId } from './import-mapper.js';
 import type { VersionedMeaningAccess, VersionedMeaningOperation, VersionedMeaningRow } from '../control-plane/versioned-meaning.js';
 
 function makePlaybookRoot(): string {
@@ -67,8 +68,15 @@ function fakeAccess(existing: VersionedMeaningRow[] = []) {
   const access: VersionedMeaningAccess = {
     async upsertRow(row) {
       rows.push(row);
-      existingRows.set(`${row.table}/${row.rowId}`, row);
-      const op: VersionedMeaningOperation = { action: 'dry-run', table: row.table, rowId: row.rowId };
+      const key = `${row.table}/${row.rowId}`;
+      const existing = existingRows.get(key);
+      const action = row.table === 'run_profiles' &&
+        existing &&
+        existing.data.profile_hash !== existing.data.source_hash
+        ? 'preserve'
+        : 'dry-run';
+      if (action !== 'preserve') existingRows.set(key, row);
+      const op: VersionedMeaningOperation = { action, table: row.table, rowId: row.rowId };
       operations.push(op);
       return op;
     },
@@ -115,6 +123,65 @@ test('PlaybookInstaller: validates, maps, and writes playbook rows', async () =>
     'playbooks/pb,roles/pb-developer,pipelines/pb-feature-development',
   );
   assert.equal(fake.commitMessage, 'Install playbook PB@1.0.0');
+});
+
+test('PlaybookInstaller: preserves edited run profiles during catalog re-import', async () => {
+  const root = makePlaybookRoot();
+  writeFileSync(
+    join(root, 'playbook.json'),
+    JSON.stringify({
+      id: 'pb',
+      name: 'PB',
+      schema_version: 2,
+      package: '@x/pb',
+      catalogs: { roles: 'catalog/roles.json', pipelines: 'catalog/pipelines.json', runProfiles: 'catalog/run-profiles.json' },
+      supported_runtimes: ['revo'],
+    }),
+  );
+  writeFileSync(
+    join(root, 'catalog', 'run-profiles.json'),
+    JSON.stringify([
+      {
+        id: 'codex-standard',
+        pipelineId: 'feature-development',
+        schemaVersion: 'run-profile/v1',
+        version: '1',
+        displayName: 'Codex standard',
+        summary: 'Codex standard profile',
+        topology: { stages: { planReviewer: { mode: 'single' } } },
+        bindings: { slots: { developer: { runnerId: 'codex', modelLevel: 'codex-standard' } } },
+        status: 'active',
+      },
+    ]),
+  );
+  const rowId = scopedRunProfileRowId('pb', 'feature-development', 'codex-standard');
+  const fake = fakeAccess([
+    {
+      table: 'run_profiles',
+      rowId,
+      data: {
+        id: rowId,
+        playbook_id: 'pb',
+        pipeline_id: 'feature-development',
+        profile_id: 'codex-standard',
+        profile_hash: 'user-edited-hash',
+        source_hash: 'catalog-hash',
+        status: 'active',
+      },
+    },
+  ]);
+  const installer = new PlaybookInstaller({
+    access: fake.access,
+    sourceResolverOptions: { cwd: join(root, '..') },
+  });
+
+  const result = await installer.install({ source: `./${basename(root)}`, commit: true });
+
+  assert.ok(result.operations.some((op) =>
+    op.action === 'preserve' &&
+    op.table === 'run_profiles' &&
+    op.rowId === rowId,
+  ));
 });
 
 test('PlaybookInstaller: dry-run never calls the versioned writer', async () => {

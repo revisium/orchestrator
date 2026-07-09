@@ -79,21 +79,23 @@ serialized into this field.
 Versioned launch profiles scoped to an imported playbook and pipeline.
 
 Fields: `id, playbook_id, pipeline_id, profile_id, schema_version, version, display_name, summary, profile_json,
-profile_hash, status, retired_at, source_path, source_hash, updated_at`.
+profile_hash, profile_revision_hash, status, retired_at, source_path, source_hash, updated_at`.
 
 `profile_json` stores the normalized launch payload: `schemaVersion`, `topology`, and `bindings`. Profile scope and
 lifecycle metadata live in row columns such as `pipeline_id`, `profile_id`, `version`, and `status`. `profile_hash` is
 pinned into Prisma `TaskRun.routeDecision` when a run is created. Catalog run profiles must pass the `run-profile/v1`
 JSON Schema before they are serialized into `profile_json`. Seeded profiles are editable after import; profile updates
-write a new Revisium revision and a new `profile_hash`.
+write a new Revisium revision. Launch-affecting edits write a new `profile_hash`; metadata/status edits can keep the
+same `profile_hash` but write a new `profile_revision_hash` and must mark the row as user-edited for catalog
+reconciliation.
 
 `source_path` and `source_hash` record the last applied catalog source when a row came from default playbook import.
 `source_hash` is the last applied normalized catalog profile hash, computed with the same normalization as
 `profile_hash`. The normalized launch hash includes launch-affecting fields such as selected/storage pipeline id,
 topology, bindings, and future launch policy fields; it excludes display/lifecycle/provenance row metadata. Catalog
-reconciliation must not
-silently overwrite edits: import may update or retire only rows whose current `profile_hash` still matches
-`source_hash`. Edited rows are preserved and reported as catalog update or removal conflicts.
+reconciliation must not silently overwrite edits: import may update or retire only rows whose current `profile_hash`
+still matches `source_hash`. User edits clear or otherwise invalidate `source_hash`, so metadata-only edits and
+deprecations are preserved as customized rows.
 
 The public pipeline/profile identifiers are `pipeline_id` and `profile_id`. The storage row `id` is an internal scoped
 row id and is not accepted as a launch alias. When a catalog removes a profile, import may mark unchanged seeded rows

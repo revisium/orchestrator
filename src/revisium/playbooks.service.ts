@@ -5,7 +5,10 @@ import type { ListRowsOptions } from '../control-plane/data-access.js';
 import type { RowWhereInput } from '../control-plane/query-types.js';
 import type { ControlPlaneTransport, TransportRow } from '../control-plane/transport.js';
 import { ControlPlaneError } from '../control-plane/errors.js';
+import { runProfileHash, runProfileRevisionHash } from '../control-plane/run-profiles.js';
+import type { VersionedMeaningScope } from '../control-plane/versioned-meaning.js';
 import { createVersionedMeaningAccess } from '../control-plane/versioned-meaning.js';
+import { scopedRunProfileRowId } from '../playbook/import-mapper.js';
 import { PlaybookInstaller, type PlaybookInstallOptions, type PlaybookInstallResult } from '../playbook/playbook-installer.js';
 import { normalizeRouteGates } from '../pipeline/route-contract.js';
 import { RevoPrismaService } from '../storage/revo-prisma.service.js';
@@ -50,7 +53,41 @@ export type RunProfileSummary = {
   summary: string;
   profile: Record<string, unknown>;
   profileHash: string;
+  profileRevisionHash: string;
   status: 'active' | 'deprecated' | 'removed';
+};
+
+export type RunProfileListPage = {
+  profiles: RunProfileSummary[];
+  totalCount: number;
+};
+
+export type CreateRunProfileInput = {
+  playbookId?: string;
+  pipelineId: string;
+  profileId: string;
+  displayName: string;
+  summary?: string;
+  profile: Record<string, unknown>;
+  status?: 'active' | 'deprecated';
+};
+
+export type UpdateRunProfileInput = {
+  playbookId?: string;
+  pipelineId: string;
+  profileId: string;
+  expectedProfileRevisionHash: string;
+  displayName?: string;
+  summary?: string;
+  profile?: Record<string, unknown>;
+  status?: 'active' | 'deprecated';
+};
+
+export type DeprecateRunProfileInput = {
+  playbookId?: string;
+  pipelineId: string;
+  profileId: string;
+  expectedProfileRevisionHash: string;
 };
 
 function str(value: unknown): string {
@@ -147,27 +184,109 @@ function runProfileFromRow(row: { id: string; data?: Record<string, unknown> }):
       ? profile as Record<string, unknown>
       : {},
     profileHash: str(data.profile_hash),
+    profileRevisionHash: str(data.profile_revision_hash),
     status: runProfileStatus(data.status),
   };
+}
+
+function runProfileData(input: {
+  rowId: string;
+  playbookId: string;
+  pipelineId: string;
+  profileId: string;
+  schemaVersion?: string;
+  version?: string;
+  displayName: string;
+  summary: string;
+  profile: Record<string, unknown>;
+  status: 'active' | 'deprecated';
+  sourcePath?: string;
+  sourceHash?: string;
+  updatedAt: string;
+}): Record<string, unknown> {
+  const schemaVersion = input.schemaVersion || 'run-profile/v1';
+  const version = input.version || '1';
+  const profileHash = runProfileHash(input.profile, {
+    pipelineId: input.pipelineId,
+    schemaVersion,
+  });
+  const profileRevisionHash = runProfileRevisionHash(input.profile, {
+    playbookId: input.playbookId,
+    pipelineId: input.pipelineId,
+    profileId: input.profileId,
+    schemaVersion,
+    version,
+    displayName: input.displayName,
+    summary: input.summary,
+    status: input.status,
+  });
+  return {
+    id: input.rowId,
+    playbook_id: input.playbookId,
+    pipeline_id: input.pipelineId,
+    profile_id: input.profileId,
+    schema_version: schemaVersion,
+    version,
+    display_name: input.displayName,
+    summary: input.summary,
+    profile_json: JSON.stringify(input.profile),
+    profile_hash: profileHash,
+    profile_revision_hash: profileRevisionHash,
+    status: input.status,
+    source_path: input.sourcePath || '',
+    source_hash: input.sourceHash || '',
+    updated_at: input.updatedAt,
+  };
+}
+
+function runProfileWriteStatus(value: unknown, fallback: 'active' | 'deprecated' = 'active'): 'active' | 'deprecated' {
+  if (value === undefined) return fallback;
+  if (value === 'active' || value === 'deprecated') return value;
+  throw new ControlPlaneError('VALIDATION_FAILURE', 'run profile status must be active or deprecated');
 }
 
 async function listAllRows(
   transport: ControlPlaneTransport,
   table: string,
   options: Omit<ListRowsOptions, 'first' | 'after'> = {},
+  limit?: number,
 ): Promise<TransportRow[]> {
   const rows: TransportRow[] = [];
   let after: string | undefined;
   for (;;) {
+    const pageSize = limit === undefined ? CATALOG_PAGE_SIZE : Math.min(CATALOG_PAGE_SIZE, Math.max(0, limit - rows.length));
+    if (pageSize <= 0) break;
     const page = await transport.listRows(table, {
       ...options,
-      first: CATALOG_PAGE_SIZE,
+      first: pageSize,
       after,
     });
     const edges = page.edges ?? [];
     rows.push(...edges.flatMap((edge) => edge.node ? [edge.node] : []));
-    if (edges.length < CATALOG_PAGE_SIZE) break;
+    if (limit !== undefined && rows.length >= limit) break;
+    if (edges.length < pageSize) break;
     after = edges.at(-1)?.cursor;
+    if (!after) break;
+  }
+  return rows;
+}
+
+async function listDraftRows(
+  scope: VersionedMeaningScope,
+  table: string,
+  options: Omit<ListRowsOptions, 'first' | 'after'> = {},
+): Promise<Array<{ id: string; data?: Record<string, unknown>; cursor?: string }>> {
+  const rows: Array<{ id: string; data?: Record<string, unknown>; cursor?: string }> = [];
+  let after: string | undefined;
+  for (;;) {
+    const page = await scope.listRows(table, {
+      ...options,
+      first: CATALOG_PAGE_SIZE,
+      after,
+    });
+    rows.push(...page);
+    if (page.length < CATALOG_PAGE_SIZE) break;
+    after = page.at(-1)?.cursor;
     if (!after) break;
   }
   return rows;
@@ -301,21 +420,54 @@ export class PlaybooksService {
     playbookId?: string;
     pipelineId?: string;
     includeDeprecated?: boolean;
+    first?: number;
   } = {}): Promise<RunProfileSummary[]> {
+    if (input.first !== undefined) {
+      return (await this.listRunProfilesPage({ ...input, first: input.first })).profiles;
+    }
     const playbook = await this.resolvePlaybook(input.playbookId);
     const base = [
       dataEquals('playbook_id', playbook.id),
       ...(input.pipelineId ? [dataEquals('pipeline_id', input.pipelineId)] : []),
     ];
     const statuses: Array<RunProfileSummary['status']> = input.includeDeprecated ? ['active', 'deprecated'] : ['active'];
-    const rows = (await Promise.all(statuses.map((status) =>
-      listAllRows(this.head, 'run_profiles', {
-        where: andWhere(...base, dataEquals('status', status)),
-      }),
-    ))).flat();
+    const rows = await listAllRows(this.head, 'run_profiles', {
+      where: andWhere(...base, { data: { path: 'status', in: statuses } }),
+      orderBy: [{ field: 'id', direction: 'asc' }],
+    }, input.first);
     return rows
-      .map((node) => runProfileFromRow({ id: node.id, data: node.data ?? {} }))
-      .sort((left, right) => left.profileId.localeCompare(right.profileId));
+      .map((node) => runProfileFromRow({ id: node.id, data: node.data ?? {} }));
+  }
+
+  async listRunProfilesPage(input: {
+    playbookId?: string;
+    pipelineId?: string;
+    includeDeprecated?: boolean;
+    first: number;
+  }): Promise<RunProfileListPage> {
+    const playbook = await this.resolvePlaybook(input.playbookId);
+    const base = [
+      dataEquals('playbook_id', playbook.id),
+      ...(input.pipelineId ? [dataEquals('pipeline_id', input.pipelineId)] : []),
+    ];
+    const statuses: Array<RunProfileSummary['status']> = input.includeDeprecated ? ['active', 'deprecated'] : ['active'];
+    const rows = await this.head.listRows('run_profiles', {
+      first: input.first,
+      where: andWhere(...base, { data: { path: 'status', in: statuses } }),
+      orderBy: [{ field: 'id', direction: 'asc' }],
+    });
+    if (rows.totalCount === undefined) {
+      throw new ControlPlaneError(
+        'VALIDATION_FAILURE',
+        'run_profiles pagination requires transport totalCount',
+      );
+    }
+    const profiles = (rows.edges ?? [])
+      .flatMap((edge) => edge.node ? [runProfileFromRow({ id: edge.node.id, data: edge.node.data ?? {} })] : []);
+    return {
+      profiles,
+      totalCount: rows.totalCount,
+    };
   }
 
   async resolveRunProfile(input: {
@@ -324,11 +476,18 @@ export class PlaybooksService {
     profileId: string;
     includeDeprecated?: boolean;
   }): Promise<RunProfileSummary> {
-    const profiles = await this.listRunProfiles({
-      playbookId: input.playbookId,
-      pipelineId: input.pipelineId,
-      includeDeprecated: input.includeDeprecated,
-    });
+    const playbook = await this.resolvePlaybook(input.playbookId);
+    const base = [
+      dataEquals('playbook_id', playbook.id),
+      dataEquals('pipeline_id', input.pipelineId),
+      dataEquals('profile_id', input.profileId),
+    ];
+    const statuses: Array<RunProfileSummary['status']> = input.includeDeprecated ? ['active', 'deprecated'] : ['active'];
+    const profiles = (await Promise.all(statuses.map((status) =>
+      listAllRows(this.head, 'run_profiles', {
+        where: andWhere(...base, dataEquals('status', status)),
+      }),
+    ))).flat().map((node) => runProfileFromRow({ id: node.id, data: node.data ?? {} }));
     const match = profiles.find((profile) => profile.profileId === input.profileId);
     if (!match) {
       throw new ControlPlaneError(
@@ -337,5 +496,130 @@ export class PlaybooksService {
       );
     }
     return match;
+  }
+
+  async createRunProfile(input: CreateRunProfileInput): Promise<RunProfileSummary> {
+    const playbookId = input.playbookId ?? (await this.resolvePlaybook()).id;
+    const scope = await this.versionedScope();
+    const existing = await this.findDraftRunProfile(scope, {
+      playbookId,
+      pipelineId: input.pipelineId,
+      profileId: input.profileId,
+    });
+    if (existing) {
+      throw new ControlPlaneError(
+        'ROW_CONFLICT',
+        `run profile already exists in pipeline ${input.pipelineId}: ${input.profileId}`,
+      );
+    }
+    const rowId = scopedRunProfileRowId(playbookId, input.pipelineId, input.profileId);
+    const data = runProfileData({
+      rowId,
+      playbookId,
+      pipelineId: input.pipelineId,
+      profileId: input.profileId,
+      displayName: input.displayName,
+      summary: input.summary ?? '',
+      profile: input.profile,
+      status: runProfileWriteStatus(input.status),
+      updatedAt: new Date().toISOString(),
+    });
+    await scope.createRow('run_profiles', rowId, data);
+    await scope.commit(`Create run profile ${input.profileId}`);
+    this.invalidateHead();
+    return runProfileFromRow({ id: rowId, data });
+  }
+
+  async updateRunProfile(input: UpdateRunProfileInput): Promise<RunProfileSummary> {
+    const playbookId = input.playbookId ?? (await this.resolvePlaybook()).id;
+    const scope = await this.versionedScope();
+    const existing = await this.requireDraftRunProfile(scope, {
+      playbookId,
+      pipelineId: input.pipelineId,
+      profileId: input.profileId,
+    });
+    const existingData = existing.data ?? {};
+    const currentHash = str(existingData.profile_revision_hash);
+    if (!currentHash) {
+      throw new ControlPlaneError(
+        'ROW_CONFLICT',
+        `run profile ${input.profileId} has no profileRevisionHash and cannot be updated`,
+      );
+    }
+    if (currentHash !== input.expectedProfileRevisionHash) {
+      throw new ControlPlaneError(
+        'ROW_CONFLICT',
+        `run profile ${input.profileId} changed: expected ${input.expectedProfileRevisionHash}, got ${currentHash}`,
+      );
+    }
+    const profile = input.profile ?? runProfileFromRow(existing).profile;
+    const data = runProfileData({
+      rowId: existing.id,
+      playbookId,
+      pipelineId: input.pipelineId,
+      profileId: input.profileId,
+      schemaVersion: str(existingData.schema_version) || 'run-profile/v1',
+      version: str(existingData.version) || '1',
+      displayName: input.displayName ?? str(existingData.display_name),
+      summary: input.summary ?? str(existingData.summary),
+      profile,
+      status: runProfileWriteStatus(input.status, runProfileStatus(existingData.status) === 'deprecated' ? 'deprecated' : 'active'),
+      sourcePath: str(existingData.source_path),
+      sourceHash: '',
+      updatedAt: new Date().toISOString(),
+    });
+    await scope.updateRow('run_profiles', existing.id, data);
+    await scope.commit(`Update run profile ${input.profileId}`);
+    this.invalidateHead();
+    return runProfileFromRow({ id: existing.id, data });
+  }
+
+  async deprecateRunProfile(input: DeprecateRunProfileInput): Promise<RunProfileSummary> {
+    return this.updateRunProfile({
+      playbookId: input.playbookId,
+      pipelineId: input.pipelineId,
+      profileId: input.profileId,
+      expectedProfileRevisionHash: input.expectedProfileRevisionHash,
+      status: 'deprecated',
+    });
+  }
+
+  private async findDraftRunProfile(
+    scope: VersionedMeaningScope,
+    input: { playbookId: string; pipelineId: string; profileId: string },
+  ): Promise<{ id: string; data?: Record<string, unknown> } | null> {
+    const rows = await listDraftRows(scope, 'run_profiles', {
+      where: andWhere(
+        dataEquals('playbook_id', input.playbookId),
+        dataEquals('pipeline_id', input.pipelineId),
+        dataEquals('profile_id', input.profileId),
+      ),
+    });
+    return rows.find((row) => runProfileStatus(row.data?.status) !== 'removed') ?? null;
+  }
+
+  private async requireDraftRunProfile(
+    scope: VersionedMeaningScope,
+    input: { playbookId: string; pipelineId: string; profileId: string },
+  ): Promise<{ id: string; data?: Record<string, unknown> }> {
+    const row = await this.findDraftRunProfile(scope, input);
+    if (!row) {
+      throw new ControlPlaneError(
+        'ROW_NOT_FOUND',
+        `run profile not found in pipeline ${input.pipelineId}: ${input.profileId}`,
+      );
+    }
+    return row;
+  }
+
+  private async versionedScope(): Promise<VersionedMeaningScope> {
+    if (!this.engine || !this.prisma) {
+      throw new ControlPlaneError('CONTROL_PLANE_NOT_AVAILABLE', 'Engine-backed control-plane is not available');
+    }
+    return createEngineVersionedMeaningScope(this.engine, this.prisma);
+  }
+
+  private invalidateHead(): void {
+    if (canInvalidate(this.head)) this.head.invalidate();
   }
 }

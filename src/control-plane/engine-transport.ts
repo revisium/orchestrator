@@ -362,6 +362,8 @@ export function createEngineTransport(
               ? [{ cursor: edge.cursor, node: toTransportRow(edge.node) }]
               : [],
         ),
+        pageInfo: rows.pageInfo,
+        totalCount: rows.totalCount,
       };
     },
     async getRow(table: string, rowId: string): Promise<TransportRow> {
