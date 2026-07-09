@@ -101,8 +101,8 @@ The public pipeline/profile identifiers are `pipeline_id` and `profile_id`. The 
 row id and is not accepted as a launch alias. When a catalog removes a profile, import may mark unchanged seeded rows
 `status=removed`; runtime listing/resolution ignores removed rows.
 
-Publishing identity is intentionally outside the current `run-profile/v1` shape. Future GitHub account selection must
-be added as a separate validated launch/config contract before it is accepted in `profile_json`.
+Top-level publishing identity is outside the current `run-profile/v1` shape. GitHub account aliases are accepted only as
+validated script-node launch bindings in `profile_json`, for example `bindings.slots.integrator.accounts.github`.
 
 ### `model_profiles`
 

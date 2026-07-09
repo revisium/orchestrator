@@ -21,7 +21,7 @@ const stopAt = process.argv[2] ?? 'plan-gate';
 
 const h = await createRunHarness();
 await givenInstalledPlaybook(h);
-// A clean throwaway repo path; the stub integrator never touches it. Intentionally NOT cleaned up —
+// A clean throwaway repo path for the parked run. Intentionally NOT cleaned up —
 // the process is about to "crash", and the OS reaps the temp dir. Leaking one /tmp dir per crash is
 // cheaper than wiring a teardown that a crash would skip anyway.
 const target = createTargetRepo();

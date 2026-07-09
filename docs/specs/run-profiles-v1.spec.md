@@ -30,7 +30,6 @@ It does not define:
 
 - visual profile editing UI layout;
 - remote provider pricing;
-- GitHub publishing identity selection;
 - arbitrary post-join synthesis beyond the current materializer substrate.
 
 ## Terms
@@ -53,8 +52,8 @@ Revisium engine stores run profiles as versioned meaning. Prisma stores runtime 
 Runtime models MUST NOT be represented as Revisium tables. In particular, `TaskRun.routeDecision` in Prisma is the run's
 immutable route pin; Revisium `run_profiles` is only the versioned source for new route resolution.
 
-Run profiles MUST NOT carry credentials or publication account aliases in v1. GitHub identity selection remains a
-separate host/runtime concern until a dedicated publishing contract is designed.
+Run profiles may carry publication account aliases only as script-node launch bindings. Credentials remain runtime host
+secrets and MUST NOT be stored in Revisium profiles or Prisma route pins.
 
 ## Default Catalog
 
@@ -108,7 +107,8 @@ profile-backed launches.
   "bindings": {
     "slots": {
       "analyst": { "runnerId": "codex", "modelLevel": "codex-deep", "permissionMode": "workspace-write" },
-      "developer": { "runnerId": "codex", "modelLevel": "codex-standard", "permissionMode": "workspace-write" }
+      "developer": { "runnerId": "codex", "modelLevel": "codex-standard", "permissionMode": "workspace-write" },
+      "integrator": { "accounts": { "github": "profile-bot" } }
     }
   },
   "status": "active"
@@ -132,7 +132,7 @@ Required catalog fields:
 The importer MUST reject duplicate profile ids and profiles referencing unknown pipeline ids.
 
 `publishing` is not part of the current `run-profile/v1` catalog shape. Importers MUST reject it as an additional
-property until a separate publishing identity contract exists.
+property. GitHub account aliases belong under `bindings.slots.<scriptNode>.accounts.github`.
 
 Stored catalog rows MUST include `id`, `pipelineId`, and `version` as catalog/storage metadata. Inline
 `create_run.profile` and `simulate_route.profile` inputs MUST NOT include persisted identity, pipeline, display, or
@@ -248,9 +248,13 @@ Binding fields:
 | `modelLevel` | Model level such as `standard`, `deep`, `codex-standard`, or `codex-deep`. |
 | `permissionMode` | Runner permission mode. |
 | `timeoutMs` | Positive timeout override. |
+| `accounts.github` | GitHub account alias for a script node, such as `integrator`; credentials are resolved from host runtime auth. |
 
-Profile bindings are the public launch binding source. Internal test harnesses may map a profile-selected runner to a
-test/stub runner, but that mapping is not a second user-facing profile layer.
+Runner/model/permission fields are valid for agent role/node bindings. `accounts.github` is valid only for script node
+bindings. A script binding MUST NOT declare `runnerId`, `modelLevel`, or `permissionMode`; the script implementation is
+selected by the pipeline node `scriptRef`.
+
+Profile bindings are the public launch binding source.
 
 ## Profile Lifecycle
 
@@ -310,14 +314,36 @@ The discovery document is advisory UI/API metadata. The server remains authorita
 profile create/update, route simulation, and run creation. Discovery suggestions MUST NOT fill missing runner/model
 launch values during route resolution; route resolution consumes a normalized profile.
 
-## Deferred Publishing Identity
+## GitHub Account Binding
 
-GitHub publishing identity is not part of `run-profile/v1`. The schema MUST reject `publishing` fields in stored and
-inline profiles so account aliases cannot become dead launch data.
+GitHub publication identity is launch configuration for script nodes. Stored and inline profiles may set:
 
-A future publishing contract must define account-selection precedence, token lookup, failure behavior, and route
-provenance before profile JSON accepts GitHub account preferences. Until then, publication paths use the existing host
-authentication behavior and profiles do not influence the GitHub account.
+```json
+{
+  "bindings": {
+    "slots": {
+      "integrator": {
+        "accounts": {
+          "github": "profile-bot"
+        }
+      }
+    }
+  }
+}
+```
+
+The account value is an alias, not a token. Runtime GitHub commands resolve credentials from account-specific host state,
+such as `GH_TOKEN_PROFILE_BOT` or `gh auth token --user profile-bot`.
+
+Resolution precedence for write-capable GitHub scripts is:
+
+1. `bindings.slots.<scriptNode>.accounts.github` from the pinned route/profile;
+2. `REVO_GH_ACCOUNT`;
+3. active `gh` account on the host.
+
+The runtime MUST fail loud when no account can be resolved and MUST NOT fall back to a hardcoded organization account.
+
+Top-level `publishing` remains invalid in `run-profile/v1`; account binding is scoped to the script node that needs it.
 
 ## Runtime Resolution
 
@@ -351,8 +377,6 @@ The service MUST reject storage row ids such as `revisium-default-19-feature-dev
 catalog `profile_id` only.
 
 Inline `profile` is not persisted to `run_profiles`, is not returned by `list_profiles`, and has no Revisium row id.
-Internal test harnesses may still map runner implementations outside the public API, but those mappings must not be
-modeled as a second user-facing profile object.
 
 MCP inputs, GraphQL inputs, route resolution, and Prisma `TaskRun` storage MUST NOT expose a second profile-like launch
 object. New runs store every replay-needed launch field in `routeDecision`.
@@ -371,8 +395,10 @@ truth for the run, even when the run was created from `profileId`.
 - `policyVersion`;
 - resolved role/node launch bindings.
 
-Future route pins may add resolved publishing identity and resolved model-profile provenance once those contracts are
+Future route pins may add resolved GitHub auth provenance and resolved model-profile provenance once those contracts are
 versioned and implemented.
+
+The requested GitHub account alias is already pinned through the normalized profile snapshot and launch bindings.
 
 For `profileSource=stored`, the route pin MUST also include `profileId`, `profileVersion`, `profileHash`, and
 `profileSnapshot`.
@@ -446,6 +472,7 @@ Required automated coverage:
 - default playbook provides profiles for every pipeline that remains launchable under the strict profile contract;
 - no separate profile-like launch object is exposed by MCP inputs, GraphQL inputs, route resolution, or Prisma
   `TaskRun` storage;
-- `publishing` fields are rejected in stored and inline `run-profile/v1` payloads until a dedicated publishing identity
-  contract exists;
+- `accounts.github` is accepted only for script node bindings and changes the profile hash;
+- script node bindings reject runner/model/permission fields;
+- top-level `publishing` fields are rejected in stored and inline `run-profile/v1` payloads;
 - GitHub tokens are never stored in `profile_json`, inline `profile`, or `routeDecision`.

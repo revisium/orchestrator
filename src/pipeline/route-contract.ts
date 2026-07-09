@@ -8,6 +8,9 @@ export type BindingOverride = {
   modelLevel?: string;
   timeoutMs?: number;
   permissionMode?: string;
+  accounts?: {
+    github?: string;
+  };
 };
 
 export type LaunchOverrides = {
@@ -220,13 +223,9 @@ export function resolveLaunchOverrides(
 export function dispatchRunnerId(runnerId: string): string {
   if (runnerId === 'stub-agent') return 'script';
   if (runnerId === 'claude-code' || runnerId === 'codex' || runnerId === 'script') return runnerId;
-  return runnerId.startsWith('revo-') ? 'script' : runnerId;
+  return runnerId;
 }
 
 export function runnerNeedsLivePreflight(runnerId: string): boolean {
-  return runnerId === 'claude-code' || runnerId === 'codex' || runnerId === 'revo-integrator' || runnerId === 'revo-merger';
-}
-
-export function runnerUsesRealIntegrator(runnerId: string): boolean {
-  return runnerId === 'revo-integrator' || runnerId === 'revo-merger';
+  return runnerId === 'claude-code' || runnerId === 'codex';
 }

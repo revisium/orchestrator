@@ -29,7 +29,7 @@ Today there is no manifest. Runner facts are hardcoded in the engine and the two
 this spec relocates:
 
 - **Dispatch is a literal switch.** `dispatchRunnerId(runnerId)` rewrites ids (`'stub-agent'`→`'script'`;
-  `'claude-code'`/`'codex'`/`'script'` pass through; `'revo-'` prefix→`'script'`; else identity) at
+  `'claude-code'`/`'codex'`/`'script'` pass through; unknown ids remain unknown) at
   `src/pipeline/route-contract.ts:110-114`, and the `RunAgent` factory `switch (args.role.runner)` enumerates
   `'claude-code'`, `'codex'`, `'script'`, `'stub-agent'` and throws `RUNNER_NOT_IMPLEMENTED` otherwise
   (`src/worker/runner-dispatch.ts:8-20`).

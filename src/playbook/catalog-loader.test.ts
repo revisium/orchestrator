@@ -284,7 +284,7 @@ test('loadPlaybookCatalogs: rejects invalid run profile JSON before import', () 
   );
 });
 
-test('loadPlaybookCatalogs: rejects deferred publishing fields in run profiles', () => {
+test('loadPlaybookCatalogs: accepts GitHub account bindings in run profiles', () => {
   const { root, manifest } = makeRoot();
   const manifestWithProfiles: PlaybookManifest = {
     ...manifest,
@@ -301,10 +301,46 @@ test('loadPlaybookCatalogs: rejects deferred publishing fields in run profiles',
         schemaVersion: 'run-profile/v1',
         version: '1',
         displayName: 'Codex standard',
-        summary: 'Publishing identity is not part of this profile schema version.',
+        summary: 'Profile pins the GitHub account for its script slot.',
+        topology: { stages: { codeReview: { mode: 'single' } } },
+        bindings: {
+          slots: {
+            developer: { runnerId: 'codex', modelLevel: 'codex-standard' },
+            integrator: { accounts: { github: 'profile-bot' } },
+          },
+        },
+        status: 'active',
+      },
+    ]),
+  );
+
+  const catalogs = loadPlaybookCatalogs(root, manifestWithProfiles);
+  assert.equal(catalogs.runProfiles[0]?.id, 'codex-standard');
+  const bindings = catalogs.runProfiles[0]?.bindings as { slots: Record<string, unknown> } | undefined;
+  assert.deepEqual(bindings?.slots.integrator, { accounts: { github: 'profile-bot' } });
+});
+
+test('loadPlaybookCatalogs: rejects top-level publishing fields in run profiles', () => {
+  const { root, manifest } = makeRoot();
+  const manifestWithProfiles: PlaybookManifest = {
+    ...manifest,
+    catalogs: { ...manifest.catalogs, runProfiles: 'catalog/run-profiles.json' },
+  };
+  writeValidRoleCatalog(root);
+  writeValidPipelineCatalog(root);
+  writeFileSync(
+    join(root, 'catalog', 'run-profiles.json'),
+    JSON.stringify([
+      {
+        id: 'codex-standard',
+        pipelineId: 'feature-development',
+        schemaVersion: 'run-profile/v1',
+        version: '1',
+        displayName: 'Codex standard',
+        summary: 'Top-level publishing is not a profile contract.',
         topology: { stages: { codeReview: { mode: 'single' } } },
         bindings: { slots: { developer: { runnerId: 'codex', modelLevel: 'codex-standard' } } },
-        publishing: { github: { account: 'revisium-io' } },
+        publishing: { github: { account: 'profile-bot' } },
         status: 'active',
       },
     ]),

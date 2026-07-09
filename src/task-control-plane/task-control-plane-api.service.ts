@@ -79,7 +79,7 @@ export const WORKFLOW_PROGRESS_EVENT_TYPES = new Set<string>([
   'pr_polled',
   ...INTEGRATOR_PROGRESS_EVENT_TYPES,
 ]);
-const BUILTIN_RUNNERS = new Set(['claude-code', 'codex', 'script', 'stub-agent', 'revo-integrator', 'revo-merger', 'revo-deterministic']);
+const BUILTIN_RUNNERS = new Set(['claude-code', 'codex', 'script', 'stub-agent']);
 
 export type RunnerModeInput = RunnerMode;
 
@@ -1894,13 +1894,15 @@ export class TaskControlPlaneApiService {
   ): Promise<void> {
     if (launchBindings.length === 0) return;
     const byPlaybookRole = new Map(roles.map((r) => [r.playbookRoleId || r.name, r]));
-    const nodeIds = new Set(Object.keys(template.nodes));
+    const nodes = template.nodes as Record<string, { kind?: string }>;
     const cachedProfiles = new Map<string, boolean>();
 
     for (const override of launchBindings) {
       const matchLabel = JSON.stringify(override.match);
       this.assertBindingMatchIsClosed(override, matchLabel);
-      this.assertBindingTargetIsKnown(override, matchLabel, byPlaybookRole, nodeIds);
+      this.assertBindingTargetIsKnown(override, matchLabel, byPlaybookRole, nodes);
+      this.assertScriptBindingShape(override, matchLabel, nodes);
+      this.assertBindingAccounts(override, matchLabel, nodes);
       this.assertRegisteredRunner(override.match.runnerId, matchLabel);
       this.assertRegisteredRunner(override.runnerId, matchLabel);
       await this.assertModelLevelAvailable(override.modelLevel, matchLabel, cachedProfiles);
@@ -1925,14 +1927,44 @@ export class TaskControlPlaneApiService {
     override: BindingOverride,
     matchLabel: string,
     byPlaybookRole: Map<string, RoleSummary>,
-    nodeIds: Set<string>,
+    nodes: Record<string, { kind?: string }>,
   ): void {
     const { roleId, nodeId } = override.match;
     if (roleId !== undefined && !byPlaybookRole.has(roleId)) {
       throw this.profileSchemaClosed(`bindingOverride match ${matchLabel} roleId "${roleId}" does not exist in the selected playbook`);
     }
-    if (nodeId !== undefined && !nodeIds.has(nodeId)) {
+    if (nodeId !== undefined && !nodes[nodeId]) {
       throw this.profileSchemaClosed(`bindingOverride match ${matchLabel} nodeId "${nodeId}" does not exist in the selected pipeline`);
+    }
+  }
+
+  private assertScriptBindingShape(
+    override: BindingOverride,
+    matchLabel: string,
+    nodes: Record<string, { kind?: string }>,
+  ): void {
+    const nodeId = override.match.nodeId;
+    if (!nodeId || nodes[nodeId]?.kind !== 'script') return;
+    if (override.runnerId || override.modelLevel || override.permissionMode) {
+      throw this.profileSchemaClosed(
+        `bindingOverride match ${matchLabel} targets script node "${nodeId}" and must not set runnerId, modelLevel, or permissionMode`,
+      );
+    }
+  }
+
+  private assertBindingAccounts(
+    override: BindingOverride,
+    matchLabel: string,
+    nodes: Record<string, { kind?: string }>,
+  ): void {
+    const github = override.accounts?.github;
+    if (github === undefined) return;
+    if (!github.trim()) {
+      throw this.profileSchemaClosed(`bindingOverride match ${matchLabel} accounts.github must be a non-empty string`);
+    }
+    const nodeId = override.match.nodeId;
+    if (!nodeId || nodes[nodeId]?.kind !== 'script') {
+      throw this.profileSchemaClosed(`bindingOverride match ${matchLabel} accounts are only supported for script nodes`);
     }
   }
 

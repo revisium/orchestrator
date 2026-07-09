@@ -31,12 +31,8 @@ Paths under `src/...` are relative to the `@revisium/orchestrator` package root.
 Today there is no `capabilities` block. The same decisions live as hardcoded branch functions on literal runner ids
 (verified shipped behavior):
 
-- `runnerNeedsLivePreflight(runnerId)` returns `true` for `'claude-code'`, `'codex'`, `'revo-integrator'`,
-  `'revo-merger'` (`src/pipeline/route-contract.ts:116-118`); consumed at
-  `src/pipeline/data-driven-task.workflow.ts:772`.
-- `runnerUsesRealIntegrator(runnerId)` returns `true` for `'revo-integrator'`, `'revo-merger'`
-  (`src/pipeline/route-contract.ts:120-122`); consumed at `src/pipeline/data-driven-task.workflow.ts:832,1383`
-  (real vs. stub integrator).
+- `runnerNeedsLivePreflight(runnerId)` returns `true` for agent runners `'claude-code'` and `'codex'`.
+  Built-in Git/GitHub scripts are selected by `scriptRef`; they are not modeled as fake runner ids.
 - `runnerProducesWorktreeChanges(runnerId)` returns `true` for `'claude-code'`, `'codex'`
   (`src/pipeline/data-driven-task.workflow.ts:358-360`); consumed at `:1128` (change capture).
 - `dispatchRunnerId(runnerId)` switch (`src/pipeline/route-contract.ts:110-114`) consumed at
@@ -64,17 +60,17 @@ the `capabilities` block below is the proposal (ADR-0004 is Status: Draft).
 | `supportsWorkspaceWrite` | boolean | Whether the runner can write the worktree at all. Distinct from per-role permission: a read-only role on a write-capable runner is fine. Relates to Codex `sandbox-enum` (`src/worker/codex-runner.ts:144-155`). |
 | `supportsStructuredOutput` | enum `native-schema`\|`tool-call`\|`prompt-only` | The structured-output tier (not a boolean). Defined in [runner-result-envelope-v1.spec.md](./runner-result-envelope-v1.spec.md). Routing may require a minimum tier. |
 | `needsLivePreflight` | boolean | Whether the runner requires a live auth/binary/reachability probe before dispatch. |
-| `performsMerge` | boolean | Whether the runner mechanically performs the integrate/merge (real integrator vs. pure stub). |
+| `performsMerge` | boolean | Not used for built-in Git/GitHub scripts; script behavior is selected by the pipeline node `scriptRef`. |
 | `producesWorktreeChanges` | boolean | Whether a successful run is expected to leave file changes in the worktree (so the engine captures a `change` artifact). |
 
 ### One-to-one replacement of the hardcoded functions
 
 | Capability field | Replaces (hardcoded today) | Today's behavior to preserve |
 |---|---|---|
-| `needsLivePreflight` | `runnerNeedsLivePreflight(runnerId)` (`src/pipeline/route-contract.ts:116-118`) | `true` for `claude-code`, `codex`, `revo-integrator`, `revo-merger`. Consumed at `src/pipeline/data-driven-task.workflow.ts:772`. |
-| `performsMerge` | `runnerUsesRealIntegrator(runnerId)` (`src/pipeline/route-contract.ts:120-122`) | `true` for `revo-integrator`, `revo-merger`. Consumed at `src/pipeline/data-driven-task.workflow.ts:832,1383`. |
+| `needsLivePreflight` | `runnerNeedsLivePreflight(runnerId)` | `true` for `claude-code` and `codex`. |
+| `performsMerge` | Removed runner branch | Built-in Git/GitHub behavior is a system script selected by `scriptRef`, not by runner id. |
 | `producesWorktreeChanges` | `runnerProducesWorktreeChanges(runnerId)` (`src/pipeline/data-driven-task.workflow.ts:358-360`) | `true` for `claude-code`, `codex`. Consumed at `:1128` (change capture). |
-| `stdoutParser` + `permissionStyle` (manifest ids, not under `capabilities`) → registry lookup | `dispatchRunnerId(runnerId)` switch (`src/pipeline/route-contract.ts:110-114`) consumed at `src/pipeline/pipeline.service.ts:470`, and `switch (role.runner)` (`src/worker/runner-dispatch.ts:8-20`) | `stub-agent`→`script`; `claude-code`/`codex`/`script` pass through; `revo-*`→`script`; else identity. After: resolve the manifest by `runner.id`, dispatch by its `(stdoutParser, permissionStyle)` pair. |
+| `stdoutParser` + `permissionStyle` (manifest ids, not under `capabilities`) → registry lookup | `dispatchRunnerId(runnerId)` switch (`src/pipeline/route-contract.ts:110-114`) consumed at `src/pipeline/pipeline.service.ts:470`, and `switch (role.runner)` (`src/worker/runner-dispatch.ts:8-20`) | `stub-agent`→`script`; `claude-code`/`codex`/`script` pass through; unknown ids remain unknown and fail at dispatch. After: resolve the manifest by `runner.id`, dispatch by its `(stdoutParser, permissionStyle)` pair. |
 | `constraints.allowedProviders` (manifest, see manifest spec) | `requireCompatibleProfile(profile)` throw (`src/worker/codex-runner.ts:179-186`, `isOpenAiCompatibleProvider` at `:109-112`) | Codex rejects a non-OpenAI-compatible provider. After: declarative provider match; a mismatch is a typed precondition failure routed to a lesson, not a hard throw inside the adapter. |
 | default-runner config id | literal `'claude-code'` default in `loadRole` (`src/control-plane/definitions.ts:112`) | A role row with no `runner_id`/`runner` defaults to `claude-code`. After: the default runner id is named config, not a literal in `loadRole`. |
 
@@ -82,7 +78,7 @@ the `capabilities` block below is the proposal (ADR-0004 is Status: Draft).
 
 - **One-to-one parity test.** A test asserts each capability field reproduces its hardcoded predecessor's behavior
   for the live runner ids (e.g. `claude-code`/`codex` → `needsLivePreflight: true`,
-  `revo-integrator`/`revo-merger` → `performsMerge: true`, `claude-code`/`codex` →
+  built-in Git/GitHub script behavior is selected by `scriptRef`, `claude-code`/`codex` →
   `producesWorktreeChanges: true`), so the migration is provably behavior-preserving.
 - **Capability fields are pinned for replay.** `needsLivePreflight` / `performsMerge` /
   `producesWorktreeChanges` are consumed in the deterministic workflow body and MUST be snapshotted into the route
@@ -113,7 +109,7 @@ Grounded in the two live adapters. These are the `capabilities` objects only; `k
   "supportsWorkspaceWrite": true,
   "supportsStructuredOutput": "native-schema",   // --json-schema (claude-code-runner.ts:159)
   "needsLivePreflight": true,                     // route-contract.ts:117
-  "performsMerge": false,                         // not in runnerUsesRealIntegrator set
+  "performsMerge": false,                         // built-in Git/GitHub scripts are selected by scriptRef
   "producesWorktreeChanges": true                 // data-driven-task.workflow.ts:359
 }
 ```
@@ -167,15 +163,15 @@ the tier is promoted to `tool-call`, which degrades to the `prompt-only` floor p
   "privacyClass": "local",
   "supportsWorkspaceWrite": true,                 // the real integrator writes git/gh
   "supportsStructuredOutput": "native-schema",    // it emits a typed result directly
-  "needsLivePreflight": false,                    // stub path; revo-integrator/merger set it true
-  "performsMerge": false,                         // true only for revo-integrator / revo-merger
+  "needsLivePreflight": false,                    // script selection is separate from runner preflight
+  "performsMerge": false,                         // merge behavior is not selected by runner id
   "producesWorktreeChanges": false                // integrator produces a PR, not worktree edits
 }
 ```
 
-The `revo-integrator` / `revo-merger` variants set `needsLivePreflight: true` and `performsMerge: true` (matching
-`src/pipeline/route-contract.ts:117,121`); the pure stub does not. This is exactly today's split between real and
-stub integrator (`src/pipeline/data-driven-task.workflow.ts:1383-1393`).
+Built-in Git/GitHub scripts such as `script:integrator` and `script:confirmMerge` are selected by pipeline node
+`scriptRef`. Run profiles may bind script-node launch data, such as `accounts.github`, but they do not turn scripts
+into runners.
 
 ## Changelog
 

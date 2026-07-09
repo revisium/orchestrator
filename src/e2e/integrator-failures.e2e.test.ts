@@ -314,7 +314,7 @@ test('D16: a stub (script-mode) integrator completes with no git/gh', { skip: e2
     const created = await h.api.createRun({
       repo: target.worktree,
       title: 'E2E stub-integrator feature run',
-      description: 'Group D — integrator overridden to a stub (script mode).',
+      description: 'Group D — integrator script with fake GitHub.',
       scope: 'Only mutate the temporary e2e target repository.',
       playbookId: PLAYBOOK_ID,
       pipelineId: 'feature-development',
@@ -349,7 +349,7 @@ test('D7: an unresolved pinned gh account fails loud (refuses ambient) → block
       integrate: {
         kind: 'needsHuman',
         lesson:
-          "could not resolve a token for the pinned gh account 'revisium-io'; REFUSING to fall back to the ambient gh account",
+          "could not resolve a token for the pinned gh account 'profile-bot'; REFUSING to fall back to the ambient gh account",
       },
     });
     const terminal = await approveUntilTerminal(h.api, run.runId); // preflight ok; integrate refuses → recovery cancel

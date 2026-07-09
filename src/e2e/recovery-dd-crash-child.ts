@@ -33,12 +33,12 @@ const CLEAN_WATCHER: AgentSpec = { byRole: { watcher: { kind: 'domainVerdict', v
 
 const h = await createRunHarness({ agent: (sink) => scriptedAgent(CLEAN_WATCHER, sink) });
 await givenInstalledPlaybook(h);
-const target = createTargetRepo(); // clean throwaway repo; the stub integrator never touches it
+const target = createTargetRepo(); // clean throwaway repo for the parked run
 
 const created = await h.api.createRun({
   repo: target.worktree,
   title: 'E2E data-driven recovery run',
-  description: 'Group L — data-driven crash-recovery (stubbed agent + integrator).',
+  description: 'Group L — data-driven crash-recovery (deterministic agent + fake GitHub).',
   scope: 'data-driven recovery e2e',
   playbookId: 'revisium-agent-playbook',
   pipelineId: DATA_DRIVEN_PIPELINE,

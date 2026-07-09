@@ -400,6 +400,14 @@ const runProfileSlotBindingSchema: JsonSchema = {
     modelLevel: { enum: VALID_MODEL_LEVELS },
     timeoutMs: { type: 'integer', minimum: 1 },
     permissionMode: NON_EMPTY_STRING,
+    accounts: {
+      type: 'object',
+      properties: {
+        github: NON_EMPTY_STRING,
+      },
+      additionalProperties: false,
+      required: ['github'],
+    },
   },
   additionalProperties: false,
   anyOf: [
@@ -407,6 +415,7 @@ const runProfileSlotBindingSchema: JsonSchema = {
     { required: ['modelLevel'] },
     { required: ['timeoutMs'] },
     { required: ['permissionMode'] },
+    { required: ['accounts'] },
   ],
 };
 

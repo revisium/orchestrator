@@ -7,7 +7,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  DEFAULT_GH_ACCOUNT,
   resolveGhAccount,
   ghTokenEnvKey,
   resolveGhToken,
@@ -17,17 +16,43 @@ import {
   type ExecFileFn,
 } from './gh-identity.js';
 
-test('resolveGhAccount: defaults to revisium-io when REVO_GH_ACCOUNT unset/blank', () => {
-  assert.equal(resolveGhAccount({}), DEFAULT_GH_ACCOUNT);
-  assert.equal(resolveGhAccount({ REVO_GH_ACCOUNT: '   ' }), DEFAULT_GH_ACCOUNT);
+test('resolveGhAccount: resolves the active gh account when env and explicit account are absent', () => {
+  const execFile: ExecFileFn = (_file, args) => {
+    assert.deepEqual(args, ['api', 'user', '--jq', '.login']);
+    return 'active-user\n';
+  };
+  assert.equal(resolveGhAccount({ env: {}, execFile }), 'active-user');
 });
 
-test('resolveGhAccount: honors an explicit non-secret account name', () => {
-  assert.equal(resolveGhAccount({ REVO_GH_ACCOUNT: 'my-bot' }), 'my-bot');
+test('resolveGhAccount: explicit account wins over host env and active gh account', () => {
+  let called = false;
+  const execFile: ExecFileFn = () => {
+    called = true;
+    return 'active-user\n';
+  };
+  assert.equal(resolveGhAccount({ account: 'profile-bot', env: { REVO_GH_ACCOUNT: 'env-bot' }, execFile }), 'profile-bot');
+  assert.equal(called, false);
+});
+
+test('resolveGhAccount: host env wins over active gh account', () => {
+  let called = false;
+  const execFile: ExecFileFn = () => {
+    called = true;
+    return 'active-user\n';
+  };
+  assert.equal(resolveGhAccount({ env: { REVO_GH_ACCOUNT: 'env-bot' }, execFile }), 'env-bot');
+  assert.equal(called, false);
+});
+
+test('resolveGhAccount: returns undefined when no account can be resolved', () => {
+  const execFile: ExecFileFn = () => {
+    throw new Error('not authenticated');
+  };
+  assert.equal(resolveGhAccount({ env: {}, execFile }), undefined);
 });
 
 test('ghTokenEnvKey: derives an env-safe per-account key', () => {
-  assert.equal(ghTokenEnvKey('revisium-io'), 'GH_TOKEN_REVISIUM_IO');
+  assert.equal(ghTokenEnvKey('profile-bot'), 'GH_TOKEN_PROFILE_BOT');
   assert.equal(ghTokenEnvKey('my.bot-9'), 'GH_TOKEN_MY_BOT_9');
 });
 
@@ -37,8 +62,8 @@ test('resolveGhToken: env override GH_TOKEN_<ACCOUNT> wins without shelling out'
     called = true;
     return '';
   };
-  const token = resolveGhToken('revisium-io', {
-    env: { GH_TOKEN_REVISIUM_IO: 'gho_fromenv' },
+  const token = resolveGhToken('profile-bot', {
+    env: { GH_TOKEN_PROFILE_BOT: 'gho_fromenv' },
     execFile,
   });
   assert.equal(token, 'gho_fromenv');
@@ -51,16 +76,16 @@ test('resolveGhToken: falls back to `gh auth token --user <account>` keyring', (
     seenArgs = args;
     return 'gho_fromkeyring\n';
   };
-  const token = resolveGhToken('revisium-io', { env: {}, execFile });
+  const token = resolveGhToken('profile-bot', { env: {}, execFile });
   assert.equal(token, 'gho_fromkeyring');
-  assert.deepEqual(seenArgs, ['auth', 'token', '--user', 'revisium-io']);
+  assert.deepEqual(seenArgs, ['auth', 'token', '--user', 'profile-bot']);
 });
 
 test('resolveGhToken: returns undefined when gh fails (account not in keyring)', () => {
   const execFile: ExecFileFn = () => {
     throw new Error('no such account');
   };
-  assert.equal(resolveGhToken('revisium-io', { env: {}, execFile }), undefined);
+  assert.equal(resolveGhToken('profile-bot', { env: {}, execFile }), undefined);
 });
 
 test('makeExecGh: pins GH_TOKEN on the spawned gh process when a token is supplied', () => {
@@ -87,16 +112,16 @@ test('makeExecGh: leaves the ambient account untouched when no token is resolved
   assert.equal(seenEnv?.GH_TOKEN, undefined, 'GH_TOKEN must NOT be injected when no token resolved');
 });
 
-test('resolvePinnedGh: returns a pinned execGh when the token resolves (0008 #1 fail-loud)', () => {
+test('resolvePinnedGh: returns a pinned execGh when an explicit account token resolves', () => {
   const execFile: ExecFileFn = (_file, args, opts) => {
-    // gh auth token --user → token; subsequent calls run with GH_TOKEN pinned.
     if (args[0] === 'auth') return 'gho_pinnedtoken\n';
-    return opts.env?.GH_TOKEN === 'gho_pinnedtoken' ? 'revisium-io' : 'WRONG';
+    return opts.env?.GH_TOKEN === 'gho_pinnedtoken' ? 'profile-bot' : 'WRONG';
   };
-  const result = resolvePinnedGh({ env: { REVO_GH_ACCOUNT: 'revisium-io' }, execFile });
+  const result = resolvePinnedGh({ account: 'profile-bot', env: {}, execFile });
   assert.ok(!('needsHuman' in result), 'must resolve to a pinned execGh');
   if (!('needsHuman' in result)) {
-    assert.equal(result.execGh(['api', 'user']), 'revisium-io', 'pinned execGh uses the resolved token');
+    assert.equal(result.account, 'profile-bot');
+    assert.equal(result.execGh(['api', 'user']), 'profile-bot', 'pinned execGh uses the resolved token');
   }
 });
 
@@ -104,11 +129,11 @@ test('resolvePinnedGh: FAILS LOUD (needsHuman) when the token cannot be resolved
   const execFile: ExecFileFn = () => {
     throw new Error('keychain unavailable (detached host)');
   };
-  const result = resolvePinnedGh({ env: {}, execFile });
+  const result = resolvePinnedGh({ account: 'profile-bot', env: {}, execFile });
   assert.ok('needsHuman' in result, 'must block, not fall back to ambient');
   if ('needsHuman' in result) {
     assert.match(result.lesson, /REFUSING to fall back/i);
-    assert.match(result.lesson, /GH_TOKEN_REVISIUM_IO/, 'lesson names the keyring-free env fix');
+    assert.match(result.lesson, /GH_TOKEN_PROFILE_BOT/, 'lesson names the keyring-free env fix');
   }
 });
 
@@ -116,9 +141,9 @@ test('resolvePinnedGh: env override resolves headless without touching the keyri
   let shelledOut = false;
   const execFile: ExecFileFn = (_file, args, opts) => {
     if (args[0] === 'auth') { shelledOut = true; return ''; }
-    return opts.env?.GH_TOKEN === 'gho_fromenv' ? 'revisium-io' : 'WRONG';
+    return opts.env?.GH_TOKEN === 'gho_fromenv' ? 'profile-bot' : 'WRONG';
   };
-  const result = resolvePinnedGh({ env: { GH_TOKEN_REVISIUM_IO: 'gho_fromenv' }, execFile });
+  const result = resolvePinnedGh({ account: 'profile-bot', env: { GH_TOKEN_PROFILE_BOT: 'gho_fromenv' }, execFile });
   assert.ok(!('needsHuman' in result));
   assert.equal(shelledOut, false, 'env override must NOT shell out to the keyring (headless-safe)');
 });

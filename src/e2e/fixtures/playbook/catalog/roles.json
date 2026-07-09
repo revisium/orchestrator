@@ -84,7 +84,7 @@
     "rights": "git-gh",
     "allowed_tools": ["Read", "Bash"],
     "default_model_level": "standard",
-    "runner_id": "revo-integrator",
+    "runner_id": "script",
     "wrappers": {
       "codex": "adapters/codex/materialized/agents/integrator.toml",
       "claude_code": "adapters/claude-code/materialized/agents/integrator.md"
@@ -110,7 +110,7 @@
     "rights": "git-gh",
     "allowed_tools": ["Read", "Bash"],
     "default_model_level": "standard",
-    "runner_id": "revo-merger",
+    "runner_id": "script",
     "wrappers": {
       "codex": "adapters/codex/materialized/agents/merger.toml",
       "claude_code": "adapters/claude-code/materialized/agents/merger.md"

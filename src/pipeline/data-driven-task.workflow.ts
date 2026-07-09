@@ -43,7 +43,7 @@ import {
 } from '../pipeline-core/index.js';
 import type { AttemptResult } from '../worker/runner.js';
 import type { BindingOverride, LaunchOverrides, RouteDecision, RouteRoleBinding } from './route-contract.js';
-import { resolveLaunchOverrides, runnerNeedsLivePreflight, runnerUsesRealIntegrator } from './route-contract.js';
+import { resolveLaunchOverrides, runnerNeedsLivePreflight } from './route-contract.js';
 import type {
   IntegratorInput,
   IntegratorOutput,
@@ -599,24 +599,13 @@ export type DataDrivenTaskDeps = {
 
   integrateFn: (input: IntegratorInput) => Promise<IntegratorOutput | IntegratorBlocked>;
 
-  runStub: (input: IntegratorInput) => IntegratorOutput;
-
   confirmMergeFn: (input: IntegratorInput) => Promise<ConfirmMergeOutput | IntegratorBlocked>;
-
-  runConfirmStub: (input: IntegratorInput) => ConfirmMergeOutput;
 
   pollPrFn: (input: IntegratorInput) => Promise<PrFeedback | IntegratorBlocked>;
 
-  runPollStub: (input: IntegratorInput) => PrFeedback;
-
   overrideMergeFn: (input: IntegratorInput) => Promise<MergeOverrideOutput | IntegratorBlocked>;
 
-  runOverrideStub: (input: IntegratorInput) => MergeOverrideOutput;
-
   respondThreadsFn: (input: IntegratorInput) => Promise<RespondThreadsOutput | IntegratorBlocked>;
-
-  runRespondStub: (input: IntegratorInput) => RespondThreadsOutput;
-
 
   captureChangeFn: (input: CaptureProducedChangeInput) => Promise<ProducedChangeArtifact>;
 
@@ -894,6 +883,7 @@ type SystemScriptInvocation = {
   decision: Extract<Decision, { type: 'invokeScript' }>;
   ctx: { taskId: string; title: string; base: string; issueRef?: IssueRef; issueAction?: IssueAction };
   bindingByRef: Map<string, RouteRoleBinding>;
+  launchBindings?: BindingOverride[];
   stepKey: string;
   inputs: Record<string, unknown>;
 };
@@ -905,15 +895,10 @@ type ScriptRegistryDeps = Pick<
   | 'appendEvent'
   | 'releaseWorktreeFn'
   | 'integrateFn'
-  | 'runStub'
   | 'confirmMergeFn'
-  | 'runConfirmStub'
   | 'pollPrFn'
-  | 'runPollStub'
   | 'overrideMergeFn'
-  | 'runOverrideStub'
   | 'respondThreadsFn'
-  | 'runRespondStub'
 >;
 
 function integratorResultPointer(result: IntegratorOutput): Record<string, unknown> {
@@ -960,21 +945,29 @@ export function buildSystemScriptRegistry(deps: ScriptRegistryDeps): Map<string,
     appendEvent,
     releaseWorktreeFn,
     integrateFn,
-    runStub,
     confirmMergeFn,
-    runConfirmStub,
     pollPrFn,
-    runPollStub,
     overrideMergeFn,
-    runOverrideStub,
     respondThreadsFn,
-    runRespondStub,
   } = deps;
+
+  function scriptGithubAccount(
+    decision: Extract<Decision, { type: 'invokeScript' }>,
+    launchBindings: BindingOverride[] | undefined,
+  ): string | undefined {
+    if (!launchBindings) return undefined;
+    for (let index = launchBindings.length - 1; index >= 0; index -= 1) {
+      const binding = launchBindings[index]!;
+      if (binding.match.nodeId === decision.nodeId) return binding.accounts?.github;
+    }
+    return undefined;
+  }
 
   function buildIntegratorInput(
     runId: string,
     ctx: SystemScriptInvocation['ctx'],
     inputs: Record<string, unknown>,
+    githubAccount?: string,
   ): IntegratorInput {
     const { taskId, title, base, issueRef, issueAction } = ctx;
     const change = producedChangeFromInputs(inputs);
@@ -985,6 +978,7 @@ export function buildSystemScriptRegistry(deps: ScriptRegistryDeps): Map<string,
       taskId,
       title,
       base,
+      ...(githubAccount ? { githubAccount } : {}),
       ...(issueRef ? { issueRef } : {}),
       ...(issueAction ? { issueAction } : {}),
       ...(changeForIntegrator ? { change: changeForIntegrator } : {}),
@@ -996,17 +990,14 @@ export function buildSystemScriptRegistry(deps: ScriptRegistryDeps): Map<string,
 
   function makeIntegratorScript<TSuccess>(desc: {
     real: (input: IntegratorInput) => Promise<TSuccess | IntegratorBlocked>;
-    stub: (input: IntegratorInput) => TSuccess;
     blockedReason: string;
     mapSuccess: (result: TSuccess) => { eventType: string; payload: Record<string, unknown>; pointer: unknown; verdict?: string };
   }): SystemScriptHandler {
-    return async ({ runId, decision, ctx, bindingByRef, stepKey, inputs }) => {
-      const integratorInput = buildIntegratorInput(runId, ctx, inputs);
-      const binding = bindingByRef.get(decision.scriptRef) ?? bindingByRef.get('script:integrator');
-      const useReal = !!binding && runnerUsesRealIntegrator(binding.resolvedRunnerId);
+    return async ({ runId, decision, ctx, launchBindings, stepKey, inputs }) => {
+      const integratorInput = buildIntegratorInput(runId, ctx, inputs, scriptGithubAccount(decision, launchBindings));
       let result: TSuccess | IntegratorBlocked;
       try {
-        result = useReal ? await desc.real(integratorInput) : desc.stub(integratorInput);
+        result = await desc.real(integratorInput);
       } catch (err) {
         const reason = err instanceof Error ? err.message : String(err);
         await appendEvent({
@@ -1068,7 +1059,6 @@ export function buildSystemScriptRegistry(deps: ScriptRegistryDeps): Map<string,
 
   const integratorScript = makeIntegratorScript({
     real: integrateFn,
-    stub: runStub,
     blockedReason: 'integrate',
     mapSuccess: (result: IntegratorOutput) => ({
       eventType: integratorProgressEventType(result),
@@ -1079,7 +1069,6 @@ export function buildSystemScriptRegistry(deps: ScriptRegistryDeps): Map<string,
 
   const confirmMergeScript = makeIntegratorScript({
     real: confirmMergeFn,
-    stub: runConfirmStub,
     blockedReason: 'confirm-merge',
     mapSuccess: (result: ConfirmMergeOutput) => ({
       eventType: 'merge_confirmed',
@@ -1099,7 +1088,6 @@ export function buildSystemScriptRegistry(deps: ScriptRegistryDeps): Map<string,
 
   const pollPrScript = makeIntegratorScript({
     real: pollPrFn,
-    stub: runPollStub,
     blockedReason: 'poll-pr',
     mapSuccess: (result: PrFeedback) => ({
       eventType: 'pr_polled',
@@ -1117,13 +1105,11 @@ export function buildSystemScriptRegistry(deps: ScriptRegistryDeps): Map<string,
     }),
   });
 
-  const overrideMergeScript: SystemScriptHandler = async ({ runId, decision, ctx, bindingByRef, stepKey, inputs }) => {
-    const integratorInput = buildIntegratorInput(runId, ctx, inputs);
-    const binding = bindingByRef.get(decision.scriptRef) ?? bindingByRef.get('script:integrator');
-    const useReal = !!binding && runnerUsesRealIntegrator(binding.resolvedRunnerId);
+  const overrideMergeScript: SystemScriptHandler = async ({ runId, decision, ctx, launchBindings, stepKey, inputs }) => {
+    const integratorInput = buildIntegratorInput(runId, ctx, inputs, scriptGithubAccount(decision, launchBindings));
     let result: MergeOverrideOutput | IntegratorBlocked;
     try {
-      result = useReal ? await overrideMergeFn(integratorInput) : runOverrideStub(integratorInput);
+      result = await overrideMergeFn(integratorInput);
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);
       await appendEvent({
@@ -1166,7 +1152,6 @@ export function buildSystemScriptRegistry(deps: ScriptRegistryDeps): Map<string,
 
   const respondThreadsScript = makeIntegratorScript({
     real: respondThreadsFn,
-    stub: runRespondStub,
     blockedReason: 'respond-threads',
     mapSuccess: (result: RespondThreadsOutput) => ({
       eventType: 'threads_responded',
@@ -1181,7 +1166,6 @@ export function buildSystemScriptRegistry(deps: ScriptRegistryDeps): Map<string,
     ['script:pollPr', pollPrScript],
     ['script:overrideMerge', overrideMergeScript],
     ['script:respondThreads', respondThreadsScript],
-    // Unknown refs fall through to this entry, matching the original else-branch behavior.
     ['script:integrator', integratorScript],
   ]);
 }
@@ -1318,11 +1302,7 @@ export function makeDataDrivenTask(
     const bindingByRef = new Map<string, RouteRoleBinding>();
     for (const binding of route.roleBindings) {
       bindingByRef.set(`role:${binding.roleId}`, binding);
-      bindingByRef.set(`script:${binding.roleId}`, binding);
       bindingByRef.set(binding.roleId, binding);
-      if (runnerUsesRealIntegrator(binding.resolvedRunnerId) && !bindingByRef.has('script:integrator')) {
-        bindingByRef.set('script:integrator', binding);
-      }
     }
     const launchBindings = route.launchBindings ?? [];
 
@@ -1647,7 +1627,7 @@ export function makeDataDrivenTask(
           });
           return { lastResult: { outcome: 'failed', errorCode: REVO_INPUT_MISSING }, lastVerdict: 'failed', failureReason: reason, stepDelta: 1 };
         }
-        const scriptResult = await invokeScript(runId, decision, { taskId, title, base, issueRef: ctx.issueRef, issueAction: ctx.issueAction }, bindingByRef, stepKeyFor(node.id, ordinal), resolved.inputs);
+        const scriptResult = await invokeScript(runId, decision, { taskId, title, base, issueRef: ctx.issueRef, issueAction: ctx.issueAction }, bindingByRef, ctx.launchBindings, stepKeyFor(node.id, ordinal), resolved.inputs);
         if (scriptResult.outcome === 'blocked') {
           return { lastResult: { outcome: 'failed', errorCode: REVO_SCRIPT_BLOCKED }, lastVerdict: 'blocked', stepDelta: 1 };
         }
@@ -2177,11 +2157,24 @@ export function makeDataDrivenTask(
     decision: Extract<Decision, { type: 'invokeScript' }>,
     ctx: { taskId: string; title: string; base: string; issueRef?: IssueRef; issueAction?: IssueAction },
     bindingByRef: Map<string, RouteRoleBinding>,
+    launchBindings: BindingOverride[],
     stepKey: string,
     inputs: Record<string, unknown>,
   ): Promise<ScriptResult> {
-    const handler = scriptRegistry.get(decision.scriptRef) ?? scriptRegistry.get('script:integrator')!;
-    return handler({ runId, decision, ctx, bindingByRef, stepKey, inputs });
+    const handler = scriptRegistry.get(decision.scriptRef);
+    if (!handler) {
+      const reason = `script handler is not registered: ${decision.scriptRef}`;
+      await appendEvent({
+        runId,
+        taskId: ctx.taskId,
+        stepId: '',
+        stepKey,
+        type: 'step_failed',
+        payload: { scriptRef: decision.scriptRef, error: reason },
+      });
+      return { outcome: 'failed', reason };
+    }
+    return handler({ runId, decision, ctx, bindingByRef, launchBindings, stepKey, inputs });
   }
 
 

@@ -43,7 +43,7 @@ after(async () => {
   if (h) await h.close();
 });
 
-/** Create + start a Group-K pipeline (stub integrator). `spec` scripts the embedded role's verdict. */
+/** Create + start a Group-K pipeline. `spec` scripts the embedded role's verdict. */
 async function startRun(pipelineId: string, spec?: AgentSpec): Promise<{ runId: string; taskId: string }> {
   const created = await h.api.createRun({
     repo: target.worktree,
@@ -78,8 +78,8 @@ test('K1: an embedded post-integrator role declared only in playbook data runs a
   const run = await startRun(PIPELINE);
   const terminal = await approveUntilTerminal(h.api, run.runId); // approve plan + merge
   assert.equal(terminal.state, 'completed');
-  // `integrate_succeeded` proves the integrator ran; it is a stub runner, so it is NOT in
-  // `executedRoles` (which records agent calls only). K3 proves pr-watcher is ordered after the integrator.
+  // `integrate_succeeded` proves the integrator script ran; it is NOT in `executedRoles` because
+  // that recorder tracks agent calls only. K3 proves pr-watcher is ordered after the integrator.
   await assertEventsPresent(h.api, run.runId, ['integrate_succeeded', 'run_completed']);
   assert.ok(executedRoles(h, run.runId).some(([role]) => role === 'pr-watcher'), 'the embedded pr-watcher ran');
 });

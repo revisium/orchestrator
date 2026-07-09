@@ -78,7 +78,7 @@ function makeRoute(options: { developerRunnerId?: string; integratorRunnerId?: s
       binding('developer', options.developerRunnerId ?? 'claude-code'),
       binding('reviewer'),
       binding('triager'),
-      binding('integrator', options.integratorRunnerId ?? 'revo-integrator'), // real-integrator runner → script:integrator resolves here
+      binding('integrator', options.integratorRunnerId ?? 'script'),
       binding('watcher'),
     ],
     params: {},
@@ -102,7 +102,7 @@ function defaultConsensusProfileTemplate(): Template {
 
 function codexBinding(roleId: string): RouteRoleBinding {
   if (roleId === 'integrator') {
-    return { roleId, rowId: roleId, modelLevel: 'standard', runnerId: 'revo-integrator', resolvedRunnerId: 'revo-integrator', runnerSource: 'playbook' };
+    return { roleId, rowId: roleId, modelLevel: 'standard', runnerId: 'script', resolvedRunnerId: 'script', runnerSource: 'playbook' };
   }
   return { roleId, rowId: roleId, modelLevel: 'codex-standard', runnerId: 'claude-code', resolvedRunnerId: 'codex', runnerSource: 'profile' };
 }
@@ -305,17 +305,12 @@ function buildAdapter(opts: {
       if (opts.integrate) return opts.integrate(input);
       return { prUrl: `https://example/pr/${input.taskId}`, branch: 'feat/x', prNumber: 1 };
     },
-    runStub: (input: IntegratorInput): IntegratorOutput => {
-      rec.integrateCalls++;
-      rec.integratorInputs.push(input);
-      return { prUrl: 'stub://pr/placeholder', branch: `feat/${input.taskId}-stub`, prNumber: 0 };
-    },
-    // The test route binds the integrator to revo-integrator (a live runner), so preflight runs. By
-    // default it passes (these tests exercise the graph, not preflight); a test can override it.
+    // Live script nodes trigger preflight. By default it passes (these tests exercise the graph);
+    // a test can override it.
     preflightFn: async () => (opts.preflight ? opts.preflight() : { ok: true }),
     // Per-run worktree lifecycle (plan 0017) — fakes here record create/release ordering via events;
-    // the live runner binding means create fires after preflight, and release fires via the explicit
-    // cleanupWorktree pipeline step (not an engine-level finally).
+    // live templates create after preflight, and release fires via the explicit cleanupWorktree
+    // pipeline step (not an engine-level finally).
     createWorktreeFn: async (_runId, _taskId, _title, _base, issueRef) => {
       rec.events.push('worktree_create:pipeline');
       rec.worktreeIssueRefs.push(issueRef);
@@ -332,7 +327,6 @@ function buildAdapter(opts: {
       if (opts.confirmMerge) return opts.confirmMerge(input);
       return { merged: true as const, prNumber: 1, prUrl: `https://example/pr/${input.taskId}/merged` };
     },
-    runConfirmStub: (input: IntegratorInput) => ({ merged: true as const, prNumber: 0, prUrl: `stub://pr/${input.taskId}/merged` }),
     overrideMergeFn: async (input: IntegratorInput): Promise<MergeOverrideOutput | IntegratorBlocked> => {
       if (opts.overrideMerge) return opts.overrideMerge(input);
       return {
@@ -345,15 +339,6 @@ function buildAdapter(opts: {
         override: { accepted: true, actor: 'test', note: 'test override', source: { gate: 'mergeGate' as const, inboxId: 'inbox-test' }, facts: [], replied: 0, resolved: 0 },
       };
     },
-    runOverrideStub: (input: IntegratorInput): MergeOverrideOutput => ({
-      prNumber: 0,
-      headSha: 'stub',
-      evidence: [`stub overrideMerge for ${input.taskId}: clean`],
-      verdict: 'clean',
-      ciFailures: [],
-      reviewThreads: [],
-      override: { accepted: true, actor: 'test', note: 'stub override', source: { gate: 'mergeGate', inboxId: 'inbox-stub' }, facts: [], replied: 0, resolved: 0 },
-    }),
     // pollPr (plan 0018): default fake reports a CLEAN PR so the loop converges to the merge gate.
     pollPrFn: async (input: IntegratorInput): Promise<PrFeedback | IntegratorBlocked> => {
       rec.pollPrCalls++;
@@ -367,14 +352,6 @@ function buildAdapter(opts: {
         reviewThreads: [],
       };
     },
-    runPollStub: (_input: IntegratorInput): PrFeedback => ({
-      prNumber: 0,
-      headSha: 'stub',
-      evidence: ['stub pollPr readiness: clean'],
-      verdict: 'clean',
-      ciFailures: [],
-      reviewThreads: [],
-    }),
     // respondThreads (plan 0018): capture the consumed triage; default reports nothing to reply/resolve.
     respondThreadsFn: async (input: IntegratorInput): Promise<RespondThreadsOutput | IntegratorBlocked> => {
       rec.respondCalls++;
@@ -382,7 +359,6 @@ function buildAdapter(opts: {
       if (opts.respondThreads) return opts.respondThreads(input);
       return { replied: 0, resolved: 0 };
     },
-    runRespondStub: (_input: IntegratorInput): RespondThreadsOutput => ({ replied: 0, resolved: 0 }),
     captureChangeFn: async (input) => {
       const change: ProducedChangeArtifact = {
         branch: `feat/${input.taskId}`,
@@ -576,7 +552,7 @@ test('DD1: happy path — analyst→plan→developer→review→integrate→poll
   assert.equal(result.status, 'succeeded');
   assert.deepEqual(rec.gates, ['plan', 'merge'], 'both humanGate nodes opened, in order');
   assert.equal(rec.completed.length, 1, 'completeRun called once');
-  assert.equal(rec.integrateCalls, 1, 'the integrator script ran once (real integrator via runner-wins)');
+  assert.equal(rec.integrateCalls, 1, 'the integrator script ran once');
   assert.ok(rec.events.includes('integrate_succeeded:integrator'), 'integrate_succeeded emitted at the script node');
   assert.equal(rec.pollPrCalls, 3, 'pollPr + mergeReadiness + mergeApproveReverify re-poll fresh readiness after approval');
   const mergeSummary = rec.gateSummaries.find((summary) => summary.nodeId === 'mergeGate');
@@ -2933,12 +2909,10 @@ function makeMinimalDeps(): DataDrivenTaskDeps {
     cancelRun: async () => null,
     loadRunTaskContext: async () => ({ taskId: 'task-1', title: 'T', base: 'master', repoRef: '', issueRef: undefined, issueAction: undefined }),
     integrateFn: async (input) => ({ prUrl: `stub://pr/${input.taskId}`, branch: 'feat/x', prNumber: 1 }),
-    runStub: (input) => ({ prUrl: `stub://pr/${input.taskId}`, branch: 'feat/x', prNumber: 0 }),
     preflightFn: async () => ({ ok: true }),
     createWorktreeFn: async () => ({ worktreePath: '/fake/worktree' }),
     releaseWorktreeFn: async () => ({ released: true, worktreePath: '/fake/worktree' }),
     confirmMergeFn: async (input) => ({ merged: true as const, prNumber: 1, prUrl: `stub://pr/${input.taskId}` }),
-    runConfirmStub: (input) => ({ merged: true as const, prNumber: 0, prUrl: `stub://pr/${input.taskId}` }),
     overrideMergeFn: async (input) => ({
       prNumber: 1,
       headSha: 'sha',
@@ -2948,19 +2922,8 @@ function makeMinimalDeps(): DataDrivenTaskDeps {
       reviewThreads: [],
       override: { accepted: true, actor: 'test', note: 'test override', source: { gate: 'mergeGate', inboxId: 'inbox-test' }, facts: [], replied: 0, resolved: 0 },
     }),
-    runOverrideStub: (input) => ({
-      prNumber: 0,
-      headSha: 'stub',
-      evidence: [`stub overrideMerge ${input.taskId}: clean`],
-      verdict: 'clean' as const,
-      ciFailures: [],
-      reviewThreads: [],
-      override: { accepted: true, actor: 'test', note: 'stub override', source: { gate: 'mergeGate', inboxId: 'inbox-stub' }, facts: [], replied: 0, resolved: 0 },
-    }),
     pollPrFn: async () => ({ prNumber: 1, headSha: 'sha', evidence: [], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] }),
-    runPollStub: () => ({ prNumber: 0, headSha: 'stub', evidence: [], verdict: 'clean' as const, ciFailures: [], reviewThreads: [] }),
     respondThreadsFn: async () => ({ replied: 0, resolved: 0 }),
-    runRespondStub: () => ({ replied: 0, resolved: 0 }),
     captureChangeFn: async (input) => ({ branch: `feat/${input.taskId}`, headSha: 'sha', worktreePath: '/fake/worktree' }),
   };
 }

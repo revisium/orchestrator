@@ -1,8 +1,8 @@
 /**
- * integrator.test.ts — unit tests for integrator.ts (B1/B3/B4/B5/M4/OQ-2).
+ * integrator.test.ts — unit tests for integrator.ts (B1/B4/B5/M4/OQ-2).
  *
  * Uses fake execGit / execGh fns — no real git, no real gh, no network.
- * Tests STUB, REAL integrator logic, preflightLive, find-or-create PR, replay safety.
+ * Tests REAL integrator logic, preflightLive, find-or-create PR, replay safety.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,7 +10,6 @@ import path from 'node:path';
 import {
   integrate,
   confirmMerge,
-  stubIntegrate,
   preflightLive,
   pollPr,
   overrideMerge,
@@ -32,10 +31,6 @@ import { GITHUB_CHECK_ROLLUP_UNAVAILABLE, type ExecGhFn } from '../poller/pr-rea
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
-function neverGit(_args: string[], _cwd: string): string {
-  throw new Error('execGit must not be called');
-}
-
 function neverGh(_args: string[]): string {
   throw new Error('execGh must not be called');
 }
@@ -52,49 +47,12 @@ function makeResolveRunCwd(cwd = FAKE_CWD): (runId: string, taskId: string) => P
   return async () => cwd;
 }
 
-async function withRevoGhAccount<T>(account: string, run: () => Promise<T>): Promise<T> {
-  const previous = process.env['REVO_GH_ACCOUNT'];
-  process.env['REVO_GH_ACCOUNT'] = account;
-  try {
-    return await run();
-  } finally {
-    if (previous === undefined) delete process.env['REVO_GH_ACCOUNT'];
-    else process.env['REVO_GH_ACCOUNT'] = previous;
-  }
-}
-
 const BASE_INPUT: IntegratorInput = {
   runId: 'run-001',
   taskId: 'task-001',
   title: 'Add feature X',
   base: 'master',
 };
-
-// ─── STUB (B3 — zero external effects) ────────────────────────────────────────
-
-test('B3: stubIntegrate returns placeholder with no execGit/execGh calls', () => {
-  const gitCalls: string[][] = [];
-  const ghCalls: string[][] = [];
-
-  // Wrap to detect if called
-  const trackingGit: ExecFn = (args, cwd) => {
-    gitCalls.push(args);
-    return neverGit(args, cwd);
-  };
-  const trackingGh: ExecGhFn = (args) => {
-    ghCalls.push(args);
-    return neverGh(args);
-  };
-  void trackingGit; void trackingGh; // not passed to stubIntegrate
-
-  const result = stubIntegrate(BASE_INPUT);
-
-  assert.equal(result.prUrl, 'stub://pr/placeholder');
-  assert.equal(result.prNumber, 0);
-  assert.ok(result.branch.startsWith('feat/'), 'branch must start with feat/');
-  assert.equal(gitCalls.length, 0, 'execGit must NOT be called in stub');
-  assert.equal(ghCalls.length, 0, 'execGh must NOT be called in stub');
-});
 
 // ─── preflightLive (B5) ───────────────────────────────────────────────────────
 
@@ -891,7 +849,6 @@ test('issue-140: produced head equal to the PR head returns a no-op nothing-to-i
 });
 
 test('issue-271: produced head equal to a foreign PR exposes author provenance on noop adoption', async () => {
-  await withRevoGhAccount('revisium-io', async () => {
     let pushCalled = false;
     const edits: string[][] = [];
     const jsonFields: string[] = [];
@@ -902,6 +859,7 @@ test('issue-271: produced head equal to a foreign PR exposes author provenance o
     };
     const input: IntegratorInput = {
       ...BASE_INPUT,
+      githubAccount: 'profile-bot',
       issueRef,
       change: {
         branch: 'feat/produced',
@@ -952,15 +910,13 @@ test('issue-271: produced head equal to a foreign PR exposes author provenance o
     assert.equal(result.prNumber, 42);
     assert.equal(result.foreignPr, true);
     assert.equal(result.prAuthor, 'developer-host');
-    assert.equal(result.integratorAccount, 'revisium-io');
+    assert.equal(result.integratorAccount, 'profile-bot');
     assert.ok(jsonFields.some((fields) => fields.split(',').includes('author')), 'PR list query must request author');
     assert.equal(pushCalled, false, 'already-pushed produced head must not push again');
     assert.deepEqual(edits, [], 'foreign noop adoption must not edit PR metadata');
-  });
 });
 
 test('issue-271: produced change push to a foreign existing PR exposes author provenance', async () => {
-  await withRevoGhAccount('revisium-io', async () => {
     let pushedRef = '';
     const edits: string[][] = [];
     const issueRef = {
@@ -970,6 +926,7 @@ test('issue-271: produced change push to a foreign existing PR exposes author pr
     };
     const input: IntegratorInput = {
       ...BASE_INPUT,
+      githubAccount: 'profile-bot',
       issueRef,
       change: {
         branch: 'feat/produced',
@@ -1020,14 +977,12 @@ test('issue-271: produced change push to a foreign existing PR exposes author pr
     assert.equal(result.headSha, 'new-produced-sha');
     assert.equal(result.foreignPr, true);
     assert.equal(result.prAuthor, 'developer-host');
-    assert.equal(result.integratorAccount, 'revisium-io');
+    assert.equal(result.integratorAccount, 'profile-bot');
     assert.equal(pushedRef, 'new-produced-sha:refs/heads/feat/produced');
     assert.deepEqual(edits, [], 'foreign existing-PR push must not edit PR metadata');
-  });
 });
 
 test('issue-271: produced change push to a same-account existing PR still repairs metadata', async () => {
-  await withRevoGhAccount('revisium-io', async () => {
     const edits: string[][] = [];
     const issueRef = {
       repo: 'o/r',
@@ -1036,6 +991,7 @@ test('issue-271: produced change push to a same-account existing PR still repair
     };
     const input: IntegratorInput = {
       ...BASE_INPUT,
+      githubAccount: 'profile-bot',
       issueRef,
       change: {
         branch: 'feat/produced',
@@ -1061,7 +1017,7 @@ test('issue-271: produced change push to a same-account existing PR still repair
               headRefOid: 'old-sha',
               title: 'Add feature X',
               body: '',
-              author: { login: 'revisium-io' },
+              author: { login: 'profile-bot' },
             },
           ]);
         }
@@ -1083,7 +1039,6 @@ test('issue-271: produced change push to a same-account existing PR still repair
     assert.deepEqual(edits, [
       ['pr', 'edit', '42', '--repo', 'o/r', '--title', '#147 Add feature X', '--body', 'Closes #147'],
     ]);
-  });
 });
 
 test('issue-140: produced change still creates a new PR when no existing PR is present', async () => {

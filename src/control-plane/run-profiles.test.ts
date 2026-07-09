@@ -78,6 +78,14 @@ test('run profiles: catalog consensus profile materializes plan and code review 
 });
 
 for (const candidate of runProfiles) {
+  test(`run profiles: script slots in ${candidate.id} do not declare runner launch fields`, () => {
+    const slots = asRecord(asRecord(candidate.bindings).slots);
+    const integrator = asRecord(slots.integrator);
+    assert.equal(integrator.runnerId, undefined);
+    assert.equal(integrator.modelLevel, undefined);
+    assert.equal(integrator.permissionMode, undefined);
+  });
+
   test(`run profiles: catalog bindings for ${candidate.id} become launch overrides`, () => {
     const overrides = launchBindingsFromRunProfile(candidate as never);
     const bySlot = new Map(overrides.map((override) => [overrideKey(override), override]));
@@ -92,6 +100,7 @@ for (const candidate of runProfiles) {
       assert.equal(actual.modelLevel, binding.modelLevel);
       assert.equal(actual.timeoutMs, binding.timeoutMs);
       assert.equal(actual.permissionMode, binding.permissionMode);
+      assert.deepEqual(actual.accounts, binding.accounts);
     }
   });
 }
@@ -193,4 +202,29 @@ test('run profiles: canonical hash includes selected pipeline context outside th
     runProfileHash(payload, { pipelineId: 'local-change' }),
     runProfileHash(payload, { pipelineId: 'analysis-only' }),
   );
+});
+
+test('run profiles: GitHub account bindings are launch config and hash input', () => {
+  const left = {
+    schemaVersion: 'run-profile/v1',
+    topology: { stages: {} },
+    bindings: {
+      slots: {
+        integrator: { accounts: { github: 'profile-bot' } },
+      },
+    },
+  };
+  const right = {
+    schemaVersion: 'run-profile/v1',
+    topology: { stages: {} },
+    bindings: {
+      slots: {
+        integrator: { accounts: { github: 'other-bot' } },
+      },
+    },
+  };
+
+  assert.notEqual(runProfileHash(left), runProfileHash(right));
+  const [binding] = launchBindingsFromRunProfile(left);
+  assert.deepEqual(binding, { match: { nodeId: 'integrator' }, accounts: { github: 'profile-bot' } });
 });
