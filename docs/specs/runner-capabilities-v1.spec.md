@@ -175,4 +175,6 @@ into runners.
 
 ## Changelog
 
+- 2026-07-09: Clarified that built-in Git/GitHub behavior is selected by pipeline `scriptRef`, not by
+  runner ids; removed old integrator/merger runner-id semantics and kept unknown script/runner selection fail-closed.
 - 2026-06-29: Initial version.

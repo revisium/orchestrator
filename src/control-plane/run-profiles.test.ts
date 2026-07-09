@@ -55,9 +55,28 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
-function slotKey(slot: string): string {
+function hasRunnerLaunchFields(binding: Record<string, unknown>): boolean {
+  return binding.runnerId !== undefined ||
+    binding.modelLevel !== undefined ||
+    binding.timeoutMs !== undefined ||
+    binding.permissionMode !== undefined;
+}
+
+function slotTargetsNode(slot: string, binding: Record<string, unknown>): boolean {
+  if (slot.startsWith('node:')) return true;
+  if (slot.startsWith('role:')) return false;
+  if (!hasRunnerLaunchFields(binding) && binding.accounts !== undefined) return true;
+  return !ROLE_SLOTS.has(slot);
+}
+
+function slotNodeId(slot: string, binding: Record<string, unknown>): string | undefined {
+  if (!slotTargetsNode(slot, binding)) return undefined;
+  return slot.startsWith('node:') ? slot.slice('node:'.length) : slot;
+}
+
+function slotKey(slot: string, binding: Record<string, unknown>): string {
   if (slot.startsWith('role:') || slot.startsWith('node:')) return slot;
-  return ROLE_SLOTS.has(slot) ? `role:${slot}` : `node:${slot}`;
+  return slotTargetsNode(slot, binding) ? `node:${slot}` : `role:${slot}`;
 }
 
 function overrideKey(override: BindingOverride): string {
@@ -78,13 +97,26 @@ test('run profiles: catalog consensus profile materializes plan and code review 
 });
 
 for (const candidate of runProfiles) {
-  test(`run profiles: script slots in ${candidate.id} do not declare runner launch fields`, () => {
+  test(`run profiles: script-node bindings in ${candidate.id} do not declare runner launch fields`, () => {
+    const pipeline = pipelines.find((entry) => entry.id === candidate.pipelineId);
+    assert.ok(pipeline, `${candidate.pipelineId} pipeline exists`);
+    const template = templateFromExecutionPolicy(pipeline.execution_policy);
+    assert.ok(template, `${candidate.pipelineId} carries template_json`);
+    const scriptNodeIds = new Set(
+      Object.entries(template.nodes)
+        .filter(([, node]) => node.kind === 'script')
+        .map(([nodeId]) => nodeId),
+    );
     const slots = asRecord(asRecord(candidate.bindings).slots);
-    const integrator = asRecord(slots.integrator);
-    assert.equal(integrator.runnerId, undefined);
-    assert.equal(integrator.modelLevel, undefined);
-    assert.equal(integrator.timeoutMs, undefined);
-    assert.equal(integrator.permissionMode, undefined);
+    for (const [slot, rawBinding] of Object.entries(slots)) {
+      const binding = asRecord(rawBinding);
+      const nodeId = slotNodeId(slot, binding);
+      if (!nodeId || !scriptNodeIds.has(nodeId)) continue;
+      assert.equal(binding.runnerId, undefined, `${candidate.id} ${slot} must not set runnerId`);
+      assert.equal(binding.modelLevel, undefined, `${candidate.id} ${slot} must not set modelLevel`);
+      assert.equal(binding.timeoutMs, undefined, `${candidate.id} ${slot} must not set timeoutMs`);
+      assert.equal(binding.permissionMode, undefined, `${candidate.id} ${slot} must not set permissionMode`);
+    }
   });
 
   test(`run profiles: catalog bindings for ${candidate.id} become launch overrides`, () => {
@@ -95,7 +127,7 @@ for (const candidate of runProfiles) {
     assert.equal(overrides.length, Object.keys(slots).length);
     for (const [slot, rawBinding] of Object.entries(slots)) {
       const binding = asRecord(rawBinding);
-      const actual = bySlot.get(slotKey(slot));
+      const actual = bySlot.get(slotKey(slot, binding));
       assert.ok(actual, `${candidate.id} binding ${slot} must produce an override`);
       assert.equal(actual.runnerId, binding.runnerId);
       assert.equal(actual.modelLevel, binding.modelLevel);

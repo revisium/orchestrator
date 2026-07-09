@@ -440,8 +440,16 @@ function runnerProducesWorktreeChanges(runnerId: string): boolean {
   return runnerId === 'claude-code' || runnerId === 'codex';
 }
 
+const LIVE_WORKTREE_SCRIPT_REFS = new Set([
+  'script:integrator',
+  'script:confirmMerge',
+  'script:pollPr',
+  'script:overrideMerge',
+  'script:respondThreads',
+]);
+
 function scriptRequiresLiveWorktree(scriptRef: string): boolean {
-  return scriptRef === 'script:integrator';
+  return LIVE_WORKTREE_SCRIPT_REFS.has(scriptRef);
 }
 
 function templateRequiresLiveWorktree(template: Template): boolean {
@@ -950,6 +958,18 @@ function mergeOverrideEventPayload(result: MergeOverrideOutput): Record<string, 
   };
 }
 
+function scriptGithubAccount(
+  decision: Extract<Decision, { type: 'invokeScript' }>,
+  launchBindings: BindingOverride[] | undefined,
+): string | undefined {
+  if (!launchBindings) return undefined;
+  for (let index = launchBindings.length - 1; index >= 0; index -= 1) {
+    const binding = launchBindings[index]!;
+    if (binding.match.nodeId === decision.nodeId) return binding.accounts?.github;
+  }
+  return undefined;
+}
+
 export function buildSystemScriptRegistry(deps: ScriptRegistryDeps): Map<string, SystemScriptHandler> {
   const {
     appendEvent,
@@ -960,18 +980,6 @@ export function buildSystemScriptRegistry(deps: ScriptRegistryDeps): Map<string,
     overrideMergeFn,
     respondThreadsFn,
   } = deps;
-
-  function scriptGithubAccount(
-    decision: Extract<Decision, { type: 'invokeScript' }>,
-    launchBindings: BindingOverride[] | undefined,
-  ): string | undefined {
-    if (!launchBindings) return undefined;
-    for (let index = launchBindings.length - 1; index >= 0; index -= 1) {
-      const binding = launchBindings[index]!;
-      if (binding.match.nodeId === decision.nodeId) return binding.accounts?.github;
-    }
-    return undefined;
-  }
 
   function buildIntegratorInput(
     runId: string,
