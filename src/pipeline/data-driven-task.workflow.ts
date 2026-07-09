@@ -436,6 +436,11 @@ function nodeProducesChange(node: Node): boolean {
     node.resultSchema === 'schema:change';
 }
 
+function recoveryContextAfterNode(nodeId: string, recoveryContext: RunOutputRow | undefined): RunOutputRow | null | undefined {
+  if (!recoveryContext) return undefined;
+  return nodeId === 'classifyRecovery' ? recoveryContext : null;
+}
+
 function runnerProducesWorktreeChanges(runnerId: string): boolean {
   return runnerId === 'claude-code' || runnerId === 'codex';
 }
@@ -1489,6 +1494,32 @@ export function makeDataDrivenTask(
   };
   type NeedsHumanRoleResult = RetryRoleResult | InvokeRoleBlockedResult | InvokeRoleQuestionResult | undefined;
 
+  function forkBranchArrival(
+    decision: ForkDecision,
+    branch: ForkDecision['branches'][number],
+    seq: number,
+    status: 'succeeded' | 'failed' | 'cancelled' | 'blocked',
+    lastVerdict: string,
+  ): JoinArrival {
+    if (status !== 'succeeded') {
+      throw new InterpretError(
+        `fork ${decision.nodeId} branch ${branch.id} completed ${status} before join ${decision.joinId}`,
+      );
+    }
+    return {
+      branchId: branch.id,
+      seq,
+      ...(lastVerdict ? { verdict: lastVerdict } : {}),
+    };
+  }
+
+  function recoveryContextFromEffect(
+    current: RunOutputRow | undefined,
+    effect: DecisionEffect,
+  ): RunOutputRow | undefined {
+    return 'recoveryContext' in effect ? effect.recoveryContext ?? undefined : current;
+  }
+
   function branchTemplateForJoin(template: Template, joinId: string): Template {
     const join = resolveNode(template, joinId);
     if (join.kind !== 'join') throw new InterpretError(`fork target ${joinId} is not a join (${join.kind})`);
@@ -1561,17 +1592,8 @@ export function makeDataDrivenTask(
       const next = coreStep(branchTemplate, state, lastResult);
       state = next.state;
       if (next.decision.type === 'complete') {
-        if (next.decision.status !== 'succeeded') {
-          throw new InterpretError(
-            `fork ${decision.nodeId} branch ${branch.id} completed ${next.decision.status} before join ${decision.joinId}`,
-          );
-        }
         return {
-          arrival: {
-            branchId: branch.id,
-            seq,
-            ...(lastVerdict ? { verdict: lastVerdict } : {}),
-          },
+          arrival: forkBranchArrival(decision, branch, seq, next.decision.status, lastVerdict),
           stepDelta,
         };
       }
@@ -1586,11 +1608,11 @@ export function makeDataDrivenTask(
       });
       stepDelta += eff.stepDelta;
       if (eff.terminal) return { terminal: eff.terminal, stepDelta };
-      if (eff.stateOverride) state = eff.stateOverride;
+      state = eff.stateOverride ?? state;
       lastResult = eff.lastResult;
-      if (eff.lastVerdict !== undefined) lastVerdict = eff.lastVerdict;
+      lastVerdict = eff.lastVerdict ?? lastVerdict;
       lastProducedOutput = eff.producedOutput ?? lastProducedOutput;
-      if ('recoveryContext' in eff) recoveryContext = eff.recoveryContext ?? undefined;
+      recoveryContext = recoveryContextFromEffect(recoveryContext, eff);
     }
 
     throw new InterpretError(
@@ -1683,6 +1705,7 @@ export function makeDataDrivenTask(
           lastResult: { outcome: 'succeeded', ...(verdict ? { verdict } : {}) },
           ...(verdict ? { lastVerdict: verdict } : {}),
           ...(producedOutput ? { producedOutput } : {}),
+          ...(ctx.recoveryContext ? { recoveryContext: recoveryContextAfterNode(node.id, ctx.recoveryContext) } : {}),
           stepDelta: result.attemptsMade,
         };
       }
@@ -1728,6 +1751,7 @@ export function makeDataDrivenTask(
           lastResult: stateOverride ? undefined : { outcome: 'succeeded', ...(sv ? { verdict: sv } : {}) },
           ...(sv ? { lastVerdict: sv } : {}),
           ...(producedOutput ? { producedOutput } : {}),
+          ...(ctx.recoveryContext ? { recoveryContext: recoveryContextAfterNode(node.id, ctx.recoveryContext) } : {}),
           ...(stateOverride ? { stateOverride } : {}),
           stepDelta: 1,
         };
