@@ -8,7 +8,7 @@ import type { McpFacadeService } from './mcp-facade.service.js';
 
 type RegisteredTool = {
   name: string;
-  config: { description?: string; inputSchema?: Record<string, unknown> };
+  config: { description?: string; inputSchema?: Record<string, unknown>; annotations?: { readOnlyHint?: boolean } };
   handler: (input: never) => Promise<unknown> | unknown;
 };
 
@@ -591,4 +591,78 @@ test('simulate_route schema accepts inline run profile', async () => {
   assert.equal(profile.schemaVersion, 'run-profile/v1');
   assert.deepEqual(profile.topology, { stages: { planReviewer: { mode: 'single' } } });
   assert.deepEqual(profile.bindings, { slots: { developer: { runnerId: 'claude-code', modelLevel: 'deep' } } });
+});
+
+test('profile management MCP tools validate schemas and delegate to facade', async () => {
+  const { z } = await import('zod');
+  const { server, tools } = makeServer();
+  const calls: unknown[] = [];
+  const facade = {
+    async getProfile(input: unknown) {
+      calls.push(['get', input]);
+      return { ok: true };
+    },
+    async createProfile(input: unknown) {
+      calls.push(['create', input]);
+      return { ok: true };
+    },
+    async updateProfile(input: unknown) {
+      calls.push(['update', input]);
+      return { ok: true };
+    },
+    async deprecateProfile(input: unknown) {
+      calls.push(['deprecate', input]);
+      return { ok: true };
+    },
+    async validateProfile(input: unknown) {
+      calls.push(['validate', input]);
+      return { ok: true };
+    },
+  } as unknown as McpFacadeService;
+  const profile = {
+    schemaVersion: 'run-profile/v1',
+    topology: { stages: { developer: { mode: 'single' } } },
+    bindings: { slots: { developer: { runnerId: 'codex', modelLevel: 'codex-standard' } } },
+  };
+
+  registerRevoMcpTools(server as never, facade);
+
+  for (const name of ['get_profile', 'create_profile', 'update_profile', 'deprecate_profile', 'validate_profile']) {
+    assert.ok(tools.find((registered) => registered.name === name), `${name} must be registered`);
+  }
+  assert.equal(tools.find((tool) => tool.name === 'get_profile')?.config.annotations?.readOnlyHint, true);
+  assert.equal(tools.find((tool) => tool.name === 'validate_profile')?.config.annotations?.readOnlyHint, true);
+  assert.equal(tools.find((tool) => tool.name === 'create_profile')?.config.annotations?.readOnlyHint, false);
+  assert.equal(tools.find((tool) => tool.name === 'update_profile')?.config.annotations?.readOnlyHint, false);
+  assert.equal(tools.find((tool) => tool.name === 'deprecate_profile')?.config.annotations?.readOnlyHint, false);
+
+  const createSchema = z.object(tools.find((tool) => tool.name === 'create_profile')?.config.inputSchema as Record<string, never>);
+  assert.equal(createSchema.safeParse({ pipelineId: 'local-change', profileId: 'custom-standard', displayName: 'Custom standard', profile }).success, true);
+  assert.equal(
+    createSchema.safeParse({
+      pipelineId: 'local-change',
+      profileId: 'custom-standard',
+      displayName: 'Custom standard',
+      profile: { ...profile, pipelineId: 'local-change' },
+    }).success,
+    false,
+    'nested profile.pipelineId is rejected',
+  );
+  const updateSchema = z.object(tools.find((tool) => tool.name === 'update_profile')?.config.inputSchema as Record<string, never>);
+  assert.equal(updateSchema.safeParse({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileHash: 'hash', profile }).success, true);
+  assert.equal(updateSchema.safeParse({ pipelineId: 'local-change', profileId: 'custom-standard', profile }).success, false, 'expectedProfileHash is required');
+
+  await tools.find((tool) => tool.name === 'get_profile')?.handler({ pipelineId: 'local-change', profileId: 'custom-standard' } as never);
+  await tools.find((tool) => tool.name === 'create_profile')?.handler({ pipelineId: 'local-change', profileId: 'custom-standard', displayName: 'Custom standard', profile } as never);
+  await tools.find((tool) => tool.name === 'update_profile')?.handler({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileHash: 'hash', profile } as never);
+  await tools.find((tool) => tool.name === 'deprecate_profile')?.handler({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileHash: 'hash' } as never);
+  await tools.find((tool) => tool.name === 'validate_profile')?.handler({ pipelineId: 'local-change', profile } as never);
+
+  assert.deepEqual(calls, [
+    ['get', { pipelineId: 'local-change', profileId: 'custom-standard' }],
+    ['create', { pipelineId: 'local-change', profileId: 'custom-standard', displayName: 'Custom standard', profile }],
+    ['update', { pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileHash: 'hash', profile }],
+    ['deprecate', { pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileHash: 'hash' }],
+    ['validate', { pipelineId: 'local-change', profile }],
+  ]);
 });

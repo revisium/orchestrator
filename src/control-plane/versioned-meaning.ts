@@ -11,7 +11,7 @@ export type VersionedMeaningRow = {
 };
 
 export type VersionedMeaningOperation = {
-  action: 'dry-run' | 'create' | 'update' | 'retire';
+  action: 'dry-run' | 'create' | 'update' | 'retire' | 'preserve';
   table: VersionedMeaningTable;
   rowId: string;
 };
@@ -78,15 +78,28 @@ function dataEquals(path: string, equals: string): RowWhereInput {
 
 const RETIRE_PAGE_SIZE = 500;
 
+function isCatalogCleanRunProfile(data: Record<string, unknown>): boolean {
+  return typeof data.source_hash === 'string' &&
+    data.source_hash.length > 0 &&
+    data.profile_hash === data.source_hash;
+}
+
+function shouldPreserveCatalogUpsert(table: VersionedMeaningTable, data: Record<string, unknown>): boolean {
+  if (table !== 'run_profiles') return false;
+  return !isCatalogCleanRunProfile(data);
+}
+
 function retirableCatalogRow(
   row: VersionedMeaningListedRow,
   playbookId: string,
   keepRowIds: ReadonlySet<string>,
+  table: VersionedMeaningCatalogTable,
 ): Record<string, unknown> | null {
   const data = objectData(row.data);
   if (data.playbook_id !== playbookId) return null;
   if (keepRowIds.has(row.id)) return null;
   if (data.status === 'removed') return null;
+  if (table === 'run_profiles' && !isCatalogCleanRunProfile(data)) return null;
   return data;
 }
 
@@ -120,7 +133,10 @@ export function createVersionedMeaningAccess(
 
       const draft = await scope();
       try {
-        await draft.getRow(row.table, row.rowId);
+        const existing = await draft.getRow(row.table, row.rowId);
+        if (shouldPreserveCatalogUpsert(row.table, objectData((existing as { data?: unknown }).data))) {
+          return { action: 'preserve', table: row.table, rowId: row.rowId };
+        }
       } catch (error) {
         if (!isRowNotFound(error)) throw error;
         await draft.createRow(row.table, row.rowId, row.data);
@@ -146,7 +162,7 @@ export function createVersionedMeaningAccess(
         });
 
         for (const existing of existingRows) {
-          const data = retirableCatalogRow(existing, input.playbookId, keep);
+          const data = retirableCatalogRow(existing, input.playbookId, keep, input.table);
           if (!data) continue;
 
           await draft.updateRow(input.table, existing.id, {

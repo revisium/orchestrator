@@ -23,7 +23,7 @@ The storage boundary is now explicit:
 Run profiles belong to Revisium meaning because they are versioned launch configuration. Run instances, route decisions,
 events, attempts, inbox items, outputs, and costs belong to Prisma.
 
-The seeded profile set is not enough for product use. Users need to edit, validate, simulate, and version profiles
+The seeded profile set is not enough for product use. Users need to create, edit, validate, and simulate profiles
 without editing TypeScript constants or changing the default playbook catalog. They also need to control which GitHub
 account performs publication. That account is launch configuration, but credentials are runtime host secrets and must
 not be stored in profile data.
@@ -46,7 +46,7 @@ A run profile owns launch configuration:
 - `pipelineId`;
 - topology overlay, such as single-stage or consensus fanout for semantic stages;
 - slot/node/runner bindings for runner id, model level, permission mode, timeout, and future budget fields;
-- version, hash, status, source path, and provenance.
+- profile version metadata, launch hash, status, source path, and provenance.
 
 The base pipeline owns workflow semantics: nodes, edges, gates, slot names, and allowed materialization points. It does
 not encode concrete provider identities by duplicating the graph.
@@ -75,18 +75,19 @@ Playbook import validates catalog-owned structured JSON with AJV before writing 
 serialized into `run_profiles.profile_json` or `pipelines.execution_policy_json`.
 
 The public identifiers are the catalog `pipeline_id` and `profile_id`. Revisium row ids such as
-`revisium-default-codex-standard` are internal storage ids and are not accepted as alternate launch ids.
+`revisium-default-feature-development-codex-standard` are internal storage ids and are not accepted as alternate launch ids.
 
 ### Editable Profiles
 
 Seeded and user-authored profiles use the same `run_profiles` table and the same `run-profile/v1` schema. After import,
-seeded rows are ordinary editable profiles. `clone_profile` may exist as a convenience command, but cloning is not
-required before editing a seeded profile.
+seeded rows are ordinary editable profiles.
 
-Profile updates are immutable at the contract level: an update writes a new Revisium revision, changes the profile
-`version` and `profile_hash`, and leaves existing runs replayable through their pinned Prisma snapshot. The active
-profile row can keep a stable internal row id because historical row versions are available through Revisium revision
-history; callers address the latest launchable version through `profile_id`.
+Profile updates mutate the current stored profile row and commit a new Revisium revision. `profile_id` remains the
+stable public handle inside a playbook/pipeline. A launch-affecting edit changes `profile_hash`; a metadata-only edit
+may keep the same `profile_hash`. Callers must send `expectedProfileHash` as an optimistic lock so stale edits cannot
+silently overwrite newer launch data. Existing runs remain replayable through the Prisma route snapshot, not through the
+current Revisium row. Any user mutation, including display-only edits and deprecation, must invalidate catalog-clean
+provenance so catalog re-import cannot silently restore the seeded row state.
 
 Profile mutation APIs must validate both JSON shape and semantic compatibility before committing a revision:
 
@@ -140,7 +141,8 @@ not provide runner/model defaults. If `profileId` is supplied, they:
 2. convert the profile topology overlay into a materialized template;
 3. convert profile bindings into launch bindings;
 4. validate the effective launch profile against the selected pipeline;
-5. pin profile/version/hash/snapshot and materialized template hash into the Prisma `TaskRun.routeDecision`.
+5. pin profile id/version metadata, profile hash/snapshot, and materialized template hash into the Prisma
+   `TaskRun.routeDecision`.
 
 If inline `profile` is supplied, the same validation and materialization path runs over the provided body, and
 `TaskRun.routeDecision` stores the normalized profile snapshot and hash for execution and replay.
@@ -174,8 +176,8 @@ designed and implemented.
 - **Store runtime run state in Revisium.** Rejected. Runtime state is Prisma-owned; Revisium engine is reserved for
   versioned meaning/config.
 - **Store only `profileId` in the run.** Rejected. Replay would change when a profile row changes.
-- **Default GitHub publication to a hardcoded org account.** Rejected. Local Revo runs must use the active user account
-  unless the launch/project/profile explicitly selects another account.
+- **Default GitHub publication to a hardcoded org account.** Rejected. Local Revo runs must use the active host
+  authentication path until a dedicated publishing identity contract exists.
 - **Store GitHub tokens in profiles.** Rejected. Profiles are versioned meaning and may be listed through control-plane
   APIs; tokens are host-local secrets.
 
@@ -186,7 +188,7 @@ designed and implemented.
 - MCP/GraphQL expose profile validation and mutation tools before a UI edits profiles directly.
 - Existing run/profile logic is centered on storage-backed profile rows.
 - Tests must assert that default profiles are seeded catalog data and that route decisions pin profile provenance.
-- GitHub publication identity becomes explicit provenance and no longer depends on a hardcoded account default.
+- GitHub publication identity remains outside `run-profile/v1` until a dedicated provenance contract is designed.
 
 ## Validation
 
@@ -200,6 +202,8 @@ Implementation PRs should verify:
 - no provider-specific feature-development pipeline id or TypeScript profile registry remains;
 - seeded profiles are editable through profile mutation APIs;
 - inline `profile` validates/materializes/pins without being listed as a stored profile;
+- `create_profile` and `update_profile` validate profile payloads against the selected pipeline before writing storage;
+- `update_profile` requires `expectedProfileHash` and mutates the current profile row through a new Revisium revision;
 - catalog re-import preserves edited profiles and only updates or retires unchanged catalog-seeded rows;
 - write-capable GitHub behavior uses the existing host auth path; profiles reject publishing fields and are not a source
   of publishing identity in `run-profile/v1`.

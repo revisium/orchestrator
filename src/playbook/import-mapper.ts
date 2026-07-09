@@ -99,6 +99,10 @@ export function scopedImportRowId(playbookId: string, itemId: string): string {
   return `${prefix}-${digest}`;
 }
 
+export function scopedRunProfileRowId(playbookId: string, pipelineId: string, profileId: string): string {
+  return scopedImportRowId(playbookId, `${pipelineId}-${profileId}`);
+}
+
 function mapRole(root: string, playbookId: string, role: RoleCatalogRecord, now: string): VersionedRow {
   if (role.runnerId === 'stub-agent') {
     throw new PlaybookError(
@@ -171,7 +175,7 @@ function mapRunProfile(
   now: string,
   sourcePath: string,
 ): VersionedRow {
-  const importedProfileId = scopedImportRowId(playbookId, profile.id);
+  const importedProfileId = scopedRunProfileRowId(playbookId, profile.pipelineId, profile.id);
   const profileJson = {
     schemaVersion: profile.schemaVersion,
     topology: profile.topology,

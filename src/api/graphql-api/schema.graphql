@@ -131,6 +131,16 @@ input CreateRunInput {
   title: String!
 }
 
+input CreateRunProfileInput {
+  displayName: String!
+  pipelineId: String!
+  playbookId: String
+  profile: JSON!
+  profileId: String!
+  status: RunProfileStatus
+  summary: String
+}
+
 type CreateRunResultModel {
   eventId: ID!
   route: JSON
@@ -154,6 +164,13 @@ type DaemonStatusModel {
 A date-time string at UTC, such as 2019-12-03T09:54:33Z, compliant with the date-time format.
 """
 scalar DateTime
+
+input DeprecateRunProfileInput {
+  expectedProfileHash: String!
+  pipelineId: String!
+  playbookId: String
+  profileId: String!
+}
 
 type DoctorResultModel {
   issues: [String!]!
@@ -200,6 +217,12 @@ input GetRunEventsInput {
   first: Int! = 50
   runId: ID!
   type: String
+}
+
+input GetRunProfileInput {
+  pipelineId: String!
+  playbookId: String
+  profileId: String!
 }
 
 type InboxConnection {
@@ -274,6 +297,14 @@ input ListMethodInput {
   first: Int! = 50
 }
 
+input ListRunProfilesInput {
+  after: String
+  first: Int! = 50
+  includeDeprecated: Boolean
+  pipelineId: String
+  playbookId: String
+}
+
 input ListRunsInput {
   after: String
   first: Int! = 50
@@ -308,9 +339,12 @@ type Mutation {
   answerQuestion(data: AnswerQuestionInput!): InboxResolutionModel!
   approveGate(data: GateDecisionInput!): InboxResolutionModel!
   createRun(data: CreateRunInput!): CreateRunResultModel!
+  createRunProfile(data: CreateRunProfileInput!): RunProfileModel!
+  deprecateRunProfile(data: DeprecateRunProfileInput!): RunProfileModel!
   rejectGate(data: GateDecisionInput!): InboxResolutionModel!
   resolveGate(data: ResolveGateInput!): InboxResolutionModel!
   resolveInboxItem(data: ResolveInboxItemInput!): InboxResolutionModel!
+  updateRunProfile(data: UpdateRunProfileInput!): RunProfileModel!
 }
 
 type PageInfo {
@@ -510,12 +544,15 @@ type Query {
   runAttempts(data: GetRunAttemptsInput!): RunAttemptConnection!
   runDigest(id: ID!): RunDigestModel!
   runEvents(data: GetRunEventsInput!): RunEventConnection!
+  runProfile(data: GetRunProfileInput!): RunProfileModel!
+  runProfiles(data: ListRunProfilesInput): RunProfileConnection!
   runProgress(id: ID!): RunProgressModel!
   runWorkflow(id: ID!): RunWorkflowModel!
   runs(data: ListRunsInput): RunConnection!
   simulateRoute(data: SimulateRouteInput!): JSON!
   status: SystemStatusModel!
   validateRepository(repo: String!): RepositoryValidationModel!
+  validateRunProfile(data: ValidateRunProfileInput!): JSON!
 }
 
 type RepositoryContextModel {
@@ -720,6 +757,36 @@ type RunModelEdge {
   node: RunModel!
 }
 
+type RunProfileConnection {
+  edges: [RunProfileModelEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type RunProfileModel {
+  displayName: String!
+  id: ID!
+  pipelineId: String!
+  playbookId: String!
+  profile: JSON!
+  profileHash: String!
+  profileId: String!
+  schemaVersion: String!
+  status: RunProfileStatus!
+  summary: String!
+  version: String!
+}
+
+type RunProfileModelEdge {
+  cursor: String!
+  node: RunProfileModel!
+}
+
+enum RunProfileStatus {
+  active
+  deprecated
+}
+
 type RunProgressModel {
   graphCursor: JSON
   updatedAt: DateTime!
@@ -806,8 +873,25 @@ type SystemStatusModel {
   project: ProjectModel!
 }
 
+input UpdateRunProfileInput {
+  displayName: String
+  expectedProfileHash: String!
+  pipelineId: String!
+  playbookId: String
+  profile: JSON
+  profileId: String!
+  status: RunProfileStatus
+  summary: String
+}
+
 type UsageModel {
   costAmount: Float!
   inputTokens: Int!
   outputTokens: Int!
+}
+
+input ValidateRunProfileInput {
+  pipelineId: String!
+  playbookId: String
+  profile: JSON!
 }

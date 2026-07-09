@@ -66,6 +66,9 @@ test('code-first GraphQL schema matches committed schema.graphql', async () => {
       readFileSync(join(import.meta.dirname, 'schema.graphql'), 'utf8'),
     );
     assert.equal(actual, expected);
+    assert.match(expected, /type RunProfileModel \{[\s\S]*?status: RunProfileStatus!/);
+    assert.match(expected, /input CreateRunProfileInput \{[\s\S]*?status: RunProfileStatus/);
+    assert.match(expected, /input UpdateRunProfileInput \{[\s\S]*?status: RunProfileStatus/);
   } finally {
     rmSync(dataDir, { recursive: true, force: true });
   }

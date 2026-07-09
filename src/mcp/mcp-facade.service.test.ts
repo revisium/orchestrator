@@ -45,6 +45,11 @@ test('McpFacadeService.getCapabilities exposes the MCP transport surface', () =>
   assert.ok(capabilities.tools.includes('get_run_attention'), 'get_run_attention must be in tools');
   assert.ok(capabilities.tools.includes('get_run_status'), 'get_run_status must be in tools');
   assert.ok(capabilities.tools.includes('watch_run_changes'), 'watch_run_changes must be in tools');
+  assert.ok(capabilities.tools.includes('get_profile'), 'get_profile must be in tools');
+  assert.ok(capabilities.tools.includes('create_profile'), 'create_profile must be in tools');
+  assert.ok(capabilities.tools.includes('update_profile'), 'update_profile must be in tools');
+  assert.ok(capabilities.tools.includes('deprecate_profile'), 'deprecate_profile must be in tools');
+  assert.ok(capabilities.tools.includes('validate_profile'), 'validate_profile must be in tools');
   const toolSet = new Set<string>(capabilities.tools);
   assert.equal(toolSet.has('observe_run'), false, 'observe_run must be removed');
   assert.equal(toolSet.has('wait_for_any_gate'), false, 'wait_for_any_gate must be removed');
@@ -319,6 +324,113 @@ test('McpFacadeService.listProfiles passes includeDeprecated to storage-backed A
     profileHash: 'hash',
     status: 'deprecated',
   }]);
+});
+
+test('McpFacadeService profile management methods delegate to storage-backed API and compact defaults', async () => {
+  const calls: unknown[] = [];
+  const profile = {
+    profileId: 'custom-standard',
+    playbookId: 'pb',
+    pipelineId: 'local-change',
+    version: '1',
+    displayName: 'Custom standard',
+    summary: 'Custom profile',
+    profileHash: 'hash',
+    status: 'active',
+    profile: { schemaVersion: 'run-profile/v1', topology: { stages: {} }, bindings: { slots: {} } },
+  };
+  const route = {
+    playbookId: 'pb',
+    pipelineId: 'local-change',
+    source: 'explicit',
+    roles: ['developer'],
+    profileSource: 'inline',
+    profileHash: 'hash',
+    materializedTemplateHash: 'template-hash',
+    roleBindings: [{ roleId: 'developer' }],
+  };
+  const api = {
+    async getProfile(input: unknown) {
+      calls.push(['get', input]);
+      return profile;
+    },
+    async createProfile(input: unknown) {
+      calls.push(['create', input]);
+      return profile;
+    },
+    async updateProfile(input: unknown) {
+      calls.push(['update', input]);
+      return profile;
+    },
+    async deprecateProfile(input: unknown) {
+      calls.push(['deprecate', input]);
+      return { ...profile, status: 'deprecated' };
+    },
+    async validateProfile(input: unknown) {
+      calls.push(['validate', input]);
+      return route;
+    },
+  } as unknown as TaskControlPlaneApiService;
+  const facade = new McpFacadeService(api);
+  const body = profile.profile;
+
+  assert.deepEqual(await facade.getProfile({ pipelineId: 'local-change', profileId: 'custom-standard' }), {
+    profileId: 'custom-standard',
+    pipelineId: 'local-change',
+    playbookId: 'pb',
+    version: '1',
+    displayName: 'Custom standard',
+    summary: 'Custom profile',
+    profileHash: 'hash',
+    status: 'active',
+  });
+  assert.deepEqual(await facade.createProfile({ pipelineId: 'local-change', profileId: 'custom-standard', displayName: 'Custom standard', profile: body }), {
+    profileId: 'custom-standard',
+    pipelineId: 'local-change',
+    playbookId: 'pb',
+    version: '1',
+    displayName: 'Custom standard',
+    summary: 'Custom profile',
+    profileHash: 'hash',
+    status: 'active',
+  });
+  assert.deepEqual(await facade.updateProfile({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileHash: 'hash', profile: body }), {
+    profileId: 'custom-standard',
+    pipelineId: 'local-change',
+    playbookId: 'pb',
+    version: '1',
+    displayName: 'Custom standard',
+    summary: 'Custom profile',
+    profileHash: 'hash',
+    status: 'active',
+  });
+  assert.deepEqual(await facade.deprecateProfile({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileHash: 'hash' }), {
+    profileId: 'custom-standard',
+    pipelineId: 'local-change',
+    playbookId: 'pb',
+    version: '1',
+    displayName: 'Custom standard',
+    summary: 'Custom profile',
+    profileHash: 'hash',
+    status: 'deprecated',
+  });
+  assert.deepEqual(await facade.validateProfile({ pipelineId: 'local-change', profile: body }), {
+    playbookId: 'pb',
+    pipelineId: 'local-change',
+    roles: ['developer'],
+    source: 'explicit',
+    profileSource: 'inline',
+    profileHash: 'hash',
+    materializedTemplateHash: 'template-hash',
+    roleBindingCount: 1,
+  });
+  assert.deepEqual(calls, [
+    ['get', { pipelineId: 'local-change', profileId: 'custom-standard' }],
+    ['create', { pipelineId: 'local-change', profileId: 'custom-standard', displayName: 'Custom standard', profile: body }],
+    ['update', { pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileHash: 'hash', profile: body }],
+    ['deprecate', { pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileHash: 'hash' }],
+    ['validate', { pipelineId: 'local-change', profile: body }],
+  ]);
 });
 
 test('McpFacadeService.simulateRoute returns a compact default response without the full route graph', async () => {

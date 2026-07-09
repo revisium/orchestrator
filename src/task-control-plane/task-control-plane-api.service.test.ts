@@ -4310,8 +4310,11 @@ function makeApiForStoredProfileTests(profileSummary: RunProfileSummary = STORED
           executionPolicy: FEATURE_DEV_POLICY,
         } as never;
       },
-      async resolveRunProfile({ pipelineId, profileId }: { playbookId: string; pipelineId: string; profileId: string }) {
+      async resolveRunProfile({ pipelineId, profileId, includeDeprecated }: { playbookId: string; pipelineId: string; profileId: string; includeDeprecated?: boolean }) {
         if (pipelineId !== 'feature-development' || profileId !== STORED_PROFILE_ID) {
+          throw new ControlPlaneError('ROW_NOT_FOUND', `run profile not found: ${profileId}`);
+        }
+        if (profileSummary.status === 'deprecated' && !includeDeprecated) {
           throw new ControlPlaneError('ROW_NOT_FOUND', `run profile not found: ${profileId}`);
         }
         return profileSummary as never;
@@ -4434,10 +4437,151 @@ test('resolveRouteDecision: profileId and inline profile are mutually exclusive'
   );
 });
 
+test('resolveRouteDecision: deprecated stored profiles are rejected for new launches', async () => {
+  const api = makeApiForStoredProfileTests({
+    ...STORED_PROFILE_SUMMARY,
+    status: 'deprecated',
+  });
+  await assert.rejects(
+    () => api.simulateRoute({
+      title: 'test',
+      pipeline: 'feature-development',
+      profileId: STORED_PROFILE_ID,
+    }),
+    /run profile not found/,
+  );
+});
+
 test('listProfiles delegates to storage-backed playbook profiles', async () => {
   const api = makeApiForStoredProfileTests();
   const profiles = await api.listProfiles({ pipelineId: 'feature-development' });
   assert.deepEqual(profiles.map((profile) => profile.profileId), [STORED_PROFILE_ID]);
+});
+
+test('createProfile validates the profile against the selected pipeline before writing storage', async () => {
+  const calls: unknown[] = [];
+  const api = makeApi({
+    playbooksService: {
+      async createRunProfile(input: unknown) {
+        calls.push(input);
+        return { ...STORED_PROFILE_SUMMARY, profileId: 'custom-standard' } as never;
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => api.createProfile({
+      pipelineId: 'local-change',
+      profileId: 'custom-standard',
+      displayName: 'Custom standard',
+      profile: {
+        schemaVersion: 'run-profile/v1',
+        topology: { stages: { missingStage: { mode: 'single' } } },
+        bindings: { slots: {} },
+      },
+    }),
+    /topology stage "missingStage" does not exist in pipeline local-change/,
+  );
+  assert.deepEqual(calls, []);
+
+  const result = await api.createProfile({
+    pipelineId: 'local-change',
+    profileId: 'custom-standard',
+    displayName: 'Custom standard',
+    profile: emptyInlineProfile(),
+  });
+  assert.equal(result.profileId, 'custom-standard');
+  assert.deepEqual(calls, [{
+    playbookId: 'pb',
+    pipelineId: 'local-change',
+    profileId: 'custom-standard',
+    displayName: 'Custom standard',
+    summary: undefined,
+    profile: emptyInlineProfile(),
+    status: undefined,
+  }]);
+});
+
+test('updateProfile validates new profile bodies and requires expectedProfileHash', async () => {
+  const calls: unknown[] = [];
+  const api = makeApi({
+    playbooksService: {
+      async updateRunProfile(input: unknown) {
+        calls.push(input);
+        return { ...STORED_PROFILE_SUMMARY, profileId: 'custom-standard' } as never;
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => api.updateProfile({
+      pipelineId: 'local-change',
+      profileId: 'custom-standard',
+      expectedProfileHash: 'h1',
+      profile: {
+        schemaVersion: 'run-profile/v1',
+        topology: { stages: { missingStage: { mode: 'single' } } },
+        bindings: { slots: {} },
+      },
+    }),
+    /topology stage "missingStage" does not exist in pipeline local-change/,
+  );
+  assert.deepEqual(calls, []);
+
+  await api.updateProfile({
+    pipelineId: 'local-change',
+    profileId: 'custom-standard',
+    expectedProfileHash: 'h1',
+    displayName: 'Renamed profile',
+  });
+  assert.deepEqual(calls, [{
+    playbookId: 'pb',
+    pipelineId: 'local-change',
+    profileId: 'custom-standard',
+    expectedProfileHash: 'h1',
+    displayName: 'Renamed profile',
+    summary: undefined,
+    profile: undefined,
+    status: undefined,
+  }]);
+});
+
+test('getProfile and deprecateProfile use storage with pipeline scope', async () => {
+  const calls: unknown[] = [];
+  const api = makeApi({
+    playbooksService: {
+      async resolvePipeline() {
+        return {
+          id: 'pb-feature-development',
+          playbookId: 'pb',
+          pipelineId: 'feature-development',
+          path: 'pipelines/feature-development/PIPELINE.md',
+          triggers: ['feature development task'],
+          requiredRoles: ['developer'],
+          alternativeRoles: [],
+          optionalRoles: [],
+          routeGates: [],
+          executionPolicy: FEATURE_DEV_POLICY,
+        } as never;
+      },
+      async resolveRunProfile(input: unknown) {
+        calls.push(['get', input]);
+        return STORED_PROFILE_SUMMARY as never;
+      },
+      async deprecateRunProfile(input: unknown) {
+        calls.push(['deprecate', input]);
+        return { ...STORED_PROFILE_SUMMARY, status: 'deprecated' } as never;
+      },
+    },
+  });
+
+  await api.getProfile({ pipelineId: 'feature-development', profileId: STORED_PROFILE_ID });
+  await api.deprecateProfile({ pipelineId: 'feature-development', profileId: STORED_PROFILE_ID, expectedProfileHash: STORED_PROFILE_HASH });
+
+  assert.deepEqual(calls, [
+    ['get', { playbookId: 'pb', pipelineId: 'feature-development', profileId: STORED_PROFILE_ID, includeDeprecated: true }],
+    ['deprecate', { playbookId: 'pb', pipelineId: 'feature-development', profileId: STORED_PROFILE_ID, expectedProfileHash: STORED_PROFILE_HASH }],
+  ]);
 });
 
 type PipelineCatalogEntry = { id: string; execution_policy: unknown };

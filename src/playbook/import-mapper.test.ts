@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { mapPlaybookRows, scopedImportRowId } from './import-mapper.js';
+import { mapPlaybookRows, scopedImportRowId, scopedRunProfileRowId } from './import-mapper.js';
 import type { PlaybookManifest } from './manifest.js';
 import type { PlaybookCatalogs } from './catalog-loader.js';
 
@@ -23,6 +23,14 @@ test('scopedImportRowId: returns Revisium-safe scoped row ids', () => {
   assert.ok(longRowId.length <= 64);
   assert.match(longRowId, /^[A-Za-z0-9_-]+$/);
   assert.match(longRowId, /-[a-f0-9]{12}$/);
+});
+
+test('scopedRunProfileRowId: scopes run profiles by playbook, pipeline, and profile id', () => {
+  assert.equal(scopedRunProfileRowId('pb', 'feature-development', 'codex-standard'), 'pb-feature-development-codex-standard');
+  assert.notEqual(
+    scopedRunProfileRowId('pb', 'feature-development', 'standard'),
+    scopedRunProfileRowId('pb', 'analysis-only', 'standard'),
+  );
 });
 
 test('mapPlaybookRows: maps roles and pipelines into versioned rows', () => {
@@ -97,7 +105,7 @@ test('mapPlaybookRows: maps roles and pipelines into versioned rows', () => {
   assert.deepEqual(rows.roles[0]?.data.allowed_tools, ['Read', 'Grep', 'Glob']);
   assert.equal(rows.pipelines[0]?.rowId, 'pb-feature-development');
   assert.deepEqual(rows.pipelines[0]?.data.route_gates, []);
-  assert.equal(rows.runProfiles[0]?.rowId, 'pb-codex-standard');
+  assert.equal(rows.runProfiles[0]?.rowId, 'pb-feature-development-codex-standard');
   assert.equal(rows.runProfiles[0]?.table, 'run_profiles');
   assert.equal(rows.runProfiles[0]?.data.profile_id, 'codex-standard');
   assert.equal(rows.runProfiles[0]?.data.pipeline_id, 'feature-development');

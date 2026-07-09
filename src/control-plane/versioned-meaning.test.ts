@@ -105,6 +105,39 @@ test('createVersionedMeaningAccess: creates missing rows and updates existing ro
   ]);
 });
 
+test('createVersionedMeaningAccess: preserves edited catalog run profiles during import', async () => {
+  const fake = fakeScope({
+    'run_profiles/pb-feature-development-codex-standard': {
+      id: 'pb-feature-development-codex-standard',
+      playbook_id: 'pb',
+      pipeline_id: 'feature-development',
+      profile_id: 'codex-standard',
+      profile_hash: 'user-edited-hash',
+      source_hash: 'catalog-hash',
+      status: 'active',
+    },
+  });
+  const access = createVersionedMeaningAccess({ scopeFactory: async () => fake.scope });
+
+  const op = await access.upsertRow({
+    table: 'run_profiles',
+    rowId: 'pb-feature-development-codex-standard',
+    data: {
+      id: 'pb-feature-development-codex-standard',
+      playbook_id: 'pb',
+      pipeline_id: 'feature-development',
+      profile_id: 'codex-standard',
+      profile_hash: 'new-catalog-hash',
+      source_hash: 'new-catalog-hash',
+      status: 'active',
+    },
+  });
+
+  assert.deepEqual(op, { action: 'preserve', table: 'run_profiles', rowId: 'pb-feature-development-codex-standard' });
+  assert.equal(fake.rows.get('run_profiles/pb-feature-development-codex-standard')?.profile_hash, 'user-edited-hash');
+  assert.equal(fake.calls.includes('update:run_profiles/pb-feature-development-codex-standard'), false);
+});
+
 test('createVersionedMeaningAccess: retires catalog rows removed from the playbook import', async () => {
   const fake = fakeScope({
     'pipelines/pb-feature-development': { id: 'pb-feature-development', playbook_id: 'pb', status: 'active' },
@@ -137,6 +170,45 @@ test('createVersionedMeaningAccess: retires catalog rows removed from the playbo
     updated_at: '2026-07-07T00:00:00.000Z',
   });
   assert.equal(fake.rows.get('pipelines/other-feature-development')?.status, 'active');
+});
+
+test('createVersionedMeaningAccess: retireMissingRows preserves user-managed and edited run profiles', async () => {
+  const fake = fakeScope({
+    'run_profiles/pb-catalog-clean': {
+      id: 'pb-catalog-clean',
+      playbook_id: 'pb',
+      profile_hash: 'catalog-hash',
+      source_hash: 'catalog-hash',
+      status: 'active',
+    },
+    'run_profiles/pb-catalog-edited': {
+      id: 'pb-catalog-edited',
+      playbook_id: 'pb',
+      profile_hash: 'user-hash',
+      source_hash: 'catalog-hash',
+      status: 'active',
+    },
+    'run_profiles/pb-user-created': {
+      id: 'pb-user-created',
+      playbook_id: 'pb',
+      profile_hash: 'user-hash',
+      source_hash: '',
+      status: 'active',
+    },
+  });
+  const access = createVersionedMeaningAccess({ scopeFactory: async () => fake.scope });
+
+  const retired = await access.retireMissingRows({
+    table: 'run_profiles',
+    playbookId: 'pb',
+    keepRowIds: [],
+    retiredAt: '2026-07-07T00:00:00.000Z',
+  });
+
+  assert.deepEqual(retired, [{ action: 'retire', table: 'run_profiles', rowId: 'pb-catalog-clean' }]);
+  assert.equal(fake.rows.get('run_profiles/pb-catalog-clean')?.status, 'removed');
+  assert.equal(fake.rows.get('run_profiles/pb-catalog-edited')?.status, 'active');
+  assert.equal(fake.rows.get('run_profiles/pb-user-created')?.status, 'active');
 });
 
 test('createVersionedMeaningAccess: retireMissingRows paginates scoped catalog rows', async () => {

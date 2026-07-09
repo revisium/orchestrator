@@ -40,11 +40,17 @@ test('GraphQL facade services wrap query-bus requests', async () => {
   await new InboxApiService(queryBus, commandBus).resolveGate({ inboxId: 'inbox_1', outcome: 'recheck' });
   await new InboxApiService(queryBus, commandBus).answerQuestion({ inboxId: 'inbox_1', answer: 'yes' });
   await new InboxApiService(queryBus, commandBus).resolveInboxItem({ inboxId: 'inbox_1', answer: { decision: 'approve' } });
-  await new MethodApiService(queryBus).listRoles({});
-  await new MethodApiService(queryBus).getRole({ roleId: 'developer' });
-  await new MethodApiService(queryBus).listPlaybooks({});
-  await new MethodApiService(queryBus).listPipelines({});
-  await new MethodApiService(queryBus).getPipeline({ pipelineId: 'pipe_1' });
+  await new MethodApiService(queryBus, commandBus).listRoles({});
+  await new MethodApiService(queryBus, commandBus).getRole({ roleId: 'developer' });
+  await new MethodApiService(queryBus, commandBus).listPlaybooks({});
+  await new MethodApiService(queryBus, commandBus).listPipelines({});
+  await new MethodApiService(queryBus, commandBus).getPipeline({ pipelineId: 'pipe_1' });
+  await new MethodApiService(queryBus, commandBus).listRunProfiles({ pipelineId: 'local-change' });
+  await new MethodApiService(queryBus, commandBus).getRunProfile({ pipelineId: 'local-change', profileId: 'custom-standard' });
+  await new MethodApiService(queryBus, commandBus).validateRunProfile({ pipelineId: 'local-change', profile: {} });
+  await new MethodApiService(queryBus, commandBus).createRunProfile({ pipelineId: 'local-change', profileId: 'custom-standard', displayName: 'Custom', profile: {} });
+  await new MethodApiService(queryBus, commandBus).updateRunProfile({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileHash: 'hash' });
+  await new MethodApiService(queryBus, commandBus).deprecateRunProfile({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileHash: 'hash' });
   await new PrApiService(queryBus).prReadiness({ repo: 'revisium/orchestrator' });
   await new PrApiService(queryBus).prFeedback({ repo: 'revisium/orchestrator' });
 
@@ -73,6 +79,12 @@ test('GraphQL facade services wrap query-bus requests', async () => {
     'ListPlaybooksQuery',
     'ListPipelinesQuery',
     'GetPipelineQuery',
+    'ListRunProfilesQuery',
+    'GetRunProfileQuery',
+    'ValidateRunProfileQuery',
+    'CreateRunProfileCommand',
+    'UpdateRunProfileCommand',
+    'DeprecateRunProfileCommand',
     'GetPrReadinessQuery',
     'ListPrFeedbackQuery',
   ]);
