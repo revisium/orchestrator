@@ -3091,6 +3091,12 @@ test('DD-recovery: successful recovery loop clears stale blocked script context 
   const result = await run();
 
   assert.equal(result.status, 'cancelled');
+  const recoveryGate = featureDevelopmentPrReview().nodes['recoveryGate'];
+  assert.equal(
+    recoveryGate.kind === 'humanGate' ? recoveryGate.gatedArtifact?.node : undefined,
+    'pollPr',
+    'after recoveryContext is cleared, recoveryGate falls back to its configured pollPr artifact',
+  );
   const recoverySummary = rec.gateSummaries.findLast((summary) => summary.nodeId === 'recoveryGate');
   assert.equal(recoverySummary?.gatedArtifact?.nodeId, 'pollPr');
   assert.equal((recoverySummary?.gatedArtifact?.payload as { verdict?: unknown } | undefined)?.verdict, 'review_changes');
