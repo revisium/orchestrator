@@ -35,10 +35,6 @@
           "modelLevel": "standard",
           "permissionMode": "acceptEdits"
         },
-        "integrator": {
-          "runnerId": "revo-integrator",
-          "modelLevel": "standard"
-        },
         "triager": {
           "runnerId": "claude-code",
           "modelLevel": "deep"
@@ -88,10 +84,6 @@
           "modelLevel": "codex-standard",
           "permissionMode": "workspace-write"
         },
-        "integrator": {
-          "runnerId": "revo-integrator",
-          "modelLevel": "standard"
-        },
         "triager": {
           "runnerId": "codex",
           "modelLevel": "codex-deep"
@@ -138,10 +130,6 @@
           "runnerId": "codex",
           "modelLevel": "codex-standard",
           "permissionMode": "workspace-write"
-        },
-        "integrator": {
-          "runnerId": "revo-integrator",
-          "modelLevel": "standard"
         },
         "triager": {
           "runnerId": "codex",
@@ -204,10 +192,6 @@
           "runnerId": "claude-code",
           "modelLevel": "standard",
           "permissionMode": "acceptEdits"
-        },
-        "integrator": {
-          "runnerId": "revo-integrator",
-          "modelLevel": "standard"
         },
         "triager": {
           "runnerId": "claude-code",

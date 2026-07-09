@@ -102,7 +102,7 @@ test('feature-development: plan→merge approve completes and opens a PR', { ski
         ['reviewer', 'stub-agent'],
         ['triager', 'stub-agent'],
         ['developer', 'stub-agent'],
-        ['integrator', 'revo-integrator'],
+        ['integrator', 'script'],
         ['watcher', 'stub-agent'],
       ],
     );

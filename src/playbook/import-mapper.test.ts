@@ -243,7 +243,7 @@ test('mapPlaybookRows: runner_id, not rights, selects the runtime runner', () =>
           rights: 'git-gh',
           allowedTools: ['Read', 'Bash'],
           defaultModelLevel: 'standard',
-          runnerId: 'revo-integrator',
+          runnerId: 'script',
           wrappers: {},
         },
       ],
@@ -253,8 +253,8 @@ test('mapPlaybookRows: runner_id, not rights, selects the runtime runner', () =>
     now: '2026-06-13T00:00:00.000Z',
   });
 
-  assert.equal(rows.roles[0]?.data.runner, 'revo-integrator');
-  assert.equal(rows.roles[0]?.data.runner_id, 'revo-integrator');
+  assert.equal(rows.roles[0]?.data.runner, 'script');
+  assert.equal(rows.roles[0]?.data.runner_id, 'script');
 });
 
 test('mapPlaybookRows: mutating a role prompt changes catalogHash (prompt hashes are folded in)', () => {

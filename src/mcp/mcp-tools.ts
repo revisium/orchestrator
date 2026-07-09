@@ -33,12 +33,16 @@ const runProfileSlotBindingSchema = z.object({
   modelLevel: z.enum(VALID_MODEL_LEVELS).optional(),
   timeoutMs: z.number().int().positive().optional(),
   permissionMode: z.string().min(1).optional(),
+  accounts: z.object({
+    github: z.string().min(1),
+  }).strict().optional(),
 }).strict().refine(
   (value) =>
     value.runnerId !== undefined ||
     value.modelLevel !== undefined ||
     value.timeoutMs !== undefined ||
-    value.permissionMode !== undefined,
+    value.permissionMode !== undefined ||
+    value.accounts !== undefined,
   { message: 'run profile slot binding must set at least one launch field' },
 );
 const runProfileBodySchema = z.object({

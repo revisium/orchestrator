@@ -19,15 +19,10 @@ type ScriptRegistryDeps = Pick<
   | 'appendEvent'
   | 'releaseWorktreeFn'
   | 'integrateFn'
-  | 'runStub'
   | 'confirmMergeFn'
-  | 'runConfirmStub'
   | 'pollPrFn'
-  | 'runPollStub'
   | 'overrideMergeFn'
-  | 'runOverrideStub'
   | 'respondThreadsFn'
-  | 'runRespondStub'
 >;
 
 const RUN_ID = 'run-registry-test';
@@ -38,14 +33,9 @@ function makeDecision(scriptRef: string, nodeId = 'scriptNode') {
   return { type: 'invokeScript' as const, scriptRef, nodeId, input: {} };
 }
 
-/** Binding that resolves to a real integrator runner. */
+/** Script binding used by script node registry tests. */
 function realBinding(): RouteRoleBinding {
-  return { roleId: 'integrator', rowId: 'integrator', modelLevel: 'standard', runnerId: 'revo-integrator', resolvedRunnerId: 'revo-integrator', runnerSource: 'playbook' };
-}
-
-/** Binding that resolves to a stub runner. */
-function stubBinding(): RouteRoleBinding {
-  return { roleId: 'integrator', rowId: 'integrator', modelLevel: 'standard', runnerId: 'claude-code', resolvedRunnerId: 'claude-code', runnerSource: 'playbook' };
+  return { roleId: 'integrator', rowId: 'integrator', modelLevel: 'standard', runnerId: 'script', resolvedRunnerId: 'script', runnerSource: 'playbook' };
 }
 
 function makeBindings(opts: { ref: string; binding: RouteRoleBinding }): Map<string, RouteRoleBinding> {
@@ -57,15 +47,10 @@ function makeBindings(opts: { ref: string; binding: RouteRoleBinding }): Map<str
 
 type DepOverrides = {
   integrateFn?: ScriptRegistryDeps['integrateFn'];
-  runStub?: ScriptRegistryDeps['runStub'];
   confirmMergeFn?: ScriptRegistryDeps['confirmMergeFn'];
-  runConfirmStub?: ScriptRegistryDeps['runConfirmStub'];
   pollPrFn?: ScriptRegistryDeps['pollPrFn'];
-  runPollStub?: ScriptRegistryDeps['runPollStub'];
   overrideMergeFn?: ScriptRegistryDeps['overrideMergeFn'];
-  runOverrideStub?: ScriptRegistryDeps['runOverrideStub'];
   respondThreadsFn?: ScriptRegistryDeps['respondThreadsFn'];
-  runRespondStub?: ScriptRegistryDeps['runRespondStub'];
   releaseWorktreeFn?: ScriptRegistryDeps['releaseWorktreeFn'];
 };
 
@@ -76,20 +61,11 @@ function buildDeps(events: AppendEventInput[], overrides: DepOverrides = {}): Sc
     integrateFn: overrides.integrateFn ?? (async (_: IntegratorInput): Promise<IntegratorOutput> => ({
       prUrl: 'https://example/pr/1', branch: 'feat/x', prNumber: 1, headSha: 'sha1', status: 'pushed',
     })),
-    runStub: overrides.runStub ?? ((_: IntegratorInput): IntegratorOutput => ({
-      prUrl: 'stub://pr/0', branch: 'feat/stub', prNumber: 0,
-    })),
     confirmMergeFn: overrides.confirmMergeFn ?? (async (_: IntegratorInput): Promise<ConfirmMergeOutput> => ({
       merged: true, prNumber: 1, prUrl: 'https://example/pr/1/merged',
     })),
-    runConfirmStub: overrides.runConfirmStub ?? ((_: IntegratorInput): ConfirmMergeOutput => ({
-      merged: true, prNumber: 0, prUrl: 'stub://pr/0/merged',
-    })),
     pollPrFn: overrides.pollPrFn ?? (async (_: IntegratorInput): Promise<PrFeedback> => ({
       prNumber: 1, headSha: 'sha1', verdict: 'clean', evidence: ['ok'], ciFailures: [], reviewThreads: [],
-    })),
-    runPollStub: overrides.runPollStub ?? ((_: IntegratorInput): PrFeedback => ({
-      prNumber: 0, headSha: 'stub', verdict: 'clean', evidence: [], ciFailures: [], reviewThreads: [],
     })),
     overrideMergeFn: overrides.overrideMergeFn ?? (async (_: IntegratorInput): Promise<MergeOverrideOutput> => ({
       prNumber: 1,
@@ -100,17 +76,7 @@ function buildDeps(events: AppendEventInput[], overrides: DepOverrides = {}): Sc
       reviewThreads: [],
       override: { accepted: true, actor: 'test', note: 'test override', source: { gate: 'mergeGate', inboxId: 'inbox-test' }, facts: [], replied: 0, resolved: 0 },
     })),
-    runOverrideStub: overrides.runOverrideStub ?? ((_: IntegratorInput): MergeOverrideOutput => ({
-      prNumber: 0,
-      headSha: 'stub',
-      verdict: 'clean',
-      evidence: ['stub override accepted'],
-      ciFailures: [],
-      reviewThreads: [],
-      override: { accepted: true, actor: 'test', note: 'stub override', source: { gate: 'mergeGate', inboxId: 'inbox-stub' }, facts: [], replied: 0, resolved: 0 },
-    })),
     respondThreadsFn: overrides.respondThreadsFn ?? (async (_: IntegratorInput): Promise<RespondThreadsOutput> => ({ replied: 2, resolved: 1 })),
-    runRespondStub: overrides.runRespondStub ?? ((_: IntegratorInput): RespondThreadsOutput => ({ replied: 0, resolved: 0 })),
   };
 }
 
@@ -177,10 +143,10 @@ test('registry: cleanupWorktree emits cleanup_failed when releaseWorktreeFn thro
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
-// script:integrator — real vs stub selection, event shape, pointer shape
+// script:integrator — event shape, pointer shape, and launch bindings
 // ──────────────────────────────────────────────────────────────────────────────
 
-test('registry: script:integrator uses real fn when binding resolves to revo-integrator', async () => {
+test('registry: script:integrator uses real fn without runner binding', async () => {
   const events: AppendEventInput[] = [];
   let realCalled = false;
   const deps = buildDeps(events, {
@@ -188,9 +154,8 @@ test('registry: script:integrator uses real fn when binding resolves to revo-int
   });
   const registry = buildSystemScriptRegistry(deps);
   const handler = registry.get('script:integrator')!;
-  const bindings = makeBindings({ ref: 'script:integrator', binding: realBinding() });
 
-  const result = await handler({ runId: RUN_ID, decision: makeDecision('script:integrator'), ctx: CTX, bindingByRef: bindings, stepKey: 'integrator', inputs: {} });
+  const result = await handler({ runId: RUN_ID, decision: makeDecision('script:integrator'), ctx: CTX, bindingByRef: new Map(), stepKey: 'integrator', inputs: {} });
 
   assert.ok(realCalled, 'real integrateFn was invoked');
   assert.equal(result.outcome, 'ok');
@@ -218,7 +183,7 @@ test('registry: script:integrator emits foreign_pr_adopted for foreign noop adop
       status: 'noop',
       foreignPr: true,
       prAuthor: 'developer-host',
-      integratorAccount: 'revisium-io',
+      integratorAccount: 'profile-bot',
     } as IntegratorOutput),
   });
   const registry = buildSystemScriptRegistry(deps);
@@ -236,27 +201,61 @@ test('registry: script:integrator emits foreign_pr_adopted for foreign noop adop
   assert.equal(payload.headSha, 'sha1');
   assert.equal(payload.status, 'noop');
   assert.equal(payload.prAuthor, 'developer-host');
-  assert.equal(payload.integratorAccount, 'revisium-io');
+  assert.equal(payload.integratorAccount, 'profile-bot');
   const pointer = (result as { outcome: 'ok'; pointer: unknown }).pointer as Record<string, unknown>;
   assert.deepEqual(pointer, payload);
   assert.notEqual(pointer, payload, 'pointer and payload must be separate object instances');
 });
 
-test('registry: script:integrator uses stub fn when binding resolves to claude-code', async () => {
+test('registry: script:integrator does not switch to stub through runner binding', async () => {
   const events: AppendEventInput[] = [];
-  let stubCalled = false;
+  let realCalled = false;
   const deps = buildDeps(events, {
-    runStub: (): IntegratorOutput => { stubCalled = true; return { prUrl: 'stub://pr/0', branch: 'feat/stub', prNumber: 0 }; },
+    integrateFn: async (): Promise<IntegratorOutput> => { realCalled = true; return { prUrl: 'https://r/pr/1', branch: 'feat/x', prNumber: 1 }; },
   });
   const registry = buildSystemScriptRegistry(deps);
   const handler = registry.get('script:integrator')!;
-  const bindings = makeBindings({ ref: 'script:integrator', binding: stubBinding() });
+  const bindings = makeBindings({
+    ref: 'script:integrator',
+    binding: {
+      roleId: 'integrator',
+      rowId: 'integrator',
+      modelLevel: 'standard',
+      runnerId: 'stub-agent',
+      resolvedRunnerId: 'script',
+      runnerSource: 'playbook',
+    },
+  });
 
   const result = await handler({ runId: RUN_ID, decision: makeDecision('script:integrator'), ctx: CTX, bindingByRef: bindings, stepKey: 'integrator', inputs: {} });
 
-  assert.ok(stubCalled, 'stub runStub was invoked');
+  assert.ok(realCalled, 'real integrateFn was invoked');
   assert.equal(result.outcome, 'ok');
   assert.equal(events[0].type, 'integrate_succeeded');
+});
+
+test('registry: script:integrator passes GitHub account from node launch binding', async () => {
+  let seenInput: IntegratorInput | undefined;
+  const deps = buildDeps([], {
+    integrateFn: async (input): Promise<IntegratorOutput> => {
+      seenInput = input;
+      return { prUrl: 'https://r/pr/1', branch: 'feat/x', prNumber: 1 };
+    },
+  });
+  const registry = buildSystemScriptRegistry(deps);
+  const handler = registry.get('script:integrator')!;
+
+  await handler({
+    runId: RUN_ID,
+    decision: makeDecision('script:integrator', 'integrator'),
+    ctx: CTX,
+    bindingByRef: new Map(),
+    launchBindings: [{ match: { nodeId: 'integrator' }, accounts: { github: 'profile-bot' } }],
+    stepKey: 'integrator',
+    inputs: {},
+  });
+
+  assert.equal(seenInput?.githubAccount, 'profile-bot');
 });
 
 test('registry: script:integrator needsHuman → pipeline_blocked at stepKey pipeline with reason=integrate', async () => {
@@ -530,10 +529,7 @@ test('registry: script:respondThreads needsHuman → pipeline_blocked with reaso
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Binding lookup: scriptRef-keyed first, script:integrator fallback
-// ──────────────────────────────────────────────────────────────────────────────
-
-test('registry: binding lookup keys off decision.scriptRef then falls back to script:integrator', async () => {
+test('registry: script handlers execute without script:integrator binding fallback', async () => {
   const events: AppendEventInput[] = [];
   let realCalled = false;
   const deps = buildDeps(events, {
@@ -542,34 +538,15 @@ test('registry: binding lookup keys off decision.scriptRef then falls back to sc
   const registry = buildSystemScriptRegistry(deps);
   const handler = registry.get('script:confirmMerge')!;
 
-  // Only 'script:integrator' binding (not script:confirmMerge), so it falls back
   const bindings = new Map<string, RouteRoleBinding>();
   bindings.set('script:integrator', realBinding());
 
   await handler({ runId: RUN_ID, decision: makeDecision('script:confirmMerge'), ctx: CTX, bindingByRef: bindings, stepKey: 'confirmMerge', inputs: {} });
 
-  assert.ok(realCalled, 'real fn used via script:integrator fallback binding');
+  assert.ok(realCalled, 'script handler uses its own real fn');
 });
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Unknown script ref falls back to script:integrator handler
-// ──────────────────────────────────────────────────────────────────────────────
-
-test('registry: unknown script:foo ref routes to integrator handler', async () => {
-  const events: AppendEventInput[] = [];
-  let integrateCalled = false;
-  const deps = buildDeps(events, {
-    integrateFn: async (): Promise<IntegratorOutput> => { integrateCalled = true; return { prUrl: 'https://r/pr/1', branch: 'feat/x', prNumber: 1 }; },
-  });
-  const registry = buildSystemScriptRegistry(deps);
-
-  // Unknown ref — no entry in registry, falls back to script:integrator entry
-  const handler = registry.get('script:unknownScript') ?? registry.get('script:integrator')!;
-  const bindings = makeBindings({ ref: 'script:unknownScript', binding: realBinding() });
-
-  const result = await handler({ runId: RUN_ID, decision: makeDecision('script:unknownScript'), ctx: CTX, bindingByRef: bindings, stepKey: 'unknownScript', inputs: {} });
-
-  assert.ok(integrateCalled, 'integrator fn was called for unknown ref');
-  assert.equal(result.outcome, 'ok');
-  assert.equal(events[0].type, 'integrate_succeeded');
+test('registry: unknown script refs are not integrator aliases', () => {
+  const registry = buildSystemScriptRegistry(buildDeps([]));
+  assert.equal(registry.get('script:unknownScript'), undefined);
 });

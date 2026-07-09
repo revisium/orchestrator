@@ -12,6 +12,9 @@ type SlotBinding = {
   modelLevel?: string;
   timeoutMs?: number;
   permissionMode?: string;
+  accounts?: {
+    github?: string;
+  };
 };
 
 const HASHED_PROFILE_FIELDS = new Set(['pipelineId', 'schemaVersion', 'topology', 'bindings']);
@@ -38,7 +41,6 @@ const ROLE_SLOTS = new Set([
   'analyst',
   'reviewer',
   'developer',
-  'integrator',
   'watcher',
   'triager',
 ]);
@@ -158,12 +160,25 @@ function slotMatch(slot: string): BindingOverride['match'] {
   return ROLE_SLOTS.has(slot) ? { roleId: slot } : { nodeId: slot };
 }
 
+function bindingSlotMatch(slot: string, binding: SlotBinding): BindingOverride['match'] {
+  const hasRunnerLaunchFields =
+    binding.runnerId !== undefined ||
+    binding.modelLevel !== undefined ||
+    binding.timeoutMs !== undefined ||
+    binding.permissionMode !== undefined;
+  if (!hasRunnerLaunchFields && binding.accounts !== undefined && !slot.startsWith('role:') && !slot.startsWith('node:')) {
+    return { nodeId: slot };
+  }
+  return slotMatch(slot);
+}
+
 function bindingOverride(slot: string, binding: SlotBinding): BindingOverride | null {
-  const override: BindingOverride = { match: slotMatch(slot) };
+  const override: BindingOverride = { match: bindingSlotMatch(slot, binding) };
   if (binding.runnerId) override.runnerId = binding.runnerId;
   if (binding.modelLevel) override.modelLevel = binding.modelLevel;
   if (binding.timeoutMs !== undefined) override.timeoutMs = binding.timeoutMs;
   if (binding.permissionMode) override.permissionMode = binding.permissionMode;
+  if (binding.accounts?.github) override.accounts = { github: binding.accounts.github };
   return Object.keys(override).length > 1 ? override : null;
 }
 

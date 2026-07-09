@@ -28,16 +28,20 @@ import {
 
 let h: RunHarness;
 const crashed: { mergeResume: string } = { mergeResume: '' };
+const crashedRepos = new Map<string, string>();
 
 before(async () => {
   if (!RUN_REAL_E2E) return;
   // Crash a data-driven run at the merge gate (plan+developer+integrate+watcher durably recorded), THEN
   // launch one host that recovers it. The host's agent is irrelevant for already-recorded steps but is
   // set to the clean-watcher constant for determinism on any replayed effect.
-  crashed.mergeResume = (await crashDataDrivenRunAt('merge-gate')).runId;
+  const mergeResume = await crashDataDrivenRunAt('merge-gate');
+  crashed.mergeResume = mergeResume.runId;
+  crashedRepos.set(mergeResume.runId, mergeResume.repo);
   h = await createRunHarness({
     agent: (sink) => scriptedAgent({ byRole: { watcher: { kind: 'domainVerdict', verdict: 'clean' } } }, sink),
   });
+  for (const [runId, repo] of crashedRepos) h.developerWrites.set(runId, repo);
 });
 
 after(async () => {

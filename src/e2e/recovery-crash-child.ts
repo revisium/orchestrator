@@ -21,7 +21,7 @@ const stopAt = process.argv[2] ?? 'plan-gate';
 
 const h = await createRunHarness();
 await givenInstalledPlaybook(h);
-// A clean throwaway repo path; the stub integrator never touches it. Intentionally NOT cleaned up —
+// A clean throwaway repo path for the parked run. Intentionally NOT cleaned up —
 // the process is about to "crash", and the OS reaps the temp dir. Leaking one /tmp dir per crash is
 // cheaper than wiring a teardown that a crash would skip anyway.
 const target = createTargetRepo();
@@ -35,4 +35,4 @@ if (stopAt === 'merge-gate') {
 
 // Flush the run id, then exit WITHOUT h.close() — no DBOS drain → the workflow stays PENDING in
 // Postgres (the crash). exit(0) inside the write callback guarantees the parent reads RUNID first.
-process.stdout.write(`RUNID=${run.runId}\n`, () => process.exit(0));
+process.stdout.write(`RUNID=${run.runId}\nTASKID=${run.taskId}\nREPO=${target.worktree}\n`, () => process.exit(0));

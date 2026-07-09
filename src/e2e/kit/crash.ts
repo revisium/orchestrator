@@ -9,6 +9,7 @@ const CHILD_ENTRY = join(repoRoot, 'src', 'e2e', 'recovery-crash-child.ts');
 const DD_CHILD_ENTRY = join(repoRoot, 'src', 'e2e', 'recovery-dd-crash-child.ts');
 
 export type CrashStopPoint = 'plan-gate' | 'merge-gate';
+export type CrashRunResult = { runId: string; taskId: string; repo: string };
 
 /**
  * Simulate a host crash: run a stubbed feature run in a SEPARATE process up to `stopAt`, then kill
@@ -17,7 +18,7 @@ export type CrashStopPoint = 'plan-gate' | 'merge-gate';
  * it. Resolves with the crashed run's id. A separate process is mandatory — DBOS is a process-global,
  * so a real crash + recovery cannot be faked in-process.
  */
-export function crashRunAt(stopAt: CrashStopPoint): Promise<{ runId: string }> {
+export function crashRunAt(stopAt: CrashStopPoint): Promise<CrashRunResult> {
   return spawnCrashChild(CHILD_ENTRY, stopAt);
 }
 
@@ -26,11 +27,11 @@ export function crashRunAt(stopAt: CrashStopPoint): Promise<{ runId: string }> {
  * in a separate process up to `stopAt`, then kill it without draining DBOS. Same recovery contract as
  * {@link crashRunAt} — the parent test boots a fresh host that recovers the PENDING data-driven workflow.
  */
-export function crashDataDrivenRunAt(stopAt: CrashStopPoint): Promise<{ runId: string }> {
+export function crashDataDrivenRunAt(stopAt: CrashStopPoint): Promise<CrashRunResult> {
   return spawnCrashChild(DD_CHILD_ENTRY, stopAt);
 }
 
-function spawnCrashChild(entry: string, stopAt: CrashStopPoint): Promise<{ runId: string }> {
+function spawnCrashChild(entry: string, stopAt: CrashStopPoint): Promise<CrashRunResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(TSX_BIN, [entry, stopAt], { env: process.env, cwd: repoRoot });
     let stdout = '';
@@ -40,8 +41,13 @@ function spawnCrashChild(entry: string, stopAt: CrashStopPoint): Promise<{ runId
     child.on('error', reject);
     child.on('exit', (code) => {
       const match = stdout.match(/RUNID=(\S+)/);
-      if (match?.[1]) resolve({ runId: match[1] });
-      else reject(new Error(`crash child did not emit RUNID (exit ${code}). stderr tail: ${stderr.slice(-400)}`));
+      const taskMatch = stdout.match(/TASKID=(\S+)/);
+      const repoMatch = stdout.match(/REPO=(\S+)/);
+      if (match?.[1] && taskMatch?.[1] && repoMatch?.[1]) {
+        resolve({ runId: match[1], taskId: taskMatch[1], repo: repoMatch[1] });
+      } else {
+        reject(new Error(`crash child did not emit RUNID/TASKID/REPO (exit ${code}). stderr tail: ${stderr.slice(-400)}`));
+      }
     });
   });
 }

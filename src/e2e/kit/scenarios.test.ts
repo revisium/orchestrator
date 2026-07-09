@@ -11,15 +11,23 @@ import {
 import { stubDefaultAgentProfile, stubDefaultFullProfile } from './run-profiles.js';
 
 function fakeHarness(api: Record<string, unknown>): RunHarness {
-  return { api } as unknown as RunHarness;
+  return { api, developerWrites: new Map() } as unknown as RunHarness;
 }
 
 test('default playbook run helpers create runs against the shipped default playbook', async () => {
   const createRunCalls: unknown[] = [];
+  const startRunCalls: unknown[] = [];
   const h = fakeHarness({
     async createRun(input: unknown) {
       createRunCalls.push(input);
-      return { runId: `run-${createRunCalls.length}`, workflow: { engine: 'data-driven' } };
+      const runId = `run-${createRunCalls.length}`;
+      return (input as { start?: boolean }).start
+        ? { runId, workflow: { engine: 'data-driven' } }
+        : { runId };
+    },
+    async startRun(input: unknown) {
+      startRunCalls.push(input);
+      return { engine: 'data-driven' };
     },
   });
 
@@ -35,7 +43,7 @@ test('default playbook run helpers create runs against the shipped default playb
       playbookId: DEFAULT_PLAYBOOK_ID,
       pipelineId: 'feature-development',
       profile: stubDefaultFullProfile(),
-      start: true,
+      start: false,
     },
     {
       repo: '/repo',
@@ -48,6 +56,8 @@ test('default playbook run helpers create runs against the shipped default playb
       start: true,
     },
   ]);
+  assert.deepEqual(startRunCalls, [{ runId: 'run-1' }]);
+  assert.deepEqual([...h.developerWrites], [['run-1', '/repo']]);
 });
 
 test('givenSeededDefaultPlaybook installs the shipped default playbook when it is absent', async () => {

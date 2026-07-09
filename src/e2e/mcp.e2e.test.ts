@@ -38,6 +38,12 @@ const inv = <T = Record<string, unknown>>(name: string, args?: Record<string, un
 
 type AttentionResult = { runId: string; state: string; nextAction: string; requiresAttention: boolean; inbox?: { id: string } };
 type WatchChangesResult = { transitions: Array<{ runId: string; state: string; inbox?: { id: string } }>; cursor: string; timedOut: boolean };
+type McpRouteDetails = {
+  launchBindings: Array<{
+    match: { nodeId?: string; roleId?: string; runnerId?: string };
+    accounts?: { github?: string };
+  }>;
+};
 
 /**
  * Poll get_run_attention until nextAction reaches the target value or 'done'.
@@ -290,6 +296,44 @@ test('H9c: simulate_route accepts a stored profileId through the MCP layer', { s
   assert.match(route.profileHash, /^[a-f0-9]{64}$/);
   assert.match(route.materializedTemplateHash, /^[a-f0-9]{64}$/);
   assert.ok(route.launchBindingCount > 0, 'stored profile must produce launch bindings');
+});
+
+test('H9d: inline profile can pass a GitHub account for a script slot through MCP', { skip: e2eSkip }, async () => {
+  const profile = {
+    schemaVersion: 'run-profile/v1',
+    topology: { stages: {} },
+    bindings: {
+      slots: {
+        integrator: { accounts: { github: 'profile-bot' } },
+      },
+    },
+  };
+
+  const route = await inv<McpRouteDetails>('simulate_route', {
+    title: 'E2E MCP inline GitHub account profile',
+    pipeline: 'feature-development',
+    profile,
+    includeDetails: true,
+  });
+  assert.deepEqual(
+    route.launchBindings.find((binding) => binding.match.nodeId === 'integrator'),
+    { match: { nodeId: 'integrator' }, accounts: { github: 'profile-bot' } },
+    'MCP simulate_route forwards accounts.github as a script-node launch binding',
+  );
+
+  const created = await inv<{ runId: string }>('create_run', {
+    title: 'E2E MCP create with GitHub account profile',
+    repo: process.cwd(),
+    pipelineId: 'feature-development',
+    profile,
+    start: false,
+    includeMonitoringGuidance: false,
+  });
+  try {
+    assert.ok(created.runId, 'MCP create_run accepts the same inline profile');
+  } finally {
+    await inv('cancel_run', { runId: created.runId });
+  }
 });
 
 test('H12: create_run response includes monitoring directive by default (shape-only, no run completion)', { skip: e2eSkip }, async () => {

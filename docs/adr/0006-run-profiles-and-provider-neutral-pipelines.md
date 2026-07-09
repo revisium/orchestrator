@@ -45,7 +45,8 @@ A run profile owns launch configuration:
 
 - `pipelineId`;
 - topology overlay, such as single-stage or consensus fanout for semantic stages;
-- slot/node/runner bindings for runner id, model level, permission mode, timeout, and future budget fields;
+- slot/node/runner bindings for runner id, model level, permission mode, timeout, script-node account aliases, and
+  future budget fields;
 - profile version metadata, launch hash, status, source path, and provenance.
 
 The base pipeline owns workflow semantics: nodes, edges, gates, slot names, and allowed materialization points. It does
@@ -122,12 +123,13 @@ Stored `profileId` and inline `profile` are mutually exclusive in one launch req
 
 ### Publishing Identity
 
-Publishing identity is deliberately out of scope for the current `run-profile/v1` implementation. The profile schema
-rejects `publishing` fields so account selection cannot be hashed or pinned without runtime support.
+GitHub publication identity is part of script-node launch configuration, not a top-level profile property. A profile may
+bind a GitHub account alias to a script node through `bindings.slots.<scriptNode>.accounts.github`. The schema continues
+to reject top-level `publishing` fields.
 
-A later ADR/spec must define GitHub account selection, token lookup, host/project precedence, and route provenance before
-profile JSON accepts publishing preferences. Until then, write-capable GitHub behavior must use the existing host auth
-path and must not treat run profiles as the source of publishing identity.
+Profiles store only the account alias. Tokens are runtime host secrets and must not be stored in Revisium profiles,
+inline profiles, or Prisma route pins. Runtime GitHub commands resolve credentials from account-specific host state such
+as `GH_TOKEN_<ACCOUNT>` or `gh auth token --user <account>`.
 
 ### Runtime Resolution
 
@@ -164,8 +166,9 @@ The pinned route decision records:
 - policy version;
 - resolved role/node launch bindings.
 
-Future route pins may add resolved publishing identity and model-profile provenance once those contracts are explicitly
-designed and implemented.
+Future route pins may add resolved GitHub auth provenance and model-profile provenance once those contracts are
+explicitly designed and implemented. The selected GitHub account alias is already replay-pinned through the normalized
+profile snapshot and launch bindings.
 
 ## Alternatives
 
@@ -177,8 +180,8 @@ designed and implemented.
 - **Store runtime run state in Revisium.** Rejected. Runtime state is Prisma-owned; Revisium engine is reserved for
   versioned meaning/config.
 - **Store only `profileId` in the run.** Rejected. Replay would change when a profile row changes.
-- **Default GitHub publication to a hardcoded org account.** Rejected. Local Revo runs must use the active host
-  authentication path until a dedicated publishing identity contract exists.
+- **Default GitHub publication to a hardcoded org account.** Rejected. Local Revo runs may use a profile-bound
+  `accounts.github`, `REVO_GH_ACCOUNT`, or the active host `gh` account, but must not silently use a hardcoded org.
 - **Store GitHub tokens in profiles.** Rejected. Profiles are versioned meaning and may be listed through control-plane
   APIs; tokens are host-local secrets.
 
@@ -189,7 +192,8 @@ designed and implemented.
 - MCP/GraphQL expose profile validation and mutation tools before a UI edits profiles directly.
 - Existing run/profile logic is centered on storage-backed profile rows.
 - Tests must assert that default profiles are seeded catalog data and that route decisions pin profile provenance.
-- GitHub publication identity remains outside `run-profile/v1` until a dedicated provenance contract is designed.
+- GitHub publication account aliases are profile launch data for script nodes; credentials remain host-local runtime
+  secrets.
 
 ## Validation
 
@@ -206,5 +210,7 @@ Implementation PRs should verify:
 - `create_profile` and `update_profile` validate profile payloads against the selected pipeline before writing storage;
 - `update_profile` requires `expectedProfileRevisionHash` and mutates the current profile row through a new Revisium revision;
 - catalog re-import preserves edited profiles and only updates or retires unchanged catalog-seeded rows;
-- write-capable GitHub behavior uses the existing host auth path; profiles reject publishing fields and are not a source
-  of publishing identity in `run-profile/v1`.
+- write-capable GitHub behavior does not use a hardcoded default account;
+- profile-bound `accounts.github` is accepted only for script nodes and is included in the route/profile hash;
+- top-level `publishing` fields are rejected in favor of script-node account bindings;
+- GitHub tokens are never stored in `profile_json`, inline `profile`, or Prisma route pins.

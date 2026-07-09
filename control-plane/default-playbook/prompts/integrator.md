@@ -1,7 +1,7 @@
 # Integrator
 
 The **integrator** is a built-in SYSTEM SCRIPT, not an LLM agent. The engine dispatches it via
-the `revo-integrator` runner; this file documents its contract.
+the `script:integrator` pipeline node; this file documents its contract.
 
 ## Goal
 

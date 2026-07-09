@@ -36,9 +36,9 @@ import { coverageForScenario, type PipelineScenarioCoverage } from '../control-p
 //
 // The bootstrap in scripts/e2e-setup.ts already seeds the default; givenSeededDefaultPlaybook only
 // self-heals a reused test home that predates this slice (and never installs the fixture). The agent
-// (and the script integrator, for feature-development) are stubbed via inline run profiles so no real
-// claude/git/gh runs; the default `feature-development` routes top-level domain verdicts past both
-// routers, so the deterministic agent drives plan->merge to completion.
+// agent roles are deterministic and GitHub is emulated by the harness, while the script integrator
+// remains a system script node; the default `feature-development` routes top-level domain verdicts
+// past both routers, so the deterministic agent drives plan->merge to completion.
 
 let h: RunHarness;
 const runCases = new Map<string, RunCase>();
@@ -140,18 +140,20 @@ test('M0b: the seeded default is distinct from the e2e fixture playbook', { skip
 });
 
 test('M1: a seeded feature-development run drives plan→merge to completed on real DBOS/Revisium', { skip: e2eSkip }, async () => {
-  const run = await startDefaultFeatureRun(h);
+  const target = createTargetRepo();
+  targets.push(target);
+  const run = await startDefaultFeatureRun(h, target.worktree);
   assert.equal((run.workflow as { engine?: string }).engine, 'data-driven', 'the seeded pipeline routes to the data-driven engine');
 
   // analyst → planReviewer → planGate → developer → codeReview → integrator(script) → pollPr(clean) →
   // mergeReadiness(clean) → mergeGate → confirmMerge. Approving both gates drives it to the
-  // `succeeded` terminal. (The pollPr polls are stubbed here — the inline profile stubs the integrator, so
-  // the run skips the triage/CI-rework loop after the fresh pre-gate readiness check.)
+  // `succeeded` terminal. The fake GitHub readiness path returns clean, so the run skips the
+  // triage/CI-rework loop after the fresh pre-gate readiness check.
   const terminal = await approveUntilTerminal(h.api, run.runId);
   assert.equal(terminal.state, 'completed');
   assert.deepEqual(terminal.approvedTopics, ['plan', 'merge'], 'both seeded humanGate nodes opened in order');
 
-  // The script integrator node ran (stub → integrate_succeeded) and the run completed — via the adapter.
+  // The script integrator node ran and the run completed — via the adapter.
   await assertEventsPresent(h.api, run.runId, ['integrate_succeeded', 'run_completed']);
 
   // Every capability handle on the (clean) happy path resolved to its route binding and executed. The

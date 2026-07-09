@@ -168,8 +168,8 @@ export function executedRoles(h: RunHarness, runId: string): Array<[string, stri
 
 /**
  * Assert a `step_succeeded` for `role` was emitted after `afterEventType`. The two operands differ in
- * shape on purpose: an integrator is a stub runner that emits `integrate_succeeded` (an event type),
- * never a step — so the ordering is checked across the two event shapes, not within one. The step's
+ * shape on purpose: the integrator is a system script that emits `integrate_succeeded` (an event type),
+ * not an agent step — so the ordering is checked across the two event shapes, not within one. The step's
  * role is the resolved binding (playbook-prefixed), matched by suffix so the assertion is robust to
  * the install prefix and the template's node naming.
  */

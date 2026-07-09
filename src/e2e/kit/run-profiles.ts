@@ -1,8 +1,16 @@
+type E2eRunProfileSlotBinding = {
+  runnerId?: string;
+  modelLevel?: string;
+  accounts?: {
+    github: string;
+  };
+};
+
 export type E2eRunProfile = {
   schemaVersion: 'run-profile/v1';
   topology: { stages: Record<string, { mode: 'single' }> };
   bindings: {
-    slots: Record<string, { runnerId: string; modelLevel: string }>;
+    slots: Record<string, E2eRunProfileSlotBinding>;
   };
 };
 
@@ -30,14 +38,14 @@ const FIXTURE_AGENT_ROLES = [
 
 function stubProfile(
   agentRoles: readonly string[],
-  scriptRoles: readonly string[] = [],
+  scriptNodes: readonly string[] = [],
 ): E2eRunProfile {
   const slots: E2eRunProfile['bindings']['slots'] = {};
   for (const role of agentRoles) {
     slots[`role:${role}`] = { runnerId: 'stub-agent', modelLevel: 'standard' };
   }
-  for (const role of scriptRoles) {
-    slots[`role:${role}`] = { runnerId: 'stub-agent', modelLevel: 'standard' };
+  for (const nodeId of scriptNodes) {
+    slots[nodeId] = { accounts: { github: 'profile-bot' } };
   }
   return {
     schemaVersion: 'run-profile/v1',
@@ -59,9 +67,9 @@ export function stubFixtureAgentProfile(): E2eRunProfile {
 }
 
 export function stubFixtureFullProfile(): E2eRunProfile {
-  return stubProfile(FIXTURE_AGENT_ROLES, ['integrator', 'merger']);
+  return stubProfile(FIXTURE_AGENT_ROLES, ['integrator']);
 }
 
 export function stubFixtureIntegratorProfile(): E2eRunProfile {
-  return stubProfile([], ['integrator', 'merger']);
+  return stubProfile([], ['integrator']);
 }
