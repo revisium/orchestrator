@@ -1632,7 +1632,7 @@ test('issueRef: no-issue run strips produced change issueRef before integrator h
   });
 });
 
-test('DD4a-issue-140: non-live produced change metadata reaches the integrator without worktree capture', async () => {
+test('DD4a-issue-140: produced change metadata reaches the live integrator without duplicate capture', async () => {
   const stubChange: ProducedChangeArtifact = {
     branch: 'feat/stub-produced',
     headSha: 'stub-produced-sha',
@@ -1675,7 +1675,7 @@ test('DD4a-issue-140: non-live produced change metadata reaches the integrator w
   assert.equal(result.status, 'succeeded');
   assert.deepEqual(rec.integratorInputs[0]?.change, stubChange);
   assert.deepEqual(rec.capturedChanges, [], 'script/stub change producers must not invoke worktree capture');
-  assert.ok(!rec.events.includes('worktree_create:pipeline'), 'non-live routes do not create a run worktree');
+  assert.ok(rec.events.includes('worktree_create:pipeline'), 'script:integrator makes the run live even with script/stub agent producers');
 });
 
 test('DD4b: pollPr ci_changes forever → cap → recoveryGate → cancelled terminal (ciLoop is DATA)', async () => {

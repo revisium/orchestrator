@@ -440,6 +440,16 @@ function runnerProducesWorktreeChanges(runnerId: string): boolean {
   return runnerId === 'claude-code' || runnerId === 'codex';
 }
 
+function scriptRequiresLiveWorktree(scriptRef: string): boolean {
+  return scriptRef === 'script:integrator';
+}
+
+function templateRequiresLiveWorktree(template: Template): boolean {
+  return Object.values(template.nodes).some((node) =>
+    node.kind === 'script' && scriptRequiresLiveWorktree(node.scriptRef),
+  );
+}
+
 function artifactRefFromResult(result: AttemptResult): string | undefined {
   const artifacts = result.artifacts;
   const processArtifact = isRecord(artifacts) && isRecord(artifacts.process) ? artifacts.process : artifacts;
@@ -1272,7 +1282,9 @@ export function makeDataDrivenTask(
 
     const { taskId, title, base, issueRef, issueAction } = await loadRunTaskContext(runId);
 
-    const live = route.roleBindings.some((b) => runnerNeedsLivePreflight(b.resolvedRunnerId));
+    const live =
+      route.roleBindings.some((b) => runnerNeedsLivePreflight(b.resolvedRunnerId)) ||
+      templateRequiresLiveWorktree(template);
     if (live) {
       const pf = await preflightFn(taskId, base);
       if ('needsHuman' in pf) {

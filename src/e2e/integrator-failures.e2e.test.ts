@@ -31,7 +31,6 @@ import {
   assertEventsPresent,
   git,
   stubFixtureAgentProfile,
-  stubFixtureFullProfile,
 } from './kit/index.js';
 
 // Group D — integrator / git / gh failure modes, exercised through the REAL integrator + real git on
@@ -303,35 +302,6 @@ test('D14: a gh error during integrate opens recoveryGate with recheck/cancel ou
     await h.api.resolveGate({ inboxId: recovery.inboxId, outcome: 'cancel', resolvedBy: 'e2e' });
     const terminal = await waitState(h.api, run.runId);
     assert.equal(terminal.state, 'cancelled');
-  } finally {
-    target.cleanup();
-  }
-});
-
-test('D16: a stub (script-mode) integrator completes with no git/gh', { skip: e2eSkip }, async () => {
-  const target = createTargetRepo();
-  try {
-    const created = await h.api.createRun({
-      repo: target.worktree,
-      title: 'E2E stub-integrator feature run',
-      description: 'Group D — integrator script with fake GitHub.',
-      scope: 'Only mutate the temporary e2e target repository.',
-      playbookId: PLAYBOOK_ID,
-      pipelineId: 'feature-development',
-      profile: stubFixtureFullProfile(),
-      start: false,
-    });
-    h.developerWrites.set(created.runId, target.worktree);
-    await h.api.startRun({ runId: created.runId });
-
-    const terminal = await approveUntilTerminal(h.api, created.runId);
-    assert.equal(terminal.state, 'completed');
-    // Stub path: integrator(stub)→pollPr(stub clean)→merge gate→confirmMerge(stub). `merge_confirmed` is
-    // the deterministic "it merged" signal; `run_completed` is implied by terminal.state and races on the
-    // fast stub path (status flips before the terminal event read), so assert the durable signals.
-    await assertEventsPresent(h.api, created.runId, ['integrate_succeeded', 'merge_confirmed']);
-    assertGhNotCalled(h, created.taskId, ['pr', 'list']);
-    assertGhNotCalled(h, created.taskId, ['pr', 'create']);
   } finally {
     target.cleanup();
   }

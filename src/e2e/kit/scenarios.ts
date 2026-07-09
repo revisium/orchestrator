@@ -26,7 +26,7 @@ export const DEFAULT_PLAYBOOK_ID = 'revisium-default';
  * past both the code-review and post-integrator-watcher routers, so the deterministic agent drives it to
  * completion.
  */
-export async function startDefaultFeatureRun(h: RunHarness, repo: string = process.cwd()) {
+export async function startDefaultFeatureRun(h: RunHarness, repo: string) {
   const created = await h.api.createRun({
     repo,
     title: 'E2E seeded default feature-development run',
@@ -35,10 +35,11 @@ export async function startDefaultFeatureRun(h: RunHarness, repo: string = proce
     playbookId: DEFAULT_PLAYBOOK_ID,
     pipelineId: 'feature-development',
     profile: stubDefaultFullProfile(),
-    start: true,
+    start: false,
   });
-  if (!('workflow' in created)) throw new Error('start:true must return workflow metadata');
-  return created;
+  h.developerWrites.set(created.runId, repo);
+  const workflow = await h.api.startRun({ runId: created.runId });
+  return { ...created, workflow };
 }
 
 /** Create + start a run on the SEEDED DEFAULT playbook's `local-change` pipeline (developer-only, no gate). */
@@ -149,9 +150,10 @@ export async function startStubbedFeatureRun(h: RunHarness, target: TargetRepo) 
     playbookId: PLAYBOOK_ID,
     pipelineId: 'feature-development',
     profile: stubFixtureFullProfile(),
-    start: true,
+    start: false,
   });
-  if (!('workflow' in created)) throw new Error('start:true must return workflow metadata');
+  h.developerWrites.set(created.runId, target.worktree);
+  await h.api.startRun({ runId: created.runId });
   return { runId: created.runId, taskId: created.taskId };
 }
 
@@ -182,6 +184,7 @@ export async function startDataDrivenRun(
     start: false,
   });
   if (specs && spec) specs.set(created.runId, spec);
+  h.developerWrites.set(created.runId, target.worktree);
   const started = await h.api.startRun({ runId: created.runId });
   return { runId: created.runId, taskId: created.taskId, started };
 }

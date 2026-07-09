@@ -140,7 +140,9 @@ test('M0b: the seeded default is distinct from the e2e fixture playbook', { skip
 });
 
 test('M1: a seeded feature-development run drives plan→merge to completed on real DBOS/Revisium', { skip: e2eSkip }, async () => {
-  const run = await startDefaultFeatureRun(h);
+  const target = createTargetRepo();
+  targets.push(target);
+  const run = await startDefaultFeatureRun(h, target.worktree);
   assert.equal((run.workflow as { engine?: string }).engine, 'data-driven', 'the seeded pipeline routes to the data-driven engine');
 
   // analyst → planReviewer → planGate → developer → codeReview → integrator(script) → pollPr(clean) →

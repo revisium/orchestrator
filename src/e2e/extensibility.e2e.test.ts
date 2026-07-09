@@ -56,6 +56,7 @@ async function startRun(pipelineId: string, spec?: AgentSpec): Promise<{ runId: 
     start: false,
   });
   if (spec) specs.set(created.runId, spec);
+  h.developerWrites.set(created.runId, target.worktree);
   await h.api.startRun({ runId: created.runId });
   return { runId: created.runId, taskId: created.taskId };
 }

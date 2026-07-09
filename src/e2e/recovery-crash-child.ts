@@ -35,4 +35,4 @@ if (stopAt === 'merge-gate') {
 
 // Flush the run id, then exit WITHOUT h.close() — no DBOS drain → the workflow stays PENDING in
 // Postgres (the crash). exit(0) inside the write callback guarantees the parent reads RUNID first.
-process.stdout.write(`RUNID=${run.runId}\n`, () => process.exit(0));
+process.stdout.write(`RUNID=${run.runId}\nTASKID=${run.taskId}\nREPO=${target.worktree}\n`, () => process.exit(0));

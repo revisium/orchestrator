@@ -125,6 +125,30 @@ test('resolvePinnedGh: returns a pinned execGh when an explicit account token re
   }
 });
 
+test('resolvePinnedGh: defaults to the active gh account and pins that account token', () => {
+  const seenCalls: string[][] = [];
+  const execFile: ExecFileFn = (_file, args, opts) => {
+    seenCalls.push(args);
+    if (args[0] === 'api' && args[1] === 'user' && args[2] === '--jq') return 'active-user\n';
+    if (args[0] === 'auth') {
+      assert.deepEqual(args, ['auth', 'token', '--user', 'active-user']);
+      return 'gho_activeuser\n';
+    }
+    return opts.env?.GH_TOKEN === 'gho_activeuser' ? 'active-user' : 'WRONG';
+  };
+  const result = resolvePinnedGh({ env: {}, execFile });
+  assert.ok(!('needsHuman' in result), 'must resolve from the active gh account');
+  if (!('needsHuman' in result)) {
+    assert.equal(result.account, 'active-user');
+    assert.equal(result.execGh(['api', 'user']), 'active-user', 'default active account is still token-pinned');
+  }
+  assert.deepEqual(seenCalls, [
+    ['api', 'user', '--jq', '.login'],
+    ['auth', 'token', '--user', 'active-user'],
+    ['api', 'user'],
+  ]);
+});
+
 test('resolvePinnedGh: FAILS LOUD (needsHuman) when the token cannot be resolved — never falls back to ambient', () => {
   const execFile: ExecFileFn = () => {
     throw new Error('keychain unavailable (detached host)');

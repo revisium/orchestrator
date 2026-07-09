@@ -43,9 +43,11 @@ const created = await h.api.createRun({
   playbookId: 'revisium-agent-playbook',
   pipelineId: DATA_DRIVEN_PIPELINE,
   profile: stubFixtureFullProfile(),
-  start: true,
+  start: false,
 });
 const runId = created.runId;
+h.developerWrites.set(runId, target.worktree);
+await h.api.startRun({ runId });
 
 const plan = await waitForGate(h.api, runId, 'plan');
 if (stopAt === 'merge-gate') {
@@ -54,4 +56,4 @@ if (stopAt === 'merge-gate') {
 }
 
 // Flush the run id, then exit WITHOUT h.close() — no DBOS drain → the workflow stays PENDING (the crash).
-process.stdout.write(`RUNID=${runId}\n`, () => process.exit(0));
+process.stdout.write(`RUNID=${runId}\nTASKID=${created.taskId}\nREPO=${target.worktree}\n`, () => process.exit(0));
