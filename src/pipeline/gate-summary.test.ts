@@ -97,6 +97,7 @@ test('recoveryGate prefers the latest blocked script lesson over stale configure
     outputs(stalePoll, blockedConfirm),
     'blocked',
     blockedConfirm,
+    blockedConfirm,
   );
 
   assert.equal(summary.gatedArtifact?.nodeId, 'confirmMerge');

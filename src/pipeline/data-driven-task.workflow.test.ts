@@ -3031,6 +3031,38 @@ test('DD-reverify-a: blocked at mergeApproveReverify → catch → classifyRecov
   assert.equal(result.status, 'cancelled', 'blocked at reverify routes to recoveryGate → cancel → cancelled');
   assert.equal(rec.confirmMergeCalls, 0, 'confirmMerge must not be called when reverify blocks');
   assert.ok(rec.gates.includes('merge'), 'recoveryGate (topic merge) must open');
+  const recoverySummary = rec.gateSummaries.find((summary) => summary.nodeId === 'recoveryGate');
+  assert.equal(recoverySummary?.gatedArtifact?.nodeId, 'mergeApproveReverify');
+  assert.deepEqual(recoverySummary?.gatedArtifact?.payload, {
+    reason: 'poll-pr',
+    lesson: 'PR is stale (DIRTY) after approval',
+    nodeId: 'mergeApproveReverify',
+  });
+});
+
+test('DD-recovery: confirmMerge block without produces still reaches recoveryGate summary', async () => {
+  const { run, rec } = buildAdapter({
+    template: featureDevelopmentPrReview(),
+    verdicts: { codeReview: 'approved' },
+    gate: (_topic, gateKey) => gateKey.startsWith('recoveryGate') ? { outcome: 'cancel' } : { decision: 'approve' },
+    confirmMerge: () => ({ needsHuman: true as const, lesson: 'failed to mark PR #7 ready for review' }),
+  });
+
+  const result = await run();
+
+  assert.equal(result.status, 'cancelled');
+  assert.equal(rec.confirmMergeCalls, 1, 'confirmMerge ran once');
+  const recoverySummary = rec.gateSummaries.find((summary) => summary.nodeId === 'recoveryGate');
+  assert.equal(recoverySummary?.gatedArtifact?.nodeId, 'confirmMerge');
+  assert.deepEqual(recoverySummary?.gatedArtifact?.payload, {
+    reason: 'confirm-merge',
+    lesson: 'failed to mark PR #7 ready for review',
+    nodeId: 'confirmMerge',
+  });
+  assert.ok(
+    rec.outputs.some((output) => output.nodeId === 'confirmMerge' && output.name === 'recoveryContext'),
+    'blocked script recovery context is persisted even when the node has no produces declaration',
+  );
 });
 
 test('DD-reverify-b: review_changes at mergeApproveReverify → router default → classifyRecovery → recoveryGate → cancel (AC#2 router path)', async () => {

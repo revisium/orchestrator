@@ -826,15 +826,13 @@ function freshMergeGateArtifact(
 
 function latestBlockedScriptArtifact(
   decision: Extract<Decision, { type: 'awaitGate' }>,
-  lastVerdict: string,
-  lastProducedOutput?: RunOutputRow,
+  recoveryContext?: RunOutputRow,
 ): RunOutputRow | undefined {
   if (decision.nodeId !== 'recoveryGate') return undefined;
-  if (lastVerdict !== 'blocked') return undefined;
-  const payload = lastProducedOutput?.payload;
+  const payload = recoveryContext?.payload;
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return undefined;
   const record = payload as Record<string, unknown>;
-  return typeof record.lesson === 'string' && typeof record.reason === 'string' ? lastProducedOutput : undefined;
+  return typeof record.lesson === 'string' && typeof record.reason === 'string' ? recoveryContext : undefined;
 }
 
 
@@ -846,9 +844,10 @@ export function buildGateSummary(
   outputsByNode: Map<string, RunOutputRow[]>,
   lastVerdict: string,
   lastProducedOutput?: RunOutputRow,
+  recoveryContext?: RunOutputRow,
 ): GateSummary {
   const summary: GateSummary = { nodeId: decision.nodeId, outcomes: decision.outcomes };
-  const artRow = latestBlockedScriptArtifact(decision, lastVerdict, lastProducedOutput)
+  const artRow = latestBlockedScriptArtifact(decision, recoveryContext)
     ?? freshMergeGateArtifact(decision, lastVerdict, lastProducedOutput)
     ?? resolveGateRow(decision.gatedArtifact, outputsByNode);
   if (artRow) summary.gatedArtifact = gateArtifactView(artRow, decision.gatedArtifact?.as);
@@ -1281,6 +1280,30 @@ export function makeDataDrivenTask(
     return row;
   }
 
+  async function recordRecoveryContext(
+    runId: string,
+    node: Node,
+    ordinal: number,
+    attemptId: string,
+    payload: unknown,
+    outputsByNode: Map<string, RunOutputRow[]>,
+  ): Promise<RunOutputRow> {
+    const row: RunOutputRow = {
+      runId,
+      nodeId: node.id,
+      ordinal,
+      name: 'recoveryContext',
+      schemaRef: 'schema:recoveryContext',
+      payload,
+      attemptId,
+    };
+    const list = outputsByNode.get(node.id) ?? [];
+    list.push(row);
+    outputsByNode.set(node.id, list);
+    await appendRunOutput(row);
+    return row;
+  }
+
   return async function dataDrivenTaskImpl(
     runId: string,
     opts: DataDrivenTaskOpts,
@@ -1350,6 +1373,7 @@ export function makeDataDrivenTask(
     let lastResult: LastResult | undefined;
     let lastVerdict = '';
     let lastProducedOutput: RunOutputRow | undefined;
+    let recoveryContext: RunOutputRow | undefined;
     let lastFailureReason = '';
     let approvedMergeGateHeadShaValue: string | undefined;
     let stepCount = 0;
@@ -1372,6 +1396,7 @@ export function makeDataDrivenTask(
         live,
         lastVerdict,
         lastProducedOutput,
+        recoveryContext,
         approvedMergeGateHeadSha: approvedMergeGateHeadShaValue,
       });
       stepCount += eff.stepDelta;
@@ -1392,6 +1417,7 @@ export function makeDataDrivenTask(
       lastResult = eff.lastResult;
       lastVerdict = eff.lastVerdict ?? lastVerdict;
       lastProducedOutput = eff.producedOutput ?? lastProducedOutput;
+      if ('recoveryContext' in eff) recoveryContext = eff.recoveryContext ?? undefined;
       lastFailureReason = eff.failureReason ?? '';
       if (eff.approvedMergeGateHeadSha !== undefined) {
         approvedMergeGateHeadShaValue = eff.approvedMergeGateHeadSha ?? undefined;
@@ -1417,6 +1443,7 @@ export function makeDataDrivenTask(
     lastResult: LastResult | undefined;
     lastVerdict?: string;
     producedOutput?: RunOutputRow;
+    recoveryContext?: RunOutputRow | null;
     failureReason?: string;
     approvedMergeGateHeadSha?: string | null;
     stepDelta: number;
@@ -1441,6 +1468,7 @@ export function makeDataDrivenTask(
     agentQuestionRetryContextByNode: Map<string, AgentQuestionRetryContext>;
     lastVerdict: string;
     lastProducedOutput?: RunOutputRow;
+    recoveryContext?: RunOutputRow;
     approvedMergeGateHeadSha?: string;
   };
   type ForkDecision = Extract<Decision, { type: 'fork' }>;
@@ -1526,6 +1554,7 @@ export function makeDataDrivenTask(
     let lastResult: LastResult | undefined;
     let lastVerdict = '';
     let lastProducedOutput: RunOutputRow | undefined;
+    let recoveryContext: RunOutputRow | undefined;
     let stepDelta = 0;
 
     for (let i = 0; i < MAX_STEPS; i++) {
@@ -1553,6 +1582,7 @@ export function makeDataDrivenTask(
         state,
         lastVerdict,
         lastProducedOutput,
+        recoveryContext,
       });
       stepDelta += eff.stepDelta;
       if (eff.terminal) return { terminal: eff.terminal, stepDelta };
@@ -1560,6 +1590,7 @@ export function makeDataDrivenTask(
       lastResult = eff.lastResult;
       if (eff.lastVerdict !== undefined) lastVerdict = eff.lastVerdict;
       lastProducedOutput = eff.producedOutput ?? lastProducedOutput;
+      if ('recoveryContext' in eff) recoveryContext = eff.recoveryContext ?? undefined;
     }
 
     throw new InterpretError(
@@ -1669,19 +1700,19 @@ export function makeDataDrivenTask(
         }
         const scriptResult = await invokeScript(runId, decision, { taskId, title, base, issueRef: ctx.issueRef, issueAction: ctx.issueAction }, bindingByRef, ctx.launchBindings, stepKeyFor(node.id, ordinal), resolved.inputs);
         if (scriptResult.outcome === 'blocked') {
-          const producedOutput = scriptResult.pointer === undefined
+          const recoveryContext = scriptResult.pointer === undefined
             ? undefined
-            : await recordOutput(runId, node, ordinal, stepKeyFor(node.id, ordinal), scriptResult.pointer, ctx.outputsByNode);
+            : await recordRecoveryContext(runId, node, ordinal, stepKeyFor(node.id, ordinal), scriptResult.pointer, ctx.outputsByNode);
           return {
             lastResult: { outcome: 'failed', errorCode: REVO_SCRIPT_BLOCKED },
             lastVerdict: 'blocked',
-            ...(producedOutput ? { producedOutput } : {}),
+            ...(recoveryContext ? { recoveryContext } : {}),
             stepDelta: 1,
           };
         }
         if (scriptResult.outcome === 'failed') {
           const reason = scriptResult.reason ? `${REVO_SCRIPT_FAILED}: ${scriptResult.reason}` : REVO_SCRIPT_FAILED;
-          return { lastResult: { outcome: 'failed', errorCode: REVO_SCRIPT_FAILED }, lastVerdict: 'failed', failureReason: reason, stepDelta: 1 };
+          return { lastResult: { outcome: 'failed', errorCode: REVO_SCRIPT_FAILED }, lastVerdict: 'failed', recoveryContext: null, failureReason: reason, stepDelta: 1 };
         }
         let pointer = scriptResult.pointer;
         let sv = scriptResult.verdict;
@@ -1704,7 +1735,7 @@ export function makeDataDrivenTask(
       case 'awaitGate': {
         const topic = gateTopicFor(decision.reason);
         const ordinal = nextOrdinal(ctx.effectOrdinalByNode, decision.nodeId);
-        const summary = buildGateSummary(decision, ctx.outputsByNode, ctx.lastVerdict, ctx.lastProducedOutput);
+        const summary = buildGateSummary(decision, ctx.outputsByNode, ctx.lastVerdict, ctx.lastProducedOutput, ctx.recoveryContext);
         const human = await awaitHuman(
           runId,
           topic,
@@ -1727,6 +1758,7 @@ export function makeDataDrivenTask(
           lastResult: verdict ? { verdict } : {},
           ...(verdict ? { lastVerdict: verdict } : {}),
           ...(producedOutput ? { producedOutput } : {}),
+          ...(decision.nodeId === 'recoveryGate' ? { recoveryContext: null } : {}),
           ...(approvedHeadSha !== undefined ? { approvedMergeGateHeadSha: approvedHeadSha } : {}),
           stepDelta: 0,
         };
