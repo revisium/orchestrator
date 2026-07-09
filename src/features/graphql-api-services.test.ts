@@ -49,8 +49,8 @@ test('GraphQL facade services wrap query-bus requests', async () => {
   await new MethodApiService(queryBus, commandBus).getRunProfile({ pipelineId: 'local-change', profileId: 'custom-standard' });
   await new MethodApiService(queryBus, commandBus).validateRunProfile({ pipelineId: 'local-change', profile: {} });
   await new MethodApiService(queryBus, commandBus).createRunProfile({ pipelineId: 'local-change', profileId: 'custom-standard', displayName: 'Custom', profile: {} });
-  await new MethodApiService(queryBus, commandBus).updateRunProfile({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileHash: 'hash' });
-  await new MethodApiService(queryBus, commandBus).deprecateRunProfile({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileHash: 'hash' });
+  await new MethodApiService(queryBus, commandBus).updateRunProfile({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileRevisionHash: 'hash' });
+  await new MethodApiService(queryBus, commandBus).deprecateRunProfile({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileRevisionHash: 'hash' });
   await new PrApiService(queryBus).prReadiness({ repo: 'revisium/orchestrator' });
   await new PrApiService(queryBus).prFeedback({ repo: 'revisium/orchestrator' });
 

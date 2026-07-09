@@ -693,12 +693,12 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
   server.registerTool(
     'update_profile',
     {
-      description: 'Update a user-managed run profile in place. expectedProfileHash is required as an optimistic lock; new profile bodies are validated before write.',
+      description: 'Update a user-managed run profile in place. expectedProfileRevisionHash is required as an optimistic lock; new profile bodies are validated before write.',
       inputSchema: {
         playbookId: z.string().min(1).optional(),
         pipelineId: z.string().min(1),
         profileId: z.string().min(1),
-        expectedProfileHash: z.string().min(1),
+        expectedProfileRevisionHash: z.string().min(1),
         displayName: z.string().min(1).optional(),
         summary: z.string().optional(),
         profile: runProfileSchema,
@@ -713,12 +713,12 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
   server.registerTool(
     'deprecate_profile',
     {
-      description: 'Mark a run profile deprecated using expectedProfileHash as an optimistic lock. Deprecated profiles remain readable and are hidden from default list_profiles.',
+      description: 'Mark a run profile deprecated using expectedProfileRevisionHash as an optimistic lock. Deprecated profiles remain readable and are hidden from default list_profiles.',
       inputSchema: {
         playbookId: z.string().min(1).optional(),
         pipelineId: z.string().min(1),
         profileId: z.string().min(1),
-        expectedProfileHash: z.string().min(1),
+        expectedProfileRevisionHash: z.string().min(1),
         includeDetails: z.boolean().optional(),
       },
       annotations: { readOnlyHint: false },

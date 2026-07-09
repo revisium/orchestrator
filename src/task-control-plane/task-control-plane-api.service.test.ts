@@ -16,7 +16,7 @@ import type { RolesService } from '../revisium/roles.service.js';
 import type { RunService } from '../revisium/run.service.js';
 import { CreateRunWorkflowError, previewCreateRunIds } from '../run/create-run.js';
 import { hasWorkflowProgress, TaskControlPlaneApiService } from './task-control-plane-api.service.js';
-import { runProfileHash, topologyProfileFromRunProfile } from '../control-plane/run-profiles.js';
+import { runProfileHash, runProfileRevisionHash, topologyProfileFromRunProfile } from '../control-plane/run-profiles.js';
 import { materializeTemplate, MATERIALIZER_VERSION } from '../pipeline-core/materialize.js';
 import { POLICY_VERSION } from '../control-plane/default-playbook-policy.js';
 import { templateFromExecutionPolicy } from '../pipeline/data-driven-template.js';
@@ -273,6 +273,7 @@ function makeApi(overrides: {
         summary: 'Test stub profile',
         profile: LOCAL_CHANGE_PROFILE,
         profileHash: 'local-change-stub-hash',
+        profileRevisionHash: 'local-change-stub-revision-hash',
         status: 'active' as const,
       };
     },
@@ -4245,6 +4246,16 @@ const STORED_PROFILE_HASH = runProfileHash(STORED_PROFILE, {
   pipelineId: 'feature-development',
   schemaVersion: 'run-profile/v1',
 });
+const STORED_PROFILE_REVISION_HASH = runProfileRevisionHash(STORED_PROFILE, {
+  playbookId: 'pb',
+  pipelineId: 'feature-development',
+  profileId: STORED_PROFILE_ID,
+  schemaVersion: 'run-profile/v1',
+  version: '1',
+  displayName: 'Codex primary, Claude review consensus',
+  summary: 'Codex development with parallel Codex plus Claude consensus for plan and code review.',
+  status: 'active',
+});
 const STORED_PROFILE_SUMMARY = {
   id: `pb-${STORED_PROFILE_ID}`,
   playbookId: 'pb',
@@ -4256,6 +4267,7 @@ const STORED_PROFILE_SUMMARY = {
   summary: 'Codex development with parallel Codex plus Claude consensus for plan and code review.',
   profile: STORED_PROFILE,
   profileHash: STORED_PROFILE_HASH,
+  profileRevisionHash: STORED_PROFILE_REVISION_HASH,
   status: 'active' as const,
 } as const;
 
@@ -4502,7 +4514,7 @@ test('createProfile validates the profile against the selected pipeline before w
   }]);
 });
 
-test('updateProfile validates new profile bodies and requires expectedProfileHash', async () => {
+test('updateProfile validates new profile bodies and requires expectedProfileRevisionHash', async () => {
   const calls: unknown[] = [];
   const api = makeApi({
     playbooksService: {
@@ -4517,7 +4529,7 @@ test('updateProfile validates new profile bodies and requires expectedProfileHas
     () => api.updateProfile({
       pipelineId: 'local-change',
       profileId: 'custom-standard',
-      expectedProfileHash: 'h1',
+      expectedProfileRevisionHash: 'h1',
       profile: {
         schemaVersion: 'run-profile/v1',
         topology: { stages: { missingStage: { mode: 'single' } } },
@@ -4531,14 +4543,14 @@ test('updateProfile validates new profile bodies and requires expectedProfileHas
   await api.updateProfile({
     pipelineId: 'local-change',
     profileId: 'custom-standard',
-    expectedProfileHash: 'h1',
+    expectedProfileRevisionHash: 'h1',
     displayName: 'Renamed profile',
   });
   assert.deepEqual(calls, [{
     playbookId: 'pb',
     pipelineId: 'local-change',
     profileId: 'custom-standard',
-    expectedProfileHash: 'h1',
+    expectedProfileRevisionHash: 'h1',
     displayName: 'Renamed profile',
     summary: undefined,
     profile: undefined,
@@ -4576,11 +4588,11 @@ test('getProfile and deprecateProfile use storage with pipeline scope', async ()
   });
 
   await api.getProfile({ pipelineId: 'feature-development', profileId: STORED_PROFILE_ID });
-  await api.deprecateProfile({ pipelineId: 'feature-development', profileId: STORED_PROFILE_ID, expectedProfileHash: STORED_PROFILE_HASH });
+  await api.deprecateProfile({ pipelineId: 'feature-development', profileId: STORED_PROFILE_ID, expectedProfileRevisionHash: STORED_PROFILE_REVISION_HASH });
 
   assert.deepEqual(calls, [
     ['get', { playbookId: 'pb', pipelineId: 'feature-development', profileId: STORED_PROFILE_ID, includeDeprecated: true }],
-    ['deprecate', { playbookId: 'pb', pipelineId: 'feature-development', profileId: STORED_PROFILE_ID, expectedProfileHash: STORED_PROFILE_HASH }],
+    ['deprecate', { playbookId: 'pb', pipelineId: 'feature-development', profileId: STORED_PROFILE_ID, expectedProfileRevisionHash: STORED_PROFILE_REVISION_HASH }],
   ]);
 });
 

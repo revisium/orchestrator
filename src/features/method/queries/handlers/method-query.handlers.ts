@@ -1,7 +1,7 @@
 import { Inject } from '@nestjs/common';
 import { IQueryHandler, QueryHandler } from '@nestjs/cqrs';
 import { TaskControlPlaneApiService } from '../../../../task-control-plane/task-control-plane-api.service.js';
-import { connectionFetchLimit, toConnection } from '../../../shared/connection.js';
+import { toConnection } from '../../../shared/connection.js';
 import { GetRunProfileQuery } from '../impl/get-run-profile.query.js';
 import { GetPipelineQuery } from '../impl/get-pipeline.query.js';
 import { GetRoleQuery } from '../impl/get-role.query.js';
@@ -47,7 +47,6 @@ function definedProfileListInput(data: ListRunProfilesQuery['data']) {
       playbookId: data.playbookId,
       pipelineId: data.pipelineId,
       includeDeprecated: data.includeDeprecated,
-      first: connectionFetchLimit(data),
     }).filter(([, value]) => value !== undefined),
   );
 }

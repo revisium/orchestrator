@@ -300,6 +300,7 @@ test('McpFacadeService.listProfiles passes includeDeprecated to storage-backed A
     displayName: 'Old profile',
     summary: 'Deprecated profile',
     profileHash: 'hash',
+    profileRevisionHash: 'revision-hash',
     status: 'deprecated',
     profile: { bindings: { slots: {} } },
   };
@@ -322,6 +323,7 @@ test('McpFacadeService.listProfiles passes includeDeprecated to storage-backed A
     displayName: 'Old profile',
     summary: 'Deprecated profile',
     profileHash: 'hash',
+    profileRevisionHash: 'revision-hash',
     status: 'deprecated',
   }]);
 });
@@ -336,6 +338,7 @@ test('McpFacadeService profile management methods delegate to storage-backed API
     displayName: 'Custom standard',
     summary: 'Custom profile',
     profileHash: 'hash',
+    profileRevisionHash: 'revision-hash',
     status: 'active',
     profile: { schemaVersion: 'run-profile/v1', topology: { stages: {} }, bindings: { slots: {} } },
   };
@@ -382,6 +385,7 @@ test('McpFacadeService profile management methods delegate to storage-backed API
     displayName: 'Custom standard',
     summary: 'Custom profile',
     profileHash: 'hash',
+    profileRevisionHash: 'revision-hash',
     status: 'active',
   });
   assert.deepEqual(await facade.createProfile({ pipelineId: 'local-change', profileId: 'custom-standard', displayName: 'Custom standard', profile: body }), {
@@ -392,9 +396,10 @@ test('McpFacadeService profile management methods delegate to storage-backed API
     displayName: 'Custom standard',
     summary: 'Custom profile',
     profileHash: 'hash',
+    profileRevisionHash: 'revision-hash',
     status: 'active',
   });
-  assert.deepEqual(await facade.updateProfile({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileHash: 'hash', profile: body }), {
+  assert.deepEqual(await facade.updateProfile({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileRevisionHash: 'hash', profile: body }), {
     profileId: 'custom-standard',
     pipelineId: 'local-change',
     playbookId: 'pb',
@@ -402,9 +407,10 @@ test('McpFacadeService profile management methods delegate to storage-backed API
     displayName: 'Custom standard',
     summary: 'Custom profile',
     profileHash: 'hash',
+    profileRevisionHash: 'revision-hash',
     status: 'active',
   });
-  assert.deepEqual(await facade.deprecateProfile({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileHash: 'hash' }), {
+  assert.deepEqual(await facade.deprecateProfile({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileRevisionHash: 'hash' }), {
     profileId: 'custom-standard',
     pipelineId: 'local-change',
     playbookId: 'pb',
@@ -412,6 +418,7 @@ test('McpFacadeService profile management methods delegate to storage-backed API
     displayName: 'Custom standard',
     summary: 'Custom profile',
     profileHash: 'hash',
+    profileRevisionHash: 'revision-hash',
     status: 'deprecated',
   });
   assert.deepEqual(await facade.validateProfile({ pipelineId: 'local-change', profile: body }), {
@@ -427,8 +434,8 @@ test('McpFacadeService profile management methods delegate to storage-backed API
   assert.deepEqual(calls, [
     ['get', { pipelineId: 'local-change', profileId: 'custom-standard' }],
     ['create', { pipelineId: 'local-change', profileId: 'custom-standard', displayName: 'Custom standard', profile: body }],
-    ['update', { pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileHash: 'hash', profile: body }],
-    ['deprecate', { pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileHash: 'hash' }],
+    ['update', { pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileRevisionHash: 'hash', profile: body }],
+    ['deprecate', { pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileRevisionHash: 'hash' }],
     ['validate', { pipelineId: 'local-change', profile: body }],
   ]);
 });

@@ -2,7 +2,7 @@ export type UpdateRunProfileCommandData = {
   playbookId?: string;
   pipelineId: string;
   profileId: string;
-  expectedProfileHash: string;
+  expectedProfileRevisionHash: string;
   displayName?: string;
   summary?: string;
   profile?: unknown;

@@ -34,6 +34,9 @@ export class RunProfileModel {
   @Field(() => String)
   profileHash!: string;
 
+  @Field(() => String)
+  profileRevisionHash!: string;
+
   @Field(() => RunProfileStatus)
   status!: RunProfileStatus;
 }

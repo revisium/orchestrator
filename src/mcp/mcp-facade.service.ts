@@ -74,7 +74,7 @@ type UpdateProfileMcpInput = {
   playbookId?: string;
   pipelineId: string;
   profileId: string;
-  expectedProfileHash: string;
+  expectedProfileRevisionHash: string;
   displayName?: string;
   summary?: string;
   profile?: unknown;
@@ -85,7 +85,7 @@ type DeprecateProfileMcpInput = {
   playbookId?: string;
   pipelineId: string;
   profileId: string;
-  expectedProfileHash: string;
+  expectedProfileRevisionHash: string;
   includeDetails?: boolean;
 };
 
@@ -234,6 +234,7 @@ function compactRunProfile(value: unknown): unknown {
     displayName: asString(profile.displayName),
     summary: compactText(profile.summary),
     profileHash: asString(profile.profileHash),
+    profileRevisionHash: asString(profile.profileRevisionHash),
     status: asString(profile.status),
   });
 }

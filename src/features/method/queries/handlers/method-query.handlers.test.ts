@@ -52,7 +52,7 @@ test('method query handlers delegate and normalize method records', async () => 
       return pipeline;
     },
     async listProfiles(input: unknown) {
-      assert.deepEqual(input, { pipelineId: 'local-change', first: 51 });
+      assert.deepEqual(input, { pipelineId: 'local-change' });
       return [{ id: 'row_1', playbookId: 'pb', pipelineId: 'local-change', profileId: 'custom', schemaVersion: 'run-profile/v1', version: '1', displayName: 'Custom', summary: '', profile: {}, profileHash: 'hash', status: 'active' }];
     },
     async getProfile(input: unknown) {

@@ -649,20 +649,20 @@ test('profile management MCP tools validate schemas and delegate to facade', asy
     'nested profile.pipelineId is rejected',
   );
   const updateSchema = z.object(tools.find((tool) => tool.name === 'update_profile')?.config.inputSchema as Record<string, never>);
-  assert.equal(updateSchema.safeParse({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileHash: 'hash', profile }).success, true);
-  assert.equal(updateSchema.safeParse({ pipelineId: 'local-change', profileId: 'custom-standard', profile }).success, false, 'expectedProfileHash is required');
+  assert.equal(updateSchema.safeParse({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileRevisionHash: 'hash', profile }).success, true);
+  assert.equal(updateSchema.safeParse({ pipelineId: 'local-change', profileId: 'custom-standard', profile }).success, false, 'expectedProfileRevisionHash is required');
 
   await tools.find((tool) => tool.name === 'get_profile')?.handler({ pipelineId: 'local-change', profileId: 'custom-standard' } as never);
   await tools.find((tool) => tool.name === 'create_profile')?.handler({ pipelineId: 'local-change', profileId: 'custom-standard', displayName: 'Custom standard', profile } as never);
-  await tools.find((tool) => tool.name === 'update_profile')?.handler({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileHash: 'hash', profile } as never);
-  await tools.find((tool) => tool.name === 'deprecate_profile')?.handler({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileHash: 'hash' } as never);
+  await tools.find((tool) => tool.name === 'update_profile')?.handler({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileRevisionHash: 'hash', profile } as never);
+  await tools.find((tool) => tool.name === 'deprecate_profile')?.handler({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileRevisionHash: 'hash' } as never);
   await tools.find((tool) => tool.name === 'validate_profile')?.handler({ pipelineId: 'local-change', profile } as never);
 
   assert.deepEqual(calls, [
     ['get', { pipelineId: 'local-change', profileId: 'custom-standard' }],
     ['create', { pipelineId: 'local-change', profileId: 'custom-standard', displayName: 'Custom standard', profile }],
-    ['update', { pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileHash: 'hash', profile }],
-    ['deprecate', { pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileHash: 'hash' }],
+    ['update', { pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileRevisionHash: 'hash', profile }],
+    ['deprecate', { pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileRevisionHash: 'hash' }],
     ['validate', { pipelineId: 'local-change', profile }],
   ]);
 });

@@ -5,7 +5,7 @@ import { PlaybookError } from './errors.js';
 import type { ResolvedPlaybookSource } from './source-resolver.js';
 import { composeRolePrompt } from './prompt-composer.js';
 import { normalizeRouteGates } from '../pipeline/route-contract.js';
-import { runProfileHash } from '../control-plane/run-profiles.js';
+import { runProfileHash, runProfileRevisionHash } from '../control-plane/run-profiles.js';
 
 export type VersionedRow = {
   table: 'playbooks' | 'roles' | 'pipelines' | 'run_profiles';
@@ -100,7 +100,7 @@ export function scopedImportRowId(playbookId: string, itemId: string): string {
 }
 
 export function scopedRunProfileRowId(playbookId: string, pipelineId: string, profileId: string): string {
-  return scopedImportRowId(playbookId, `${pipelineId}-${profileId}`);
+  return scopedImportRowId(playbookId, `${pipelineId.length}-${pipelineId}-${profileId}`);
 }
 
 function mapRole(root: string, playbookId: string, role: RoleCatalogRecord, now: string): VersionedRow {
@@ -185,6 +185,16 @@ function mapRunProfile(
     pipelineId: profile.pipelineId,
     schemaVersion: profile.schemaVersion,
   });
+  const profileRevisionHash = runProfileRevisionHash(profileJson, {
+    playbookId,
+    pipelineId: profile.pipelineId,
+    profileId: profile.id,
+    schemaVersion: profile.schemaVersion,
+    version: profile.version,
+    displayName: profile.displayName,
+    summary: profile.summary,
+    status: profile.status,
+  });
   return {
     table: 'run_profiles',
     rowId: importedProfileId,
@@ -199,6 +209,7 @@ function mapRunProfile(
       summary: profile.summary,
       profile_json: JSON.stringify(profileJson),
       profile_hash: profileHash,
+      profile_revision_hash: profileRevisionHash,
       status: profile.status,
       source_path: sourcePath,
       source_hash: profileHash,

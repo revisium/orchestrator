@@ -12,5 +12,5 @@ export class DeprecateRunProfileInput {
   profileId!: string;
 
   @Field(() => String)
-  expectedProfileHash!: string;
+  expectedProfileRevisionHash!: string;
 }

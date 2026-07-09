@@ -75,7 +75,7 @@ Playbook import validates catalog-owned structured JSON with AJV before writing 
 serialized into `run_profiles.profile_json` or `pipelines.execution_policy_json`.
 
 The public identifiers are the catalog `pipeline_id` and `profile_id`. Revisium row ids such as
-`revisium-default-feature-development-codex-standard` are internal storage ids and are not accepted as alternate launch ids.
+`revisium-default-19-feature-development-codex-standard` are internal storage ids and are not accepted as alternate launch ids.
 
 ### Editable Profiles
 
@@ -84,10 +84,11 @@ seeded rows are ordinary editable profiles.
 
 Profile updates mutate the current stored profile row and commit a new Revisium revision. `profile_id` remains the
 stable public handle inside a playbook/pipeline. A launch-affecting edit changes `profile_hash`; a metadata-only edit
-may keep the same `profile_hash`. Callers must send `expectedProfileHash` as an optimistic lock so stale edits cannot
-silently overwrite newer launch data. Existing runs remain replayable through the Prisma route snapshot, not through the
-current Revisium row. Any user mutation, including display-only edits and deprecation, must invalidate catalog-clean
-provenance so catalog re-import cannot silently restore the seeded row state.
+may keep the same `profile_hash` but changes `profile_revision_hash`. Callers must send
+`expectedProfileRevisionHash` as an optimistic lock so stale edits cannot silently overwrite newer launch data, display
+metadata, or lifecycle status. Existing runs remain replayable through the Prisma route snapshot, not through the current
+Revisium row. Any user mutation, including display-only edits and deprecation, must invalidate catalog-clean provenance
+so catalog re-import cannot silently restore the seeded row state.
 
 Profile mutation APIs must validate both JSON shape and semantic compatibility before committing a revision:
 
@@ -203,7 +204,7 @@ Implementation PRs should verify:
 - seeded profiles are editable through profile mutation APIs;
 - inline `profile` validates/materializes/pins without being listed as a stored profile;
 - `create_profile` and `update_profile` validate profile payloads against the selected pipeline before writing storage;
-- `update_profile` requires `expectedProfileHash` and mutates the current profile row through a new Revisium revision;
+- `update_profile` requires `expectedProfileRevisionHash` and mutates the current profile row through a new Revisium revision;
 - catalog re-import preserves edited profiles and only updates or retires unchanged catalog-seeded rows;
 - write-capable GitHub behavior uses the existing host auth path; profiles reject publishing fields and are not a source
   of publishing identity in `run-profile/v1`.

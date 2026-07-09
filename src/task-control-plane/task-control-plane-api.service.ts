@@ -1617,7 +1617,7 @@ export class TaskControlPlaneApiService {
       playbookId,
       pipelineId,
       profileId: input.profileId,
-      expectedProfileHash: input.expectedProfileHash,
+      expectedProfileRevisionHash: input.expectedProfileRevisionHash,
       displayName: input.displayName,
       summary: input.summary,
       profile,
@@ -1632,7 +1632,7 @@ export class TaskControlPlaneApiService {
       playbookId: playbook.id,
       pipelineId: pipeline.pipelineId,
       profileId: input.profileId,
-      expectedProfileHash: input.expectedProfileHash,
+      expectedProfileRevisionHash: input.expectedProfileRevisionHash,
     });
   }
 

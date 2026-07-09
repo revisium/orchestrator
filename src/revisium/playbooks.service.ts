@@ -5,7 +5,7 @@ import type { ListRowsOptions } from '../control-plane/data-access.js';
 import type { RowWhereInput } from '../control-plane/query-types.js';
 import type { ControlPlaneTransport, TransportRow } from '../control-plane/transport.js';
 import { ControlPlaneError } from '../control-plane/errors.js';
-import { runProfileHash } from '../control-plane/run-profiles.js';
+import { runProfileHash, runProfileRevisionHash } from '../control-plane/run-profiles.js';
 import type { VersionedMeaningScope } from '../control-plane/versioned-meaning.js';
 import { createVersionedMeaningAccess } from '../control-plane/versioned-meaning.js';
 import { scopedRunProfileRowId } from '../playbook/import-mapper.js';
@@ -53,6 +53,7 @@ export type RunProfileSummary = {
   summary: string;
   profile: Record<string, unknown>;
   profileHash: string;
+  profileRevisionHash: string;
   status: 'active' | 'deprecated' | 'removed';
 };
 
@@ -70,7 +71,7 @@ export type UpdateRunProfileInput = {
   playbookId?: string;
   pipelineId: string;
   profileId: string;
-  expectedProfileHash: string;
+  expectedProfileRevisionHash: string;
   displayName?: string;
   summary?: string;
   profile?: Record<string, unknown>;
@@ -81,7 +82,7 @@ export type DeprecateRunProfileInput = {
   playbookId?: string;
   pipelineId: string;
   profileId: string;
-  expectedProfileHash: string;
+  expectedProfileRevisionHash: string;
 };
 
 function str(value: unknown): string {
@@ -178,6 +179,7 @@ function runProfileFromRow(row: { id: string; data?: Record<string, unknown> }):
       ? profile as Record<string, unknown>
       : {},
     profileHash: str(data.profile_hash),
+    profileRevisionHash: str(data.profile_revision_hash),
     status: runProfileStatus(data.status),
   };
 }
@@ -198,20 +200,33 @@ function runProfileData(input: {
   updatedAt: string;
 }): Record<string, unknown> {
   const schemaVersion = input.schemaVersion || 'run-profile/v1';
+  const version = input.version || '1';
+  const profileHash = runProfileHash(input.profile, {
+    pipelineId: input.pipelineId,
+    schemaVersion,
+  });
+  const profileRevisionHash = runProfileRevisionHash(input.profile, {
+    playbookId: input.playbookId,
+    pipelineId: input.pipelineId,
+    profileId: input.profileId,
+    schemaVersion,
+    version,
+    displayName: input.displayName,
+    summary: input.summary,
+    status: input.status,
+  });
   return {
     id: input.rowId,
     playbook_id: input.playbookId,
     pipeline_id: input.pipelineId,
     profile_id: input.profileId,
     schema_version: schemaVersion,
-    version: input.version || '1',
+    version,
     display_name: input.displayName,
     summary: input.summary,
     profile_json: JSON.stringify(input.profile),
-    profile_hash: runProfileHash(input.profile, {
-      pipelineId: input.pipelineId,
-      schemaVersion,
-    }),
+    profile_hash: profileHash,
+    profile_revision_hash: profileRevisionHash,
     status: input.status,
     source_path: input.sourcePath || '',
     source_hash: input.sourceHash || '',
@@ -486,11 +501,11 @@ export class PlaybooksService {
       profileId: input.profileId,
     });
     const existingData = existing.data ?? {};
-    const currentHash = str(existingData.profile_hash);
-    if (currentHash !== input.expectedProfileHash) {
+    const currentHash = str(existingData.profile_revision_hash);
+    if (currentHash !== input.expectedProfileRevisionHash) {
       throw new ControlPlaneError(
         'ROW_CONFLICT',
-        `run profile ${input.profileId} changed: expected ${input.expectedProfileHash}, got ${currentHash}`,
+        `run profile ${input.profileId} changed: expected ${input.expectedProfileRevisionHash}, got ${currentHash}`,
       );
     }
     const profile = input.profile ?? runProfileFromRow(existing).profile;
@@ -520,7 +535,7 @@ export class PlaybooksService {
       playbookId: input.playbookId,
       pipelineId: input.pipelineId,
       profileId: input.profileId,
-      expectedProfileHash: input.expectedProfileHash,
+      expectedProfileRevisionHash: input.expectedProfileRevisionHash,
       status: 'deprecated',
     });
   }

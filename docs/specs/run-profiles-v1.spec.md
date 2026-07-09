@@ -160,7 +160,7 @@ Fields:
 
 | Field | Meaning |
 | --- | --- |
-| `id` | Internal scoped row id, e.g. `revisium-default-feature-development-codex-standard`; not a public launch alias. |
+| `id` | Internal scoped row id, e.g. `revisium-default-19-feature-development-codex-standard`; not a public launch alias. |
 | `playbook_id` | Installed playbook id. |
 | `pipeline_id` | Profile pipeline id. |
 | `profile_id` | Catalog profile id. |
@@ -170,6 +170,7 @@ Fields:
 | `summary` | Listing summary. |
 | `profile_json` | Normalized launch payload JSON. |
 | `profile_hash` | Stable launch hash of `profile_json` plus selected/storage pipeline context. |
+| `profile_revision_hash` | Stable row revision hash used as the optimistic lock for profile mutations. |
 | `status` | `active`, `deprecated`, or import tombstone `removed`. |
 | `retired_at` | Import timestamp when a previously seeded row was removed from the catalog. |
 | `source_path` | Catalog path, usually `catalog/run-profiles.json`. |
@@ -178,8 +179,9 @@ Fields:
 
 Seeded profiles are normal editable rows after import. Profile updates keep the internal row id and public `profile_id`
 stable, overwrite the current row values, and commit a new Revisium revision. A launch-affecting edit writes a new
-`profile_json` and `profile_hash`; a display-only edit may keep the same `profile_hash`. Old runs do not depend on the
-current row because they carry Prisma route pins with `profileSnapshot` and `profileHash`.
+`profile_json` and `profile_hash`; a display-only edit may keep the same `profile_hash` but must change
+`profile_revision_hash`. Old runs do not depend on the current row because they carry Prisma route pins with
+`profileSnapshot` and `profileHash`.
 
 Any user mutation, including display-only edits and deprecation, must invalidate catalog-clean provenance, for example
 by clearing `source_hash`. This prevents a later catalog import from treating the row as unchanged and silently
@@ -202,6 +204,11 @@ update or removal conflict instead of replacing it.
 
 Display-only metadata changes write a Revisium revision but do not change the launch payload hash. Route pins use the
 launch payload hash because that is the replay identity.
+
+`profile_revision_hash` is a separate row-level lock. It includes the launch hash plus playbook/pipeline/profile
+identity, schema/version metadata, display name, summary, and status. It excludes provenance fields such as
+`source_path`, `source_hash`, `retired_at`, and `updated_at`. Any successful `update_profile` or `deprecate_profile`
+changes the returned `profile_revision_hash` whenever the user-visible row state changes.
 
 ## Topology V1
 
@@ -257,7 +264,7 @@ Required operations:
 | `get_profile` | Read one profile by playbook, pipeline, and public `profile_id`. |
 | `validate_profile` | Validate an inline or edited profile without committing it. |
 | `create_profile` | Create a new stored profile. |
-| `update_profile` | Update the current stored profile row using `expectedProfileHash` as an optimistic lock. |
+| `update_profile` | Update the current stored profile row using `expectedProfileRevisionHash` as an optimistic lock. |
 | `deprecate_profile` | Mark a profile `deprecated` so new launches do not use it by default. |
 
 Mutation rules:
@@ -266,9 +273,11 @@ Mutation rules:
 - `create_profile` MUST reject duplicate `profile_id` values in the same playbook and pipeline;
 - `create_profile` and `update_profile` MUST validate the payload against the selected playbook/pipeline before writing
   storage;
-- `update_profile` MUST require `expectedProfileHash` and reject stale updates;
+- `update_profile` MUST require `expectedProfileRevisionHash` and reject stale updates;
 - `update_profile` MUST commit a new Revisium revision while preserving the same public `profile_id`;
 - `update_profile` MUST write a new `profile_hash` when the launch payload changes;
+- `update_profile` and `deprecate_profile` MUST write a new `profile_revision_hash` when display metadata, lifecycle
+  status, or launch payload changes;
 - `update_profile` and `deprecate_profile` MUST invalidate catalog-clean provenance even when the launch payload hash
   does not change;
 - `profile_id` is stable for callers and points to the current active row;
@@ -338,7 +347,7 @@ If inline `profile` is present:
 6. compute a stable inline profile hash using the selected pipeline as hash context;
 7. return/create a route with profile provenance pins.
 
-The service MUST reject storage row ids such as `revisium-default-feature-development-codex-standard` as `profileId`; callers use the
+The service MUST reject storage row ids such as `revisium-default-19-feature-development-codex-standard` as `profileId`; callers use the
 catalog `profile_id` only.
 
 Inline `profile` is not persisted to `run_profiles`, is not returned by `list_profiles`, and has no Revisium row id.
@@ -403,7 +412,7 @@ Profile-management tools expose:
 | `get_profile` | no | Return one stored profile with normalized JSON and provenance. |
 | `validate_profile` | no | Validate an inline or edited profile without committing. |
 | `create_profile` | yes | Create a new profile. |
-| `update_profile` | yes | Update the current stored profile row with `expectedProfileHash`. |
+| `update_profile` | yes | Update the current stored profile row with `expectedProfileRevisionHash`. |
 | `deprecate_profile` | yes | Mark a profile deprecated. |
 
 `get_capabilities` SHOULD advertise `list_profiles` as the discovery path. It MUST NOT advertise TypeScript constants as
@@ -427,7 +436,7 @@ Required automated coverage:
 - no hardcoded profile registry is used by production route resolution;
 - seeded profiles are editable and `update_profile` mutates the current row through a new Revisium revision;
 - playbook re-import preserves edited profiles and updates/retires only catalog-clean seeded profiles;
-- update_profile rejects stale `expectedProfileHash` preconditions;
+- update_profile rejects stale `expectedProfileRevisionHash` preconditions;
 - deprecated profiles are listed only when requested and are rejected for new v1 launches;
 - `validate_profile` rejects unknown topology stages, binding slots, runner/model/permission choices, and unsupported
   profile fields before storage writes;

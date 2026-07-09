@@ -26,10 +26,14 @@ test('scopedImportRowId: returns Revisium-safe scoped row ids', () => {
 });
 
 test('scopedRunProfileRowId: scopes run profiles by playbook, pipeline, and profile id', () => {
-  assert.equal(scopedRunProfileRowId('pb', 'feature-development', 'codex-standard'), 'pb-feature-development-codex-standard');
+  assert.equal(scopedRunProfileRowId('pb', 'feature-development', 'codex-standard'), 'pb-19-feature-development-codex-standard');
   assert.notEqual(
     scopedRunProfileRowId('pb', 'feature-development', 'standard'),
     scopedRunProfileRowId('pb', 'analysis-only', 'standard'),
+  );
+  assert.notEqual(
+    scopedRunProfileRowId('pb', 'a-b', 'c'),
+    scopedRunProfileRowId('pb', 'a', 'b-c'),
   );
 });
 
@@ -105,12 +109,13 @@ test('mapPlaybookRows: maps roles and pipelines into versioned rows', () => {
   assert.deepEqual(rows.roles[0]?.data.allowed_tools, ['Read', 'Grep', 'Glob']);
   assert.equal(rows.pipelines[0]?.rowId, 'pb-feature-development');
   assert.deepEqual(rows.pipelines[0]?.data.route_gates, []);
-  assert.equal(rows.runProfiles[0]?.rowId, 'pb-feature-development-codex-standard');
+  assert.equal(rows.runProfiles[0]?.rowId, 'pb-19-feature-development-codex-standard');
   assert.equal(rows.runProfiles[0]?.table, 'run_profiles');
   assert.equal(rows.runProfiles[0]?.data.profile_id, 'codex-standard');
   assert.equal(rows.runProfiles[0]?.data.pipeline_id, 'feature-development');
   assert.equal(rows.runProfiles[0]?.data.source_path, 'catalog/run-profiles.json');
   assert.ok(typeof rows.runProfiles[0]?.data.profile_hash === 'string');
+  assert.ok(typeof rows.runProfiles[0]?.data.profile_revision_hash === 'string');
   const storedProfileJson = JSON.parse(String(rows.runProfiles[0]?.data.profile_json)) as Record<string, unknown>;
   assert.equal(storedProfileJson.bindings !== undefined, true);
   assert.equal(storedProfileJson.pipelineId, undefined);

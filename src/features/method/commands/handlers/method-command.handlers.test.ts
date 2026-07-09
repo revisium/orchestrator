@@ -37,18 +37,18 @@ test('method command handlers delegate run profile mutations through TaskControl
   assert.equal((await new UpdateRunProfileHandler(api).execute(new UpdateRunProfileCommand({
     pipelineId: 'local-change',
     profileId: 'custom-standard',
-    expectedProfileHash: 'hash',
+    expectedProfileRevisionHash: 'hash',
     profile,
   }))).profileId, 'custom-standard');
   assert.equal((await new DeprecateRunProfileHandler(api).execute(new DeprecateRunProfileCommand({
     pipelineId: 'local-change',
     profileId: 'custom-standard',
-    expectedProfileHash: 'hash',
+    expectedProfileRevisionHash: 'hash',
   }))).status, 'deprecated');
 
   assert.deepEqual(calls, [
     `create:${JSON.stringify({ pipelineId: 'local-change', profileId: 'custom-standard', displayName: 'Custom standard', profile })}`,
-    `update:${JSON.stringify({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileHash: 'hash', profile })}`,
-    'deprecate:{"pipelineId":"local-change","profileId":"custom-standard","expectedProfileHash":"hash"}',
+    `update:${JSON.stringify({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileRevisionHash: 'hash', profile })}`,
+    'deprecate:{"pipelineId":"local-change","profileId":"custom-standard","expectedProfileRevisionHash":"hash"}',
   ]);
 });

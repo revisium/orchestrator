@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { PlaybookInstaller } from './playbook-installer.js';
+import { scopedRunProfileRowId } from './import-mapper.js';
 import type { VersionedMeaningAccess, VersionedMeaningOperation, VersionedMeaningRow } from '../control-plane/versioned-meaning.js';
 
 function makePlaybookRoot(): string {
@@ -153,12 +154,13 @@ test('PlaybookInstaller: preserves edited run profiles during catalog re-import'
       },
     ]),
   );
+  const rowId = scopedRunProfileRowId('pb', 'feature-development', 'codex-standard');
   const fake = fakeAccess([
     {
       table: 'run_profiles',
-      rowId: 'pb-feature-development-codex-standard',
+      rowId,
       data: {
-        id: 'pb-feature-development-codex-standard',
+        id: rowId,
         playbook_id: 'pb',
         pipeline_id: 'feature-development',
         profile_id: 'codex-standard',
@@ -178,7 +180,7 @@ test('PlaybookInstaller: preserves edited run profiles during catalog re-import'
   assert.ok(result.operations.some((op) =>
     op.action === 'preserve' &&
     op.table === 'run_profiles' &&
-    op.rowId === 'pb-feature-development-codex-standard',
+    op.rowId === rowId,
   ));
 });
 

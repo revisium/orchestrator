@@ -14,7 +14,7 @@ export class UpdateRunProfileInput {
   profileId!: string;
 
   @Field(() => String)
-  expectedProfileHash!: string;
+  expectedProfileRevisionHash!: string;
 
   @Field(() => String, { nullable: true })
   displayName?: string;

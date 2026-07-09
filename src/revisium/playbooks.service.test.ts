@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import type { ControlPlaneTransport, TransportList, TransportRow } from '../control-plane/transport.js';
 import type { ListRowsOptions } from '../control-plane/data-access.js';
 import { ControlPlaneError } from '../control-plane/errors.js';
-import { runProfileHash } from '../control-plane/run-profiles.js';
+import { runProfileHash, runProfileRevisionHash } from '../control-plane/run-profiles.js';
+import { scopedRunProfileRowId } from '../playbook/import-mapper.js';
 import { PlaybookInstaller, type PlaybookInstallResult } from '../playbook/playbook-installer.js';
 import { PlaybooksService } from './playbooks.service.js';
 
@@ -374,9 +375,20 @@ test('PlaybooksService.install does not invalidate when nothing was committed', 
 });
 
 function mutableProfile(profileId: string, profile: Record<string, unknown>, sourceHash = ''): TransportRow {
+  const rowId = scopedRunProfileRowId('pb', 'feature-development', profileId);
   const profileHash = runProfileHash(profile, { pipelineId: 'feature-development', schemaVersion: 'run-profile/v1' });
-  return makeRow(`pb-feature-development-${profileId}`, {
-    id: `pb-feature-development-${profileId}`,
+  const profileRevisionHash = runProfileRevisionHash(profile, {
+    playbookId: 'pb',
+    pipelineId: 'feature-development',
+    profileId,
+    schemaVersion: 'run-profile/v1',
+    version: '1',
+    displayName: profileId,
+    summary: `${profileId} summary`,
+    status: 'active',
+  });
+  return makeRow(rowId, {
+    id: rowId,
     playbook_id: 'pb',
     pipeline_id: 'feature-development',
     profile_id: profileId,
@@ -386,6 +398,7 @@ function mutableProfile(profileId: string, profile: Record<string, unknown>, sou
     summary: `${profileId} summary`,
     profile_json: JSON.stringify(profile),
     profile_hash: profileHash,
+    profile_revision_hash: profileRevisionHash,
     status: 'active',
     source_path: sourceHash ? 'catalog/run-profiles.json' : '',
     source_hash: sourceHash,
@@ -472,9 +485,10 @@ test('PlaybooksService.createRunProfile writes a profile row and rejects duplica
   assert.equal(created.profileId, 'custom-standard');
   assert.equal(created.status, 'active');
   assert.equal(created.profileHash, runProfileHash(EMPTY_PROFILE, { pipelineId: 'feature-development', schemaVersion: 'run-profile/v1' }));
-  assert.equal(created.id, 'pb-feature-development-custom-standard');
+  assert.match(created.profileRevisionHash, /^[a-f0-9]{64}$/);
+  assert.equal(created.id, 'pb-19-feature-development-custom-standard');
   assert.equal(head.invalidations, 1);
-  assert.ok(deps.calls.includes('createRow:run_profiles/pb-feature-development-custom-standard'));
+  assert.ok(deps.calls.includes('createRow:run_profiles/pb-19-feature-development-custom-standard'));
   assert.ok(deps.calls.includes('commit:Create run profile custom-standard'));
   await assert.rejects(
     () => svc.createRunProfile({
@@ -508,7 +522,7 @@ test('PlaybooksService.createRunProfile rejects invalid public status values def
   assert.deepEqual(deps.calls.filter((call) => call.startsWith('createRow:')), []);
 });
 
-test('PlaybooksService.updateRunProfile overwrites the same row with expectedProfileHash lock', async () => {
+test('PlaybooksService.updateRunProfile overwrites the same row with expectedProfileRevisionHash lock', async () => {
   const existingProfile = {
     schemaVersion: 'run-profile/v1',
     topology: { stages: {} },
@@ -523,14 +537,14 @@ test('PlaybooksService.updateRunProfile overwrites the same row with expectedPro
   const head = fakeInvalidatableHead();
   const deps = fakeWritableDeps([existing]);
   const svc = new PlaybooksService(head, deps.engine as never, deps.prisma as never);
-  const expectedProfileHash = String(existing.data?.profile_hash);
+  const expectedProfileRevisionHash = String(existing.data?.profile_revision_hash);
 
   await assert.rejects(
     () => svc.updateRunProfile({
       playbookId: 'pb',
       pipelineId: 'feature-development',
       profileId: 'custom-standard',
-      expectedProfileHash: 'stale-hash',
+      expectedProfileRevisionHash: 'stale-hash',
       profile: updatedProfile,
     }),
     (err: ControlPlaneError) => err.code === 'ROW_CONFLICT',
@@ -541,7 +555,7 @@ test('PlaybooksService.updateRunProfile overwrites the same row with expectedPro
     playbookId: 'pb',
     pipelineId: 'feature-development',
     profileId: 'custom-standard',
-    expectedProfileHash,
+    expectedProfileRevisionHash,
     displayName: 'Custom updated',
     summary: 'Updated profile',
     profile: updatedProfile,
@@ -551,9 +565,39 @@ test('PlaybooksService.updateRunProfile overwrites the same row with expectedPro
   assert.equal(updated.profileId, 'custom-standard');
   assert.equal(updated.displayName, 'Custom updated');
   assert.equal(updated.profileHash, runProfileHash(updatedProfile, { pipelineId: 'feature-development', schemaVersion: 'run-profile/v1' }));
+  assert.notEqual(updated.profileRevisionHash, expectedProfileRevisionHash);
   assert.equal(deps.rows.size, 1, 'update must not create a second profile row');
   assert.equal(deps.rows.get(`run_profiles/${existing.id}`)?.data?.source_hash, '', 'user edit must no longer be catalog-clean');
   assert.ok(deps.calls.includes(`updateRow:run_profiles/${existing.id}`));
+});
+
+test('PlaybooksService.updateRunProfile protects metadata-only edits with profileRevisionHash', async () => {
+  const existing = mutableProfile('custom-standard', EMPTY_PROFILE, 'catalog-hash');
+  const head = fakeInvalidatableHead();
+  const deps = fakeWritableDeps([existing]);
+  const svc = new PlaybooksService(head, deps.engine as never, deps.prisma as never);
+  const expectedProfileRevisionHash = String(existing.data?.profile_revision_hash);
+
+  const updated = await svc.updateRunProfile({
+    playbookId: 'pb',
+    pipelineId: 'feature-development',
+    profileId: 'custom-standard',
+    expectedProfileRevisionHash,
+    displayName: 'Renamed profile',
+  });
+
+  assert.equal(updated.profileHash, existing.data?.profile_hash);
+  assert.notEqual(updated.profileRevisionHash, expectedProfileRevisionHash);
+  await assert.rejects(
+    () => svc.updateRunProfile({
+      playbookId: 'pb',
+      pipelineId: 'feature-development',
+      profileId: 'custom-standard',
+      expectedProfileRevisionHash,
+      summary: 'stale metadata edit',
+    }),
+    (err: ControlPlaneError) => err.code === 'ROW_CONFLICT',
+  );
 });
 
 test('PlaybooksService.deprecateRunProfile hides profiles from default listing but keeps get readable', async () => {
@@ -575,11 +619,12 @@ test('PlaybooksService.deprecateRunProfile hides profiles from default listing b
     playbookId: 'pb',
     pipelineId: 'feature-development',
     profileId: 'custom-standard',
-    expectedProfileHash: String(existing.data?.profile_hash),
+    expectedProfileRevisionHash: String(existing.data?.profile_revision_hash),
   });
 
   assert.equal(deprecated.status, 'deprecated');
   assert.equal(deprecated.profileHash, existing.data?.profile_hash);
+  assert.notEqual(deprecated.profileRevisionHash, existing.data?.profile_revision_hash);
   assert.equal(deps.rows.get(`run_profiles/${existing.id}`)?.data?.source_hash, '', 'deprecation must no longer be catalog-clean');
   assert.ok(deps.calls.includes(`updateRow:run_profiles/${existing.id}`));
 

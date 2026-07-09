@@ -166,7 +166,7 @@ A date-time string at UTC, such as 2019-12-03T09:54:33Z, compliant with the date
 scalar DateTime
 
 input DeprecateRunProfileInput {
-  expectedProfileHash: String!
+  expectedProfileRevisionHash: String!
   pipelineId: String!
   playbookId: String
   profileId: String!
@@ -771,6 +771,7 @@ type RunProfileModel {
   profile: JSON!
   profileHash: String!
   profileId: String!
+  profileRevisionHash: String!
   schemaVersion: String!
   status: RunProfileStatus!
   summary: String!
@@ -875,7 +876,7 @@ type SystemStatusModel {
 
 input UpdateRunProfileInput {
   displayName: String
-  expectedProfileHash: String!
+  expectedProfileRevisionHash: String!
   pipelineId: String!
   playbookId: String
   profile: JSON

@@ -96,8 +96,8 @@ test('read-model resolvers delegate to domain api services', async () => {
   assert.equal(new MethodResolver(methodApi as never).runProfile({ pipelineId: 'local-change', profileId: 'custom-standard' } as never), 'profile');
   assert.equal(new MethodResolver(methodApi as never).validateRunProfile({ pipelineId: 'local-change', profile: {} } as never), 'validateProfile');
   assert.equal(new MethodResolver(methodApi as never).createRunProfile({ pipelineId: 'local-change', profileId: 'custom-standard', displayName: 'Custom', profile: {} } as never), 'createProfile');
-  assert.equal(new MethodResolver(methodApi as never).updateRunProfile({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileHash: 'hash' } as never), 'updateProfile');
-  assert.equal(new MethodResolver(methodApi as never).deprecateRunProfile({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileHash: 'hash' } as never), 'deprecateProfile');
+  assert.equal(new MethodResolver(methodApi as never).updateRunProfile({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileRevisionHash: 'hash' } as never), 'updateProfile');
+  assert.equal(new MethodResolver(methodApi as never).deprecateRunProfile({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileRevisionHash: 'hash' } as never), 'deprecateProfile');
   assert.equal(new PrResolver(prApi as never).prReadiness({ repo: 'revisium/orchestrator' }), 'readiness');
   assert.equal(new PrResolver(prApi as never).prFeedback({ repo: 'revisium/orchestrator' }), 'feedback');
   assert.ok(calls.some((call) => call === 'digest:{"runId":"run_1"}'));
@@ -111,8 +111,8 @@ test('read-model resolvers delegate to domain api services', async () => {
   assert.ok(calls.some((call) => call === 'profile:{"pipelineId":"local-change","profileId":"custom-standard"}'));
   assert.ok(calls.some((call) => call === 'validateProfile:{"pipelineId":"local-change","profile":{}}'));
   assert.ok(calls.some((call) => call === 'createProfile:{"pipelineId":"local-change","profileId":"custom-standard","displayName":"Custom","profile":{}}'));
-  assert.ok(calls.some((call) => call === 'updateProfile:{"pipelineId":"local-change","profileId":"custom-standard","expectedProfileHash":"hash"}'));
-  assert.ok(calls.some((call) => call === 'deprecateProfile:{"pipelineId":"local-change","profileId":"custom-standard","expectedProfileHash":"hash"}'));
+  assert.ok(calls.some((call) => call === 'updateProfile:{"pipelineId":"local-change","profileId":"custom-standard","expectedProfileRevisionHash":"hash"}'));
+  assert.ok(calls.some((call) => call === 'deprecateProfile:{"pipelineId":"local-change","profileId":"custom-standard","expectedProfileRevisionHash":"hash"}'));
   assert.ok(calls.some((call) => call === 'approve:{"inboxId":"inbox_1"}'));
   assert.ok(calls.some((call) => call === `resolveGate:${JSON.stringify({ inboxId: 'inbox_1', outcome: 'recheck', reconcile: GateReconcileInput.keep, adoptionAudit })}`));
   assert.ok(calls.some((call) => call === 'resolve:{"inboxId":"inbox_1","answer":{"decision":"approve"}}'));

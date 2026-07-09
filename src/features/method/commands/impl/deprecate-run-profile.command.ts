@@ -2,7 +2,7 @@ export type DeprecateRunProfileCommandData = {
   playbookId?: string;
   pipelineId: string;
   profileId: string;
-  expectedProfileHash: string;
+  expectedProfileRevisionHash: string;
 };
 
 export class DeprecateRunProfileCommand {
