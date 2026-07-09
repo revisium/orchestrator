@@ -54,6 +54,11 @@ MCP and GraphQL compact-response tests must prove both sides of the contract: la
 actionable semantic fields remain visible. When compacting readiness or feedback, preserve the fields that explain
 `verdict` and `nextAction`.
 
+MCP tool-call tests and smoke consumers must treat a resolved `callTool` promise as transport success only. Tool
+execution failures are reported in the result with `isError: true`, not as JSON-RPC protocol errors. Any consumer-side
+helper or smoke script must check `isError` (or call `assertMcpToolSuccess`) before treating a tool result as success.
+Expected negative cases must assert `isError: true` and the actionable error text.
+
 Tests for removed or deprecated tools must assert absence from the registered surface and update specs/docs in the same
 change. Do not leave README/spec references to tools that are no longer registered.
 
