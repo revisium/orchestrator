@@ -670,11 +670,11 @@ test('claude-code runner: writes process artifacts and returns a stable process 
 test('claude-code runner: reports spawn, stdout, stderr, parsed, and finished lifecycle', async () => {
   const events: string[] = [];
   const stdout = structuredTransport({ verdict: 'approved', output: 'ok' });
+  const assistantLine = '{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}\n';
   const runner = createClaudeCodeRunner({
     executor: async (req) => {
       req.onSpawn?.(456);
-      // stream-json: a stdout line is parsed into a per-turn `parsed` event (not a raw stdout event).
-      req.onStdoutChunk?.('{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}\n');
+      req.onStdoutChunk?.(assistantLine);
       req.onStderrChunk?.('diagnostic chunk');
       return ok(stdout, { stderr: 'diagnostic chunk' });
     },
@@ -694,6 +694,7 @@ test('claude-code runner: reports spawn, stdout, stderr, parsed, and finished li
   assert.deepEqual(events, [
     'started',
     'spawned:456',
+    `stdout:${assistantLine}`,
     'parsed:assistant',
     'stderr:diagnostic chunk',
     'parsed:result',
@@ -807,7 +808,7 @@ test('claude-code runner: reports is_error metadata before failing the attempt',
   ]);
 });
 
-test('claude-code runner: clean exit with permission_denials reports terminal permission_blocked', async () => {
+test('claude-code runner: clean exit with permission_denials keeps successful terminal status', async () => {
   const events: CapturedReporterEvent[] = [];
   const stdout = structuredTransport(
     { verdict: 'approved', output: 'ok', nextSteps: [], needsHuman: false },
@@ -832,9 +833,21 @@ test('claude-code runner: clean exit with permission_denials reports terminal pe
   assert.equal(result.verdict, 'approved');
   assert.equal(result.needsHuman, false);
   assert.equal(result.nextSteps.length, 0);
-  assert.deepEqual(events.at(-2), { kind: 'finished', exitCode: 0, timedOut: false });
-  assert.equal(events.at(-1)?.kind, 'status');
-  assert.equal((events.at(-1) as Extract<CapturedReporterEvent, { kind: 'status' }> | undefined)?.status, 'permission_blocked');
+  assert.deepEqual(events.at(-1), { kind: 'finished', exitCode: 0, timedOut: false });
+  assert.ok(
+    events.some(
+      (event): event is Extract<CapturedReporterEvent, { kind: 'parsed' }> =>
+        event.kind === 'parsed' && event.type === 'permission_denials',
+    ),
+    'permission_denials remain visible as diagnostics',
+  );
+  assert.ok(
+    !events.some(
+      (event): event is Extract<CapturedReporterEvent, { kind: 'status' }> =>
+        event.kind === 'status' && event.status === 'permission_blocked',
+    ),
+    'successful structured output must not be downgraded to terminal permission_blocked activity',
+  );
 });
 
 test('claude-code runner: permission_denials parsed preview is bounded', async () => {

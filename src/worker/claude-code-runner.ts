@@ -262,6 +262,7 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
         },
         onStdoutChunk: (chunk) => {
           processArtifact?.appendStdout(chunk);
+          reporter?.output('stdout', chunk);
           stdoutLineBuffer += chunk;
           let nl: number;
           while ((nl = stdoutLineBuffer.indexOf('\n')) >= 0) {
@@ -309,9 +310,6 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
       const costs = buildUsageCosts(step, profile, transport);
       const attemptResult = buildAttemptResult(agent, step, costs, processSnapshot);
       reporter?.finished({ exitCode: result.code, timedOut: result.timedOut });
-      if (hasPermissionDenials(transport.permissionDenials)) {
-        reporter?.status('permission_blocked', { preview: permissionDenialsPreview(transport) });
-      }
       return attemptResult;
     } catch (err) {
       if (err instanceof RunAgentError) throw err;
