@@ -40,7 +40,8 @@ There is no internal archive of obsolete plans. Git history is the archive.
 | Control-plane tables or ownership classes | [control-plane-schema.md](./control-plane-schema.md) | `control-plane/bootstrap.config.json`, `src/control-plane/**`, `src/revisium/**` |
 | Playbook import or built-in playbook catalogs | [architecture-overview.md](./architecture-overview.md), [pipeline state machine spec](./specs/pipeline-state-machine-v1.spec.md), [default playbook policy spec](./specs/default-playbook-policy.spec.md) | `control-plane/default-playbook/**`, `src/playbook/**`, `@revisium/agent-playbook` catalog compatibility |
 | Model profiles, run profiles, routing policy, budgets, limits | [control-plane-schema.md](./control-plane-schema.md), [pipeline state machine spec](./specs/pipeline-state-machine-v1.spec.md), [run profiles v1](./specs/run-profiles-v1.spec.md) | `src/control-plane/definitions.ts`, `src/control-plane/run-profiles.ts`, `control-plane/default-playbook/catalog/run-profiles.json`, default playbook policy rows, cost tests |
-| Pipeline coverage strategy, DSL e2e cases, graph coverage, or hard skips | [pipeline test coverage v1](./specs/pipeline-test-coverage-v1.spec.md), [default playbook policy spec](./specs/default-playbook-policy.spec.md) | `src/e2e/kit/scenario.ts`, `src/e2e/*.e2e.test.ts`, `src/control-plane/default-playbook-policy.test.ts`, `VERIFICATION.md` |
+| Pipeline coverage strategy, DSL e2e cases, graph coverage, or hard skips | [pipeline test coverage v1](./specs/pipeline-test-coverage-v1.spec.md), [default playbook policy spec](./specs/default-playbook-policy.spec.md) | `src/e2e/support/pipeline-context.ts`, `src/e2e/pipeline/**`, `src/testing/policy/pipeline-coverage.ts`, `VERIFICATION.md` |
+| Test-layer boundaries, surface contexts, coverage evidence, semantic snapshots, or test timing | [test architecture v1](./specs/test-architecture-v1.spec.md), [current test coverage matrix](./specs/test-coverage-matrix-v1.json), [pipeline test coverage v1](./specs/pipeline-test-coverage-v1.spec.md) | `src/e2e/**`, `src/testing/policy/**`, `eslint-local-rules/test-architecture-boundaries.js`, `package.json`, `.github/workflows/ci.yml` |
 | Storage bootstrap, Prisma schema, DBOS placement, or embedded engine integration | [ADR-0007](./adr/0007-revo-storage-foundation.md), [storage database layout v1](./specs/storage-database-layout-v1.spec.md), [Revo Prisma and engine schema v1](./specs/revo-prisma-engine-schema-v1.spec.md) | `prisma/schema.prisma`, `src/storage/**`, `src/engine/**`, `src/revisium/**` |
 | Revo projects, ADR/KB stores, or template migrations | [ADR-0008](./adr/0008-revo-projects-and-versioned-knowledge.md), [Revo project knowledge and migrations v1](./specs/revo-project-knowledge-migrations-v1.spec.md) | future `src/projects/**`, future `src/revisium-store/**`, future `src/revisium-migrations/**` |
 | Runner behavior or external effects | [runner-contract.md](./runner-contract.md) | `src/runners/**`, `src/worker/**`, e2e runner scenarios |
@@ -63,6 +64,7 @@ generated PNG diagrams unless the asset is genuinely visual and cannot be repres
 | [ADR-0006](./adr/0006-run-profiles-and-provider-neutral-pipelines.md) | Run profiles and provider-neutral feature-development |
 | [ADR-0007](./adr/0007-revo-storage-foundation.md) | Revo storage foundation |
 | [ADR-0008](./adr/0008-revo-projects-and-versioned-knowledge.md) | Revo projects and versioned knowledge |
+| [ADR-0009](./adr/0009-test-architecture-boundaries.md) | Accepted test-layer, context, and evidence-ownership boundaries |
 
 ## Specs
 
@@ -74,10 +76,17 @@ generated PNG diagrams unless the asset is genuinely visual and cannot be repres
 | [Human gates v1](./specs/human-gates-v1.spec.md) | Inbox-backed gates, questions, watch tools, PR review feedback loop |
 | [Default playbook policy](./specs/default-playbook-policy.spec.md) | Bundled `feature-development` policy rules, static verifier scope, and merge-gate recheck behavior |
 | [Pipeline test coverage v1](./specs/pipeline-test-coverage-v1.spec.md) | Test-layer ownership, DSL coverage matrix policy, profile coverage, and hard-skip rules |
+| [Test architecture v1](./specs/test-architecture-v1.spec.md) | Accepted target layer/context boundaries, runtime-evidence requirements, matrix ownership, migration, and CI constraints |
 | [Run profiles v1](./specs/run-profiles-v1.spec.md) | Draft run-profile contract for provider-neutral `feature-development`, profile-driven topology/bindings, MCP ergonomics, and replay pins |
 | [Storage database layout v1](./specs/storage-database-layout-v1.spec.md) | Draft storage v2 topology, database ownership, bootstrap order, and migration planes |
 | [Revo Prisma and engine schema v1](./specs/revo-prisma-engine-schema-v1.spec.md) | Draft Revo product DB schema ownership and embedded engine table compatibility |
 | [Revo project knowledge and migrations v1](./specs/revo-project-knowledge-migrations-v1.spec.md) | Draft Revo project ADR/KB table initialization and engine migration contract |
+
+## Current-state snapshots
+
+| Snapshot | Purpose |
+| --- | --- |
+| [Test coverage matrix v1](./specs/test-coverage-matrix-v1.json) | Stage 2 working-tree evidence and Stage 1 performance baseline; documentation-owned, not the executable registry |
 
 ## Guides and References
 

@@ -8,6 +8,9 @@ import { ControlPlaneError } from '../control-plane/errors.js';
 import { AgentObservabilityError } from '../observability/types.js';
 import { CreateRunWorkflowError } from '../run/create-run.js';
 import { RunWatchService, type WatchResult } from '../task-control-plane/run-watch.service.js';
+import { focusedCaseTitle } from '../testing/policy/non-dsl-ownership.js';
+
+const focusedOwner = 'src/mcp/mcp-facade.service.test.ts';
 
 const never = <T>() => new Promise<T>(() => undefined);
 
@@ -25,7 +28,7 @@ async function resultBeforeDeadline<T>(promise: Promise<T>, ms = 500): Promise<T
   }
 }
 
-test('McpFacadeService.getCapabilities exposes the MCP transport surface', () => {
+test(focusedCaseTitle('H8', focusedOwner, 'getCapabilities exposes the MCP transport surface'), () => {
   const facade = new McpFacadeService({} as TaskControlPlaneApiService);
   const capabilities = facade.getCapabilities();
 
@@ -290,7 +293,38 @@ test('McpFacadeService pipeline tools can include execution policy details when 
   assert.equal(await facade.getPipeline({ pipelineId: 'pb-feature-development', includeDetails: true }), pipeline);
 });
 
-test('McpFacadeService.listProfiles passes includeDeprecated to storage-backed API', async () => {
+test(focusedCaseTitle(
+  'H9',
+  focusedOwner,
+  'catalog methods preserve playbook, role, and pipeline projections',
+), async () => {
+  const playbooks = [{ id: 'pb', name: 'Playbook' }];
+  const roles = [{ id: 'pb-developer', name: 'developer' }];
+  const pipelines = [{
+    id: 'pb-local-change',
+    playbookId: 'pb',
+    pipelineId: 'local-change',
+    path: 'pipelines/local-change.json',
+    triggers: ['small edit'],
+    requiredRoles: ['developer'],
+    alternativeRoles: [],
+    optionalRoles: [],
+    routeGates: [],
+    executionPolicy: { template_json: { specVersion: '1.0', nodes: {} } },
+  }];
+  const facade = new McpFacadeService({
+    async listPlaybooks() { return playbooks; },
+    async listRoles() { return roles; },
+    async listPipelines() { return pipelines; },
+  } as unknown as TaskControlPlaneApiService);
+
+  assert.deepEqual(await facade.listPlaybooks(), playbooks);
+  assert.deepEqual(await facade.listRoles(), roles);
+  const listedPipelines = await facade.listPipelines() as Array<{ pipelineId: string }>;
+  assert.deepEqual(listedPipelines.map((item) => item.pipelineId), ['local-change']);
+});
+
+test(focusedCaseTitle('H9b', focusedOwner, 'listProfiles preserves stored profile projections'), async () => {
   const calls: unknown[] = [];
   const profile = {
     profileId: 'old-profile',
@@ -861,7 +895,7 @@ test('compactReviewThreads: unresolvedCount and included are populated from the 
   assert.equal((threads.items ?? []).length, 1);
 });
 
-test('McpFacadeService.createRun monitoring directive is present with correct shape by default', async () => {
+test(focusedCaseTitle('H12', focusedOwner, 'createRun includes monitoring guidance by default'), async () => {
   const api = {
     async createRun() {
       return { runId: 'run-1', started: false };
@@ -884,7 +918,7 @@ test('McpFacadeService.createRun monitoring directive is present with correct sh
   assert.equal((monitoring?.clientHints as Record<string, unknown>)?.advisory, true);
 });
 
-test('McpFacadeService.createRun monitoring directive is absent when includeMonitoringGuidance is false', async () => {
+test(focusedCaseTitle('H12b', focusedOwner, 'createRun honors monitoring guidance opt-out'), async () => {
   const api = {
     async createRun() {
       return { runId: 'run-1', started: false };
@@ -911,7 +945,7 @@ test('McpFacadeService.createRun confirmationRequired path carries no monitoring
   assert.equal('monitoring' in result, false, 'monitoring must be absent on confirmationRequired path');
 });
 
-test('McpFacadeService.startRun monitoring directive is present with correct shape by default', async () => {
+test(focusedCaseTitle('H12c', focusedOwner, 'startRun includes monitoring guidance'), async () => {
   const api = {
     async startRun() {
       return { runId: 'run-1', workflowID: 'wf-1', alreadyStarted: false, engine: 'data-driven' };

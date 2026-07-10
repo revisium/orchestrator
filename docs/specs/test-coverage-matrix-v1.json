@@ -1,0 +1,598 @@
+{
+  "artifactKind": "revo-test-coverage-current-state",
+  "schemaVersion": "1.0.0",
+  "snapshotStatus": "stage-2-implemented-working-tree",
+  "snapshotNotice": "This file records source-backed Stage 2 implementation evidence from the current working tree. It does not claim Stage 3 observed-runtime coverage, semantic snapshots, or declared-versus-observed comparison.",
+  "source": {
+    "revision": "a29bfbf6e0404ce95a278deebd3d0a5524eab3ec",
+    "branch": "master",
+    "observedDate": "2026-07-10",
+    "workingTreeState": "Uncommitted approved Stage 2 implementation on the named base revision."
+  },
+  "ownership": {
+    "owner": "Revo test architecture and CI verification",
+    "normativeSpec": "docs/specs/test-architecture-v1.spec.md",
+    "pipelinePolicySpec": "docs/specs/pipeline-test-coverage-v1.spec.md",
+    "architectureDecision": "docs/adr/0009-test-architecture-boundaries.md"
+  },
+  "statusLegend": {
+    "strong": "Current source evidence substantially supports the stated policy at this revision.",
+    "partial": "Current source evidence supports part of the contract family and the listed gaps remain.",
+    "not-implemented": "Current source inspection found no implementation of this target contract."
+  },
+  "targetStageLegend": {
+    "maintain-current": "Preserve the current evidence while later stages migrate surrounding structure.",
+    "stage-2": "Implemented test contexts, directory ownership, public-boundary representatives, and structural enforcement.",
+    "stage-3": "Semantic runtime trace, declared-versus-observed comparison, snapshots, or same-run timing are the target.",
+    "stage-2-and-3": "Context separation belongs to Stage 2 and authoritative runtime evidence belongs to Stage 3.",
+    "separately-authorized": "Execution requires a later human-approved external target or credential policy."
+  },
+  "performanceBaseline": {
+    "captureMethod": {
+      "provider": "GitHub Actions",
+      "repository": "revisium/orchestrator",
+      "workflowPath": ".github/workflows/ci.yml",
+      "branch": "master",
+      "conclusion": "success",
+      "selection": "The ten latest completed matching workflow runs visible on 2026-07-10, ordered newest first.",
+      "job": "E2E (real DBOS/Revisium + embedded Postgres)",
+      "actionStep": "Run E2E (REVO_E2E_REAL=1)",
+      "calculation": "For each sample, subtract the GitHub Actions started_at timestamp from completed_at for the E2E job and action step; the source timestamps have one-second resolution. The action step combines setup and test execution. For the even-sized sample, the reported integer median is the floor of the mean of the fifth and sixth sorted values."
+    },
+    "sampleCount": 10,
+    "sampleSelection": "successful master CI runs",
+    "samples": [
+      {
+        "runId": "29036355185",
+        "url": "https://github.com/revisium/orchestrator/actions/runs/29036355185",
+        "e2eJobSeconds": 137,
+        "combinedSetupPlusTestActionStepSeconds": 117
+      },
+      {
+        "runId": "29035427899",
+        "url": "https://github.com/revisium/orchestrator/actions/runs/29035427899",
+        "e2eJobSeconds": 137,
+        "combinedSetupPlusTestActionStepSeconds": 115
+      },
+      {
+        "runId": "29015008313",
+        "url": "https://github.com/revisium/orchestrator/actions/runs/29015008313",
+        "e2eJobSeconds": 132,
+        "combinedSetupPlusTestActionStepSeconds": 116
+      },
+      {
+        "runId": "29013346262",
+        "url": "https://github.com/revisium/orchestrator/actions/runs/29013346262",
+        "e2eJobSeconds": 141,
+        "combinedSetupPlusTestActionStepSeconds": 117
+      },
+      {
+        "runId": "29012556989",
+        "url": "https://github.com/revisium/orchestrator/actions/runs/29012556989",
+        "e2eJobSeconds": 132,
+        "combinedSetupPlusTestActionStepSeconds": 115
+      },
+      {
+        "runId": "29008194910",
+        "url": "https://github.com/revisium/orchestrator/actions/runs/29008194910",
+        "e2eJobSeconds": 132,
+        "combinedSetupPlusTestActionStepSeconds": 115
+      },
+      {
+        "runId": "28998577811",
+        "url": "https://github.com/revisium/orchestrator/actions/runs/28998577811",
+        "e2eJobSeconds": 132,
+        "combinedSetupPlusTestActionStepSeconds": 116
+      },
+      {
+        "runId": "28996119466",
+        "url": "https://github.com/revisium/orchestrator/actions/runs/28996119466",
+        "e2eJobSeconds": 189,
+        "combinedSetupPlusTestActionStepSeconds": 164
+      },
+      {
+        "runId": "28974790010",
+        "url": "https://github.com/revisium/orchestrator/actions/runs/28974790010",
+        "e2eJobSeconds": 133,
+        "combinedSetupPlusTestActionStepSeconds": 113
+      },
+      {
+        "runId": "28973615252",
+        "url": "https://github.com/revisium/orchestrator/actions/runs/28973615252",
+        "e2eJobSeconds": 125,
+        "combinedSetupPlusTestActionStepSeconds": 102
+      }
+    ],
+    "e2eJobSeconds": {
+      "median": 132,
+      "maximum": 189,
+      "maximumStatistic": "maximum, not p95"
+    },
+    "combinedSetupPlusTestActionStepSeconds": {
+      "median": 115,
+      "maximum": 164,
+      "maximumStatistic": "maximum, not p95"
+    },
+    "ciFileConcurrency": 2,
+    "localDefaultFileConcurrency": 4,
+    "localWallClockTargetSeconds": {
+      "minimum": 70,
+      "maximum": 90
+    },
+    "currentMeasurementLimit": "The CI action step combines setup and test execution, so current timestamps cannot isolate those costs.",
+    "budgetStatus": "baseline-only; no calibrated percentage regression threshold exists",
+    "evidencePaths": [
+      ".github/workflows/ci.yml",
+      "AGENTS.md",
+      "package.json"
+    ]
+  },
+  "layers": [
+    {
+      "id": "unit",
+      "intent": "Pure decision internals, validators, materializers, serializers, and focused adapters.",
+      "policy": "exhaustive",
+      "relativeCiCost": "low"
+    },
+    {
+      "id": "static-policy",
+      "intent": "Catalog, graph, profile, declaration, structural, and drift validation without runtime execution.",
+      "policy": "exhaustive",
+      "relativeCiCost": "low"
+    },
+    {
+      "id": "pipeline-dsl",
+      "intent": "User-visible workflow routes, gate outcomes, terminals, route reasons, and side effects.",
+      "policy": "exhaustive",
+      "relativeCiCost": "high"
+    },
+    {
+      "id": "full-integration",
+      "intent": "Real host, DBOS, Revisium, embedded PostgreSQL, controlled runner dispatch, and lifecycle integration.",
+      "policy": "representative",
+      "relativeCiCost": "high"
+    },
+    {
+      "id": "surface-e2e",
+      "intent": "Actual MCP, GraphQL, and CLI public transport boundaries.",
+      "policy": "representative",
+      "relativeCiCost": "medium-high"
+    },
+    {
+      "id": "runtime-e2e",
+      "intent": "Lifecycle, crash recovery, replay, concurrency, isolation, and teardown.",
+      "policy": "representative",
+      "relativeCiCost": "high"
+    },
+    {
+      "id": "manual-provider-smoke",
+      "intent": "Human-authorized representative checks against authenticated external providers.",
+      "policy": "representative",
+      "relativeCiCost": "external"
+    },
+    {
+      "id": "structural-enforcement",
+      "intent": "Type, lint, schema, matrix, hard-skip, and meta-test enforcement.",
+      "policy": "exhaustive",
+      "relativeCiCost": "low-medium"
+    }
+  ],
+  "contractFamilies": [
+    {
+      "id": "pipeline-core",
+      "family": "Pipeline core decisions",
+      "scope": "Interpreter, validation, defaults, catches, bounded rework, joins, and replay re-resolution.",
+      "owningLayer": "unit",
+      "owner": [
+        "src/pipeline-core"
+      ],
+      "policy": "exhaustive",
+      "currentStatus": "strong",
+      "evidencePaths": [
+        "src/pipeline-core/interpret.test.ts",
+        "src/pipeline-core/validate.test.ts",
+        "src/pipeline-core/diff.test.ts"
+      ],
+      "gaps": [],
+      "relativeCiCost": "low",
+      "ciLane": "verify",
+      "targetStage": "maintain-current"
+    },
+    {
+      "id": "profiles-materialization",
+      "family": "Profiles and pipeline materialization",
+      "scope": "Profile validation, deterministic materialization, topology fan-out, consensus, routing signatures, and seeded bindings.",
+      "owningLayer": "unit",
+      "owner": [
+        "src/pipeline-core",
+        "src/control-plane"
+      ],
+      "policy": "exhaustive",
+      "currentStatus": "strong",
+      "evidencePaths": [
+        "src/pipeline-core/materialize.test.ts",
+        "src/control-plane/run-profiles.test.ts",
+        "src/control-plane/seed-default-playbook.test.ts"
+      ],
+      "gaps": [
+        "No full profile Cartesian E2E is intended; representative routing signatures remain the E2E boundary."
+      ],
+      "relativeCiCost": "low",
+      "ciLane": "verify",
+      "targetStage": "maintain-current"
+    },
+    {
+      "id": "static-default-policy",
+      "family": "Static default pipeline policy",
+      "scope": "Graph terminals, freshness, gate outcomes, bounded loops, recovery catches, cleanup, and mutation diagnostics.",
+      "owningLayer": "static-policy",
+      "owner": [
+        "src/testing/policy"
+      ],
+      "policy": "exhaustive",
+      "currentStatus": "partial",
+      "evidencePaths": [
+        "src/control-plane/default-playbook-policy.ts",
+        "src/control-plane/default-playbook-policy.test.ts",
+        "control-plane/default-playbook/catalog/pipelines.json"
+      ],
+      "gaps": [
+        "Semantic default-policy validation is deliberately scoped to feature-development; local-change and analysis-only have catalog and materialization evidence but not the same policy family."
+      ],
+      "relativeCiCost": "low",
+      "ciLane": "verify",
+      "targetStage": "maintain-current"
+    },
+    {
+      "id": "pipeline-declared-coverage",
+      "family": "Declared pipeline coverage",
+      "scope": "Static-policy ownership of stable graph/profile tags, scenario declarations, primary-owner assignment, waiver accounting, and executable case attachment.",
+      "owningLayer": "static-policy",
+      "owner": [
+        "src/testing/policy"
+      ],
+      "policy": "exhaustive",
+      "currentStatus": "strong",
+      "evidencePaths": [
+        "src/testing/policy/pipeline-coverage.ts",
+        "src/testing/policy/pipeline-coverage.test.ts",
+        "src/e2e/pipeline/recovery-graph.e2e.test.ts",
+        "src/e2e/pipeline/runner-retry-gate.e2e.test.ts",
+        "src/e2e/pipeline/seeded-profiles.e2e.test.ts",
+        "src/e2e/pipeline/target-contract-red-suite.e2e.test.ts"
+      ],
+      "gaps": [
+        "DSL scenarios are declared execution cases, but their tags are not compared with observed runtime traversal."
+      ],
+      "relativeCiCost": "low for declaration checks; high for declared execution cases",
+      "ciLane": "verify and real-e2e",
+      "targetStage": "stage-3"
+    },
+    {
+      "id": "observed-runtime-coverage",
+      "family": "Observed runtime pipeline coverage",
+      "scope": "Persisted semantic facts and declared-versus-observed comparison for runtime-owned cells.",
+      "owningLayer": "pipeline-dsl",
+      "owner": [
+        "future runtime evidence producer",
+        "future pipeline DSL evidence reader"
+      ],
+      "policy": "exhaustive",
+      "currentStatus": "not-implemented",
+      "evidencePaths": [
+        "src/testing/policy/pipeline-coverage.ts",
+        "src/testing/policy/pipeline-coverage.test.ts",
+        "src/e2e/support/pipeline-context.ts",
+        "prisma/schema.prisma"
+      ],
+      "gaps": [
+        "No authoritative persisted semantic runtime evidence exists.",
+        "No same-run declared-versus-observed comparison exists.",
+        "Retries, repeated nodes, joins, and terminals lack one normalized coverage projection."
+      ],
+      "relativeCiCost": "target low marginal cost inside existing real-e2e",
+      "ciLane": "future same real-e2e pass",
+      "targetStage": "stage-3"
+    },
+    {
+      "id": "representative-full-integration",
+      "family": "Representative full integration",
+      "scope": "Real host, DBOS, Revisium, embedded PostgreSQL, controlled runner dispatch, gates, worktrees, attempts, and terminal lifecycle.",
+      "owningLayer": "full-integration",
+      "owner": [
+        "src/e2e/integration",
+        "src/e2e/support/integration-context.ts"
+      ],
+      "policy": "representative",
+      "currentStatus": "strong",
+      "evidencePaths": [
+        "src/e2e/integration/run-lifecycle.e2e.test.ts",
+        "src/e2e/integration/seed-default-playbook.e2e.test.ts",
+        "src/e2e/support/integration-context.ts"
+      ],
+      "gaps": [
+        "External agent and GitHub behavior is controlled, so live-provider behavior is outside this family."
+      ],
+      "relativeCiCost": "high",
+      "ciLane": "real-e2e",
+      "targetStage": "maintain-current"
+    },
+    {
+      "id": "mcp-surface",
+      "family": "MCP surface",
+      "scope": "Tool schemas, compact results, application errors, transport behavior, and lifecycle operations.",
+      "owningLayer": "surface-e2e",
+      "owner": [
+        "src/mcp",
+        "src/e2e/surfaces/mcp",
+        "src/e2e/support/mcp-context.ts"
+      ],
+      "policy": "representative",
+      "currentStatus": "strong",
+      "evidencePaths": [
+        "src/mcp/mcp-tools.test.ts",
+        "src/mcp/mcp-http.service.test.ts",
+        "src/mcp/mcp-tool-result.test.ts",
+        "src/e2e/surfaces/mcp/stdio.e2e.test.ts",
+        "src/e2e/support/mcp-context.ts",
+        "src/cli/commands/mcp.ts"
+      ],
+      "gaps": [],
+      "relativeCiCost": "medium-high",
+      "ciLane": "verify and real-e2e",
+      "targetStage": "maintain-current"
+    },
+    {
+      "id": "graphql-surface",
+      "family": "GraphQL surface",
+      "scope": "Schema parity, resolver behavior, HTTP operations, WebSocket subscriptions, filtering, and protocol-visible errors.",
+      "owningLayer": "surface-e2e",
+      "owner": [
+        "src/api/graphql-api",
+        "src/e2e/surfaces/graphql",
+        "src/e2e/support/graphql-context.ts"
+      ],
+      "policy": "representative",
+      "currentStatus": "strong",
+      "evidencePaths": [
+        "src/api/graphql-api/graphql-schema.test.ts",
+        "src/api/graphql-api/graphql-ws/subscription.resolvers.test.ts",
+        "src/e2e/surfaces/graphql/graphql.e2e.test.ts",
+        "src/e2e/support/graphql-context.ts"
+      ],
+      "gaps": [],
+      "relativeCiCost": "low for schema; high for real transport",
+      "ciLane": "verify and real-e2e",
+      "targetStage": "maintain-current"
+    },
+    {
+      "id": "cli-lifecycle",
+      "family": "CLI lifecycle",
+      "scope": "Command registration, start, stop, status, restart, doctor, logs, process remediation, and MCP bridge lifecycle.",
+      "owningLayer": "surface-e2e",
+      "owner": [
+        "src/cli",
+        "src/smoke",
+        "src/e2e/surfaces/cli"
+      ],
+      "policy": "representative",
+      "currentStatus": "strong",
+      "evidencePaths": [
+        "src/cli/program.test.ts",
+        "src/cli/commands/doctor-report.test.ts",
+        "src/cli/commands/process-tree.test.ts",
+        "src/cli/commands/rogue-reaper.test.ts",
+        "src/smoke/cli.test.ts",
+        "src/smoke/isolation.test.ts",
+        "src/e2e/surfaces/cli/lifecycle.e2e.test.ts",
+        "src/e2e/support/cli-context.ts"
+      ],
+      "gaps": [],
+      "relativeCiCost": "high when host backed",
+      "ciLane": "verify and real-e2e",
+      "targetStage": "maintain-current"
+    },
+    {
+      "id": "runtime-host-lifecycle",
+      "family": "Runtime host lifecycle",
+      "scope": "Process/profile-isolated host start, readiness, stopped state, restart, and failure-safe cleanup.",
+      "owningLayer": "runtime-e2e",
+      "owner": [
+        "src/e2e/runtime/lifecycle",
+        "src/e2e/support/runtime-lifecycle-context.ts"
+      ],
+      "policy": "representative",
+      "currentStatus": "strong",
+      "evidencePaths": [
+        "src/e2e/runtime/lifecycle/host-lifecycle.e2e.test.ts",
+        "src/e2e/support/runtime-lifecycle-context.ts",
+        "src/e2e/support/isolated-profile.ts"
+      ],
+      "gaps": [],
+      "relativeCiCost": "high but profile-isolated",
+      "ciLane": "real-e2e",
+      "targetStage": "maintain-current"
+    },
+    {
+      "id": "runtime-recovery",
+      "family": "Runtime recovery and replay",
+      "scope": "Crash recovery, parked gates, replay/idempotency, retry gates, cleanup, and external-effect boundaries.",
+      "owningLayer": "runtime-e2e",
+      "owner": [
+        "src/e2e/runtime/recovery"
+      ],
+      "policy": "representative",
+      "currentStatus": "partial",
+      "evidencePaths": [
+        "src/e2e/runtime/recovery/recovery.e2e.test.ts",
+        "src/e2e/runtime/recovery/data-driven-recovery.e2e.test.ts",
+        "src/e2e/runtime/recovery/recovery-crash-child.ts",
+        "src/e2e/runtime/recovery/recovery-dd-crash-child.ts",
+        "src/e2e/support/recovery-context.ts",
+        "src/e2e/support/persisted-facts.ts"
+      ],
+      "gaps": [
+        "Crash coverage is representative at selected stop points rather than across every external-effect and cleanup boundary.",
+        "Current replay assertions rely on generic events rather than authoritative semantic trace facts."
+      ],
+      "relativeCiCost": "high",
+      "ciLane": "real-e2e",
+      "targetStage": "stage-3"
+    },
+    {
+      "id": "runtime-concurrency",
+      "family": "Runtime concurrency and isolation",
+      "scope": "Queue overflow, double start, independent gates, mixed terminals, per-file isolation, and same-repository worktrees.",
+      "owningLayer": "runtime-e2e",
+      "owner": [
+        "src/e2e/runtime/concurrency",
+        "src/host"
+      ],
+      "policy": "representative",
+      "currentStatus": "strong",
+      "evidencePaths": [
+        "src/e2e/runtime/concurrency/concurrency.e2e.test.ts",
+        "src/host/queue-ownership.test.ts",
+        "src/e2e/support/concurrency-context.ts",
+        "src/e2e/support/env.ts"
+      ],
+      "gaps": [],
+      "relativeCiCost": "high",
+      "ciLane": "verify and real-e2e",
+      "targetStage": "maintain-current"
+    },
+    {
+      "id": "runtime-teardown",
+      "family": "Runtime teardown and wait bounds",
+      "scope": "Parked-gate shutdown, per-file DBOS cancellation, forced test-process exit, settled waits, and stuck detection.",
+      "owningLayer": "runtime-e2e",
+      "owner": [
+        "src/e2e/runtime/concurrency",
+        "src/e2e/support",
+        "package.json",
+        "AGENTS.md"
+      ],
+      "policy": "representative",
+      "currentStatus": "strong",
+      "evidencePaths": [
+        "src/e2e/runtime/concurrency/teardown-drain.e2e.test.ts",
+        "src/e2e/support/teardown-context.ts",
+        "src/e2e/support/harness.ts",
+        "src/e2e/support/drive.ts",
+        "src/e2e/support/env.ts",
+        "package.json",
+        "AGENTS.md"
+      ],
+      "gaps": [
+        "Suite-level same-run performance artifacts are tracked by the CI performance family rather than this sentinel."
+      ],
+      "relativeCiCost": "high but bounded",
+      "ciLane": "real-e2e",
+      "targetStage": "maintain-current"
+    },
+    {
+      "id": "provider-smoke",
+      "family": "Live provider smoke",
+      "scope": "Authenticated representative runner and pull-request provider checks outside deterministic CI.",
+      "owningLayer": "manual-provider-smoke",
+      "owner": [
+        "scripts"
+      ],
+      "policy": "representative",
+      "currentStatus": "partial",
+      "evidencePaths": [
+        "scripts/smoke-claude-runner.ts",
+        "scripts/smoke-pr-poller.ts",
+        "package.json"
+      ],
+      "gaps": [
+        "No Codex provider smoke is evidenced.",
+        "No approved shared target, credential policy, negative case, or CI ownership exists for live provider smoke."
+      ],
+      "relativeCiCost": "external and credentialed",
+      "ciLane": "manual only",
+      "targetStage": "separately-authorized"
+    },
+    {
+      "id": "semantic-snapshots",
+      "family": "Semantic snapshots",
+      "scope": "Normalized same-run projections that supplement explicit route, terminal, and side-effect assertions.",
+      "owningLayer": "pipeline-dsl",
+      "owner": [
+        "future pipeline DSL and runtime evidence contexts"
+      ],
+      "policy": "representative",
+      "currentStatus": "not-implemented",
+      "evidencePaths": [
+        "src/e2e/support/pipeline-context.ts",
+        "src/e2e/support/persisted-facts.ts"
+      ],
+      "gaps": [
+        "No semantic snapshot format, normalization rule, stored snapshots, or update discipline is implemented.",
+        "No persisted semantic runtime evidence exists as a snapshot source."
+      ],
+      "relativeCiCost": "target low-medium marginal cost inside existing real-e2e",
+      "ciLane": "future same real-e2e pass",
+      "targetStage": "stage-3"
+    },
+    {
+      "id": "structural-lint-meta-enforcement",
+      "family": "Structural, lint, type, and meta enforcement",
+      "scope": "Required verification, generated-code drift, registry ownership, hard skips, GraphQL schema parity, and comment policy.",
+      "owningLayer": "structural-enforcement",
+      "owner": [
+        "eslint.config.mjs",
+        "eslint-local-rules",
+        "src/testing/policy",
+        "src/e2e/support",
+        "src/api/graphql-api"
+      ],
+      "policy": "exhaustive",
+      "currentStatus": "strong",
+      "evidencePaths": [
+        "eslint.config.mjs",
+        "eslint-local-rules/no-dead-pointers.js",
+        "eslint-local-rules/test-architecture-boundaries.js",
+        "src/testing/policy/pipeline-coverage.test.ts",
+        "src/testing/policy/test-architecture-boundaries-rule.test.ts",
+        "src/testing/policy/test-coverage-matrix.test.ts",
+        "src/testing/policy/e2e-discovery.test.ts",
+        "src/testing/policy/hard-skip-issue-ref.test.ts",
+        "src/api/graphql-api/graphql-schema.test.ts",
+        "package.json",
+        ".github/workflows/ci.yml"
+      ],
+      "gaps": [],
+      "relativeCiCost": "low-medium",
+      "ciLane": "verify",
+      "targetStage": "maintain-current"
+    },
+    {
+      "id": "ci-performance-governance",
+      "family": "CI performance governance",
+      "scope": "E2E concurrency, isolation, teardown, current baseline, same-run timing, and future calibrated regression budgets.",
+      "owningLayer": "structural-enforcement",
+      "owner": [
+        ".github/workflows/ci.yml",
+        "package.json",
+        "AGENTS.md"
+      ],
+      "policy": "representative",
+      "currentStatus": "partial",
+      "evidencePaths": [
+        ".github/workflows/ci.yml",
+        "package.json",
+        "AGENTS.md",
+        "src/e2e/runtime/concurrency/teardown-drain.e2e.test.ts"
+      ],
+      "gaps": [
+        "Current CI timestamps combine setup and test execution.",
+        "No same-run per-scenario marginal or trace-projection timing artifact exists.",
+        "No calibrated regression budget exists; the recorded values are a baseline, not a hard threshold."
+      ],
+      "relativeCiCost": "governance over high-cost real-e2e",
+      "ciLane": "verify and real-e2e",
+      "targetStage": "stage-3"
+    }
+  ]
+}
