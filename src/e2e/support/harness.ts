@@ -50,8 +50,7 @@ export type HostFixture = {
 /**
  * Boot the real control-plane services (DBOS + embedded Revisium engine) with only the agent and `gh` faked.
  * Mirrors the wiring of the production `RevisiumModule` closely enough that the returned `api` behaves
- * like the live MCP/CLI surface. Always pair with `harness.close()` (or {@link closeHarness}) in a
- * `finally` block.
+ * like the live MCP/CLI surface. Always pair with `harness.close()` in a `finally` block.
  */
 export async function createHostFixture(opts: HostFixtureOptions = {}): Promise<HostFixture> {
   await ensureStorage();

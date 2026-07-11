@@ -81,7 +81,11 @@ for (const [caseId, pipelineId, roleId] of [
     assert.equal(postIntegrator.kind, 'agent');
     assert.equal('roleRef' in postIntegrator ? postIntegrator.roleRef : undefined, `role:${roleId}`);
     const roles = pipeline.required_roles ?? [];
-    assert.ok(roles.indexOf(roleId) > roles.indexOf('integrator'));
+    const integratorIndex = roles.indexOf('integrator');
+    const postIntegratorIndex = roles.indexOf(roleId);
+    assert.notEqual(integratorIndex, -1, 'integrator is declared by the fixture pipeline');
+    assert.notEqual(postIntegratorIndex, -1, `${roleId} is declared by the fixture pipeline`);
+    assert.ok(postIntegratorIndex > integratorIndex);
   });
 }
 

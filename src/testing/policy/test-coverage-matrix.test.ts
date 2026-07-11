@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { sameExactStringSet } from './exact-string-set.js';
 import { validateTestCoverageMatrix } from './test-coverage-matrix.js';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -108,6 +109,81 @@ test('test coverage matrix rejects an extra existing but stale owner path', () =
     diagnostic.code === 'MATRIX_SHAPE' &&
     diagnostic.message.includes('pipeline-declared-coverage') &&
     diagnostic.message.includes('stale canonical owner')));
+});
+
+test('test coverage matrix compares canonical owners as a total string set', () => {
+  const reorderedFixture = cloneMatrix();
+  const reorderedRows = reorderedFixture['contractFamilies'] as Array<Record<string, unknown>>;
+  const reordered = reorderedRows.find((row) => row['id'] === 'profiles-materialization');
+  assert.ok(reordered);
+  reordered['owner'] = [...reordered['owner'] as string[]].reverse();
+  assert.deepEqual(validateTestCoverageMatrix(reorderedFixture, repositoryRoot), []);
+
+  const duplicateFixture = cloneMatrix();
+  const duplicateRows = duplicateFixture['contractFamilies'] as Array<Record<string, unknown>>;
+  const duplicated = duplicateRows.find((row) => row['id'] === 'profiles-materialization');
+  assert.ok(duplicated);
+  duplicated['owner'] = ['src/pipeline-core', 'src/pipeline-core'];
+  assert.ok(validateTestCoverageMatrix(duplicateFixture, repositoryRoot).some((diagnostic) =>
+    diagnostic.code === 'MATRIX_SHAPE' &&
+    diagnostic.message.includes('profiles-materialization') &&
+    diagnostic.message.includes('stale canonical owner')));
+});
+
+test('test coverage matrix compares Unicode-equivalent strings as exact set members', () => {
+  const composed = 'é';
+  const decomposed = 'e\u0301';
+
+  assert.equal(composed.localeCompare(decomposed), 0);
+  assert.equal(sameExactStringSet([composed, decomposed], [decomposed, composed]), true);
+});
+
+test('test coverage matrix stops before snapshot validation when contract families are invalid', () => {
+  const fixture = cloneMatrix();
+  fixture['contractFamilies'] = [];
+  fixture['snapshotNotice'] = 'invalid notice';
+
+  assert.deepEqual(validateTestCoverageMatrix(fixture, repositoryRoot), [
+    { code: 'MATRIX_SHAPE', message: 'matrix.contractFamilies must be a non-empty array' },
+  ]);
+});
+
+test('test coverage matrix skips sparse layer holes', () => {
+  const fixture = cloneMatrix();
+  const layers = fixture['layers'] as Array<Record<string, unknown>>;
+  layers.length += 1;
+
+  assert.deepEqual(validateTestCoverageMatrix(fixture, repositoryRoot), []);
+});
+
+test('test coverage matrix preserves performance baseline diagnostic order', () => {
+  const fixture = cloneMatrix();
+  const performance = fixture['performanceBaseline'] as Record<string, unknown>;
+  performance['captureMethod'] = null;
+  performance['sampleCount'] = 0;
+  performance['samples'] = [{}];
+  performance['e2eJobSeconds'] = null;
+  performance['combinedSetupPlusTestActionStepSeconds'] = null;
+  performance['localWallClockTargetSeconds'] = null;
+  performance['ciFileConcurrency'] = 0;
+  performance['localDefaultFileConcurrency'] = 0;
+
+  assert.deepEqual(validateTestCoverageMatrix(fixture, repositoryRoot), [
+    { code: 'MATRIX_SHAPE', message: 'matrix.performanceBaseline.captureMethod must be an object' },
+    { code: 'MATRIX_SHAPE', message: 'matrix.performanceBaseline.sampleCount must be a positive integer' },
+    { code: 'MATRIX_SHAPE', message: 'matrix.performanceBaseline.samples must match sampleCount' },
+    { code: 'MATRIX_SHAPE', message: 'matrix.performanceBaseline.e2eJobSeconds must be an object' },
+    {
+      code: 'MATRIX_SHAPE',
+      message: 'matrix.performanceBaseline.combinedSetupPlusTestActionStepSeconds must be an object',
+    },
+    { code: 'MATRIX_SHAPE', message: 'matrix.performanceBaseline.localWallClockTargetSeconds must be an object' },
+    { code: 'MATRIX_SHAPE', message: 'matrix.performanceBaseline.ciFileConcurrency must be a positive integer' },
+    {
+      code: 'MATRIX_SHAPE',
+      message: 'matrix.performanceBaseline.localDefaultFileConcurrency must be a positive integer',
+    },
+  ]);
 });
 
 test('test coverage matrix rejects missing or unknown canonical contract families', () => {

@@ -43,9 +43,17 @@ export class RecoveredRun {
   async rejectAtPlan(): Promise<void> {
     const gate = await waitForGate(this.#host.api, this.runId, 'plan');
     await this.#host.api.rejectGate({ inboxId: gate.inboxId, resolvedBy: 'e2e' });
-    await waitState(this.#host.api, this.runId);
+    const terminal = await waitState(this.#host.api, this.runId);
+    assert.equal(terminal.state, 'blocked');
     const detail = await this.#host.api.getRun({ runId: this.runId });
-    assert.notEqual(detail.run.status, 'completed');
+    assert.equal(detail.run.status, 'paused');
+    const events = await waitForRunEvents(
+      this.#host.api,
+      this.runId,
+      (items) => items.some((event) => event.type === 'pipeline_blocked'),
+    );
+    const blocked = events.find((event) => event.type === 'pipeline_blocked');
+    assert.equal((blocked?.payload as { reason?: unknown } | undefined)?.reason, 'route-terminal');
   }
 
   expectEvents(types: readonly string[]): Promise<void> {
@@ -190,6 +198,7 @@ export async function createCrashCheckpoint(options: Readonly<{
       await host.api.approveGate({ inboxId: plan.inboxId, resolvedBy: 'crash-child' });
       await waitForGate(host.api, run.runId, 'merge');
     }
+    // The crash child exits without host shutdown so recovery observes undrained DBOS state.
     return { runId: run.runId, taskId: run.taskId, repo: target.worktree };
   } catch (error) {
     await host.close().catch(() => undefined);

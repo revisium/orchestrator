@@ -30,7 +30,7 @@ The linked specification owns the exact boundary, dependency, enforcement, migra
 requirements. This decision does not choose a persistence model, durable projection, or read contract for observed
 runtime evidence. Any such choice requires a separate Stage 3 architecture decision and approval gate.
 
-## Alternatives Considered
+## Alternatives
 
 - Keep the current broad harness and source layout. Rejected because abstraction levels and ownership would remain
   easy to mix, and support mechanics would continue to spread across suites.

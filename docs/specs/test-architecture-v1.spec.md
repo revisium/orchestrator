@@ -47,6 +47,11 @@ The current registry proves declared ownership. Typed case identity is validated
 materialized templates and routing signatures. It does not prove observed runtime traversal, and scenario coverage
 metadata is not compared with persisted execution facts.
 
+Registry ownership is keyed by full `PipelineCoverageCellId`. Tags are behavior descriptors only: DSL declarations
+resolve within their selected pinned materialized identity, while static-policy, unit, and waiver declarations resolve
+to explicitly selected pinned identities and cells. A cloned or changed materialized template cannot inherit ownership
+merely by reusing existing tags.
+
 The current `src/e2e/` tree separates pipeline, integration, public-surface, runtime, and support ownership. Narrow
 typed contexts keep host construction, DBOS, storage, provider mechanics, polling, and subprocess cleanup private.
 The former `src/e2e/kit/` barrel and source-text attachment mechanism no longer exist.

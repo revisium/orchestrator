@@ -18,6 +18,7 @@ import {
   definePipelineCoverageRegistry,
   derivePipelineCoverageCatalog,
   graphCoverageTagsForTemplate,
+  pipelineCoverageCellId,
   routingSignatureForRunProfile,
   validatePipelineCaseAttachment,
   validatePipelineCoverageRegistry,
@@ -42,6 +43,33 @@ function assertOwnerSurface(ownerSurface: string): void {
   assert.ok(statSync(join(repoRoot, ownerSurface)).size > 0, `${ownerSurface} must exist and be non-empty`);
 }
 
+function materializedIdentity(pipelineId: string, profileId: string): MaterializedCoverageIdentity {
+  const identity = PIPELINE_COVERAGE_MANIFEST.catalog.materialized.find((candidate) =>
+    candidate.pipelineId === pipelineId && candidate.profileId === profileId);
+  assert.ok(identity);
+  return identity;
+}
+
+function waiverForCell(input: Readonly<{
+  id: string;
+  tag: PipelineCoverageTag;
+  materialized?: MaterializedCoverageIdentity;
+  reason: string;
+  ownerSurface: string;
+  expiry?: Readonly<{ stage?: 'stage-2' | 'stage-3' | 'later'; condition?: string }>;
+}>) {
+  const materialized = input.materialized ?? materializedIdentity('feature-development', 'base');
+  return {
+    id: input.id,
+    reason: input.reason,
+    ownerSurface: input.ownerSurface,
+    tags: [input.tag],
+    materialized: [materialized],
+    cellIds: [pipelineCoverageCellId(materialized, input.tag)],
+    ...(input.expiry ? { expiry: input.expiry } : {}),
+  };
+}
+
 test('pipeline coverage registry: bundled default graph and profile tags are fully owned', () => {
   assert.deepEqual(validatePipelineCoverageRegistry({ pipelines, runProfiles }), []);
 });
@@ -60,7 +88,7 @@ test('pipeline coverage registry: public scenario mutation cannot forge default 
 
   const beforeMutation = validatePipelineCoverageRegistry({ pipelines: forgedPipelines, runProfiles });
   assert.ok(beforeMutation.some((diagnostic) =>
-    diagnostic.code === 'PIPELINE_COVERAGE_UNOWNED_TAG' && diagnostic.tag === forgedTag));
+    diagnostic.code === 'PIPELINE_COVERAGE_UNOWNED_CELL' && diagnostic.tag === forgedTag));
 
   const ownerSurface = scenario.ownerSurface;
   const tagsLength = scenario.tags.length;
@@ -82,7 +110,7 @@ test('pipeline coverage registry: public scenario mutation cannot forge default 
 
   assert.deepEqual(mutationResults, [false, false, false]);
   assert.ok(afterMutation.some((diagnostic) =>
-    diagnostic.code === 'PIPELINE_COVERAGE_UNOWNED_TAG' && diagnostic.tag === forgedTag));
+    diagnostic.code === 'PIPELINE_COVERAGE_UNOWNED_CELL' && diagnostic.tag === forgedTag));
 });
 
 test('pipeline coverage registry: public nested scenario and ownership aliases are immutable', () => {
@@ -116,6 +144,10 @@ test('pipeline coverage registry: public nested scenario and ownership aliases a
   assert.equal(Object.isFrozen(ownership), true);
   assert.equal(Object.isFrozen(ownership.tags), true);
   assert.equal(Object.isFrozen(ownership.primaryTags), true);
+  assert.equal(Object.isFrozen(ownership.materialized), true);
+  assert.ok(ownership.materialized.every((identity) => Object.isFrozen(identity)));
+  assert.equal(Object.isFrozen(ownership.cellIds), true);
+  assert.equal(Object.isFrozen(ownership.primaryCellIds), true);
 });
 
 test('pipeline coverage registry: production builder exactly projects runtime input entries', () => {
@@ -136,6 +168,7 @@ test('pipeline coverage registry: production builder exactly projects runtime in
       ownerSurface: 'src/testing/policy/runtime-owner.test.ts',
       tags: ['node:runtime-owner:outcome:approved'],
       primaryTags: ['node:runtime-owner:outcome:approved'],
+      materialized: [{ pipelineId: 'feature-development', profileId: 'base' }],
       runtimeMetadata: ownershipMetadata,
     }],
     waivers: [{
@@ -143,10 +176,11 @@ test('pipeline coverage registry: production builder exactly projects runtime in
       reason: 'runtime projection fixture',
       ownerSurface: 'src/testing/policy/pipeline-coverage.test.ts',
       tags: ['node:runtime-waiver:outcome:approved'],
+      materialized: [{ pipelineId: 'feature-development', profileId: 'base' }],
       expiry: { stage: 'later' },
       runtimeMetadata: waiverMetadata,
     }],
-  } as unknown as PipelineCoverageRegistry);
+  } as never);
   const entries = [registry.scenarios[0], registry.ownership[0], registry.waivers[0]];
   const sourceMetadata = [scenarioMetadata, ownershipMetadata, waiverMetadata];
 
@@ -189,6 +223,7 @@ test('pipeline coverage registry: production builder deep-freezes detached input
     ownerSurface: 'src/testing/policy/input-owner.test.ts',
     tags: ownershipTags,
     primaryTags: ownershipPrimaryTags,
+    materialized: [scenarioMaterialized],
     diagnosticCode: 'DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING' as const,
   };
   const waiverTags = [waiverTag];
@@ -198,13 +233,14 @@ test('pipeline coverage registry: production builder deep-freezes detached input
     reason: 'input alias fixture',
     ownerSurface: 'src/testing/policy/pipeline-coverage.test.ts',
     tags: waiverTags,
+    materialized: [scenarioMaterialized],
     expiry: waiverExpiry,
   };
   const input = {
     scenarios: [scenario],
     ownership: [ownership],
     waivers: [waiver],
-  } satisfies PipelineCoverageRegistry;
+  };
 
   const registry = definePipelineCoverageRegistry(input);
   const canonicalScenario = registry.scenarios[0];
@@ -222,13 +258,22 @@ test('pipeline coverage registry: production builder deep-freezes detached input
     canonicalScenario.tags,
     canonicalScenario.primaryTags,
     canonicalScenario.materialized,
+    canonicalScenario.cellIds,
+    canonicalScenario.primaryCellIds,
     registry.ownership,
     canonicalOwnership,
     canonicalOwnership.tags,
     canonicalOwnership.primaryTags,
+    canonicalOwnership.materialized,
+    ...canonicalOwnership.materialized,
+    canonicalOwnership.cellIds,
+    canonicalOwnership.primaryCellIds,
     registry.waivers,
     canonicalWaiver,
     canonicalWaiver.tags,
+    canonicalWaiver.materialized,
+    ...canonicalWaiver.materialized,
+    canonicalWaiver.cellIds,
     canonicalWaiver.expiry,
   ]) {
     assert.equal(Object.isFrozen(value), true);
@@ -243,9 +288,11 @@ test('pipeline coverage registry: production builder deep-freezes detached input
   assert.notStrictEqual(canonicalOwnership, ownership);
   assert.notStrictEqual(canonicalOwnership.tags, ownershipTags);
   assert.notStrictEqual(canonicalOwnership.primaryTags, ownershipPrimaryTags);
+  assert.notStrictEqual(canonicalOwnership.materialized, ownership.materialized);
   assert.notStrictEqual(registry.waivers, input.waivers);
   assert.notStrictEqual(canonicalWaiver, waiver);
   assert.notStrictEqual(canonicalWaiver.tags, waiverTags);
+  assert.notStrictEqual(canonicalWaiver.materialized, waiver.materialized);
   assert.notStrictEqual(canonicalWaiver.expiry, waiverExpiry);
 
   assert.deepEqual([
@@ -279,7 +326,8 @@ test('pipeline coverage registry: production builder deep-freezes detached input
   assert.equal(canonicalScenario.ownerSurface, 'src/e2e/pipeline/input-scenario.e2e.test.ts');
   assert.deepEqual(canonicalScenario.tags, [scenarioTag]);
   assert.deepEqual(canonicalScenario.primaryTags, [scenarioTag]);
-  assert.deepEqual(canonicalScenario.materialized, { pipelineId: 'feature-development', profileId: 'base' });
+  assert.equal(canonicalScenario.materialized.pipelineId, 'feature-development');
+  assert.equal(canonicalScenario.materialized.profileId, 'base');
   assert.equal(registry.ownership.length, 1);
   assert.equal(canonicalOwnership.ownerSurface, 'src/testing/policy/input-owner.test.ts');
   assert.deepEqual(canonicalOwnership.tags, [ownershipTag]);
@@ -470,6 +518,9 @@ test('pipeline coverage registry: static, unit, and waiver owner surfaces exist'
 });
 
 test('pipeline coverage registry: rejects undefined DSL tags', () => {
+  const materialized = materializedIdentity('feature-development', 'base');
+  const tag = 'node:noSuchNode:outcome:approved' as PipelineCoverageTag;
+  const cellId = pipelineCoverageCellId(materialized, tag);
   const diagnostics = validatePipelineCoverageRegistry({
     pipelines,
     runProfiles,
@@ -477,15 +528,17 @@ test('pipeline coverage registry: rejects undefined DSL tags', () => {
       scenarios: [{
         id: 'bad-scenario',
         ownerSurface: 'src/e2e/bad.e2e.test.ts',
-        tags: ['node:noSuchNode:outcome:approved' as PipelineCoverageTag],
-        primaryTags: ['node:noSuchNode:outcome:approved' as PipelineCoverageTag],
-        materialized: { pipelineId: 'feature-development', profileId: 'base' },
+        tags: [tag],
+        primaryTags: [tag],
+        materialized,
+        cellIds: [cellId],
+        primaryCellIds: [cellId],
       }],
     }),
   });
 
   assert.ok(diagnostics.some((diagnostic) =>
-    diagnostic.code === 'PIPELINE_COVERAGE_UNDEFINED_TAG' &&
+    diagnostic.code === 'PIPELINE_COVERAGE_UNDEFINED_CELL' &&
     diagnostic.scenarioId === 'bad-scenario' &&
     diagnostic.tag === 'node:noSuchNode:outcome:approved',
   ));
@@ -501,23 +554,76 @@ test('pipeline coverage registry: rejects unowned catalog graph outcomes', () =>
         ...scenario,
         tags: scenario.tags.filter((tag) => tag !== unownedTag),
         primaryTags: scenario.primaryTags.filter((tag) => tag !== unownedTag),
+        cellIds: scenario.cellIds.filter((cellId) => !String(cellId).endsWith(`::${unownedTag}`)),
+        primaryCellIds: scenario.primaryCellIds.filter((cellId) => !String(cellId).endsWith(`::${unownedTag}`)),
       })),
       ownership: PIPELINE_COVERAGE_REGISTRY.ownership.map((owner) => ({
         ...owner,
         tags: owner.tags.filter((tag) => tag !== unownedTag),
         primaryTags: owner.primaryTags.filter((tag) => tag !== unownedTag),
+        cellIds: owner.cellIds.filter((cellId) => !String(cellId).endsWith(`::${unownedTag}`)),
+        primaryCellIds: owner.primaryCellIds.filter((cellId) => !String(cellId).endsWith(`::${unownedTag}`)),
       })),
       waivers: PIPELINE_COVERAGE_REGISTRY.waivers.map((waiver) => ({
         ...waiver,
         tags: waiver.tags?.filter((tag) => tag !== unownedTag),
+        cellIds: waiver.cellIds.filter((cellId) => !String(cellId).endsWith(`::${unownedTag}`)),
       })),
     }),
   });
 
   assert.ok(diagnostics.some((diagnostic) =>
-    diagnostic.code === 'PIPELINE_COVERAGE_UNOWNED_TAG' &&
+    diagnostic.code === 'PIPELINE_COVERAGE_UNOWNED_CELL' &&
     diagnostic.tag === unownedTag,
   ));
+});
+
+test('pipeline coverage registry: a cloned template with existing tags has unowned materialized cells', () => {
+  const feature = pipelines.find((pipeline) => pipeline.id === 'feature-development');
+  assert.ok(feature);
+  const clone = structuredClone(feature);
+  clone.id = 'feature-development-clone';
+  if (clone.execution_policy?.template_json) {
+    clone.execution_policy.template_json.pipelineId = clone.id;
+  }
+
+  const diagnostics = validatePipelineCoverageRegistry({
+    pipelines: [...pipelines, clone],
+    runProfiles,
+  });
+
+  assert.ok(diagnostics.some((diagnostic) =>
+    String(diagnostic.code) === 'PIPELINE_COVERAGE_UNOWNED_CELL' &&
+    String(Reflect.get(diagnostic, 'cellId')).includes('feature-development-clone::base::')),
+  );
+});
+
+test('pipeline coverage registry: DSL ownership does not transfer to a sibling materialization without explicit proof', () => {
+  const tag = 'node:mergeGate:outcome:cancel' as PipelineCoverageTag;
+  const scenario = PIPELINE_COVERAGE_REGISTRY.scenarios.find((candidate) =>
+    candidate.materialized.pipelineId === 'feature-development' &&
+    candidate.materialized.profileId === 'base' &&
+    candidate.primaryTags.includes(tag));
+  const sibling = materializedIdentity('feature-development', 'claude-standard');
+  const siblingCellId = pipelineCoverageCellId(sibling, tag);
+  assert.ok(scenario);
+  assert.deepEqual(
+    PIPELINE_COVERAGE_REGISTRY.ownership
+      .filter((owner) => owner.primaryCellIds.includes(siblingCellId))
+      .map((owner) => owner.diagnosticCode),
+    ['DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING'],
+  );
+
+  const diagnostics = validatePipelineCoverageRegistry({
+    pipelines,
+    runProfiles,
+    registry: registryWith({
+      ownership: PIPELINE_COVERAGE_REGISTRY.ownership.filter((owner) => owner.diagnosticCode === undefined),
+    }),
+  });
+
+  assert.ok(diagnostics.some((diagnostic) =>
+    diagnostic.code === 'PIPELINE_COVERAGE_UNOWNED_CELL' && diagnostic.cellId === siblingCellId));
 });
 
 test('pipeline coverage registry: rejects incomplete waivers', () => {
@@ -526,10 +632,12 @@ test('pipeline coverage registry: rejects incomplete waivers', () => {
     runProfiles,
     registry: registryWith({
       waivers: [{
-        id: 'bad-waiver',
-        reason: '',
-        ownerSurface: '',
-        tags: ['node:mergeGate:outcome:cancel'],
+        ...waiverForCell({
+          id: 'bad-waiver',
+          tag: 'node:mergeGate:outcome:cancel',
+          reason: '',
+          ownerSurface: '',
+        }),
       }],
     }),
   });
@@ -587,13 +695,7 @@ test('pipeline coverage registry: rejects duplicate primary owners', () => {
     registry: registryWith({
       scenarios: [
         ...PIPELINE_COVERAGE_REGISTRY.scenarios,
-        {
-          id: 'duplicate-primary',
-          ownerSurface: 'src/e2e/pipeline/gates.e2e.test.ts',
-          tags: [tag],
-          primaryTags: [tag],
-          materialized: { pipelineId: 'feature-development', profileId: 'base' },
-        },
+        { ...owner, id: 'duplicate-primary', ownerSurface: 'src/e2e/pipeline/gates.e2e.test.ts' },
       ],
     }),
   });
@@ -651,11 +753,13 @@ test('pipeline coverage registry: rejects a cell that is both owned and waived',
     runProfiles,
     registry: registryWith({
       waivers: [{
-        id: 'owned-cell-waiver',
-        reason: 'negative fixture',
-        ownerSurface: 'src/testing/policy/pipeline-coverage.test.ts',
-        tags: [tag],
-        expiry: { stage: 'stage-3' },
+        ...waiverForCell({
+          id: 'owned-cell-waiver',
+          tag,
+          reason: 'negative fixture',
+          ownerSurface: 'src/testing/policy/pipeline-coverage.test.ts',
+          expiry: { stage: 'stage-3' },
+        }),
       }],
     }),
   });
@@ -670,6 +774,7 @@ test('pipeline coverage registry: validates waiver expiry and keeps the committe
   const withoutPrimary = PIPELINE_COVERAGE_REGISTRY.scenarios.map((scenario) => ({
     ...scenario,
     primaryTags: scenario.primaryTags.filter((candidate) => candidate !== tag),
+    primaryCellIds: scenario.primaryCellIds.filter((cellId) => !String(cellId).endsWith(`::${tag}`)),
   }));
   const diagnostics = validatePipelineCoverageRegistry({
     pipelines,
@@ -677,11 +782,13 @@ test('pipeline coverage registry: validates waiver expiry and keeps the committe
     registry: registryWith({
       scenarios: withoutPrimary,
       waivers: [{
-        id: 'expired-waiver',
-        reason: 'temporary fixture',
-        ownerSurface: 'src/testing/policy/pipeline-coverage.test.ts',
-        tags: [tag],
-        expiry: { stage: 'stage-2' },
+        ...waiverForCell({
+          id: 'expired-waiver',
+          tag,
+          reason: 'temporary fixture',
+          ownerSurface: 'src/testing/policy/pipeline-coverage.test.ts',
+          expiry: { stage: 'stage-2' },
+        }),
       }],
     }),
   });
@@ -700,13 +807,17 @@ test('pipeline coverage registry: Stage 3 rejects a signature waiver that expire
       scenarios: PIPELINE_COVERAGE_REGISTRY.scenarios.map((scenario) => ({
         ...scenario,
         primaryTags: scenario.primaryTags.filter((candidate) => candidate !== tag),
+        primaryCellIds: scenario.primaryCellIds.filter((cellId) => !String(cellId).endsWith(`::${tag}`)),
       })),
       waivers: [{
-        id: 'stage-3-expired-signature',
-        reason: 'negative fixture',
-        ownerSurface: 'src/testing/policy/pipeline-coverage.test.ts',
-        tags: [tag],
-        expiry: { stage: 'stage-3' },
+        ...waiverForCell({
+          id: 'stage-3-expired-signature',
+          tag,
+          materialized: materializedIdentity('feature-development', 'codex-standard'),
+          reason: 'negative fixture',
+          ownerSurface: 'src/testing/policy/pipeline-coverage.test.ts',
+          expiry: { stage: 'stage-3' },
+        }),
       }],
     }),
   });

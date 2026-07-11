@@ -1,149 +1,139 @@
-export type NonDslOwnerLayer = 'pipeline-dsl' | 'focused' | 'static-policy';
+export type NonDslOwnerLayer = 'pipeline-dsl' | 'focused';
 
-function nonDslCase<const CaseId extends string, const OwnerLayer extends NonDslOwnerLayer>(
-  caseId: CaseId,
+type NonDslCase<
+  CaseId extends string,
+  OwnerLayer extends NonDslOwnerLayer,
+  OwnerSurface extends string,
+  RetainedBehavior extends string,
+> = Readonly<{
+  kind: 'non-dsl';
+  caseId: CaseId;
+  ownerLayer: OwnerLayer;
+  ownerSurface: OwnerSurface;
+  retainedBehavior: RetainedBehavior;
+}>;
+
+type NonDslCaseDeclarations = Readonly<Record<string, string>>;
+
+type DeclaredNonDslCases<
+  OwnerLayer extends NonDslOwnerLayer,
+  OwnerSurface extends string,
+  Declarations extends NonDslCaseDeclarations,
+> = readonly {
+  [CaseId in keyof Declarations & string]: NonDslCase<
+    CaseId,
+    OwnerLayer,
+    OwnerSurface,
+    Declarations[CaseId] & string
+  >;
+}[keyof Declarations & string][];
+
+function nonDslCases<
+  const OwnerLayer extends NonDslOwnerLayer,
+  const OwnerSurface extends string,
+  const Declarations extends NonDslCaseDeclarations,
+>(
   ownerLayer: OwnerLayer,
-  ownerSurface: string,
-  retainedBehavior: string,
-) {
-  return Object.freeze({
+  ownerSurface: OwnerSurface,
+  declarations: Declarations,
+): DeclaredNonDslCases<OwnerLayer, OwnerSurface, Declarations> {
+  const attachments = Object.entries(declarations).map(([caseId, retainedBehavior]) => Object.freeze({
     kind: 'non-dsl' as const,
     caseId,
     ownerLayer,
     ownerSurface,
     retainedBehavior,
-  });
+  }));
+  return Object.freeze(attachments) as DeclaredNonDslCases<OwnerLayer, OwnerSurface, Declarations>;
 }
 
 export const nonDslCaseManifest = Object.freeze([
-  nonDslCase('C1', 'pipeline-dsl', 'src/e2e/pipeline/agent-failures.e2e.test.ts',
-    'blocking review reworks and completes'),
-  nonDslCase('C2', 'pipeline-dsl', 'src/e2e/pipeline/agent-failures.e2e.test.ts',
-    'review iteration cap blocks'),
-  nonDslCase('C3', 'pipeline-dsl', 'src/e2e/pipeline/agent-failures.e2e.test.ts',
-    'developer failure reaches retry gate'),
-  nonDslCase('C4', 'pipeline-dsl', 'src/e2e/pipeline/agent-failures.e2e.test.ts',
-    'invalid agent result fails terminally'),
-  nonDslCase('L1', 'pipeline-dsl', 'src/e2e/pipeline/data-driven.e2e.test.ts',
-    'data-driven plan and merge route completes'),
-  nonDslCase('L4', 'pipeline-dsl', 'src/e2e/pipeline/data-driven.e2e.test.ts',
-    'produced plan hydrates developer context'),
-  nonDslCase('L3', 'pipeline-dsl', 'src/e2e/pipeline/data-driven.e2e.test.ts',
-    'data-driven review cap reaches stuck gate'),
-  nonDslCase('K1', 'pipeline-dsl', 'src/e2e/pipeline/extensibility.e2e.test.ts',
-    'declared post-integrator role completes'),
-  nonDslCase('K2', 'pipeline-dsl', 'src/e2e/pipeline/extensibility.e2e.test.ts',
-    'declared post-integrator blocker reworks'),
-  nonDslCase('K4', 'pipeline-dsl', 'src/e2e/pipeline/extensibility.e2e.test.ts',
-    'unknown-id declared role completes'),
-  nonDslCase('B3', 'pipeline-dsl', 'src/e2e/pipeline/gates.e2e.test.ts',
-    'plan rejection blocks before development'),
-  nonDslCase('B4', 'pipeline-dsl', 'src/e2e/pipeline/gates.e2e.test.ts',
-    'merge recheck re-presents merge gate'),
-  nonDslCase('B10', 'pipeline-dsl', 'src/e2e/pipeline/gates.e2e.test.ts',
-    'pending plan decision exposes risk'),
-  nonDslCase('B13', 'pipeline-dsl', 'src/e2e/pipeline/gates.e2e.test.ts',
-    'plan gate carries artifact and verdict'),
-  nonDslCase('B12', 'pipeline-dsl', 'src/e2e/pipeline/gates.e2e.test.ts',
-    'parked run cancellation reaches cancelled terminal'),
-  nonDslCase('D11', 'pipeline-dsl', 'src/e2e/pipeline/integrator-routing.e2e.test.ts',
-    'D11: nothing to integrate'),
-  nonDslCase('D9', 'pipeline-dsl', 'src/e2e/pipeline/integrator-routing.e2e.test.ts',
-    'D9: integration recovery'),
-  nonDslCase('D10', 'pipeline-dsl', 'src/e2e/pipeline/integrator-routing.e2e.test.ts',
-    'D10: integration recovery'),
-  nonDslCase('D20', 'pipeline-dsl', 'src/e2e/pipeline/integrator-routing.e2e.test.ts',
-    'D20: confirm merge recovery route'),
-  nonDslCase('D2', 'pipeline-dsl', 'src/e2e/pipeline/integrator-routing.e2e.test.ts',
-    'D2: reuse existing PR'),
-  nonDslCase('D14', 'pipeline-dsl', 'src/e2e/pipeline/integrator-routing.e2e.test.ts',
-    'D14: GitHub failure recovery'),
-  nonDslCase('D14b', 'pipeline-dsl', 'src/e2e/pipeline/integrator-routing.e2e.test.ts',
-    'D14b: PR ready failure recovery'),
-  nonDslCase('D7', 'pipeline-dsl', 'src/e2e/pipeline/integrator-routing.e2e.test.ts',
-    'D7: pinned GitHub identity failure'),
-  nonDslCase('D13', 'pipeline-dsl', 'src/e2e/pipeline/integrator-routing.e2e.test.ts',
-    'D13: push rejection'),
-  nonDslCase('D15', 'pipeline-dsl', 'src/e2e/pipeline/integrator-routing.e2e.test.ts',
-    'D15: integrator lesson redaction'),
-  nonDslCase('D19', 'pipeline-dsl', 'src/e2e/pipeline/integrator-routing.e2e.test.ts',
-    'D19: GitHub error redaction'),
-  nonDslCase('D35', 'pipeline-dsl', 'src/e2e/pipeline/integrator-routing.e2e.test.ts',
-    'D35: merge conflict recovery'),
-  nonDslCase('D30', 'pipeline-dsl', 'src/e2e/pipeline/integrator-routing.e2e.test.ts',
-    'D30: CI rework'),
-  nonDslCase('D31', 'pipeline-dsl', 'src/e2e/pipeline/integrator-routing.e2e.test.ts',
-    'D31: review feedback fix'),
-  nonDslCase('D32', 'pipeline-dsl', 'src/e2e/pipeline/integrator-routing.e2e.test.ts',
-    'D32: review feedback wontfix'),
-  nonDslCase('D33', 'pipeline-dsl', 'src/e2e/pipeline/integrator-routing.e2e.test.ts',
-    'D33: review feedback question'),
-  nonDslCase('N1', 'pipeline-dsl', 'src/e2e/pipeline/parallel-consensus.e2e.test.ts',
-    'both reviewer branches approve before join'),
-  nonDslCase('N2', 'pipeline-dsl', 'src/e2e/pipeline/parallel-consensus.e2e.test.ts',
-    'one reviewer rejection blocks consensus'),
-  nonDslCase('N3', 'pipeline-dsl', 'src/e2e/pipeline/parallel-consensus.e2e.test.ts',
-    'both reviewer rejections reach join before block'),
-  nonDslCase('N4', 'pipeline-dsl', 'src/e2e/pipeline/parallel-consensus.e2e.test.ts',
-    'approved and clean satisfy consensus'),
-  nonDslCase('RG234-A', 'pipeline-dsl', 'src/e2e/pipeline/runner-retry-gate.e2e.test.ts',
-    'transient developer failure retries in the same run and worktree'),
-  nonDslCase('RG234-B', 'pipeline-dsl', 'src/e2e/pipeline/runner-retry-gate.e2e.test.ts',
-    'transient developer failure give-up remains blocked'),
-  nonDslCase('RG234-C', 'pipeline-dsl', 'src/e2e/pipeline/runner-retry-gate.e2e.test.ts',
-    'provider overload reaches the manual retry gate'),
-  nonDslCase('B5', 'focused', 'src/task-control-plane/task-control-plane-api.service.test.ts',
-    'duplicate gate resolution exposes previous status and reuses the first stored answer'),
-  nonDslCase('B6', 'focused', 'src/task-control-plane/task-control-plane-api.service.test.ts',
-    'conflicting gate replay preserves first-decision-wins signaling'),
-  nonDslCase('B7', 'focused', 'src/task-control-plane/task-control-plane-api.service.test.ts',
-    'question answering rejects approval gate rows'),
-  nonDslCase('B9', 'focused', 'src/task-control-plane/task-control-plane-api.service.test.ts',
-    'unknown inbox gate operations preserve ROW_NOT_FOUND'),
-  nonDslCase('I1', 'focused', 'src/task-control-plane/task-control-plane-api.service.test.ts',
-    'explicit pipeline selection exposes required roles and normalized gates'),
-  nonDslCase('I2', 'focused', 'src/task-control-plane/task-control-plane-api.service.test.ts',
-    'omitted pipeline selection fails closed'),
-  nonDslCase('I3', 'focused', 'src/task-control-plane/task-control-plane-api.service.test.ts',
-    'required roles receive ordered runner and model bindings'),
-  nonDslCase('I4', 'focused', 'src/task-control-plane/task-control-plane-api.service.test.ts',
-    'public params remain inert and cannot select a runner'),
-  nonDslCase('I5', 'focused', 'src/task-control-plane/task-control-plane-api.service.test.ts',
-    'inline profiles override binding axes with profile provenance'),
-  nonDslCase('I6', 'focused', 'src/task-control-plane/task-control-plane-api.service.test.ts',
-    'unknown route resources fail closed with application errors'),
-  nonDslCase('I7', 'focused', 'src/task-control-plane/task-control-plane-api.service.test.ts',
-    'create and simulation use the same route-decision projection'),
-  nonDslCase('I8', 'focused', 'src/task-control-plane/task-control-plane-api.service.test.ts',
-    'profile binding provenance is retained per binding axis'),
-  nonDslCase('I9', 'focused', 'src/task-control-plane/task-control-plane-api.service.test.ts',
-    'unknown role runner bindings fail before start'),
-  nonDslCase('I9b', 'focused', 'src/task-control-plane/task-control-plane-api.service.test.ts',
-    'unknown node runner bindings fail before start'),
-  nonDslCase('I10', 'focused', 'src/task-control-plane/task-control-plane-api.service.test.ts',
-    'permission mode is validated against the selected runner'),
-  nonDslCase('I10b', 'focused', 'src/task-control-plane/task-control-plane-api.service.test.ts',
-    'GitHub account remains a script-node launch binding'),
-  nonDslCase('I11', 'focused', 'src/task-control-plane/task-control-plane-api.service.test.ts',
-    'stored profiles materialize and stamp pinned provenance'),
-  nonDslCase('H4', 'focused', 'src/task-control-plane/task-control-plane-api.service.test.ts',
-    'route-looking public params remain inert data'),
-  nonDslCase('H8', 'focused', 'src/mcp/mcp-facade.service.test.ts',
-    'capability and registered-tool names stay aligned'),
-  nonDslCase('H9', 'focused', 'src/mcp/mcp-facade.service.test.ts',
-    'catalog tools delegate and preserve public projections'),
-  nonDslCase('H9b', 'focused', 'src/mcp/mcp-facade.service.test.ts',
-    'stored run profiles are listed through the public adapter'),
-  nonDslCase('H9c', 'focused', 'src/task-control-plane/task-control-plane-api.service.test.ts',
-    'stored profile simulation returns materialized provenance'),
-  nonDslCase('H9d', 'focused', 'src/task-control-plane/task-control-plane-api.service.test.ts',
-    'inline GitHub account binding reaches launch configuration'),
-  nonDslCase('H12', 'focused', 'src/mcp/mcp-facade.service.test.ts',
-    'create response includes monitoring guidance by default'),
-  nonDslCase('H12b', 'focused', 'src/mcp/mcp-facade.service.test.ts',
-    'create response honors monitoring guidance opt-out'),
-  nonDslCase('H12c', 'focused', 'src/mcp/mcp-facade.service.test.ts',
-    'start response includes monitoring guidance'),
+  ...nonDslCases('pipeline-dsl', 'src/e2e/pipeline/agent-failures.e2e.test.ts', {
+    C1: 'blocking review reworks and completes',
+    C2: 'review iteration cap blocks',
+    C3: 'developer failure reaches retry gate',
+    C4: 'invalid agent result fails terminally',
+  }),
+  ...nonDslCases('pipeline-dsl', 'src/e2e/pipeline/data-driven.e2e.test.ts', {
+    L1: 'data-driven plan and merge route completes',
+    L4: 'produced plan hydrates developer context',
+    L3: 'data-driven review cap reaches stuck gate',
+  }),
+  ...nonDslCases('pipeline-dsl', 'src/e2e/pipeline/extensibility.e2e.test.ts', {
+    K1: 'declared post-integrator role completes',
+    K2: 'declared post-integrator blocker reworks',
+    K4: 'unknown-id declared role completes',
+  }),
+  ...nonDslCases('pipeline-dsl', 'src/e2e/pipeline/gates.e2e.test.ts', {
+    B3: 'plan rejection blocks before development',
+    B4: 'merge recheck re-presents merge gate',
+    B10: 'pending plan decision exposes risk',
+    B13: 'plan gate carries artifact and verdict',
+    B12: 'parked run cancellation reaches cancelled terminal',
+  }),
+  ...nonDslCases('pipeline-dsl', 'src/e2e/pipeline/integrator-routing.e2e.test.ts', {
+    D11: 'D11: nothing to integrate',
+    D9: 'D9: integration recovery',
+    D10: 'D10: integration recovery',
+    D20: 'D20: confirm merge recovery route',
+    D2: 'D2: reuse existing PR',
+    D14: 'D14: GitHub failure recovery',
+    D14b: 'D14b: PR ready failure recovery',
+    D7: 'D7: pinned GitHub identity failure',
+    D13: 'D13: push rejection',
+    D15: 'D15: integrator lesson redaction',
+    D19: 'D19: GitHub error redaction',
+    D35: 'D35: merge conflict recovery',
+    D30: 'D30: CI rework',
+    D31: 'D31: review feedback fix',
+    D32: 'D32: review feedback wontfix',
+    D33: 'D33: review feedback question',
+  }),
+  ...nonDslCases('pipeline-dsl', 'src/e2e/pipeline/parallel-consensus.e2e.test.ts', {
+    N1: 'both reviewer branches approve before join',
+    N2: 'one reviewer rejection blocks consensus',
+    N3: 'both reviewer rejections reach join before block',
+    N4: 'approved and clean satisfy consensus',
+  }),
+  ...nonDslCases('pipeline-dsl', 'src/e2e/pipeline/runner-retry-gate.e2e.test.ts', {
+    'RG234-A': 'transient developer failure retries in the same run and worktree',
+    'RG234-B': 'transient developer failure give-up remains blocked',
+    'RG234-C': 'provider overload reaches the manual retry gate',
+  }),
+  ...nonDslCases('focused', 'src/task-control-plane/task-control-plane-api.service.test.ts', {
+    B5: 'duplicate gate resolution exposes previous status and reuses the first stored answer',
+    B6: 'conflicting gate replay preserves first-decision-wins signaling',
+    B7: 'question answering rejects approval gate rows',
+    B9: 'unknown inbox gate operations preserve ROW_NOT_FOUND',
+    I1: 'explicit pipeline selection exposes required roles and normalized gates',
+    I2: 'omitted pipeline selection fails closed',
+    I3: 'required roles receive ordered runner and model bindings',
+    I4: 'public params remain inert and cannot select a runner',
+    I5: 'inline profiles override binding axes with profile provenance',
+    I6: 'unknown route resources fail closed with application errors',
+    I7: 'create and simulation use the same route-decision projection',
+    I8: 'profile binding provenance is retained per binding axis',
+    I9: 'unknown role runner bindings fail before start',
+    I9b: 'unknown node runner bindings fail before start',
+    I10: 'permission mode is validated against the selected runner',
+    I10b: 'GitHub account remains a script-node launch binding',
+    I11: 'stored profiles materialize and stamp pinned provenance',
+    H4: 'route-looking public params remain inert data',
+  }),
+  ...nonDslCases('focused', 'src/mcp/mcp-facade.service.test.ts', {
+    H8: 'capability and registered-tool names stay aligned',
+    H9: 'catalog tools delegate and preserve public projections',
+    H9b: 'stored run profiles are listed through the public adapter',
+  }),
+  ...nonDslCases('focused', 'src/task-control-plane/task-control-plane-api.service.test.ts', {
+    H9c: 'stored profile simulation returns materialized provenance',
+    H9d: 'inline GitHub account binding reaches launch configuration',
+  }),
+  ...nonDslCases('focused', 'src/mcp/mcp-facade.service.test.ts', {
+    H12: 'create response includes monitoring guidance by default',
+    H12b: 'create response honors monitoring guidance opt-out',
+    H12c: 'start response includes monitoring guidance',
+  }),
 ] as const);
 
 export type NonDslCaseAttachment = (typeof nonDslCaseManifest)[number];
@@ -164,7 +154,7 @@ export const focusedCaseOwnership = Object.freeze(nonDslCaseManifest.filter(isFo
 
 export function nonDslPipelineCaseAttachment(caseId: PipelineNonDslCaseId): PipelineNonDslCaseAttachment {
   const attachment = attachmentByCaseId.get(caseId);
-  if (!attachment || attachment.ownerLayer !== 'pipeline-dsl') {
+  if (attachment?.ownerLayer !== 'pipeline-dsl') {
     throw new Error(`unknown non-DSL pipeline case attachment: ${caseId}`);
   }
   return attachment;

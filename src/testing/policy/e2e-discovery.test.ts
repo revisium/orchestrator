@@ -33,6 +33,12 @@ test('the real E2E command uses recursive discovery and preserves execution boun
   const command = pkg.scripts['test:e2e'] ?? '';
 
   assert.match(command, /tsx scripts\/discover-e2e-tests\.ts/);
+  assert.match(command, /e2e_tests=.*\$\(tsx scripts\/discover-e2e-tests\.ts\)/);
+  assert.match(command, /test -n "\$e2e_tests"/);
+  assert.ok(
+    command.indexOf('test -n "$e2e_tests"') < command.indexOf('tsx --test'),
+    'empty discovery must fail before the test runner is invoked',
+  );
   assert.match(command, /--test-concurrency=\$\{REVO_E2E_FILE_CONCURRENCY:-4\}/);
   assert.match(command, /--test-force-exit/);
   assert.match(command, /REVO_SHUTDOWN_DRAIN_TIMEOUT_MS=100/);

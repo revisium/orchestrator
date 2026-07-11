@@ -36,7 +36,7 @@ export class CliContext {
   hostState(): CliHostState {
     const runtime = this.#profile.runtime();
     return {
-      running: this.#profile.running(),
+      running: runtime !== null && isAlive(runtime.pid),
       ...(runtime ? { pid: runtime.pid } : {}),
     };
   }

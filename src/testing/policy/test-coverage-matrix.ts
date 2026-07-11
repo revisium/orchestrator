@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
+import { sameExactStringSet } from './exact-string-set.js';
 
 export type MatrixDiagnostic = Readonly<{
   code: 'MATRIX_SHAPE' | 'MATRIX_EVIDENCE_PATH' | 'MATRIX_FUTURE_CLAIM';
@@ -179,12 +180,6 @@ function validateEvidencePaths(
   }
 }
 
-function sameStringSet(left: readonly string[], right: readonly string[]): boolean {
-  const sortedRight = [...right].sort();
-  return left.length === right.length &&
-    [...left].sort().every((value, index) => value === sortedRight[index]);
-}
-
 function validateCanonicalFamily(
   diagnostics: MatrixDiagnostic[],
   repositoryRoot: string,
@@ -201,7 +196,7 @@ function validateCanonicalFamily(
     });
   }
   const owners = Array.isArray(family['owner']) ? family['owner'].filter(nonEmptyString) : [];
-  if (!sameStringSet(owners, contract.owners)) {
+  if (!sameExactStringSet(owners, contract.owners)) {
     diagnostics.push({
       code: 'MATRIX_SHAPE',
       message: `${familyPath} (${id}) has stale canonical owner set; ` +
@@ -235,11 +230,279 @@ function validateStageThreeBoundary(
 ): void {
   if (family['targetStage'] !== 'stage-3' || family['currentStatus'] === 'not-implemented') return;
   const gaps = Array.isArray(family['gaps']) ? family['gaps'].filter(nonEmptyString) : [];
-  const futureGap = gaps.join(' ').match(/observed|semantic trace|same-run|calibrated|runtime evidence/i);
+  const futureGap = /observed|semantic trace|same-run|calibrated|runtime evidence/i.exec(gaps.join(' '));
   if (gaps.length === 0 || !futureGap) {
     diagnostics.push({
       code: 'MATRIX_FUTURE_CLAIM',
       message: `${familyPath} (${String(family['id'])}) targets Stage 3 but does not preserve its unimplemented Stage 3 gap`,
+    });
+  }
+}
+
+function validateMatrixHeader(diagnostics: MatrixDiagnostic[], root: Record<string, unknown>): void {
+  validateStringFields(diagnostics, root, 'matrix', [
+    'artifactKind', 'schemaVersion', 'snapshotStatus', 'snapshotNotice',
+  ]);
+}
+
+function validateMatrixSource(diagnostics: MatrixDiagnostic[], root: Record<string, unknown>): void {
+  const source = requireFields(diagnostics, root['source'], 'matrix.source', ['revision', 'branch', 'observedDate']);
+  if (source) validateStringFields(diagnostics, source, 'matrix.source', ['revision', 'branch', 'observedDate']);
+}
+
+function validateMatrixOwnership(diagnostics: MatrixDiagnostic[], root: Record<string, unknown>): void {
+  const ownership = requireFields(diagnostics, root['ownership'], 'matrix.ownership', [
+    'owner', 'normativeSpec', 'pipelinePolicySpec', 'architectureDecision',
+  ]);
+  if (ownership) {
+    validateStringFields(diagnostics, ownership, 'matrix.ownership', [
+      'owner', 'normativeSpec', 'pipelinePolicySpec', 'architectureDecision',
+    ]);
+  }
+}
+
+type MatrixLegends = Readonly<{
+  status: Record<string, unknown> | undefined;
+  targetStage: Record<string, unknown> | undefined;
+}>;
+type FamilyReferenceValues = ReadonlySet<string> | Record<string, unknown> | undefined;
+
+function validateStringMap(
+  diagnostics: MatrixDiagnostic[],
+  value: unknown,
+  path: string,
+): Record<string, unknown> | undefined {
+  const map = record(value);
+  if (!map || Object.keys(map).length === 0 || !Object.values(map).every(nonEmptyString)) {
+    diagnostics.push({ code: 'MATRIX_SHAPE', message: `${path} must be a non-empty string map` });
+  }
+  return map;
+}
+
+function validateMatrixLegends(diagnostics: MatrixDiagnostic[], root: Record<string, unknown>): MatrixLegends {
+  return {
+    status: validateStringMap(diagnostics, root['statusLegend'], 'matrix.statusLegend'),
+    targetStage: validateStringMap(diagnostics, root['targetStageLegend'], 'matrix.targetStageLegend'),
+  };
+}
+
+function validatePositiveInteger(
+  diagnostics: MatrixDiagnostic[],
+  value: unknown,
+  path: string,
+): void {
+  if (!Number.isInteger(value) || Number(value) <= 0) {
+    diagnostics.push({ code: 'MATRIX_SHAPE', message: `${path} must be a positive integer` });
+  }
+}
+
+function validateObjectFields(
+  diagnostics: MatrixDiagnostic[],
+  value: Record<string, unknown>,
+  path: string,
+  fields: readonly string[],
+): void {
+  for (const field of fields) {
+    if (!record(value[field])) {
+      diagnostics.push({ code: 'MATRIX_SHAPE', message: `${path}.${field} must be an object` });
+    }
+  }
+}
+
+function validatePerformanceBaseline(
+  diagnostics: MatrixDiagnostic[],
+  root: Record<string, unknown>,
+  repositoryRoot: string,
+): void {
+  const path = 'matrix.performanceBaseline';
+  const performance = requireFields(diagnostics, root['performanceBaseline'], path, [
+    'captureMethod',
+    'sampleCount',
+    'samples',
+    'e2eJobSeconds',
+    'combinedSetupPlusTestActionStepSeconds',
+    'ciFileConcurrency',
+    'localDefaultFileConcurrency',
+    'localWallClockTargetSeconds',
+    'evidencePaths',
+  ]);
+  if (!performance) return;
+
+  validateObjectFields(diagnostics, performance, path, ['captureMethod']);
+  validatePositiveInteger(diagnostics, performance['sampleCount'], `${path}.sampleCount`);
+  if (!Array.isArray(performance['samples']) || performance['samples'].length !== performance['sampleCount']) {
+    diagnostics.push({ code: 'MATRIX_SHAPE', message: `${path}.samples must match sampleCount` });
+  }
+  validateObjectFields(diagnostics, performance, path, [
+    'e2eJobSeconds',
+    'combinedSetupPlusTestActionStepSeconds',
+    'localWallClockTargetSeconds',
+  ]);
+  validatePositiveInteger(diagnostics, performance['ciFileConcurrency'], `${path}.ciFileConcurrency`);
+  validatePositiveInteger(
+    diagnostics,
+    performance['localDefaultFileConcurrency'],
+    `${path}.localDefaultFileConcurrency`,
+  );
+  validateEvidencePaths(diagnostics, repositoryRoot, performance['evidencePaths'], `${path}.evidencePaths`);
+}
+
+function validateMatrixLayers(diagnostics: MatrixDiagnostic[], value: unknown): ReadonlySet<string> {
+  const layerIds = new Set<string>();
+  if (!Array.isArray(value) || value.length === 0) {
+    diagnostics.push({ code: 'MATRIX_SHAPE', message: 'matrix.layers must be a non-empty array' });
+    return layerIds;
+  }
+  value.forEach((layer, index) => {
+    const path = `matrix.layers[${index}]`;
+    const item = requireFields(diagnostics, layer, path, ['id', 'intent', 'policy', 'relativeCiCost']);
+    if (item) {
+      validateStringFields(diagnostics, item, path, ['id', 'intent', 'policy', 'relativeCiCost']);
+      if (nonEmptyString(item['id'])) layerIds.add(item['id']);
+    }
+  });
+  return layerIds;
+}
+
+function validateFamilyId(
+  diagnostics: MatrixDiagnostic[],
+  family: Record<string, unknown>,
+  familyPath: string,
+  familyIds: Set<string>,
+): void {
+  const id = family['id'];
+  if (!nonEmptyString(id)) return;
+  if (familyIds.has(id)) {
+    diagnostics.push({ code: 'MATRIX_SHAPE', message: `${familyPath}.id must be unique: ${id}` });
+  }
+  familyIds.add(id);
+  if (!CANONICAL_FAMILY_IDS.has(id)) {
+    diagnostics.push({ code: 'MATRIX_SHAPE', message: `${familyPath} has unknown contract family ${id}` });
+  }
+}
+
+function validateFamilyReference(
+  diagnostics: MatrixDiagnostic[],
+  value: unknown,
+  declaredValues: FamilyReferenceValues,
+  message: string,
+): void {
+  if (nonEmptyString(value) && !Object.hasOwn(declaredValues ?? {}, value) &&
+    !(declaredValues instanceof Set && declaredValues.has(value))) {
+    diagnostics.push({ code: 'MATRIX_SHAPE', message });
+  }
+}
+
+function validateFamilyPolicy(
+  diagnostics: MatrixDiagnostic[],
+  family: Record<string, unknown>,
+  familyPath: string,
+): void {
+  if (family['policy'] !== 'exhaustive' && family['policy'] !== 'representative') {
+    diagnostics.push({ code: 'MATRIX_SHAPE', message: `${familyPath}.policy must be exhaustive or representative` });
+  }
+}
+
+function validateStageThreeClaim(
+  diagnostics: MatrixDiagnostic[],
+  family: Record<string, unknown>,
+  familyPath: string,
+): void {
+  const id = family['id'];
+  if ((id === 'observed-runtime-coverage' || id === 'semantic-snapshots') &&
+    family['currentStatus'] !== 'not-implemented') {
+    diagnostics.push({
+      code: 'MATRIX_FUTURE_CLAIM',
+      message: `${familyPath} cannot claim Stage 3 runtime evidence during Stage 2`,
+    });
+  }
+}
+
+function validateContractFamily(
+  diagnostics: MatrixDiagnostic[],
+  value: unknown,
+  index: number,
+  repositoryRoot: string,
+  layerIds: ReadonlySet<string>,
+  legends: MatrixLegends,
+  familyIds: Set<string>,
+): void {
+  const familyPath = `matrix.contractFamilies[${index}]`;
+  const family = requireFields(diagnostics, value, familyPath, [
+    'id',
+    'family',
+    'scope',
+    'owningLayer',
+    'owner',
+    'policy',
+    'currentStatus',
+    'evidencePaths',
+    'gaps',
+    'relativeCiCost',
+    'ciLane',
+    'targetStage',
+  ]);
+  if (!family) return;
+
+  validateStringFields(diagnostics, family, familyPath, [
+    'id', 'family', 'scope', 'owningLayer', 'policy', 'currentStatus', 'relativeCiCost', 'ciLane', 'targetStage',
+  ]);
+  validateFamilyId(diagnostics, family, familyPath, familyIds);
+  validateFamilyReference(
+    diagnostics,
+    family['owningLayer'],
+    layerIds,
+    `${familyPath}.owningLayer is not declared in matrix.layers`,
+  );
+  validateFamilyReference(
+    diagnostics,
+    family['currentStatus'],
+    legends.status,
+    `${familyPath}.currentStatus is not declared in statusLegend`,
+  );
+  validateFamilyReference(
+    diagnostics,
+    family['targetStage'],
+    legends.targetStage,
+    `${familyPath}.targetStage is not declared in targetStageLegend`,
+  );
+  validateFamilyPolicy(diagnostics, family, familyPath);
+  validateEvidencePaths(diagnostics, repositoryRoot, family['evidencePaths'], `${familyPath}.evidencePaths`);
+  validateStringArray(diagnostics, family['owner'], `${familyPath}.owner`);
+  validateStringArray(diagnostics, family['gaps'], `${familyPath}.gaps`, true);
+  validateCanonicalFamily(diagnostics, repositoryRoot, family, familyPath);
+  validateStageThreeBoundary(diagnostics, family, familyPath);
+  validateStageThreeClaim(diagnostics, family, familyPath);
+}
+
+function validateContractFamilies(
+  diagnostics: MatrixDiagnostic[],
+  value: unknown,
+  repositoryRoot: string,
+  layerIds: ReadonlySet<string>,
+  legends: MatrixLegends,
+): boolean {
+  if (!Array.isArray(value) || value.length === 0) {
+    diagnostics.push({ code: 'MATRIX_SHAPE', message: 'matrix.contractFamilies must be a non-empty array' });
+    return false;
+  }
+  const familyIds = new Set<string>();
+  for (const [index, family] of value.entries()) {
+    validateContractFamily(diagnostics, family, index, repositoryRoot, layerIds, legends, familyIds);
+  }
+  for (const id of CANONICAL_FAMILY_IDS) {
+    if (!familyIds.has(id)) {
+      diagnostics.push({ code: 'MATRIX_SHAPE', message: `matrix.contractFamilies is missing canonical family ${id}` });
+    }
+  }
+  return true;
+}
+
+function validateSnapshotNotice(diagnostics: MatrixDiagnostic[], value: unknown): void {
+  if (!nonEmptyString(value) || !/Stage 3/i.test(value) || !/does not claim/i.test(value)) {
+    diagnostics.push({
+      code: 'MATRIX_FUTURE_CLAIM',
+      message: 'matrix.snapshotNotice must explicitly disclaim Stage 3 observed-runtime coverage',
     });
   }
 }
@@ -260,159 +523,21 @@ export function validateTestCoverageMatrix(matrix: unknown, repositoryRoot: stri
     'contractFamilies',
   ]);
   if (!root) return diagnostics;
-  validateStringFields(diagnostics, root, 'matrix', [
-    'artifactKind', 'schemaVersion', 'snapshotStatus', 'snapshotNotice',
-  ]);
 
-  const source = requireFields(diagnostics, root['source'], 'matrix.source', ['revision', 'branch', 'observedDate']);
-  if (source) validateStringFields(diagnostics, source, 'matrix.source', ['revision', 'branch', 'observedDate']);
-  const ownership = requireFields(diagnostics, root['ownership'], 'matrix.ownership', [
-    'owner', 'normativeSpec', 'pipelinePolicySpec', 'architectureDecision',
-  ]);
-  if (ownership) {
-    validateStringFields(diagnostics, ownership, 'matrix.ownership', [
-      'owner', 'normativeSpec', 'pipelinePolicySpec', 'architectureDecision',
-    ]);
-  }
-  const statusLegend = record(root['statusLegend']);
-  const targetStageLegend = record(root['targetStageLegend']);
-  for (const [legendName, legend] of [
-    ['statusLegend', statusLegend],
-    ['targetStageLegend', targetStageLegend],
-  ] as const) {
-    if (!legend || Object.keys(legend).length === 0 || !Object.values(legend).every(nonEmptyString)) {
-      diagnostics.push({ code: 'MATRIX_SHAPE', message: `matrix.${legendName} must be a non-empty string map` });
-    }
-  }
-  const performance = requireFields(diagnostics, root['performanceBaseline'], 'matrix.performanceBaseline', [
-    'captureMethod',
-    'sampleCount',
-    'samples',
-    'e2eJobSeconds',
-    'combinedSetupPlusTestActionStepSeconds',
-    'ciFileConcurrency',
-    'localDefaultFileConcurrency',
-    'localWallClockTargetSeconds',
-    'evidencePaths',
-  ]);
-  if (performance) {
-    if (!record(performance['captureMethod'])) {
-      diagnostics.push({ code: 'MATRIX_SHAPE', message: 'matrix.performanceBaseline.captureMethod must be an object' });
-    }
-    if (!Number.isInteger(performance['sampleCount']) || Number(performance['sampleCount']) <= 0) {
-      diagnostics.push({ code: 'MATRIX_SHAPE', message: 'matrix.performanceBaseline.sampleCount must be a positive integer' });
-    }
-    if (!Array.isArray(performance['samples']) || performance['samples'].length !== performance['sampleCount']) {
-      diagnostics.push({ code: 'MATRIX_SHAPE', message: 'matrix.performanceBaseline.samples must match sampleCount' });
-    }
-    for (const field of ['e2eJobSeconds', 'combinedSetupPlusTestActionStepSeconds', 'localWallClockTargetSeconds']) {
-      if (!record(performance[field])) {
-        diagnostics.push({ code: 'MATRIX_SHAPE', message: `matrix.performanceBaseline.${field} must be an object` });
-      }
-    }
-    for (const field of ['ciFileConcurrency', 'localDefaultFileConcurrency']) {
-      if (!Number.isInteger(performance[field]) || Number(performance[field]) <= 0) {
-        diagnostics.push({ code: 'MATRIX_SHAPE', message: `matrix.performanceBaseline.${field} must be a positive integer` });
-      }
-    }
-    validateEvidencePaths(
-      diagnostics,
-      repositoryRoot,
-      performance['evidencePaths'],
-      'matrix.performanceBaseline.evidencePaths',
-    );
-  }
-
-  const layers = root['layers'];
-  const layerIds = new Set<string>();
-  if (!Array.isArray(layers) || layers.length === 0) {
-    diagnostics.push({ code: 'MATRIX_SHAPE', message: 'matrix.layers must be a non-empty array' });
-  } else {
-    layers.forEach((layer, index) => {
-      const item = requireFields(diagnostics, layer, `matrix.layers[${index}]`, ['id', 'intent', 'policy', 'relativeCiCost']);
-      if (item) {
-        validateStringFields(diagnostics, item, `matrix.layers[${index}]`, ['id', 'intent', 'policy', 'relativeCiCost']);
-        if (nonEmptyString(item['id'])) layerIds.add(item['id']);
-      }
-    });
-  }
-
-  const families = root['contractFamilies'];
-  if (!Array.isArray(families) || families.length === 0) {
-    diagnostics.push({ code: 'MATRIX_SHAPE', message: 'matrix.contractFamilies must be a non-empty array' });
-    return diagnostics;
-  }
-
-  const familyIds = new Set<string>();
-  for (const [index, value] of families.entries()) {
-    const familyPath = `matrix.contractFamilies[${index}]`;
-    const family = requireFields(diagnostics, value, familyPath, [
-      'id',
-      'family',
-      'scope',
-      'owningLayer',
-      'owner',
-      'policy',
-      'currentStatus',
-      'evidencePaths',
-      'gaps',
-      'relativeCiCost',
-      'ciLane',
-      'targetStage',
-    ]);
-    if (!family) continue;
-    validateStringFields(diagnostics, family, familyPath, [
-      'id', 'family', 'scope', 'owningLayer', 'policy', 'currentStatus', 'relativeCiCost', 'ciLane', 'targetStage',
-    ]);
-    if (nonEmptyString(family['id'])) {
-      if (familyIds.has(family['id'])) {
-        diagnostics.push({ code: 'MATRIX_SHAPE', message: `${familyPath}.id must be unique: ${family['id']}` });
-      }
-      familyIds.add(family['id']);
-      if (!CANONICAL_FAMILY_IDS.has(family['id'])) {
-        diagnostics.push({ code: 'MATRIX_SHAPE', message: `${familyPath} has unknown contract family ${family['id']}` });
-      }
-    }
-    if (nonEmptyString(family['owningLayer']) && !layerIds.has(family['owningLayer'])) {
-      diagnostics.push({ code: 'MATRIX_SHAPE', message: `${familyPath}.owningLayer is not declared in matrix.layers` });
-    }
-    if (nonEmptyString(family['currentStatus']) && !Object.hasOwn(statusLegend ?? {}, family['currentStatus'])) {
-      diagnostics.push({ code: 'MATRIX_SHAPE', message: `${familyPath}.currentStatus is not declared in statusLegend` });
-    }
-    if (nonEmptyString(family['targetStage']) && !Object.hasOwn(targetStageLegend ?? {}, family['targetStage'])) {
-      diagnostics.push({ code: 'MATRIX_SHAPE', message: `${familyPath}.targetStage is not declared in targetStageLegend` });
-    }
-    if (family['policy'] !== 'exhaustive' && family['policy'] !== 'representative') {
-      diagnostics.push({ code: 'MATRIX_SHAPE', message: `${familyPath}.policy must be exhaustive or representative` });
-    }
-    validateEvidencePaths(diagnostics, repositoryRoot, family['evidencePaths'], `${familyPath}.evidencePaths`);
-    validateStringArray(diagnostics, family['owner'], `${familyPath}.owner`);
-    validateStringArray(diagnostics, family['gaps'], `${familyPath}.gaps`, true);
-    validateCanonicalFamily(diagnostics, repositoryRoot, family, familyPath);
-    validateStageThreeBoundary(diagnostics, family, familyPath);
-
-    const id = family['id'];
-    if ((id === 'observed-runtime-coverage' || id === 'semantic-snapshots') &&
-      family['currentStatus'] !== 'not-implemented') {
-      diagnostics.push({
-        code: 'MATRIX_FUTURE_CLAIM',
-        message: `${familyPath} cannot claim Stage 3 runtime evidence during Stage 2`,
-      });
-    }
-  }
-
-  for (const id of CANONICAL_FAMILY_IDS) {
-    if (!familyIds.has(id)) {
-      diagnostics.push({ code: 'MATRIX_SHAPE', message: `matrix.contractFamilies is missing canonical family ${id}` });
-    }
-  }
-
-  const notice = root['snapshotNotice'];
-  if (!nonEmptyString(notice) || !/Stage 3/i.test(notice) || !/does not claim/i.test(notice)) {
-    diagnostics.push({
-      code: 'MATRIX_FUTURE_CLAIM',
-      message: 'matrix.snapshotNotice must explicitly disclaim Stage 3 observed-runtime coverage',
-    });
-  }
+  validateMatrixHeader(diagnostics, root);
+  validateMatrixSource(diagnostics, root);
+  validateMatrixOwnership(diagnostics, root);
+  const legends = validateMatrixLegends(diagnostics, root);
+  validatePerformanceBaseline(diagnostics, root, repositoryRoot);
+  const layerIds = validateMatrixLayers(diagnostics, root['layers']);
+  const validFamilies = validateContractFamilies(
+    diagnostics,
+    root['contractFamilies'],
+    repositoryRoot,
+    layerIds,
+    legends,
+  );
+  if (!validFamilies) return diagnostics;
+  validateSnapshotNotice(diagnostics, root['snapshotNotice']);
   return diagnostics;
 }

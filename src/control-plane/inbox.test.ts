@@ -483,7 +483,7 @@ test('A9 (G2+C2): resolveInbox on pending row returns stored (re-read) answer on
   assert.equal(result.answer, 'approve', 'returned answer must equal the stored/re-read value (C2)');
 });
 
-test('B5/B6: duplicate or conflicting resolution returns the first stored answer', async () => {
+test('resolveInbox returns the stored answer when an already-resolved row is replayed', async () => {
   const inboxId = 'inbox-g2';
   const storedAnswer = { decision: 'approve' };
 

@@ -76,19 +76,24 @@ workflow effect.
 The coverage model is a registry-backed matrix. Each declarative scenario SHOULD carry stable coverage tags. The
 meta-test MUST be cheap enough to run outside the real e2e lane, and MUST run in the required CI verification lane.
 
-Coverage tags use stable ids:
+Coverage tags are stable behavior descriptors:
 
 - `node:<nodeId>:outcome:<verdict>` for human-gate and choice outcomes;
 - `node:<nodeId>:catch:<errorCode>` for effect failure routes;
 - `node:<nodeId>:default` for default branches;
 - `profile:<profileId>:signature:<routingSignature>` for representative profile coverage.
 
+Ownership is assigned to materialized coverage cells, not to tags globally. A cell combines the pinned pipeline id,
+profile id, materialized-template hash, routing signature, and one descriptor tag. Reusing a tag in a cloned or changed
+template does not reuse ownership: the new materialized cell must receive its own explicit declaration.
+
 The graph-coverage meta-test MUST verify:
 
-- every product template edge/outcome is covered by a DSL tag, a static-policy diagnostic tag, a unit-owned tag, or an
-  explicit waiver;
-- every DSL tag references a defined edge/outcome or profile signature;
-- no scenario uses an undefined tag;
+- every materialized product-template edge/outcome cell is covered by a DSL scenario, a static-policy diagnostic, a
+  unit owner, or an explicit waiver;
+- every DSL scenario references cells under its one selected pinned materialized identity;
+- static-policy, unit, and waiver declarations resolve to explicit pinned materialized identities and cell ids;
+- no declaration uses an undefined or stale cell;
 - every primary cell has exactly one owner and no cell is both owned and waived;
 - every waiver has stable cells, a short reason, an owner surface, and an expiry stage or condition.
 
@@ -96,7 +101,8 @@ The shipped registry currently carries no waivers. If a future waiver is introdu
 source-owned, and visible through the registry meta-test; waivers MUST NOT be used to close an audit milestone while the
 covered behavior still belongs to that milestone.
 
-Defensive edges, catch routes, default branches, and counter-bound conjuncts MAY be covered by static-policy diagnostics
+Tags remain descriptors for review and diagnostics; they MUST NOT act as a global ownership fallback. Defensive edges,
+catch routes, default branches, and counter-bound conjuncts MAY be covered by static-policy diagnostics
 instead of a runtime DSL scenario when a runtime scenario would duplicate lower-level proof or create low-value e2e
 churn. They MUST NOT disappear silently.
 
@@ -148,9 +154,6 @@ least one cap-exhaustion path for every user-visible recovery loop family.
   hard-skip/milestone guidance after the default-pipeline audit remediation work.
 - 2026-07-09: Marked the policy implemented after the default-pipeline audit remediation close-out: graph coverage is
   registry-backed in required CI, the waiver registry is empty, and hard skips are guarded.
-- 2026-07-10: Linked the general test architecture and current-state matrix, and recorded the declared-only
-  boundary pending Stage 2 and Stage 3 implementation.
-- 2026-07-10: Recorded acceptance of ADR-0009 and the general test architecture specification; Stage 2 remains
-  unstarted, and Stage 3 remains separately gated.
-- 2026-07-10: Implemented Stage 2 typed pipeline plans, materialized-template/routing-signature cell derivation,
-  exact primary ownership, waiver expiry validation, and source-text-free case attachment; Stage 3 remains gated.
+- 2026-07-10: Accepted ADR-0009 and the general test architecture specification, linked the current-state matrix,
+  and implemented Stage 2 typed pipeline plans, pinned materialized-cell ownership, waiver expiry validation, and
+  source-text-free case attachment; Stage 3 observed-runtime evidence remains separately gated.

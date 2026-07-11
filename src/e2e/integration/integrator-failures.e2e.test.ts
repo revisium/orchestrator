@@ -121,7 +121,6 @@ test('D20 integration: confirm-merge recovery preserves the real worktree', { sk
 test('D22: developer output and the integration commit live in the given worktree', { skip: e2eSkip }, async () => {
   const target = integration.target();
   const run = await prepareFeature(target, {
-    title: 'E2E integrator-failure feature run',
     gh: 'merge-not-clean',
   });
   await run.start();

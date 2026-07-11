@@ -86,25 +86,17 @@ recoveryScenario('RG-C: mergeGate override_merge over advisory thread -> confirm
   expect: { terminal: 'completed', path: ['merge_overridden', 'merge_confirmed'] },
 });
 
-test('RG-D: mergeGate recheck -> mergeRecheck(stub:clean) -> mergeGate cancel -> cancelled (#276)', {
-  skip: e2eSkip,
-}, async () => {
-  await pipeline.run({
-    title: 'RG-D: mergeGate recheck -> mergeRecheck(stub:clean) -> mergeGate cancel -> cancelled (#276)',
-    playbook: 'default',
-    repo: target,
-    coverage: coverageForScenario('RG-D-merge-recheck-clean'),
-    profile: 'default-full',
-    gates: [
-      { topic: 'plan', options: PLAN_OPTIONS, outcome: 'approved' },
-      { topic: 'merge', options: MERGE_OPTIONS, outcome: 'recheck', nodeId: 'mergeGate' },
-      { topic: 'merge', options: MERGE_OPTIONS, outcome: 'cancel', nodeId: 'mergeGate' },
-    ],
-    expect: {
-      terminal: 'cancelled',
-      path: [{ type: 'pr_polled', payload: { verdict: 'clean' } }],
-    },
-  });
+recoveryScenario('RG-D: mergeGate recheck -> mergeRecheck(stub:clean) -> mergeGate cancel -> cancelled (#276)', coverageForScenario('RG-D-merge-recheck-clean'), {
+  profile: 'default-full',
+  gates: [
+    { topic: 'plan', options: PLAN_OPTIONS, outcome: 'approved' },
+    { topic: 'merge', options: MERGE_OPTIONS, outcome: 'recheck', nodeId: 'mergeGate' },
+    { topic: 'merge', options: MERGE_OPTIONS, outcome: 'cancel', nodeId: 'mergeGate' },
+  ],
+  expect: {
+    terminal: 'cancelled',
+    path: [{ type: 'pr_polled', payload: { verdict: 'clean' } }],
+  },
 });
 
 test('RG-E: always-ci-red -> ciLoop exhaustion -> recoveryGate(merge-recovery) -> cancel -> cancelled', { skip: e2eSkip }, async () => {

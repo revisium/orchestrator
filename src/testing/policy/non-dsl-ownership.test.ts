@@ -27,7 +27,7 @@ const expectedPipelineCases = [
   'RG234-A', 'RG234-B', 'RG234-C',
 ] as const;
 
-test('focused/static consolidation retains every non-representative routing and MCP case exactly once', () => {
+test('focused consolidation retains every non-representative routing and MCP case exactly once', () => {
   const ids = focusedCaseOwnership.map((entry) => entry.caseId);
   assert.deepEqual([...ids].sort(), [...expectedCases].sort());
   assert.equal(new Set(ids).size, ids.length);
@@ -36,6 +36,10 @@ test('focused/static consolidation retains every non-representative routing and 
 test('canonical non-DSL manifest retains every pipeline and focused attachment exactly once', () => {
   const ids = nonDslCaseManifest.map((entry) => entry.caseId);
   assert.equal(new Set(ids).size, ids.length);
+  assert.equal(Object.isFrozen(nonDslCaseManifest), true);
+  for (const attachment of nonDslCaseManifest) {
+    assert.equal(Object.isFrozen(attachment), true, attachment.caseId);
+  }
   assert.deepEqual(
     [...ids].sort(),
     [...expectedPipelineCases, ...expectedCases].sort(),
@@ -56,7 +60,7 @@ test('focused ownership construction rejects attachment to a different executabl
   );
 });
 
-test('focused/static ownership points only at repository-relative focused evidence', () => {
+test('focused ownership points only at repository-relative focused evidence', () => {
   for (const entry of focusedCaseOwnership) {
     assert.equal(entry.ownerSurface.startsWith('/') || entry.ownerSurface.includes('..'), false, entry.caseId);
     assert.equal(entry.ownerSurface.includes('/e2e/'), false, `${entry.caseId} must not claim representative E2E ownership`);

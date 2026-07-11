@@ -89,6 +89,14 @@ function staticPropertyName(node) {
   return undefined;
 }
 
+function staticImportSource(node) {
+  if (node.type === 'Literal' && typeof node.value === 'string') return node.value;
+  if (node.type === 'TemplateLiteral' && node.expressions.length === 0) {
+    return node.quasis[0]?.value.cooked;
+  }
+  return undefined;
+}
+
 function looksLikeRunRoutingMap(name) {
   const tokens = name
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
@@ -172,8 +180,9 @@ export default {
         checkImport(node, String(node.source.value));
       },
       ImportExpression(node) {
-        if (node.source.type !== 'Literal' || typeof node.source.value !== 'string') return;
-        checkImport(node, node.source.value);
+        const source = staticImportSource(node.source);
+        if (source === undefined) return;
+        checkImport(node, source);
       },
       MemberExpression(node) {
         if (layer !== 'pipeline' && layer !== 'surfaces') return;

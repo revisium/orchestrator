@@ -114,6 +114,25 @@ test('test boundary rule rejects child-process subpaths and literal dynamic raw 
   ]);
 });
 
+test('test boundary rule rejects static template-literal dynamic raw imports', async () => {
+  const messages = await verify(
+    '/repo/src/e2e/pipeline/example.e2e.test.ts',
+    [
+      'await import(`../../runners/integrator.js`);',
+      'await import(`node:child_process/promises`);',
+    ].join('\n'),
+  );
+  assert.deepEqual(messages.map((message) => message.messageId), ['rawAccess', 'rawAccess']);
+});
+
+test('test boundary rule leaves interpolated dynamic imports non-static', async () => {
+  const messages = await verify(
+    '/repo/src/e2e/pipeline/example.e2e.test.ts',
+    'await import(`../../runners/${runnerName}.js`);',
+  );
+  assert.deepEqual(messages, []);
+});
+
 test('test boundary rule rejects computed and destructured aliases of privileged properties', async () => {
   const messages = await verify(
     '/repo/src/e2e/pipeline/example.e2e.test.ts',

@@ -9,6 +9,10 @@ function toolResult(data: unknown) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(data) }] };
 }
 
+function toolError(text: string) {
+  return { isError: true, content: [{ type: 'text' as const, text }] };
+}
+
 test('MCP context tracks created runs and unparks leftovers through public tools before target cleanup', async () => {
   const calls: string[] = [];
   let gateResolved = false;
@@ -155,4 +159,42 @@ test('MCP context cancels an active running run through public tools before targ
     'get_run_status',
   ]);
   assert.equal(targetCleaned, true);
+});
+
+test('MCP context aggregates every target cleanup failure and does not retain targets for a second close', async () => {
+  const cleanupAttempts: string[] = [];
+  const targets = ['first', 'second'].map((name) => ({
+    root: `/tmp/${name}`,
+    worktree: `/tmp/${name}/worktree`,
+    repairDirty() {},
+    cleanup() {
+      cleanupAttempts.push(name);
+      throw new Error(`${name} cleanup failed`);
+    },
+  }) satisfies TargetRepo);
+  const client = {
+    async callTool() {
+      return toolError('create failed');
+    },
+    async close() {},
+  } as unknown as Client;
+  const transport = { async close() {} } as unknown as StdioClientTransport;
+  let targetIndex = 0;
+  const context = new McpContext(client, transport, () => targets[targetIndex++] as TargetRepo);
+
+  await context.createRun({ title: 'first', pipelineId: 'local-change', start: false });
+  await context.createRun({ title: 'second', pipelineId: 'local-change', start: false });
+
+  await assert.rejects(context.close(), (error: unknown) => {
+    assert.ok(error instanceof AggregateError);
+    assert.deepEqual(error.errors.map(String), [
+      'Error: first cleanup failed',
+      'Error: second cleanup failed',
+    ]);
+    return true;
+  });
+  assert.deepEqual(cleanupAttempts, ['first', 'second']);
+
+  await context.close();
+  assert.deepEqual(cleanupAttempts, ['first', 'second']);
 });

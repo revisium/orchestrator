@@ -45,5 +45,7 @@ test('M1: the shipped feature-development pipeline completes on the real host', 
   await run.resolveGate({ topic: 'merge', options: MERGE_OPTIONS, outcome: 'approved' });
   await run.settle('completed');
   await run.expectEvents(['integrate_succeeded', 'run_completed']);
-  for (const role of ['analyst', 'developer', 'reviewer']) run.expectRoleExecuted(role);
+  for (const role of ['analyst', 'developer', 'reviewer']) {
+    run.expectRoleExecuted(role);
+  }
 });

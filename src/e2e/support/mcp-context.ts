@@ -286,7 +286,13 @@ export class McpContext {
       await this.#client.close().catch((error) => cleanupErrors.push(error));
       await this.#transport.close().catch((error) => cleanupErrors.push(error));
       await this.#closeSupport().catch((error) => cleanupErrors.push(error));
-      for (const target of this.#targets) target.cleanup();
+      for (const target of this.#targets) {
+        try {
+          target.cleanup();
+        } catch (error) {
+          cleanupErrors.push(error);
+        }
+      }
       this.#targets.clear();
       this.#runs.clear();
     }

@@ -1415,11 +1415,7 @@ test('TaskControlPlaneApiService.approveGate leaves pending signal state when DB
   assert.deepEqual(events, ['gate_signal_pending']);
 });
 
-test(focusedCaseTitle(
-  ['B5', 'B6'],
-  focusedOwner,
-  'duplicate gate decisions expose previousStatus and preserve the first stored answer',
-), async () => {
+function gateReplayFixture() {
   let inbox = makeInboxItem();
   const signals: unknown[] = [];
   const api = makeApi({
@@ -1447,16 +1443,43 @@ test(focusedCaseTitle(
       },
     },
   });
+  return { api, getInbox: () => inbox, signals };
+}
 
-  const approved = await api.approveGate({ inboxId: inbox.id, resolvedBy: 'alice' });
-  const conflicting = await api.rejectGate({ inboxId: inbox.id, resolvedBy: 'bob' });
+test(focusedCaseTitle(
+  'B5',
+  focusedOwner,
+  'same-answer duplicate exposes resolved previousStatus and reuses the first stored answer',
+), async () => {
+  const fixture = gateReplayFixture();
+
+  const first = await fixture.api.approveGate({ inboxId: fixture.getInbox().id, resolvedBy: 'alice' });
+  const duplicate = await fixture.api.approveGate({ inboxId: fixture.getInbox().id, resolvedBy: 'alice-retry' });
+
+  assert.equal(first.previousStatus, 'pending');
+  assert.equal(duplicate.previousStatus, 'resolved');
+  assert.deepEqual(duplicate.answer, first.answer);
+  assert.equal(first.signaled, true);
+  assert.equal(duplicate.signaled, true);
+  assert.deepEqual(fixture.signals, [first.answer, first.answer]);
+});
+
+test(focusedCaseTitle(
+  'B6',
+  focusedOwner,
+  'different-answer conflict exposes resolved previousStatus and signals the first stored answer',
+), async () => {
+  const fixture = gateReplayFixture();
+
+  const approved = await fixture.api.approveGate({ inboxId: fixture.getInbox().id, resolvedBy: 'alice' });
+  const conflicting = await fixture.api.rejectGate({ inboxId: fixture.getInbox().id, resolvedBy: 'bob' });
 
   assert.equal(approved.previousStatus, 'pending');
   assert.equal(conflicting.previousStatus, 'resolved');
   assert.deepEqual(conflicting.answer, approved.answer, 'first decision wins over a conflicting replay');
   assert.equal(approved.signaled, true);
   assert.equal(conflicting.signaled, true);
-  assert.deepEqual(signals, [approved.answer, approved.answer]);
+  assert.deepEqual(fixture.signals, [approved.answer, approved.answer]);
 });
 
 test(focusedCaseTitle('B7', focusedOwner, 'answerQuestion refuses gate rows'), async () => {
