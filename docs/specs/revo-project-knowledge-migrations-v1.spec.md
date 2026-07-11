@@ -7,6 +7,8 @@
   `prisma/schema.prisma`, `@revisium/engine`
 - **Related ADRs:** [ADR-0008](../adr/0008-revo-projects-and-versioned-knowledge.md),
   [ADR-0007](../adr/0007-revo-storage-foundation.md)
+- **Related specs:** [execution-plan-v1.spec.md](./execution-plan-v1.spec.md),
+  [run-dataflow-v1.spec.md](./run-dataflow-v1.spec.md)
 
 ## Scope
 
@@ -28,9 +30,10 @@ The key words MUST, MUST NOT, SHOULD, SHOULD NOT, MAY are to be interpreted as R
 
 ## Current Contract
 
-Current orchestrator initializes a reserved `control-plane` project through the embedded Revisium engine and uses engine
-rows for playbooks, roles, pipelines, runtime projections, inbox rows, and events. The project name comes from
-`control-plane/bootstrap.config.json`.
+Current orchestrator initializes a reserved `control-plane` project through the embedded Revisium engine and
+uses engine rows for versioned control-plane meaning: playbooks, roles, pipelines, and run profiles. Mutable runtime
+projections, inbox rows, events, outputs, attempts, and costs are first-party Revo Prisma models. The reserved project
+name comes from `control-plane/bootstrap.config.json`.
 
 Orchestrator has a first-class `RevoProject` Prisma model for the reserved system project and future user projects.
 Orchestrator does not yet configure a `revisium-migrations` development workflow for Revo ADR/KB templates.
@@ -72,9 +75,46 @@ Initial user-project ADR/KB table groups:
 | Table id | Purpose |
 | --- | --- |
 | `adr_documents` | Accepted ADR documents and metadata |
-| `adr_proposals` | ADR proposal records and review state |
-| `kb_documents` | Versioned knowledge documents |
-| `kb_facts` | Durable facts, repository maps, and structured project knowledge |
+| `adr_proposals` | Workflow metadata pointing to one proposal document and proposal revision |
+| `kb_documents` | Versioned knowledge documents with accepted-revision provenance |
+| `kb_facts` | Durable facts, repository maps, and structured project knowledge with source and verification provenance |
+
+`adr_proposals` MUST NOT store a second authoritative ADR body. A proposal row points to the proposal
+document and revision:
+
+```ts
+type AdrProposalMetadata = {
+  proposalId: string;
+  documentId: string;
+  proposalBranch: string;
+  proposalRevisionId: string;
+  sourceRunId?: string;
+  sourceArtifactId?: string;
+  status: 'draft' | 'proposed' | 'accepted' | 'rejected' | 'superseded';
+  acceptedRevisionId?: string;
+  reviewedAt?: string;
+};
+```
+
+The proposal document body exists once in versioned document content at `proposalRevisionId`. Acceptance
+commits or merges that document into the accepted branch and records `acceptedRevisionId`. The metadata row
+does not copy the body.
+
+KB documents and facts MUST carry provenance:
+
+```ts
+type KnowledgeProvenance = {
+  sourceRunId?: string;
+  sourceArtifactId?: string;
+  sourceRepositorySnapshot?: string;
+  acceptedRevisionId: string;
+  status: 'accepted' | 'superseded' | 'needs_verification';
+  verifiedAt: string;
+};
+```
+
+Search indexes, embeddings, and vector projections MAY be derived from accepted revisions. They MUST NOT become the
+authoritative document/fact body or replace provenance.
 
 Exact user-content schemas evolve through the existing Revisium engine migration mechanism. Revo MUST NOT add a
 second migration state table and MUST NOT mirror applied template versions in Revo Prisma.
@@ -214,6 +254,23 @@ V1 rules:
 This uses Revisium versioning for what it is good at: reviewable, diffable, accepted meaning. Hot run state remains in
 plain Revo Prisma runtime tables.
 
+### Route-time knowledge selection
+
+Agents read accepted ADR/KB revisions by default. A route MAY include proposal content only when the selected pipeline
+explicitly declares that proposal context.
+
+Route planning resolves selected project knowledge to:
+
+- project id;
+- document/fact id;
+- accepted or explicitly selected proposal revision id;
+- content digest;
+- provenance status and verification time.
+
+The resulting pins are stored in the immutable
+[execution plan](./execution-plan-v1.spec.md). Replay and recovery MUST NOT re-read a mutable branch head or search
+index. A later accepted revision affects only later plans.
+
 ### Development Workflow
 
 Revo needs a local workflow analogous to the consumer `save/apply` pattern and Prisma's migration ergonomics.
@@ -300,6 +357,9 @@ Required tests:
 - user APIs cannot modify template files, engine migration rows, or engine system tables;
 - release bootstrap blocks readiness on required migration failure;
 - archived or deleted projects do not receive write-time migrations.
+- `adr_proposals` points to proposal document/revision metadata and does not duplicate the authoritative body;
+- KB documents/facts require source, accepted revision, status, and verification-time provenance;
+- route-time knowledge pins remain stable when accepted branches or derived search indexes change.
 
 ## Compatibility
 
@@ -349,4 +409,6 @@ The system control-plane store is initialized and migrated by the storage/contro
 
 ## Changelog
 
+- 2026-07-11: Corrected Current Contract runtime ownership to Prisma, made `adr_proposals` metadata point to
+  one proposal document/revision, and added KB provenance plus route-time accepted-revision pins.
 - 2026-07-06: Initial draft.

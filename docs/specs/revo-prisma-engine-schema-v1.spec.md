@@ -7,6 +7,9 @@
   `node_modules/@revisium/engine/prisma/schema.prisma`, `revisium-core/prisma/schema.prisma`
 - **Related ADRs:** [ADR-0007](../adr/0007-revo-storage-foundation.md),
   [ADR-0008](../adr/0008-revo-projects-and-versioned-knowledge.md)
+- **Related specs:** [execution-plan-v1.spec.md](./execution-plan-v1.spec.md),
+  [resources-workspaces-effects-v1.spec.md](./resources-workspaces-effects-v1.spec.md),
+  [run-dataflow-v1.spec.md](./run-dataflow-v1.spec.md)
 
 ## Scope
 
@@ -26,9 +29,12 @@ It does not define every final field on every runtime table.
 
 ## Current Contract
 
-Current orchestrator has a first-party `prisma/schema.prisma` with Revo product rows needed for storage-v2 bootstrap
-and engine-required physical tables. Runtime rows are currently accessed through embedded engine-backed data-access
-services, and DBOS is configured separately through `systemDatabaseUrl`.
+Current orchestrator has a first-party `prisma/schema.prisma` with Revo product/runtime rows and
+engine-required physical tables. Prisma runtime models include `TaskRun`, `RunTask`,
+`RunEvent`, `RunAttempt`, `InboxItem`, `RunOutput`, and
+`CostLedgerEntry`. Runtime services access those rows through Prisma-backed data access. DBOS is configured
+separately through `systemDatabaseUrl`. Embedded engine rows hold versioned meaning and engine bookkeeping;
+they do not own runtime projections, inbox items, or run events.
 
 `@revisium/engine` has its own Prisma schema with these core models:
 
@@ -200,13 +206,15 @@ The first Revo Prisma runtime schema SHOULD include these groups:
 | --- | --- |
 | Projects/repositories | `RevoProject`, repository membership, project settings, soft-delete state |
 | Runs | `TaskRun`, run status, route decision pins, profile pins, requested operation |
+| Execution plans | Immutable plan bytes/digest and bounded query projections for new-plan runs |
 | Tasks/nodes | current graph cursor or node-level execution state if needed outside DBOS |
 | Attempts | physical runner attempts, verdict, cost, token usage, artifact refs, bounded stdout/stderr tails |
 | Inbox | human gates/questions, deterministic identity, status, answer payload, signal state |
 | Events | append-only run events with monotonic sequence used for deterministic per-run ordering |
 | Outputs | named node outputs and output summaries |
 | Costs | cost ledger by run/node/attempt/provider/model |
-| Artifacts | file/worktree/artifact index rows pointing to filesystem storage |
+| Workspaces/resources | workspace plan/resource identity, allocation generation, lease, lifecycle, dirty state |
+| Artifacts | typed artifact envelope/index rows pointing to Git, filesystem, content-addressed, GitHub, or Revisium storage |
 
 Runtime constraints SHOULD include:
 
@@ -217,6 +225,10 @@ Runtime constraints SHOULD include:
 - uniqueness for active/pending inbox identity;
 - indexes for status dashboards and run attention queries;
 - retention-friendly timestamps and optional partitioning seams.
+
+Execution plans and workspace/artifact indexes are Revo runtime data. They MUST NOT be implemented as versioned
+Revisium tables. Artifact index rows MUST remain bounded and MUST NOT contain full source trees, diffs, large logs, or
+duplicate accepted ADR/KB bodies.
 
 ### DBOS exclusion
 
@@ -262,6 +274,10 @@ Required tests:
 - engine can create branch/revision/table/row through the embedded Revo DB setup;
 - DBOS tables are absent from Revo Prisma;
 - runtime idempotency constraints protect repeated DBOS step writes.
+- execution-plan digests and immutable bytes cannot be updated after run creation;
+- workspace/resource identity and allocation-generation constraints protect replayed allocation and release;
+- artifact index fixtures retain typed immutable references while source, diffs, and large blobs remain outside
+  Prisma.
 
 ## Compatibility
 
@@ -307,4 +323,6 @@ Control-plane tables: playbooks, roles, pipelines
 
 ## Changelog
 
+- 2026-07-11: Corrected Current Contract runtime ownership to Prisma and added Draft execution-plan,
+  workspace/resource, and typed artifact-index model groups without moving large content into the database.
 - 2026-07-06: Initial draft.

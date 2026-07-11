@@ -1,161 +1,200 @@
 # Product vision
 
-> What `revo` is for, who it serves, and where it is going. The architectural invariants live in
-> [architecture-overview.md](./architecture-overview.md); exact durable contracts live in [specs/](./specs/);
-> the engine decision lives in [adr/0001-execution-engine-and-host.md](./adr/0001-execution-engine-and-host.md).
-> This doc does not restate them — it says why they are worth building.
+> This page owns the product thesis, first wedge, and stage boundaries. Runtime invariants live in
+> [architecture-overview.md](./architecture-overview.md); exact contracts live in [specs/](./specs/); ADRs explain why
+> durable directions were chosen.
 
-## One paragraph
+## Product thesis
 
-**`revo`** (`@revisium/orchestrator`) is a **local orchestrator** that runs software-development tasks via
-**short-lived AI agents under deterministic control**. A playbook defines a state machine of agent steps, script
-steps, human gates, branches, and loops. Gates, budgets, and iteration caps are enforced by code and data, never
-by prompts. The developer **steers through approvals** - the plan before the code, the diff before the merge, the
-price before the bill - instead of babysitting a terminal. Everything that gives agent work meaning lives in
-**Revisium** as typed, reviewable data: roles, policies, and ADRs are versioned (committed); runtime records -
-events, attempts, cost - are draft data, never committed. Execution progress lives in DBOS, not Revisium.
+Revo is a deterministic, durable, local control plane over probabilistic AI workers. LLMs may understand, propose,
+and execute work, but algorithms and humans retain authority over state transitions, budgets, gates, permissions,
+and irreversible actions.
 
-## The pains
+Revo does not try to make model behavior reproducible. It makes the process around that behavior explicit,
+recoverable, reviewable, and auditable.
 
-- Agents can't be trusted blindly — you need the plan before code, the diff before merge, the price before
-  the bill.
-- Agents need babysitting — approvals chain you to a terminal.
-- Notifications arrive where the tool lives, not where the developer lives.
-- You can't intervene mid-run — only kill it.
-- "What happened overnight?" — no picture across runs, steps, spend.
-- Live sessions are expensive and degrade — context grows, quality drops.
-- Agent knowledge (roles, prompts, policies) lives in flat, scattered files or chat — no typed schema, no review-as-status, no product UI.
-- Configuration is a rabbit hole: YAML, prompts, models — scary to start.
-- Agent memory is ephemeral — every run rediscovers the project.
-- Decisions (ADRs, plans) drown in chat logs and don't survive the session.
-- A crashed process is lost work — no durable execution out of the box.
-- Nobody knows where the tokens and money went.
-- Cloud agents demand your code and infrastructure leave the building.
-- Lock-in to a single agent vendor.
+## First wedge
 
-## What we provide
+The first product promise is intentionally narrow:
 
-*This is the product thesis across all stages — not everything below is shipped; the capability map further down
-marks what exists today vs what is planned.*
+```text
+task or issue
+  -> approved plan
+  -> implemented and independently reviewed change
+  -> pull request observed through CI and review feedback
+  -> human-approved merge
+```
 
-- The orchestrator is deterministic code, not an agent: gates cannot be "forgotten".
-- Short-lived agents + narrow context: state, not history — cheap and restartable.
-- Durable execution (DBOS): a crash is not a loss; the run resumes from the first unfinished step.
-- Two mandatory gates: plan and merge. The human decides — the system waits.
-- A human decision is a state change: one-action approve, wherever it's convenient.
-- The inbox comes to the developer: GitHub, messenger, their own agent (MCP) — not the other way around.
-- Roles, prompts, policies, models are versioned typed data: diff, review, rollback.
-- Plans and ADRs are artifacts with review and comments, not chat messages.
-- Human comments (PR, plan, diff) are ordinary pipeline steps: agents triage and act on them.
-- The system proposes the pipeline/roles for a task — the human only approves.
-- Full provenance: model, params, tokens, cost, verdict — per attempt.
-- Budgets and iteration caps are data, not hope: the run stops itself.
-- Domain memory: agents accumulate project knowledge in typed tables, not embeddings.
-- Local-first: one package, one Postgres; your repo checkout, orchestration state, and infrastructure stay local — model traffic depends on the runner you choose.
-- BYO agent: Claude Code today, Codex tomorrow — we are the control layer, not the model vendor.
-- 15-minute onboarding (target flow): `revo up` → `revo init` → first PR, zero YAML.
+ADRs, knowledge bases, reusable fragments, custom effects, multiple runners, and richer UI can improve this loop.
+They do not replace it as the onboarding promise or the north-star path.
 
-## Principles
+## Why this needs a control plane
 
-The five invariants — meaning/progress split, swappable engine, short-lived agents, sealed store knowledge,
-human decision as state change — live in [architecture-overview.md](./architecture-overview.md). This doc does
-not restate them; everything above builds on them. If a product idea requires breaking one, the idea is wrong,
-not the invariant.
+- Agents are useful but cannot be trusted to remember a gate, respect a budget, or judge their own work alone.
+- Long-lived sessions become expensive and accumulate irrelevant history.
+- A crashed process should not erase completed work or a pending approval.
+- Plans, evidence, review feedback, cost, and outcomes need one inspectable run record.
+- GitHub feedback and human questions should route back into work without trapping the developer at a terminal.
+- The repository and orchestration state should remain local; model traffic depends on the selected runner.
+- The product must remain runner-neutral rather than becoming another coding agent.
 
-## The interaction model (target state)
+## Authority boundary
 
-The developer:
+Algorithms own graph validation, cursor transitions, counters, limits, policy checks, and typed-result handling.
+Humans own declared approval gates and irreversible decisions. An LLM is a short-lived, replaceable worker: it may
+propose a route or plan, perform an agent step, and return a typed result, artifact, verdict, or `needsHuman` signal.
 
-- **formulates tasks in their own agent** — the orchestrator is reachable as tools via MCP;
-- **approves in their pocket** — a push card with the plan, the cost, and the risk; one action;
-- **merges on GitHub** — the merge gate becomes the GitHub merge itself, not a parallel ceremony;
-- **configures and investigates in a versioned UI** (Revisium) — roles, policies, run history, spend;
-- **uses the terminal only for `revo up` and CI.**
+An LLM does not advance the workflow cursor, resolve its own gate, change iteration or budget policy, select an
+undeclared permission/effect, or publish outside the selected graph. A script/effect does not choose the next node or
+open a human gate either; it performs one bounded operation and returns a recorded typed result for the reducer.
 
-Every surface is a thin client over the same state. This is the engine/session symmetry from
-[architecture-overview.md](./architecture-overview.md): the autonomous engine and the interactive human are
-indistinguishable by their effect — both just change state.
-
-Today's alpha: the daemon starts through lifecycle CLI commands, agents work through `revo mcp`, and UI/scripts
-use the local GraphQL endpoint. Runs and gates are product operations exposed through MCP and GraphQL, not separate
-free-form terminal sessions.
+Git, GitHub, filesystem, and network operations have externally dependent outcomes. Calling them deterministic hides
+the real boundary. Determinism belongs to the transition over pinned inputs and a validated recorded result.
 
 ## Capability map by stage
 
-**Now** — landed local daemon, MCP, GraphQL, data-driven pipelines, human gates, worktree isolation, and PR
-review-feedback:
+### Current shipped behavior
 
-- pipeline as **data**: a versioned graph template executed by a generic durable engine — architect → developer →
-  reviewer → integrator, durable end-to-end (see [adr/0002](./adr/0002-data-driven-pipeline-state-machine.md));
-- plan and merge gates via the human inbox;
-- live Claude Code runner;
-- budgets and iteration caps as data;
-- per-attempt provenance (model, params, tokens, cost, verdict);
-- default playbook seed and playbook import through product tools reading `@revisium/agent-playbook` catalogs;
-- MCP server — the orchestrator as tools inside the developer's agent;
-- PR review-feedback loop — observe CI/reviews, triage PR comments by type (CI failure → developer; review comment
-  → analyst, then fix + reply + resolve the thread; genuinely ambiguous → a human question gate) → merge gate.
+- `pipeline-core` is an I/O-free reducer over a typed graph, run state, and the last recorded result.
+- The DBOS adapter owns durable progress, waits, retries, checkpoint/replay, and process recovery.
+- Revo Prisma owns hot product/runtime facts: projects, runs, tasks, attempts, inbox items, events, outputs, costs, and
+  their indexes. Repository selections are currently stored as run/task references rather than a first-class
+  `Repository` model.
+- The embedded Revisium engine owns committed/versioned control-plane meaning such as installed playbook metadata,
+  roles, pipelines, model profiles, run profiles, and routing policy.
+- Git and worktrees own source changes and diffs; files own large artifacts. Revo records summaries and references.
+- MCP and GraphQL call shared product/application services. MCP is the agent front door; GraphQL is the UI/script
+  front door; the CLI owns daemon lifecycle.
+- The built-in default playbook ships the executable product bootstrap graph under
+  `control-plane/default-playbook/`.
+- `@revisium/agent-playbook` currently exposes catalogs for discovery, role metadata, route gates, and
+  execution-policy recommendations. Its pipeline catalog does not yet provide an executable graph and the package is
+  not runnable by the shipped Revo importer end to end.
+- Product-owned script handlers perform integration, PR readiness, response, and merge operations. They are external
+  effects with recorded results; several remain more monolithic or domain-coupled than the Draft target.
+- Inbox-backed plan, question, recovery, and merge gates park and resume durable runs.
 
-**Next:**
+### Accepted target
 
-- `revo up` — single process (boot Revisium in-process; the last MVP-onboarding gap).
+Accepted ADRs establish the DBOS/NestJS host boundary, the generic pipeline-as-data reducer/adapter split, the
+graph-shaped GraphQL direction, and test-architecture boundaries. The pipeline decision is substantially shipped.
+The GraphQL v1 target is not fully landed while compatibility roots remain in the committed SDL.
 
-**Later:**
+Accepted status means the decision is approved, not that every delivery slice is complete. Conversely, implemented
+code does not turn a Draft ADR into an Accepted decision.
 
-- route proposal — the system suggests the pipeline/roles for a task; the human approves;
-- pre-PR diff review in our own UI (Monaco) + plan/ADR section comments at the plan gate — the UI-anchored half of
-  "review threads" (the PR-comment loop already landed; see **Now**);
-- policy editor UI on Revisium-admin — versioned, reviewable role/policy edits;
-- runs board — the cross-run picture: status, steps, spend;
-- domain memory — typed project tables that agents query;
-- projects / multi-repo;
-- model/run profiles management.
+### Draft target
+
+The next architecture contracts propose one end-to-end execution authority chain:
+
+```text
+authoring package
+  -> validated catalogs, documents, and executable graph
+  -> immutable PlaybookVersion
+  -> fully resolved and pinned ExecutionPlan
+  -> pure reducer + durable effect shell
+```
+
+The Draft contracts also separate versioned script definitions from executions, model repositories/worktrees as
+resources with explicit lifecycle, generalize approval subjects and freshness, and define the proposal-to-accepted
+flow for ADR/KB meaning. Recovery reads the pinned execution plan, not mutable package HEAD, a source checkout, or a
+live capability registry.
+
+The redesign is a direct cutover for internal alpha contracts: no legacy aliases, fallback reads, dual-write storage,
+hidden filesystem discovery, or public stub-vs-live runtime fork. Current behavior that has not yet been replaced stays
+documented as Current; it is not promoted into the target for compatibility's sake.
+
+### Later
+
+- reusable, validated graph fragments after the internal graph contract stabilizes;
+- trusted build/install-time custom scripts after the script/effect contract stabilizes;
+- a policy and playbook editor, runs board, and richer review surfaces;
+- broader project knowledge, provenance-aware retrieval, and attachments;
+- additional local or remote runners through explicit capabilities;
+- notification adapters and multi-user workflows over the same product state.
+
+Later custom code is not arbitrary untrusted runtime source. Fragments and plugins must not become a premature public
+API that freezes an unstable internal graph.
+
+## Interaction model
+
+Today an operator starts the local daemon through lifecycle commands, connects an agent through MCP, and may use the
+loopback GraphQL API for UI or scripts. Runs, observation, and gates are product operations, not a free-form live
+agent session.
+
+The target interaction is equally simple from every surface: formulate a task, approve the proposed route/plan,
+inspect exceptions and feedback, then approve the exact merge subject. A UI is a projection/editor over the same
+commands and queries; it is not a second orchestration engine.
+
+## Meaning, runtime facts, and source work
+
+Revo deliberately uses different stores for different lifecycles:
+
+| Owner | Product responsibility |
+| --- | --- |
+| DBOS | Workflow progress, durable waits, retries, checkpoints, and recovery |
+| Revo Prisma | Hot mutable facts: projects, runs, tasks, attempts, inbox, events, outputs, costs, and indexes |
+| Embedded Revisium engine | Committed/versioned meaning: installed playbooks, roles, pipeline/config definitions, and later accepted ADR/KB revisions |
+| Git, worktrees, files | Source repositories, changes, diffs, and large artifacts |
+
+The stores may share one embedded PostgreSQL cluster, but their ownership and mutation rules remain distinct.
+
+## ADR and knowledge lifecycle
+
+Playbook/method is reusable cross-project working method. ADRs are normative project decisions. A knowledge base holds
+descriptive project facts. Run artifacts and events are evidence from one execution; they do not become accepted
+meaning merely because an agent produced them.
+
+The Draft lifecycle is:
+
+```text
+run artifact
+  -> proposal branch or revision
+  -> validation and review
+  -> human or declared policy gate
+  -> accepted project revision
+  -> pinned context of future runs
+```
+
+Agents read accepted revisions by default. Proposal content enters a run only when its pipeline explicitly selects
+it. Facts carry provenance and verification time; search indexes or embeddings may be derived, but are not the source
+of truth.
 
 ## Differentiators
 
-- Versioned **structured, typed, reviewable** knowledge as the source of truth of agent work — schemas, foreign
-  keys, review-as-status — vs. flat git files (git-native standards) and vs. config-in-code
-  (frameworks/products).
-- Durable execution in a **local-first form factor**: an in-process library over one Postgres — no server to
-  operate (vs. Temporal-class engines; see [adr/0001](./adr/0001-execution-engine-and-host.md)).
-- **BYO coding agent**: complementary to model vendors, not competing with them.
-- **Per-attempt provenance** — not "reproducibility": agent runs are non-deterministic; we sell auditability
-  per attempt.
-- A **ready UI + multi-user review surface** (inherited from Revisium) — git-native standards have no UI; local
-  CLIs have no multi-user.
+- Deterministic governance around probabilistic workers, rather than prompt-owned orchestration.
+- Durable execution in a local-first package form factor.
+- Short-lived workers with narrow, selected context rather than an ever-growing chat transcript.
+- Runner neutrality: Claude Code, Codex, and successors are workforce behind a stable control boundary.
+- Per-attempt provenance and auditability, not a false claim of model reproducibility.
+- Versioned structured meaning with review and explicit acceptance.
 
 ## Anti-goals
 
-Extending the list in [architecture-overview.md](./architecture-overview.md), not duplicating it:
-
-- **Not an agent framework.** We orchestrate agents; we do not provide a library for building them.
-- **No ML / self-tuning.** Routing, budgets, and policies are explicit data edited by humans, not learned weights.
-- **Not a CMS.** Domain tables are designed by agents inside runs and reviewed by humans — we do not ship a
-  content-modeling product.
-- **No live sessions.** Short-lived agents are a load-bearing invariant, not a temporary limitation.
-- **We do not build our own coding agent.** Claude Code, Codex, and successors are the workforce; we are the
-  control layer.
+- Revo is not an agent framework or model vendor.
+- Revo does not use an LLM as the workflow engine, policy engine, or gate authority.
+- Revo does not keep live agent sessions as durable state.
+- Revo does not copy repositories or large diffs into routing state.
+- Revo does not make chat history, embeddings, or run artifacts authoritative project memory.
+- Revo does not silently expose GraphQL beyond loopback or grant effects outside declared capabilities.
 
 ## Glossary
 
-- **Playbook** — a named, versioned set of roles + pipelines + policies installed into the engine. The engine
-  executes any playbook; `default` is the built-in playbook shipped with the engine; `revisium` is the canonical
-  playbook, distributed as the npm package `@revisium/agent-playbook` (the engine imports its catalogs).
-  Per-run playbook provenance recording (`playbook: <name>@<version>`) is planned, not landed.
-- **Role** — a named agent definition (prompt, model level, scope, runner) — data in Revisium, not code.
-- **Agent step** — a pipeline node that invokes a role through a runner.
-- **Script step** — a deterministic pipeline node that performs automation outside an agent prompt.
-- **Pipeline** — a state-machine template with agent steps, script steps, human gates, branches, loops, waits,
-  joins, and terminal nodes.
-- **Run** — one task moving through a pipeline, durable from creation to merge.
-- **Gate** — a mandatory human decision point; the workflow parks until the human resolves it. Common gates include
-  plan approval, merge approval, and clarifying questions.
-- **Inbox** — the single queue of pending human decisions and agent questions; resolving an item resumes the
-  parked workflow.
-- **Attempt** — one execution of one step by one agent process; the unit of provenance and cost accounting.
-- **Provenance** — the recorded facts of an attempt: playbook, role, model, params, tokens, cost, verdict.
+- **Playbook** — a versioned method package of roles, pipelines, policies, references, and templates. The full
+  executable package installation contract is Draft.
+- **PlaybookVersion** — Draft immutable installed snapshot of one validated playbook package.
+- **ExecutionPlan** — Draft fully resolved, immutable set of execution-affecting inputs pinned for one run.
+- **Pipeline** — a typed state-machine graph of agent steps, script/effect steps, gates, branches, waits, joins, and
+  terminals.
+- **Agent step** — a node that invokes one short-lived worker through a selected role and runner.
+- **Script/effect step** — a node that invokes one bounded operation and records its typed result; it does not route.
+- **Human gate** — a required decision or answer that parks the run until its inbox item is resolved.
+- **Run** — one task moving through one pinned route and graph.
+- **Attempt** — one physical execution of a step; the unit for logs, verdict, token, cost, and timing evidence.
+- **Provenance** — recorded inputs and facts that explain which playbook, route, worker, operation, and result produced
+  an outcome.
 
 ## North-star metric
 
-**Time-to-first-merged-PR.** From `revo up` on a fresh machine to the first merged PR authored by a run.
-Everything that increases it is a product bug.
+**Time-to-first-merged-PR.** From first local setup to the first merged pull request governed by a Revo run. Product
+work that does not improve or protect that path must justify its cost.

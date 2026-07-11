@@ -11,7 +11,8 @@
 - **Related specs:** [pipeline-state-machine-v1.spec.md](./pipeline-state-machine-v1.spec.md),
   [run-dataflow-v1.spec.md](./run-dataflow-v1.spec.md),
   [default-playbook-policy.spec.md](./default-playbook-policy.spec.md),
-  [playbook-storage-v1.spec.md](./playbook-storage-v1.spec.md)
+  [playbook-storage-v1.spec.md](./playbook-storage-v1.spec.md),
+  [execution-plan-v1.spec.md](./execution-plan-v1.spec.md)
 
 ## Scope
 
@@ -41,7 +42,8 @@ It does not define:
 | Topology overlay | Profile-owned materialization settings, such as consensus fanout for selected stages. |
 | Binding | Runner/model/permission/timeout selection for a role slot, node slot, or future lane. |
 | Materialized template | Pipeline template after applying the topology overlay. |
-| Route pin | Immutable route decision stored on the Prisma run row. |
+| Route pin | Current immutable route decision stored on the Prisma run row. |
+| Execution plan | Draft fully resolved immutable run input compiled from the selected profile and installed playbook. |
 | Seeded profile | Profile imported from a playbook catalog during bootstrap/import. After import it is editable profile data. |
 | Inline profile | Unsaved `run-profile/v1` payload supplied to route simulation or run creation. |
 
@@ -49,8 +51,11 @@ It does not define:
 
 Revisium engine stores run profiles as versioned meaning. Prisma stores runtime run facts.
 
-Runtime models MUST NOT be represented as Revisium tables. In particular, `TaskRun.routeDecision` in Prisma is the run's
-immutable route pin; Revisium `run_profiles` is only the versioned source for new route resolution.
+Runtime models MUST NOT be represented as Revisium tables. In current code,
+`TaskRun.routeDecision` in Prisma is the run's immutable route pin; Revisium `run_profiles` is only
+the versioned source for new route resolution. Under the Draft target, route planning compiles the selected immutable
+playbook version and current profile revision into the
+[execution plan](./execution-plan-v1.spec.md). The mutable profile row is never a recovery input.
 
 Run profiles may carry publication account aliases only as script-node launch bindings. Credentials remain runtime host
 secrets and MUST NOT be stored in Revisium profiles or Prisma route pins.
@@ -391,7 +396,7 @@ Inline `profile` is not persisted to `run_profiles`, is not returned by `list_pr
 MCP inputs, GraphQL inputs, route resolution, and Prisma `TaskRun` storage MUST NOT expose a second profile-like launch
 object. New runs store every replay-needed launch field in `routeDecision`.
 
-## Route Pins
+## Current Route Pins
 
 Prisma `TaskRun.routeDecision` MUST include route provenance for all launches. This snapshot is the execution source of
 truth for the run, even when the run was created from `profileId`.
@@ -423,6 +428,26 @@ or an inline request body.
 
 Replay, resume, digest, and workflow inspection MUST read the pinned route decision. They MUST NOT re-read the latest
 Revisium profile row for an existing run.
+
+## Draft Execution-Plan Migration
+
+The target route service produces one immutable `ExecutionPlan` after profile validation and topology
+materialization. Profile data is an input to planning, not an execution-time registry.
+
+The plan MUST pin:
+
+- the selected profile revision/hash and normalized launch payload;
+- the immutable playbook version and executable graph/hash;
+- resolved agent runner/model/permission/timeout/retry bindings;
+- resolved script definitions, permission/resource bindings, and secret-binding references;
+- artifact and approval-subject schema versions;
+- repository snapshots, workspace plan, iteration caps, and budget policy.
+
+After plan creation, replay and recovery MUST NOT re-read `run_profiles`, rematerialize topology from a
+mutable profile, or discover missing bindings from process defaults. Profile edits affect only later plans.
+
+The execution-plan cutover replaces the current partial route-pin execution source for new internal-alpha runs. It
+MUST NOT add a fallback from an incomplete plan to `RouteDecision` or a current profile row.
 
 ## MCP Surface
 
@@ -487,3 +512,8 @@ Required automated coverage:
 - script node bindings reject runner/model/timeout/permission fields;
 - top-level `publishing` fields are rejected in stored and inline `run-profile/v1` payloads;
 - GitHub tokens are never stored in `profile_json`, inline `profile`, or `routeDecision`.
+
+## Changelog
+
+- 2026-07-11: Clarified that profiles are mutable planning inputs, documented the current partial route pin, and
+  added the Draft direct compilation path to an immutable execution plan.

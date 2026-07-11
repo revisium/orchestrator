@@ -1,19 +1,22 @@
 # Revo playbook materialization v1 spec
 
-- **Status:** Draft.
+- **Status:** Draft
 - **Version:** v1
 - **Owners:** `src/worker`, `src/runners`, `src/playbook`, Revo runtime.
 - **Source files:** `src/worker/git-worktree-manager.ts`, `src/runners/worktree.service.ts`,
   `src/worker/build-context.ts`, `src/playbook/prompt-composer.ts`, `src/playbook/import-mapper.ts`.
 - **Related ADRs:** [ADR-0005](../adr/0005-versioned-playbook-storage-and-revo-materialization.md).
 - **Related specs:** [playbook-storage-v1.spec.md](./playbook-storage-v1.spec.md),
+  [execution-plan-v1.spec.md](./execution-plan-v1.spec.md),
   [run-dataflow-v1.spec.md](./run-dataflow-v1.spec.md),
+  [resources-workspaces-effects-v1.spec.md](./resources-workspaces-effects-v1.spec.md),
   [runner-manifest-v1.spec.md](./runner-manifest-v1.spec.md).
 
 ## Scope
 
-This spec defines how a pinned playbook snapshot is materialized into a Revo run worktree and how prompt-backed
-workers discover role, reference, stack, method, and template context from that materialization.
+This spec defines how a pinned playbook snapshot and execution plan are materialized into a planned Revo run
+workspace and how prompt-backed workers discover role, reference, stack, method, and template context from that
+materialization.
 
 This spec does not define how playbook documents are stored in Revisium. That is owned by
 [playbook-storage-v1.spec.md](./playbook-storage-v1.spec.md). It also does not define provider-specific prompt or
@@ -109,16 +112,20 @@ value pinned in `.revo/context/run.json`. Runtime MUST fail before worker invoca
 type RevoRunContext = {
   runId: string;
   attemptId?: string;
+  executionPlanId: string;
+  executionPlanDigest: string;
   playbookVersionId: string;
   snapshotHash: string;
   contentTreeHash: string;
   selectedPipelineId: string;
-  repoRoot: string;
+  repositorySnapshotDigest: string;
+  workspaceResourceId: string;
 };
 ```
 
-`run.json` is run-scoped and immutable for the worktree. It MUST NOT carry a single selected role because one run
-worktree can execute multiple roles and concurrent nodes.
+`run.json` is run-scoped and immutable for the workspace. It MUST be a projection of the pinned execution
+plan. It MUST NOT carry a mutable source path or a single selected role because one run workspace can execute multiple
+roles and concurrent nodes.
 
 ### `.revo/context/steps/<nodeId>/selected-references.json`
 
@@ -127,12 +134,14 @@ concurrent pipeline shares one run worktree.
 
 ```ts
 type RevoSelectedReferences = {
+  executionPlanDigest: string;
   playbookVersionId: string;
   snapshotHash: string;
   contentTreeHash: string;
   pipelineId: string;
   nodeId: string;
   roleId: string;
+  workspaceResourceId: string;
   roleDocuments: string[];
   sharedReferences: string[];
   stacks: string[];
@@ -147,9 +156,10 @@ All paths are relative to `.revo/playbook` and MUST exist in `manifest.json`. Th
 document and role core reference. The materialized bundle MAY contain the full canonical snapshot, but the selected
 list is the role's first-read contract.
 
-The materialized selected-reference file MUST be a faithful path projection of the matching
-`PlaybookSelectionPin.nodeSelections[]` entry from the durable route decision. Runtime MUST validate that
-`playbookVersionId`, `snapshotHash`, and `contentTreeHash` match `run.json` before invoking the worker.
+The materialized selected-reference file MUST be a faithful path projection of the matching resolved role binding in
+the immutable `ExecutionPlan`. Runtime MUST validate that `executionPlanDigest`,
+`playbookVersionId`, `snapshotHash`, and `contentTreeHash` match `run.json` before
+invoking the worker.
 
 Projection rules:
 
@@ -186,6 +196,9 @@ playbook.json
 catalog/
 roles/
 pipelines/
+graphs/
+scripts/
+schemas/
 references/
 stacks/
 method/
@@ -193,9 +206,8 @@ templates/
 checklists/
 ```
 
-During migration, the materializer MUST also include any `runtimeIncluded: true` catalog-addressed documents outside
-those roots. The current flat default playbook uses `prompts/<role>.md`; those files remain valid runtime documents
-until the bundled playbook is reshaped.
+The target materializer MUST reject undeclared catalog-addressed runtime documents outside those roots. The current
+flat default playbook and `prompts/<role>.md` path remain Current Contract inputs only.
 
 The default materialization MUST exclude:
 
@@ -230,7 +242,8 @@ Required tests:
 - repeated materialization of the same snapshot produces identical file hashes;
 - manifest validation recomputes `contentTreeHash` and compares it with the durable run pin;
 - selected references resolve to manifest entries and filesystem paths;
-- selected references are a faithful per-node projection of `PlaybookSelectionPin.nodeSelections[]`;
+- `run.json` matches the pinned execution plan and workspace resource;
+- selected references are a faithful per-node projection of execution-plan role bindings;
 - corrupting a materialized file produces `playbook_manifest_hash_mismatch`;
 - deleting a selected reference produces `playbook_selected_reference_missing`;
 - prompt composition includes the worktree-local `.revo` load instruction and step context path;
@@ -243,15 +256,16 @@ returned provider-side 529 overload and was not a materializer verdict.
 
 ## Compatibility
 
-During migration, runtime MAY continue to pass the composed `roles.system_prompt` to existing runners. The new `.revo`
-bundle is additive until prompt-backed workers are updated to depend on selected references.
+This redesign uses direct cutover for new internal-alpha runs. Prompt-backed workers MUST use the selected
+worktree-local bundle; runtime MUST NOT fall back to `roles.system_prompt` or a live source checkout.
 
-Existing runs without `.revo/playbook` remain readable for audit, but they cannot be replayed under this spec unless
-their playbook snapshot is reconstructed and materialized as a recovery artifact.
+Existing runs without `.revo/playbook` remain readable for audit and are not replayable under this contract.
+The runtime MUST NOT reconstruct missing snapshots from mutable current source.
 
-For new runs, crash recovery MAY recreate the git worktree and MUST re-materialize `.revo` from the durable route pin
-before resuming worker execution. Re-materialization MUST be idempotent for the same `runId`, `playbookVersionId`, and
-`contentTreeHash`.
+For new runs, crash recovery MAY recreate a missing clean workspace through the resource manager and MUST
+re-materialize `.revo` from the immutable execution plan before resuming worker execution.
+Re-materialization MUST be idempotent for the same `executionPlanDigest`, `workspaceResourceId`,
+`playbookVersionId`, and `contentTreeHash`.
 
 ## Examples
 
@@ -259,12 +273,14 @@ Minimal `selected-references.json` for a developer role:
 
 ```json
 {
+  "executionPlanDigest": "sha256:plan",
   "playbookVersionId": "revisium-agent-playbook@0.1.0:sha256:abc",
   "snapshotHash": "sha256:abc",
   "contentTreeHash": "sha256:def",
   "pipelineId": "feature-development",
   "nodeId": "developer-implementation",
   "roleId": "developer",
+  "workspaceResourceId": "workspace:run-01:repo-main",
   "roleDocuments": [
     "roles/developer/ROLE.md",
     "roles/developer/references/core.md"
@@ -301,4 +317,6 @@ playbook_selected_reference_missing.
 
 ## Changelog
 
+- 2026-07-11: Made materialization depend only on the pinned playbook version, execution plan, and planned workspace;
+  removed live-source and composed-prompt fallback from the Draft target.
 - 2026-07-01: Initial draft target contract for Revo worktree playbook materialization.

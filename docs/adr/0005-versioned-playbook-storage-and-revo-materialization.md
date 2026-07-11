@@ -2,165 +2,109 @@
 
 - **Status:** Draft
 - **Decision date:** 2026-07-01
+- **Implementation status:** Current catalog import and built-in graph bootstrap do not implement this end-to-end
+  target.
 - **Specs:** [playbook storage v1](../specs/playbook-storage-v1.spec.md),
-  [Revo playbook materialization v1](../specs/revo-playbook-materialization-v1.spec.md)
-- **Relates-to:** [default playbook policy](../specs/default-playbook-policy.spec.md),
-  [run dataflow v1](../specs/run-dataflow-v1.spec.md),
-  [runner execution contract](./0004-runner-execution-contract.md)
+  [Revo playbook materialization v1](../specs/revo-playbook-materialization-v1.spec.md),
+  [execution plan v1](../specs/execution-plan-v1.spec.md),
+  [script runtime v1](../specs/script-runtime-v1.spec.md),
+  [resources, workspaces, and effects v1](../specs/resources-workspaces-effects-v1.spec.md)
+- **Refines:** [ADR-0002](./0002-data-driven-pipeline-state-machine.md)
 
 ## Context
 
-Revo currently installs a playbook into the control plane as a small set of rows: `playbooks`, `roles`, and
-`pipelines`. Role import composes a runtime prompt from the role markdown body plus `references/core.md`, stores the
-result in `roles.system_prompt`, and records a source hash. This is enough for the bundled flat default playbook, but
-it is not enough for the canonical `agent-playbook` shape.
+Revo currently imports `playbooks`, `roles`, `pipelines`, and run-profile metadata into the control plane. The
+product-owned default playbook includes executable `template_json` graphs and is the bootstrap source for shipped
+runs. The canonical `@revisium/agent-playbook` package is different: its current catalogs describe discovery, roles,
+route gates, runner bindings, and execution-policy recommendations, but do not contain an executable graph. It is not
+runnable by the shipped Revo importer end to end.
 
-The canonical playbook is a versioned method package, not just prompt text. It contains a manifest, role and pipeline
-catalogs, role docs, role-local references, shared references, stack references, method docs, checklists, templates,
-and generated adapter wrappers. Some of those roots are source data, some are derived adapter output, and some are
-legacy archive content. A run needs a reproducible snapshot of the source data it was routed against, and Revo workers
-need that snapshot inside the run worktree rather than reading a moving checkout of `agent-playbook`.
+The canonical package contains more than prompts: method documents, roles, pipelines, references, stacks, checklists,
+templates, catalogs, and generated platform adapters. A run must not depend on a moving package checkout, runtime LLM
+parsing of pipeline prose, or mutable registries during recovery.
 
-The target also needs a data model for relationships across playbook items. Pipelines reference roles; roles and
-stacks reference documents; route-time selection resolves role, surface, stack, framework, practice, tooling, and
-repo-overlay context. Expressing this does not currently require Revisium self-relations. The first stable contract can store
-relations as typed string/id references and validate that the referenced ids or paths exist inside the same immutable
-snapshot.
+The current Prisma `TaskRun.routeDecision` pins a materialized built-in graph/profile decision, but it is not yet a
+complete immutable record of every execution-affecting playbook document, runner/script capability, resource,
+selected context revision, and implementation digest.
 
-## Decision
+## Draft Decision
 
-Adopt a hybrid playbook model:
-
-- Markdown and JSON remain the authoring format.
-- Installation produces an immutable `PlaybookVersion` snapshot in Revisium/control-plane storage.
-- The snapshot stores raw document content, normalized metadata, content hashes, typed entity projections, and typed
-  string/id relations.
-- Route planning pins the selected `playbookVersionId`, `snapshotHash`, `contentTreeHash`, and per-step selected
-  references in the durable route decision. Workflow execution, replay, and recovery read that pinned decision, never
-  a live source checkout.
-- Revo materializes the pinned snapshot into `.revo/playbook` inside each run worktree and writes route-time selection
-  into `.revo/context`.
-- Prompt-backed workers receive only the core role prompt plus an instruction to load selected references from
-  their step-scoped `.revo/context/steps/<nodeId>/selected-references.json` and `.revo/playbook/**`.
-
-The storage model is intentionally not a markdown-block taxonomy such as `DECISION[]`. Source labels like
-`[DECISION]` can become optional extracted annotations later, but the load-bearing schema is the playbook package:
-version, documents, roles, pipelines, stacks, references, templates, and their relations.
-
-### Canonical source roots
-
-The initial canonical runtime roots are:
-
-- `playbook.json`
-- `catalog/`
-- `roles/`
-- `pipelines/`
-- `references/`
-- `stacks/`
-- `method/`
-- `templates/`
-- `checklists/`
-
-Generated adapter roots such as `adapters/codex/materialized` and `adapters/claude-code/materialized` are not runtime
-source data. They can be stored as auxiliary documents for audit if needed, but workers must not route from them.
-`legacy/` is import-only archive content and is excluded from the default runtime bundle.
-
-### Relation model
-
-Relations are stored as validated records, not database self-relations. A relation names a source entity, target
-entity or target path, relation type, and whether the relation is required for routing or materialization.
-
-Examples:
-
-- `pipeline:feature-development requires_role role:developer`
-- `pipeline:feature-development optional_role role:qa-backend`
-- `role:developer has_core_reference document:roles/developer/references/core.md`
-- `stack:js-ts has_core_reference document:stacks/js-ts/references/typescript.md`
-
-The importer validates that all required targets exist in the same `PlaybookVersion`. It does not require Revisium
-self-relations or cross-table foreign keys to express this.
-
-Per-run and per-step selected references are not `PlaybookRelation` rows because they are route decisions, not
-immutable playbook facts. They live in the durable route pin and are materialized under `.revo/context`.
-
-### Revo materialization
-
-Each run worktree gets a `.revo` bundle:
+Adopt one compiled playbook authority chain:
 
 ```text
-.revo/
-  playbook/
-    manifest.json
-    playbook.json
-    catalog/
-    roles/
-    pipelines/
-    references/
-    stacks/
-    method/
-    templates/
-    checklists/
-  context/
-    run.json
-    steps/
-      <nodeId>/
-        selected-references.json
+canonical authoring package
+  -> installer/compiler validation
+  -> immutable PlaybookVersion
+  -> route-time fully resolved ExecutionPlan
+  -> selected worktree playbook/context materialization
 ```
 
-The bundle manifest records the pinned playbook version, snapshot hash, included roots, excluded roots, per-file
-hashes, and schema version. Runtime validates the manifest and the step-scoped selected-reference file before invoking
-a worker.
+Markdown and JSON remain human-reviewable authoring source. A runnable package also declares a validated
+machine-readable executable graph and all required capability/artifact references. Runtime must not derive executable
+topology by asking an LLM to interpret `PIPELINE.md`.
+
+Installation validates package paths, documents, catalogs, executable graph content, relations, and capability
+references, then records one immutable `PlaybookVersion`. The built-in product graph is bootstrap data until it is
+authored through that same package contract; it must not become a competing canonical authoring source for
+`@revisium/agent-playbook`.
+
+Route planning resolves the selected graph, roles, runner capabilities, scripts/effects, policies, resources,
+artifact contracts, and selected context into an immutable `ExecutionPlan`. DBOS workflow execution, replay, and
+recovery consume that pin and do not read mutable package HEAD, a source checkout, latest control-plane rows, or a
+live capability registry.
+
+Materialization places only the pinned playbook/context needed by workers inside the selected worktree. Materialized
+files are derived execution inputs, not a new authoring source.
+
+If executable graph paths, effect capability references, artifact schemas, or future fragment references extend the
+current `playbook.json`/catalog contract, the authoring schema version changes explicitly. Schema v2 must not acquire
+silent optional semantics that old importers cannot validate.
+
+Reusable graph fragments are a later playbook concept. Trusted custom scripts are build/install-time package code,
+not arbitrary untrusted runtime snippets. Neither receives a public plugin API until the internal graph, script, and
+execution-plan contracts stabilize.
+
+## Direct Cutover
+
+This internal alpha redesign uses direct replacement:
+
+- no legacy role/pipeline aliases;
+- no fallback reads from old rows or source files;
+- no dual-write compatibility storage;
+- no filesystem scanning as hidden discovery;
+- no runtime LLM interpretation of canonical Markdown;
+- no public stub-vs-live product route.
+
+Current behavior remains documented until replacement lands, but it does not shape the target as a compatibility
+requirement.
 
 ## Alternatives
 
-- **Flat prompt import only.** Rejected. It loses shared references, stack composition, templates, method contracts,
-  and route-time selection evidence. It also makes runs depend on whatever text was concatenated into
-  `system_prompt`.
-- **Raw file copy only.** Rejected as the full storage contract. It is useful for `.revo` materialization, but it does
-  not give Revisium a queryable schema for roles, pipelines, selected references, or compatibility checks.
-- **Fully normalized markdown database with no raw files.** Rejected. The playbook is authored and reviewed as
-  markdown. Removing raw source content would make audit, review, and future adapter generation worse.
-- **Hybrid raw documents plus typed projections and relations. Chosen.** This keeps markdown reviewable while giving
-  Revo stable, versioned, queryable data and a reproducible worktree bundle.
+- **Keep flat role/pipeline row import.** Rejected because it omits the package documents, executable graph contract,
+  cross-item relations, and full replay inputs.
+- **Copy the source tree into every run and read it live.** Rejected because source files are mutable and do not prove
+  validation, selection, or capability resolution.
+- **Normalize all Markdown into database-only prose.** Rejected because Git-reviewed authoring remains valuable and
+  raw source is needed for audit/materialization.
+- **Let the built-in product graph and canonical package remain co-authoritative.** Rejected because fixes and policy
+  would drift between two owners.
 
 ## Consequences
 
-- The bundled default playbook should evolve from a flat prompt directory toward the same package shape used by the
-  canonical playbook.
-- Playbook installation gains additional versioned rows or document records beyond `playbooks`, `roles`, and
-  `pipelines`.
-- Route planning must pin the playbook snapshot and selected reference set.
-- Worker prompts should shrink: role/core prompt stays in the prompt, conditional references move into `.revo`.
-- Runtime failures must distinguish missing or corrupt materialized playbook context from agent reasoning failures.
-- Adapter-generated files are no longer confused with source behavior in Revo runtime paths.
-- The current flat bundled default playbook remains importable during migration. It may have role documents under
-  `prompts/` and no role-local core references until the bundled playbook is reshaped.
-
-## Validation
-
-The implementing PR must be TDD-first. Required acceptance tests:
-
-- importer stores all present canonical document roots and excludes generated adapter and legacy roots by default;
-- importer validates role, pipeline, stack, and document relation targets inside one snapshot;
-- runs pin `playbookVersionId`, `snapshotHash`, `contentTreeHash`, and per-step selected references in the durable
-  route decision;
-- worktree creation materializes `.revo/playbook/manifest.json`, `.revo/context/run.json`, and
-  `.revo/context/steps/<nodeId>/selected-references.json`;
-- selected references resolve to files present in the manifest;
-- a stub-runner prompt-contract test proves the worker prompt instructs the role to read `.revo`, then opens every
-  selected role/core/shared/stack reference using only worktree-local `.revo`;
-- corrupt or missing `.revo` files fail before worker invocation with a materialization error.
-
-The initial manual smoke on 2026-07-01 materialized 133 canonical documents into a temporary `.revo/playbook` bundle,
-excluded `adapters` and `legacy`, and verified access with Codex subagents, Claude, and OpenCode. GLM returned a
-provider-side 529 overload and did not produce a materialization verdict.
+- Package installation becomes compilation, not row copying.
+- `PlaybookVersion` is immutable; project/user customization produces an explicit versioned overlay or derived
+  version rather than mutating imported rows with reconciliation rules.
+- `ExecutionPlan` becomes the sole execution/recovery input for execution-affecting meaning.
+- Worktree context can be verified against pinned hashes before invoking a worker.
+- Import and route failures distinguish invalid authoring content, unresolved capabilities, corrupt materialization,
+  and worker failure.
+- The current canonical package needs a schema-versioned executable graph declaration before it is Revo-runnable.
 
 ## Open Questions
 
-- Whether auxiliary generated adapter artifacts should be stored in the same snapshot as non-runtime documents or in a
-  separate audit namespace.
-- Whether source-label extraction (`[DECISION]`, `[TODO]`, `[BEST-PRACTICE]`) should ship in v1 or remain a later
-  annotation index.
-- Whether `.revo/playbook` should materialize the full canonical snapshot on every run or only the selected subset
-  plus dependency roots. The default should favor full canonical snapshot until bundle size becomes a measured problem.
-- Which Revisium table names should hold document and relation projections.
+- Which authoring schema version first declares the executable graph and its effect/artifact references?
+- Does the first compiler emit one graph artifact per pipeline or one package-wide graph bundle?
+- What is the smallest materialized reference subset that remains easy to audit without making selection brittle?
+- Which customization use case is first: project overlay, user overlay, or derived package version?
+
+Exact records, hashes, validation failures, and materialization file shapes remain owned by the linked Draft specs.

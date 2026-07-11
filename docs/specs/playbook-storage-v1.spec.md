@@ -1,6 +1,6 @@
 # Playbook storage v1 spec
 
-- **Status:** Draft.
+- **Status:** Draft
 - **Version:** v1
 - **Owners:** `src/playbook`, `src/revisium`, control-plane storage.
 - **Source files:** `src/playbook/manifest.ts`, `src/playbook/catalog-loader.ts`,
@@ -12,13 +12,15 @@
 - **Related ADRs:** [ADR-0005](../adr/0005-versioned-playbook-storage-and-revo-materialization.md).
 - **Related specs:** [Revo playbook materialization v1](./revo-playbook-materialization-v1.spec.md),
   [run-dataflow-v1.spec.md](./run-dataflow-v1.spec.md),
-  [default-playbook-policy.spec.md](./default-playbook-policy.spec.md).
+  [default-playbook-policy.spec.md](./default-playbook-policy.spec.md),
+  [execution-plan-v1.spec.md](./execution-plan-v1.spec.md),
+  [script-runtime-v1.spec.md](./script-runtime-v1.spec.md).
 
 ## Scope
 
 This spec defines the versioned storage contract for Revo playbooks as Revisium/control-plane data. It covers package
 identity, document records, typed entity projections, relation records, snapshot hashing, import validation, and
-durable route pinning.
+the immutable installer/compiler handoff to route planning.
 
 This spec does not define the physical `.revo` worktree layout. That is owned by
 [revo-playbook-materialization-v1.spec.md](./revo-playbook-materialization-v1.spec.md). It also does not define runner
@@ -81,7 +83,42 @@ and a sibling `references/core.md` when present.
 The current contract does not store full source documents, stack references, shared references, method docs,
 templates, checklists, route-time selected references, or a complete immutable snapshot.
 
+The executable default graph currently lives inside
+`catalog/pipelines.json[*].execution_policy.template_json`. The catalog does not have a separate
+machine-readable authoring contract for executable graph documents, required scripts, artifact schemas, or reusable
+fragments.
+
 ## Target Migration
+
+### Immutable install and authoring-schema cutover
+
+The target path is:
+
+```text
+authoring package
+  -> validated catalogs, documents, schemas, and executable graph
+  -> immutable PlaybookVersion
+  -> fully resolved ExecutionPlan
+```
+
+An installed `PlaybookVersion` MUST be immutable. Project or user customization MUST create an explicit
+versioned overlay or derived playbook version. It MUST NOT mutate imported base rows or rely on reconciliation magic.
+
+The current authoring schema v2 cannot be silently extended to claim this target. Adding executable-graph,
+script-definition, artifact-schema, or future fragment references requires an explicit authoring manifest/catalog
+schema-version bump. The next version number and exact JSON field layout remain open questions in this Draft spec.
+
+The bumped authoring schema MUST express, directly or through validated referenced documents:
+
+- one executable graph for every launchable pipeline;
+- required script/effect definitions and capabilities;
+- produced and consumed artifact schema references;
+- route policy and required human-gate declarations;
+- role/runner binding requirements without resolved environment values;
+- future fragment references only after internal graph and script contracts stabilize.
+
+The installer/compiler MUST NOT parse pipeline Markdown prose to recover executable semantics. Reusable fragments are
+a planned authoring concept, not a public plugin API in v1.
 
 ### Core records
 
@@ -136,6 +173,9 @@ type PlaybookDocument = {
     | "method"
     | "template"
     | "checklist"
+    | "executable_graph"
+    | "script_definition"
+    | "artifact_schema"
     | "auxiliary";
   mediaType: "application/json" | "text/markdown" | "text/plain";
   rawContent: string;
@@ -198,11 +238,18 @@ type PlaybookPipeline = {
   routeGates: string[];
   platformInvocation: string;
   executionPolicyJson: string;
+  executableGraphDocumentId: string;
+  executableGraphHash: string;
+  requiredScriptIds: string[];
+  artifactSchemaDocumentIds: string[];
 };
 ```
 
 Every role id referenced by `requiredRoles`, `alternativeRoles`, or `optionalRoles` MUST resolve to a `PlaybookRole`
 inside the same `PlaybookVersion`.
+
+Every script and artifact-schema reference MUST resolve inside the same `PlaybookVersion`. The installed
+projection above is a compiler output contract; it does not freeze the exact next authoring catalog JSON fields.
 
 #### `PlaybookStack`
 
@@ -263,6 +310,8 @@ type PlaybookRelation = {
     | "has_shared_reference"
     | "has_stack_reference"
     | "uses_template"
+    | "uses_script"
+    | "uses_artifact_schema"
     | "refines_method";
   targetKind: string;
   targetId?: string;
@@ -288,6 +337,9 @@ playbook.json
 catalog/
 roles/
 pipelines/
+graphs/
+scripts/
+schemas/
 references/
 stacks/
 method/
@@ -295,12 +347,9 @@ templates/
 checklists/
 ```
 
-The importer MUST store every present canonical runtime root. Roots are optional during migration because the current
-bundled default playbook is flat: role catalog paths point at `prompts/<role>.md`, and the package has no `roles/`,
-`stacks/`, `method/`, `templates/`, or `checklists/` roots yet. A missing canonical root is not an import failure
-unless a catalog, frontmatter field, or selected reference points into it. Catalog-addressed runtime documents outside
-canonical roots, such as `prompts/<role>.md` in the flat default playbook, MUST still be stored as
-`runtimeIncluded: true` documents.
+The target importer MUST store every declared canonical runtime root. A missing declared root or referenced document
+is an import failure. The current flat bundled playbook remains a Current Contract input only; the target compiler
+does not preserve `prompts/<role>.md` or absent canonical roots as a compatibility shape.
 
 The importer MUST exclude `.git`, `.github`, generated adapter output, local overlays, and `legacy/` from the default
 runtime snapshot. A future audit mode MAY retain those documents as `runtimeIncluded: false`.
@@ -326,32 +375,15 @@ order. It is the hash that `.revo` materialization can recompute from files.
 `snapshotHash` covers the `contentTreeHash` plus typed projections and required relations. It is the stronger storage
 identity for the whole imported version.
 
-### Route-time selection
+### Route-time compiler handoff
 
-Route planning MUST pin playbook selection into the durable route decision. The route decision is the DBOS workflow
-argument/replay seam for data-driven runs; future `task_runs` columns MAY project these fields for query speed, but
-the durable source of truth is the route decision payload.
+The installer exposes immutable `PlaybookVersion` records and typed projections to route planning. Route
+planning resolves those records into the `ExecutionPlan` owned by
+[execution-plan-v1.spec.md](./execution-plan-v1.spec.md).
 
-The pinned shape is:
-
-```ts
-type PlaybookSelectionPin = {
-  playbookVersionId: string;
-  snapshotHash: string;
-  contentTreeHash: string;
-  pipelineId: string;
-  roleIds: string[];
-  nodeSelections: Array<{
-    nodeId: string;
-    roleId: string;
-    selectedDocumentIds: string[];
-    selectedReferenceIds: string[];
-    selectedStackIds: string[];
-  }>;
-};
-```
-
-Replay and recovery MUST use this pin. They MUST NOT re-resolve the latest playbook package or live source path.
+The execution plan pins the playbook version, snapshot/content hashes, executable graph/hash, selected role and
+reference documents, scripts, artifact schemas, and policy bindings. Replay and recovery MUST use that plan. They
+MUST NOT re-resolve the latest playbook package, mutable versioned-meaning head, or live source path.
 
 ## Validation
 
@@ -361,7 +393,10 @@ Storage validation MUST cover:
 - unique role ids, pipeline ids, stack ids, document ids, and reference ids;
 - role catalog path exists and points to a role document;
 - pipeline catalog path exists and points to a pipeline document;
+- every launchable pipeline has one validated executable graph document;
 - pipeline role references resolve inside the same snapshot;
+- required script definitions and artifact schemas resolve inside the same snapshot;
+- graph script and dataflow declarations agree with the installed typed projections;
 - `default_model_level` remains in the allowed portable or Codex model-level vocabulary;
 - production role catalog rows do not bind `runner_id` to `stub-agent`;
 - role frontmatter matches catalog id, surface, rights, default model level, and runner id when present;
@@ -369,20 +404,37 @@ Storage validation MUST cover:
 - markdown links that point inside canonical roots resolve or are explicitly marked optional;
 - `contentTreeHash` and `snapshotHash` are deterministic across repeated imports of identical content.
 
-Unit tests SHOULD use a fixture copied from the canonical `agent-playbook` layout. Integration tests SHOULD prove that
-the bundled flat default playbook can be imported into the target storage model without pretending it has role-local
-core references.
+Unit tests SHOULD use a fixture copied from the canonical `agent-playbook` layout. Integration tests MUST
+prove direct installation of the bumped authoring schema and MUST reject the flat v2 package as a target package
+instead of synthesizing missing roots or execution declarations.
 
 ## Compatibility
 
-Existing rows in `playbooks`, `roles`, and `pipelines` remain the compatibility surface for current runtime code until
-the materializer and route planner consume `PlaybookVersion` directly.
+This redesign uses direct cutover for internal alpha data. The installer, materializer, and route planner switch
+together to immutable `PlaybookVersion` plus `ExecutionPlan`.
 
-The target importer SHOULD dual-write compatibility rows and snapshot rows during migration. Removing `roles.system_prompt`
-as the primary prompt source requires a separate migration because existing runners read that field.
+The target implementation MUST NOT:
 
-`schema_version: 2` remains supported for the current manifest. Adding snapshot document storage does not require a
-manifest bump by itself unless authoring fields change.
+- dual-write legacy and snapshot rows;
+- read legacy rows as a fallback;
+- preserve legacy aliases or synthetic flat roots;
+- reconstruct missing executable declarations from prose or filesystem scanning;
+- treat `roles.system_prompt` as an authoritative fallback;
+- silently upgrade authoring schema v2 in place.
+
+Current v2 rows and local alpha data MAY be reset. Historical run records MAY remain readable for audit, but replay
+requires a complete immutable snapshot and execution plan.
+
+## Open Questions
+
+- What is the next authoring schema version number?
+- Which exact manifest/catalog fields reference executable graphs, script definitions, artifact schemas, and later
+  fragments?
+- Are graph, script, and artifact-schema documents separate canonical roots or typed entries in one catalog?
+- How are derived playbook overlays authored and reviewed without mutating an installed base version?
+
+These questions keep this spec Draft. They MUST be resolved by an explicit authoring-schema contract before the target
+is implemented.
 
 ## Examples
 
@@ -415,4 +467,7 @@ Minimal role reference projection:
 
 ## Changelog
 
+- 2026-07-11: Replaced compatibility rows and dual-write migration with direct immutable-package cutover, added the
+  executable compiler handoff, and required an explicit future authoring-schema bump without freezing its exact
+  fields.
 - 2026-07-01: Initial draft target contract for full versioned playbook storage.
