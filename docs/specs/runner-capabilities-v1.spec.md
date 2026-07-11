@@ -113,7 +113,7 @@ Grounded in the two live adapters. These are the `capabilities` objects only; `k
   "provider": "anthropic",
   "authMode": "cli-session",
   "privacyClass": "external",
-  "supportsWorkspaceWrite": false,
+  "supportsWorkspaceWrite": true,
   "supportsStructuredOutput": "native-schema",   // --json-schema (claude-code-runner.ts:159)
   "needsLivePreflight": true,                     // route-contract.ts:117
   "performsMerge": false,                         // built-in Git/GitHub scripts are selected by scriptRef
@@ -143,7 +143,7 @@ Grounded in the two live adapters. These are the `capabilities` objects only; `k
   "provider": "provider-gateway",
   "authMode": "provider-config",
   "privacyClass": "profile",
-  "supportsWorkspaceWrite": true,
+  "supportsWorkspaceWrite": false,
   "supportsStructuredOutput": "prompt-only",      // only "no --json-schema flag" is proven; tool-call unverified
   "needsLivePreflight": true,
   "performsMerge": false,
