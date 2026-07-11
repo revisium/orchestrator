@@ -63,6 +63,7 @@ export type PipelineCoverageWaiver = Readonly<{
 
 export type PipelineCoverageDiagnosticCode =
   | 'PIPELINE_COVERAGE_UNDEFINED_CELL'
+  | 'PIPELINE_COVERAGE_INCONSISTENT_PRIMARY_CLAIM'
   | 'PIPELINE_COVERAGE_UNOWNED_CELL'
   | 'PIPELINE_COVERAGE_DUPLICATE_OWNER'
   | 'PIPELINE_COVERAGE_OWNED_AND_WAIVED'
@@ -1098,17 +1099,19 @@ export function validatePipelineCoverageRegistry(input: {
   const catalog = derivePipelineCoverageCatalog(input.pipelines, input.runProfiles);
   const definedCells = new Map(catalog.cells.map((cell) => [cell.id, cell]));
   const ownedCells = new Set<PipelineCoverageCellId>();
+  const dslPrimaryCells = new Set<PipelineCoverageCellId>();
   const diagnostics: PipelineCoverageDiagnostic[] = [];
 
   addOwnershipAlgebraDiagnostics(diagnostics, registry, input.currentStage ?? 'stage-2');
-  addScenarioDiagnostics(diagnostics, definedCells, ownedCells, registry.scenarios);
+  addScenarioDiagnostics(diagnostics, definedCells, ownedCells, dslPrimaryCells, registry.scenarios);
   addOwnershipDiagnostics(diagnostics, definedCells, ownedCells, registry.ownership);
   addWaiverDiagnostics(diagnostics, definedCells, ownedCells, registry.waivers, input.currentStage ?? 'stage-2');
   addUnownedCellDiagnostics(diagnostics, catalog.cells, ownedCells);
   addProfileRoutingSignatureDiagnostics(
     diagnostics,
     input.runProfiles,
-    registry,
+    dslPrimaryCells,
+    registry.waivers,
     input.currentStage ?? 'stage-2',
   );
 
@@ -1119,6 +1122,7 @@ function addScenarioDiagnostics(
   diagnostics: PipelineCoverageDiagnostic[],
   definedCells: ReadonlyMap<PipelineCoverageCellId, PipelineCoverageCell>,
   ownedCells: Set<PipelineCoverageCellId>,
+  dslPrimaryCells: Set<PipelineCoverageCellId>,
   scenarios: readonly PipelineDslCoverageScenario[],
 ): void {
   for (const scenario of scenarios) {
@@ -1126,19 +1130,16 @@ function addScenarioDiagnostics(
       scenarioId: scenario.id,
       ownerSurface: scenario.ownerSurface,
     });
-    for (const cellId of scenario.primaryCellIds) {
-      if (!scenario.cellIds.includes(cellId)) {
-        diagnostics.push({
-          code: 'PIPELINE_COVERAGE_UNDEFINED_CELL',
-          message: `primary coverage cell ${cellId} is not declared by scenario ${scenario.id}`,
-          cellId,
-          tag: tagFromCellId(cellId),
-          scenarioId: scenario.id,
-          ownerSurface: scenario.ownerSurface,
-        });
-      }
-    }
-    addOwnedCells(ownedCells, scenario.primaryCellIds);
+    addPrimaryCellClaimDiagnostics(diagnostics, definedCells, ownedCells, dslPrimaryCells, {
+      declaration: `scenario ${scenario.id}`,
+      evidence: `DSL scenario ${scenario.id}`,
+      tags: scenario.tags,
+      primaryTags: scenario.primaryTags,
+      materialized: [scenario.materialized],
+      cellIds: scenario.cellIds,
+      primaryCellIds: scenario.primaryCellIds,
+      context: { scenarioId: scenario.id, ownerSurface: scenario.ownerSurface },
+    });
   }
 }
 
@@ -1152,18 +1153,81 @@ function addOwnershipDiagnostics(
     addDefinedCellDiagnostics(diagnostics, definedCells, owner.cellIds, {
       ownerSurface: owner.ownerSurface,
     });
-    for (const cellId of owner.primaryCellIds) {
-      if (!owner.cellIds.includes(cellId)) {
-        diagnostics.push({
-          code: 'PIPELINE_COVERAGE_UNDEFINED_CELL',
-          message: `primary coverage cell ${cellId} is not declared by ${owner.owner}:${owner.ownerSurface}`,
-          cellId,
-          tag: tagFromCellId(cellId),
-          ownerSurface: owner.ownerSurface,
-        });
-      }
+    addPrimaryCellClaimDiagnostics(diagnostics, definedCells, ownedCells, undefined, {
+      declaration: `${owner.owner}:${owner.ownerSurface}`,
+      evidence: `${owner.owner} evidence ${owner.ownerSurface}`,
+      tags: owner.tags,
+      primaryTags: owner.primaryTags,
+      materialized: owner.materialized,
+      cellIds: owner.cellIds,
+      primaryCellIds: owner.primaryCellIds,
+      context: { ownerSurface: owner.ownerSurface },
+    });
+  }
+}
+
+type PrimaryCellClaim = Readonly<{
+  declaration: string;
+  evidence: string;
+  tags: readonly PipelineCoverageTag[];
+  primaryTags: readonly PipelineCoverageTag[];
+  materialized: readonly MaterializedCoverageIdentity[];
+  cellIds: readonly PipelineCoverageCellId[];
+  primaryCellIds: readonly PipelineCoverageCellId[];
+  context: Readonly<{ scenarioId?: string; ownerSurface?: string }>;
+}>;
+
+function addPrimaryCellClaimDiagnostics(
+  diagnostics: PipelineCoverageDiagnostic[],
+  definedCells: ReadonlyMap<PipelineCoverageCellId, PipelineCoverageCell>,
+  ownedCells: Set<PipelineCoverageCellId>,
+  acceptedCells: Set<PipelineCoverageCellId> | undefined,
+  claim: PrimaryCellClaim,
+): void {
+  const undeclaredPrimaryTags = claim.primaryTags.filter((tag) => !claim.tags.includes(tag));
+  for (const tag of undeclaredPrimaryTags) {
+    diagnostics.push({
+      code: 'PIPELINE_COVERAGE_INCONSISTENT_PRIMARY_CLAIM',
+      message: `primary coverage tag ${tag} is not declared by ${claim.evidence} tags`,
+      tag,
+      ...claim.context,
+    });
+  }
+  const declaredPrimaryTags = claim.primaryTags.filter((tag) => !undeclaredPrimaryTags.includes(tag));
+  const claimedPrimaryCellIds = new Set(claim.materialized.flatMap((identity) =>
+    cellIdsFor(identity, claim.primaryTags)));
+  const derivedPrimaryCellIds = new Set(claim.materialized.flatMap((identity) =>
+    cellIdsFor(identity, declaredPrimaryTags)));
+  const materializedSelectors = claim.materialized
+    .map((identity) => `${identity.pipelineId}/${identity.profileId}`)
+    .toSorted(compareStrings)
+    .join(', ');
+
+  for (const cellId of claim.primaryCellIds) {
+    const declared = claim.cellIds.includes(cellId);
+    if (!declared) {
+      diagnostics.push({
+        code: 'PIPELINE_COVERAGE_UNDEFINED_CELL',
+        message: `primary coverage cell ${cellId} is not declared by ${claim.declaration}`,
+        cellId,
+        tag: tagFromCellId(cellId),
+        ...claim.context,
+      });
     }
-    addOwnedCells(ownedCells, owner.primaryCellIds);
+    const consistent = derivedPrimaryCellIds.has(cellId);
+    if (!consistent && !claimedPrimaryCellIds.has(cellId)) {
+      diagnostics.push({
+        code: 'PIPELINE_COVERAGE_INCONSISTENT_PRIMARY_CLAIM',
+        message: `primary coverage cell ${cellId} is not derived from ${claim.evidence} primary tags under ${materializedSelectors}`,
+        cellId,
+        tag: tagFromCellId(cellId),
+        ...claim.context,
+      });
+    }
+    if (declared && consistent && definedCells.has(cellId)) {
+      ownedCells.add(cellId);
+      acceptedCells?.add(cellId);
+    }
   }
 }
 
@@ -1257,11 +1321,12 @@ function addUnownedCellDiagnostics(
 function addProfileRoutingSignatureDiagnostics(
   diagnostics: PipelineCoverageDiagnostic[],
   runProfiles: readonly RunProfileCoverageInput[],
-  registry: PipelineCoverageRegistry,
+  dslPrimaryCells: ReadonlySet<PipelineCoverageCellId>,
+  waivers: readonly PipelineCoverageWaiver[],
   currentStage: PipelineCoverageStage,
 ): void {
   for (const signature of profileRoutingSignatures(runProfiles)) {
-    if (isProfileRoutingSignatureCovered(signature, registry, currentStage)) continue;
+    if (isProfileRoutingSignatureCovered(signature, dslPrimaryCells, waivers, currentStage)) continue;
     diagnostics.push({
       code: 'PIPELINE_COVERAGE_SIGNATURE_WITHOUT_DSL',
       message: `profile routing signature ${signature} has no DSL scenario owner or waiver`,
@@ -1307,20 +1372,20 @@ function addIncompleteWaiverDiagnostic(
 
 function isProfileRoutingSignatureCovered(
   signature: string,
-  registry: PipelineCoverageRegistry,
+  dslPrimaryCells: ReadonlySet<PipelineCoverageCellId>,
+  waivers: readonly PipelineCoverageWaiver[],
   currentStage: PipelineCoverageStage,
 ): boolean {
-  return hasDslScenarioForSignature(signature, registry.scenarios) ||
-    hasWaiverForProfileSignature(signature, registry.waivers, currentStage);
+  return hasDslPrimaryCellForSignature(signature, dslPrimaryCells) ||
+    hasWaiverForProfileSignature(signature, waivers, currentStage);
 }
 
-function hasDslScenarioForSignature(
+function hasDslPrimaryCellForSignature(
   signature: string,
-  scenarios: readonly PipelineDslCoverageScenario[],
+  dslPrimaryCells: ReadonlySet<PipelineCoverageCellId>,
 ): boolean {
-  return scenarios.some((scenario) =>
-    scenario.primaryTags.some((tag) => profileSignatureFromTag(tag) === signature),
-  );
+  return [...dslPrimaryCells].some((cellId) =>
+    profileSignatureFromTag(tagFromCellId(cellId)) === signature);
 }
 
 function hasWaiverForProfileSignature(

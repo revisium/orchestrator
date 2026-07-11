@@ -544,6 +544,50 @@ test('pipeline coverage registry: rejects undefined DSL tags', () => {
   ));
 });
 
+test('pipeline coverage registry: rejects a defined primary cell forged under mismatched DSL metadata', () => {
+  const tag = 'node:mergeGate:outcome:cancel' as PipelineCoverageTag;
+  const materialized = materializedIdentity('feature-development', 'base');
+  const cellId = pipelineCoverageCellId(materialized, tag);
+  const forgedOwner = PIPELINE_COVERAGE_REGISTRY.scenarios.find((scenario) =>
+    scenario.id === 'M1-profile-single');
+  assert.ok(PIPELINE_COVERAGE_MANIFEST.catalog.cells.some((cell) => cell.id === cellId));
+  assert.ok(forgedOwner);
+  assert.equal(forgedOwner.tags.includes(tag), false);
+  assert.notEqual(pipelineCoverageCellId(forgedOwner.materialized, tag), cellId);
+
+  const registry = registryWith({
+    scenarios: PIPELINE_COVERAGE_REGISTRY.scenarios.map((scenario) => {
+      const primaryCellIds = scenario.primaryCellIds.filter((candidate) => candidate !== cellId);
+      return scenario.id === forgedOwner.id
+        ? { ...scenario, cellIds: [...scenario.cellIds, cellId], primaryCellIds: [...primaryCellIds, cellId] }
+        : { ...scenario, primaryCellIds };
+    }),
+    ownership: PIPELINE_COVERAGE_REGISTRY.ownership.map((owner) => ({
+      ...owner,
+      primaryCellIds: owner.primaryCellIds.filter((candidate) => candidate !== cellId),
+    })),
+  });
+  const diagnostics = validatePipelineCoverageRegistry({ pipelines, runProfiles, registry });
+
+  assert.deepEqual(diagnostics, validatePipelineCoverageRegistry({ pipelines, runProfiles, registry }));
+
+  assert.deepEqual(
+    diagnostics.filter((diagnostic) => String(diagnostic.code) === 'PIPELINE_COVERAGE_INCONSISTENT_PRIMARY_CLAIM'),
+    [{
+      code: 'PIPELINE_COVERAGE_INCONSISTENT_PRIMARY_CLAIM',
+      message: `primary coverage cell ${cellId} is not derived from DSL scenario M1-profile-single primary tags under feature-development/codex-standard`,
+      cellId,
+      tag,
+      scenarioId: 'M1-profile-single',
+      ownerSurface: forgedOwner.ownerSurface,
+    }],
+  );
+  assert.equal(diagnostics.some((diagnostic) =>
+    diagnostic.code === 'PIPELINE_COVERAGE_UNDEFINED_CELL' && diagnostic.cellId === cellId), false);
+  assert.equal(diagnostics.some((diagnostic) =>
+    diagnostic.code === 'PIPELINE_COVERAGE_UNOWNED_CELL' && diagnostic.cellId === cellId), true);
+});
+
 test('pipeline coverage registry: rejects unowned catalog graph outcomes', () => {
   const unownedTag = 'node:mergeGate:outcome:address_review_threads';
   const diagnostics = validatePipelineCoverageRegistry({
@@ -661,6 +705,63 @@ test('pipeline coverage registry: #234 agent-question resume is executable DSL c
     false,
     '#234 must not remain covered by a waiver',
   );
+});
+
+test('pipeline coverage registry: a bare primary tag cannot forge DSL signature ownership', () => {
+  const tag = 'profile:codex-standard:signature:single-review' as PipelineCoverageTag;
+  const materialized = materializedIdentity('feature-development', 'codex-standard');
+  const cellId = pipelineCoverageCellId(materialized, tag);
+  const dslOwner = PIPELINE_COVERAGE_REGISTRY.scenarios.find((scenario) =>
+    scenario.primaryCellIds.includes(cellId));
+  const unrelatedScenario = PIPELINE_COVERAGE_REGISTRY.scenarios.find((scenario) =>
+    scenario.id !== dslOwner?.id && !scenario.tags.includes(tag) && !scenario.primaryTags.includes(tag));
+  assert.ok(PIPELINE_COVERAGE_MANIFEST.catalog.cells.some((cell) => cell.id === cellId));
+  assert.ok(dslOwner);
+  assert.ok(unrelatedScenario);
+
+  const registry = registryWith({
+    scenarios: PIPELINE_COVERAGE_REGISTRY.scenarios.map((scenario) => {
+      if (scenario.id === dslOwner.id) {
+        return {
+          ...scenario,
+          primaryTags: scenario.primaryTags.filter((candidate) => candidate !== tag),
+          primaryCellIds: scenario.primaryCellIds.filter((candidate) => candidate !== cellId),
+        };
+      }
+      return scenario.id === unrelatedScenario.id
+        ? { ...scenario, primaryTags: [...scenario.primaryTags, tag] }
+        : scenario;
+    }),
+    ownership: [
+      ...PIPELINE_COVERAGE_REGISTRY.ownership.map((owner) => ({
+        ...owner,
+        primaryCellIds: owner.primaryCellIds.filter((candidate) => candidate !== cellId),
+      })),
+      {
+        owner: 'unit',
+        ownerSurface: 'src/testing/policy/pipeline-coverage.test.ts',
+        tags: [tag],
+        primaryTags: [tag],
+        materialized: [materialized],
+        cellIds: [cellId],
+        primaryCellIds: [cellId],
+      },
+    ],
+  });
+
+  assert.deepEqual(validatePipelineCoverageRegistry({ pipelines, runProfiles, registry }), [
+    {
+      code: 'PIPELINE_COVERAGE_INCONSISTENT_PRIMARY_CLAIM',
+      message: `primary coverage tag ${tag} is not declared by DSL scenario ${unrelatedScenario.id} tags`,
+      tag,
+      scenarioId: unrelatedScenario.id,
+      ownerSurface: unrelatedScenario.ownerSurface,
+    },
+    {
+      code: 'PIPELINE_COVERAGE_SIGNATURE_WITHOUT_DSL',
+      message: 'profile routing signature single-review has no DSL scenario owner or waiver',
+    },
+  ]);
 });
 
 test('pipeline coverage registry: rejects profile signatures with no DSL owner or waiver', () => {
