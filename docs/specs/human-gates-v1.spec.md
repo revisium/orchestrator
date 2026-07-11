@@ -1,12 +1,15 @@
 # Human gates v1 spec
 
-- **Status:** Accepted.
+- **Status:** Accepted
+- **Version:** v1
 - **Source files:** `src/pipeline-core/types.ts`, `src/pipeline/await-human.ts`, `src/revisium/inbox.service.ts`,
   `src/run/prisma-runtime-data-access.ts`,
   `src/features/inbox/**`, `src/api/graphql-api/inbox/**`, `src/mcp/mcp-tools.ts`,
   `src/task-control-plane/run-watch.service.ts`, `src/poller/pr-readiness.ts`.
 - **Related specs:** [pipeline-state-machine-v1.spec.md](./pipeline-state-machine-v1.spec.md),
-  [run-dataflow-v1.spec.md](./run-dataflow-v1.spec.md).
+  [run-dataflow-v1.spec.md](./run-dataflow-v1.spec.md),
+  [execution-plan-v1.spec.md](./execution-plan-v1.spec.md),
+  [script-runtime-v1.spec.md](./script-runtime-v1.spec.md).
 
 ## Scope
 
@@ -72,6 +75,159 @@ inbox {
 
 Human decisions are state changes, not direct commands to agents. A resolver writes the decision to the inbox row
 and signals the parked workflow. The workflow then resumes and routes through the pipeline graph.
+
+## Draft Target: Generic Approval Subjects
+
+The shipped adapter has merge-specific freshness handling keyed to domain node ids and `headSha` fields.
+That behavior remains current until the target below is implemented. The target replaces domain knowledge in the
+generic runtime with a typed approval subject.
+
+This section is the canonical owner of approval-subject identity, revision, freshness, and invalidation semantics.
+[execution-plan-v1.spec.md](./execution-plan-v1.spec.md) pins the schema id/version/digest only. It MUST NOT redefine
+these semantics.
+
+### Subject and record
+
+```ts
+type ApprovalSubject = {
+  schemaVersion: 'approval-subject/v1';
+  kind: string;
+  resource: {
+    type: 'artifact' | 'repository' | 'pull-request' | 'knowledge' | 'other';
+    id: string;
+  };
+  revision: {
+    type: 'digest' | 'git-commit' | 'github-head' | 'revisium-revision' | 'version';
+    value: string;
+  };
+  policyContextDigest: string;
+  subjectDigest: string;
+};
+
+type ApprovalRecord = {
+  gateInstanceId: string;
+  subject: ApprovalSubject;
+  outcome: string;
+  note?: string;
+  decidedBy: string;
+  decidedAt: string;
+  status: 'active' | 'invalidated';
+  invalidatedAt?: string;
+  invalidationReason?: 'subject_changed' | 'policy_changed' | 'explicit_revoke';
+};
+```
+
+`kind` and `resource.type` are generic vocabularies. The gate runtime MUST NOT branch on a pipeline
+node id, GitHub lifecycle name, or role id to interpret them.
+
+`subjectDigest` MUST be the canonical hash of `schemaVersion`, `kind`, `resource`, and `revision`.
+`policyContextDigest` MUST be computed separately from the canonical policy-context input. Display text, inbox title,
+and resolver transport metadata MUST NOT affect either digest.
+
+An approval outcome is valid only when both the `subjectDigest` and `policyContextDigest` recorded in the approval
+record match the current values. It MUST NOT be transferred to another artifact, commit, PR head, knowledge revision,
+or policy context.
+
+### Freshness and invalidation
+
+Before an irreversible or approval-protected write, the graph MUST execute the declared read effect that produces the
+current subject and policy context. The generic gate/effect adapter MUST construct separate comparison inputs:
+
+```ts
+type ApprovalFreshnessComparison = {
+  subject: {
+    recordedDigest: string;
+    currentDigest: string;
+  };
+  policyContext: {
+    recordedDigest: string;
+    currentDigest: string;
+  };
+};
+
+type ApprovalFreshnessResult =
+  | { status: 'active' }
+  | { status: 'invalidated'; reason: 'subject_changed' | 'policy_changed' };
+```
+
+The adapter MUST evaluate those inputs in this order:
+
+1. If `subject.recordedDigest` differs from `subject.currentDigest`, invalidate with `subject_changed`.
+2. Otherwise, if `policyContext.recordedDigest` differs from `policyContext.currentDigest`, invalidate with
+   `policy_changed`.
+3. Otherwise, preserve the active approval with `status: 'active'`.
+
+The result is deterministic when both values change: a subject mismatch takes precedence and the result is
+`subject_changed`, never `policy_changed`.
+
+Examples:
+
+| Recorded `(subjectDigest, policyContextDigest)` | Current `(subjectDigest, policyContextDigest)` | Result |
+| --- | --- | --- |
+| `('subject-a', 'policy-a')` | `('subject-a', 'policy-a')` | `active` |
+| `('subject-a', 'policy-a')` | `('subject-b', 'policy-a')` | `subject_changed` |
+| `('subject-a', 'policy-a')` | `('subject-a', 'policy-b')` | `policy_changed` |
+| `('subject-a', 'policy-a')` | `('subject-b', 'policy-b')` | `subject_changed` |
+
+Freshness invariants:
+
+- a subject mismatch MUST produce `subject_changed`, even when the policy context also mismatches;
+- `policy_changed` MUST be produced only when the subject digest matches and the policy context digest differs;
+- matching subject and policy context digests preserve the active approval;
+- a missing or unreadable current subject or policy context fails closed;
+- an invalidated approval cannot authorize a write.
+
+The comparison consumes recorded typed results. It MUST NOT perform hidden GitHub, Git, filesystem, or Revisium I/O.
+The executable graph decides whether invalidation routes to a new gate, rework, cancellation, or another declared
+recovery path.
+
+An explicit revocation writes `explicit_revoke` and signals the workflow through the same state-change path
+as other gate mutations. Resolver transports MUST NOT delete or overwrite the original decision.
+
+### Gate artifact
+
+A target gate-resolution artifact includes:
+
+```ts
+type GateResolutionArtifact = {
+  approval: ApprovalRecord;
+  inboxId: string;
+};
+```
+
+The nested `ApprovalRecord` is the sole authoritative representation of the resolution: consumers MUST read
+`outcome`, `note`, `decidedBy`, `decidedAt`, `status`, and invalidation fields through `approval`. The artifact MUST
+NOT duplicate those fields at the top level. `inboxId` identifies the source inbox row and is artifact metadata, not a
+second decision representation.
+
+The artifact family and reference modes are owned by
+[run-dataflow-v1.spec.md](./run-dataflow-v1.spec.md). Inbox context MAY project a bounded subject summary, but the
+full artifact or large evidence remains referenced rather than copied into the inbox row.
+
+### Security and validation
+
+- Subject resolvers MUST use execution-plan resource and permission bindings.
+- Resolver output MUST be schema-validated and secret-redacted before persistence.
+- A resolver MUST NOT accept a caller-supplied digest without verifying the canonical subject fields.
+- An approval resolver MUST reject outcomes outside the gate's declared menu.
+- A write effect MUST prove an active matching approval when its definition requires one.
+- Approval comparison and invalidation events MUST be append-only audit evidence.
+
+Required target tests:
+
+- canonical subject and policy-context inputs hash identically across transports;
+- changing resource identity or revision changes `subjectDigest`;
+- changing policy context changes `policyContextDigest` without changing `subjectDigest`;
+- a subject-only mismatch returns `subject_changed`;
+- a policy-only mismatch returns `policy_changed`;
+- a mismatch in both inputs returns `subject_changed`;
+- unchanged subjects preserve approval across replay;
+- changed subjects invalidate approval before a protected write;
+- explicit revocation preserves the original decision and blocks use;
+- missing subject or policy-context evidence fails closed;
+- gate-resolution artifacts expose resolution fields only through the nested `ApprovalRecord`;
+- generic runtime tests contain no domain node-id or merge-specific condition;
+- MCP and GraphQL resolve the same gate command and persist the same approval record.
 
 ## Current Product Verbs
 
@@ -327,8 +483,20 @@ Contracts:
 - Known informational bots (`sonarqubecloud`, `cursor`, `linear-app`, `deepsource-autofix`) MUST be suppressed into
   `ignoredNoise`; all other bot comments MUST surface in `developerFixes` with `source: 'bot_comment'`.
 
+### Draft script-boundary replacement
+
+The loop above documents shipped default-playbook behavior. Under
+[script-runtime-v1.spec.md](./script-runtime-v1.spec.md), `pollPr` is replaced by one bounded readiness
+snapshot read. Wait, cap, and recheck behavior remains explicit pipeline graph data. Marking a draft PR ready for
+review becomes a separate write effect. Approval freshness uses the generic subject contract above rather than
+`mergeGate` or `mergeApproveReverify` knowledge in the adapter.
+
 ## Changelog
 
+- 2026-07-11: Split subject and policy freshness comparison inputs with subject-first invalidation precedence, and
+  made the nested `ApprovalRecord` authoritative for gate-resolution fields.
+- 2026-07-11: Added the Draft generic `ApprovalSubject`, revision/freshness/invalidation owner contract and
+  separated the future readiness snapshot, wait/recheck, and ready-for-review mutation boundaries.
 - 2026-07-06: Bounded `pollPr`/`mergeReadiness` `recheck` self-loops with `pollLoop < 8`, documented zero-CI
   first-poll readiness with `checks: none registered`, and routed unclassifiable poll state through recovery
   classification (issue #272).

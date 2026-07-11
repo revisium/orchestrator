@@ -2,9 +2,9 @@
 
 # @revisium/orchestrator
 
-Local-first orchestration for software-development work driven by short-lived agents.
+Deterministic, durable, local control over software-development work performed by short-lived AI agents.
 
-**Turn a task into a playbook-driven state machine.**
+**Turn a task into a reviewed change without giving the model control of the process.**
 
 [![License](https://img.shields.io/github/license/revisium/orchestrator?color=blue)](LICENSE)
 [![CI](https://github.com/revisium/orchestrator/actions/workflows/ci.yml/badge.svg)](https://github.com/revisium/orchestrator/actions/workflows/ci.yml)
@@ -18,24 +18,12 @@ Part of the [Revisium](https://github.com/revisium/revisium) ecosystem.
 ```mermaid
 flowchart LR
   task[Task]
-  playbook[Playbook]
-  machine[State machine]
-  outcome[Outcome]
+  plan[Approved plan]
+  change[Implemented and independently reviewed change]
+  pr[Pull request observed through CI and review]
+  merge[Human-approved merge]
 
-  task --> playbook --> machine --> outcome
-
-  subgraph nodes[State machine nodes]
-    agent[Agent step] --> script[Script step] --> gate[Human gate] --> branch{Branch}
-    branch --> loop((Loop))
-    loop -. retry .-> agent
-    loop -. reroute .-> script
-  end
-
-  machine -. expands into .-> nodes
-  outcome --> pr[Pull request]
-  outcome --> evidence[Evidence]
-  outcome --> decisions[Decisions]
-  outcome --> history[Run history]
+  task --> plan --> change --> pr --> merge
 ```
 
 > Revo is in active development. The package is suitable for evaluation and local experimentation; do not treat
@@ -43,37 +31,55 @@ flowchart LR
 
 ## Overview
 
-Revo is a local control plane for agentic work. A caller creates a run, Revo selects a playbook, and the playbook
-executes as a state machine made of agent steps, script steps, human gates, branches, and loops.
+Revo is a deterministic, durable, local control plane over probabilistic AI workers. LLMs may understand, propose,
+and execute work, but algorithms and humans retain authority over state transitions, budgets, gates, permissions,
+and irreversible actions.
 
-The goal is not to replace coding agents. Revo coordinates them: it keeps state, records evidence, enforces gates,
-and gives humans a stable place to approve plans, resolve questions, inspect feedback, and decide when work is ready
-to ship.
+The first product wedge is deliberately narrow: task or issue -> approved plan -> implemented and independently
+reviewed change -> pull request observed through CI and review feedback -> human-approved merge. Revo coordinates
+coding agents around that loop; it does not replace them or trust them to govern it.
 
 ## How It Works
 
-- **Playbooks define flow.** Roles, scripts, gates, verdicts, branches, and loop limits are data, not hidden prompt
-  convention.
-- **Agent steps are short-lived.** Each agent process receives current state and exits after one step.
-- **Script steps do deterministic work.** Automation such as integration, polling, and response actions stays outside
-  agent prompts.
-- **Human gates are state changes.** A plan approval, question answer, or merge approval resolves an inbox item and
-  resumes the run.
-- **Outputs are traceable.** Artifacts, evidence, decisions, attempts, cost, and run history are recorded for later
-  inspection.
+- **A pure reducer owns routing.** `pipeline-core` consumes a pinned graph, state, and recorded result, then emits one
+  decision. It performs no I/O and does not delegate cursor control to an agent or script.
+- **Durability stays outside the reducer.** DBOS owns workflow progress, waits, retries, checkpointing, and recovery.
+- **Agents are untrusted, short-lived workers.** Each process receives one bounded task, returns a typed result, and
+  exits. It cannot advance the cursor, bypass a gate, mutate policy, or publish outside the selected graph.
+- **Scripts are bounded effects.** Git, GitHub, filesystem, and network operations depend on external state. The
+  deterministic part is the transition over their validated, recorded result, not the external outcome itself.
+- **Humans retain irreversible authority.** Inbox-backed gates park the run until the declared approval or answer is
+  recorded. A changed approval subject must be reviewed again.
+- **Storage has explicit owners.** DBOS owns progress; Revo Prisma owns hot runtime facts; the embedded Revisium
+  engine owns committed/versioned meaning; Git, worktrees, and files own source changes and large artifacts.
+- **Front doors share application services.** MCP serves agents and GraphQL serves UI/scripts, but neither transport
+  owns orchestration or reads storage internals directly.
+
+## Contract Status
+
+- **Current shipped behavior:** the pure pipeline reducer, DBOS adapter, Prisma runtime rows, versioned control-plane
+  rows, human gates, agent runners, product-owned script handlers, and the built-in executable default graph.
+- **Accepted target:** the generic pipeline-as-data engine and graph-shaped GraphQL direction recorded by Accepted
+  ADRs. Some GraphQL compatibility roots remain during implementation.
+- **Draft target:** validate an executable authoring package into an immutable `PlaybookVersion`, resolve a complete
+  per-run `ExecutionPlan`, and execute versioned script/effect and resource/workspace contracts without live mutable
+  registry reads. See the Draft specs in [docs/specs/](./docs/specs/).
+- **Later:** reusable graph fragments, trusted build/install-time custom scripts, broader ADR/KB workflows, and richer
+  UI. These extend the first wedge; they are not prerequisites for it.
 
 ## Concepts
 
 | Term | Meaning |
 | --- | --- |
 | **Revo** | The local orchestrator and control plane for software-development runs. |
-| **Playbook** | A versioned bundle of roles, pipelines, policies, and routing rules. |
-| **Pipeline** | A state-machine template that defines the steps, gates, branches, loops, and terminal outcomes. |
+| **Playbook** | A versioned method package. Today Revo ships a product-owned executable bootstrap graph; the full canonical package-to-`PlaybookVersion` path is Draft. |
+| **Pipeline** | A validated state-machine graph that defines steps, gates, branches, loops, and terminal outcomes. |
 | **Role** | A named agent definition: prompt, model level, scope, runner, and allowed behavior. |
 | **Agent step** | A pipeline node that starts a short-lived coding agent through a role. |
-| **Script step** | A deterministic automation node used for integration, polling, readiness, or response actions. |
+| **Script/effect step** | A bounded operation that returns a typed recorded result. External effects are not deterministic outcomes and do not choose the next node. |
 | **Human gate** | A required decision or answer; the run parks until an inbox item is resolved. |
 | **Run** | One task moving through a selected playbook and pipeline. |
+| **Execution plan** | Draft target: the immutable, fully resolved execution-affecting inputs pinned for one run. |
 | **Attempt** | One execution of one step; the unit for logs, verdicts, tokens, and cost. |
 | **MCP** | The local agent-facing tool bridge exposed by `revo mcp`. |
 | **GraphQL API** | The local API surface for UI and script integrations. |

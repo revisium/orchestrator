@@ -1,6 +1,7 @@
 # GraphQL admin API v1 spec
 
-- **Status:** Accepted target contract.
+- **Status:** Accepted
+- **Implementation status:** The accepted target is partially implemented; legacy compatibility roots remain.
 - **Contract owners:** `src/api/graphql-api/**`, `src/http/graphql-host.ts`, `src/features/**`.
 - **Related ADRs:** [ADR-0003](../adr/0003-graphql-graph-shape.md).
 
@@ -326,6 +327,8 @@ where needed.
 
 ## Changelog
 
+- 2026-07-11: Normalized Status metadata and recorded partial implementation with legacy compatibility roots; no
+  contract change.
 - 2026-06-29: Normative-language / canon-discipline pass; no contract change.
 - 2026-06-27: Added issueRef create-run, Run projection, and PR readiness linkage contract.
 - 2026-06-26: Erratum: explicitly added `runAttempts` to the legacy run-scoped root reserved/removal list,

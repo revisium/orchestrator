@@ -16,8 +16,11 @@ archive of superseded plans.
 | --- | --- |
 | [graphql-admin-api-v1.spec.md](./graphql-admin-api-v1.spec.md) | Local GraphQL admin API: transport rules, graph-shaped contract, compatibility, and verification |
 | [pipeline-state-machine-v1.spec.md](./pipeline-state-machine-v1.spec.md) | Data-driven pipeline template grammar, reducer contract, validation, versioning, and diff classification |
+| [execution-plan-v1.spec.md](./execution-plan-v1.spec.md) | Draft immutable, fully resolved route/run input with playbook, graph, binding, policy, repository, resource, schema, budget, and secret-reference pins |
 | [run-dataflow-v1.spec.md](./run-dataflow-v1.spec.md) | Step output production/consumption, prompt hydration, runtime output storage, and validation |
 | [human-gates-v1.spec.md](./human-gates-v1.spec.md) | Inbox-backed human gates, gate resolution, question gates, watch tools, and PR review-feedback gates |
+| [script-runtime-v1.spec.md](./script-runtime-v1.spec.md) | Draft versioned script/effect definitions, capability-scoped invocation, typed results/errors, idempotency, redaction, and bounded operation splits |
+| [resources-workspaces-effects-v1.spec.md](./resources-workspaces-effects-v1.spec.md) | Draft repository snapshots, workspace plans, resource identity/lifecycle, filesystem capabilities, dirty-state handling, and artifact-store boundaries |
 | [default-playbook-policy.spec.md](./default-playbook-policy.spec.md) | Bundled `feature-development` policy rules, static verifier scope, and merge-gate recheck behavior |
 | [pipeline-test-coverage-v1.spec.md](./pipeline-test-coverage-v1.spec.md) | Pipeline test-layer ownership, DSL coverage matrix policy, profile coverage, and hard-skip rules |
 | [test-architecture-v1.spec.md](./test-architecture-v1.spec.md) | Accepted target test-layer/context boundaries, runtime-evidence requirements, matrix ownership, migration, and CI constraints |

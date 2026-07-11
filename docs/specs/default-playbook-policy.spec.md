@@ -1,6 +1,6 @@
 # Default playbook policy spec
 
-- **Status:** Accepted.
+- **Status:** Accepted
 - **Version:** v1
 - **Source files:** `control-plane/default-playbook/catalog/pipelines.json`,
   `src/control-plane/default-playbook-policy.ts`, `src/control-plane/default-playbook-policy.test.ts`.
@@ -113,6 +113,7 @@ contract: the verifier does not prove that GitHub/provider state was fresh at ru
 
 ## Changelog
 
+- 2026-07-11: Normalized Status metadata to the exact enum value; no contract change.
 - 2026-07-06: #273 — `script:pollPr` terminal verdicts now leave readiness loops explicitly:
   externally merged PRs route through `cleanupWorktree -> mergedEnd`, while externally closed unmerged PRs route to
   `recoveryGate` with `pr_closed_externally` evidence.

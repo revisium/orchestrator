@@ -1,6 +1,6 @@
 # Diagram assets
 
-This directory contains deterministic Mermaid sources for architecture diagrams used by the root README and docs.
+This directory contains editable Mermaid sources for architecture diagrams used by the docs.
 
 Rules:
 

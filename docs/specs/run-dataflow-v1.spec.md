@@ -1,15 +1,18 @@
 # Run dataflow v1 spec
 
-- **Status:** Accepted.
+- **Status:** Accepted
+- **Version:** v1
 - **Source files:** `src/pipeline-core/types.ts`, `src/pipeline-core/validate-dataflow.ts`,
   `src/pipeline/data-driven-task.workflow.ts`, `src/run/run-outputs.ts`, `src/run/prisma-runtime-data-access.ts`.
-- **Related specs:** [pipeline-state-machine-v1.spec.md](./pipeline-state-machine-v1.spec.md).
+- **Related specs:** [pipeline-state-machine-v1.spec.md](./pipeline-state-machine-v1.spec.md),
+  [execution-plan-v1.spec.md](./execution-plan-v1.spec.md),
+  [resources-workspaces-effects-v1.spec.md](./resources-workspaces-effects-v1.spec.md).
 
 ## Scope
 
-Run dataflow defines how step outputs move from producer nodes to later consumer nodes without widening the
-state-machine routing signal. It covers produced artifacts, prompt hydration, validation, storage, and replay
-safety.
+Run dataflow is the canonical owner of typed artifact families and reference modes. It defines how step outputs move
+from producer nodes to later consumer nodes without widening the state-machine routing signal. It covers produced
+artifacts, prompt hydration, validation, storage, and replay safety.
 
 The key words MUST, MUST NOT, SHOULD, SHOULD NOT, MAY are to be interpreted as in RFC 2119 / BCP 14.
 
@@ -114,7 +117,130 @@ Rules:
 - Code and diffs MUST NOT be copied into runtime storage; downstream nodes receive pointers such as branch/head/PR
   metadata.
 
+## Draft Target: Typed Artifact Families
+
+The shipped `produces.name` plus optional `resultSchema` contract remains the current behavior. The
+target compiler replaces the single Git-shaped catch-all convention with explicit, versioned artifact families.
+
+### Family and schema identity
+
+```ts
+type ArtifactSchemaRef = {
+  family: string;
+  schemaId: string;
+  version: string;
+  digest: string;
+};
+
+type ArtifactEnvelope = {
+  artifactId: string;
+  schema: ArtifactSchemaRef;
+  value: ArtifactValueRef;
+  provenance: {
+    runId: string;
+    nodeId: string;
+    ordinal: number;
+    attemptId?: string;
+    executionPlanDigest: string;
+    producedAt: string;
+  };
+};
+
+type ArtifactValueRef =
+  | {
+      mode: 'inline';
+      mediaType: 'application/json';
+      value: unknown;
+      contentDigest: string;
+    }
+  | {
+      mode: 'content-addressed';
+      storeId: string;
+      contentDigest: string;
+      mediaType: string;
+      bytes: number;
+    }
+  | {
+      mode: 'external';
+      store: 'git' | 'filesystem' | 'github' | 'revisium';
+      locator: Record<string, string>;
+      immutableRevision: string;
+      contentDigest?: string;
+    };
+```
+
+The installed playbook owns artifact schema documents. The execution plan pins every schema id, version, and digest
+that its graph can produce or consume. [execution-plan-v1.spec.md](./execution-plan-v1.spec.md) owns that pin; it MUST
+NOT redefine family fields or reference semantics.
+
+Initial family vocabulary:
+
+| Family | Contract purpose |
+| --- | --- |
+| `plan` | Requirements, route, or implementation plan intended for review. |
+| `review` | Independent review verdict and findings over a pinned subject. |
+| `change` | Repository/workspace change identity and typed source/diff references. |
+| `pr-readiness` | One bounded GitHub readiness snapshot and observed external revision. |
+| `verification` | Local or remote gate results and evidence references. |
+| `gate-resolution` | Human outcome plus the pinned approval subject and resolution provenance. |
+| `knowledge-proposal` | Proposal document/revision metadata for ADR or KB acceptance flow. |
+| `resource` | Repository snapshot or workspace resource identity and lifecycle evidence. |
+
+Artifact family ids are extensible installed data. A family id MUST resolve to one pinned schema version before a run
+starts. Producers and consumers MUST NOT infer a schema from an artifact name.
+
+### Reference modes
+
+`inline` is allowed only for secret-redacted JSON within the pinned payload limit.
+`content-addressed` is REQUIRED for immutable content whose bytes are stored by Revo and exceed that limit.
+`external` is REQUIRED when Git, filesystem, GitHub, or Revisium remains the authoritative store.
+
+An external reference MUST include an immutable revision. A mutable path, branch name, PR number, or document id by
+itself is not an artifact identity. Git references use the repository snapshot plus object/commit identity.
+Filesystem references use a resource id plus content digest. GitHub references use repository identity plus an
+observed revision such as head SHA. Revisium references use project/document identity plus accepted revision id.
+
+Prisma `RunOutput` rows store the envelope and bounded inline value or reference. They MUST NOT store full
+source trees, diffs, repository blobs, large logs, or duplicate accepted ADR/KB bodies. The authoritative bytes remain
+in Git, the validated filesystem/content-addressed store, GitHub, or Revisium.
+
+### Target change artifact
+
+The target `change` family separates repository/workspace identity from source and diff content:
+
+```ts
+type ChangeArtifact = {
+  repositorySnapshotDigest: string;
+  workspaceResourceId: string;
+  baseCommit: string;
+  headCommit: string;
+  branch?: string;
+  sourceRef: ArtifactValueRef;
+  diffRef?: ArtifactValueRef;
+  pullRequestRef?: ArtifactValueRef;
+};
+```
+
+`sourceRef` and `diffRef` MUST use external or content-addressed modes. They MUST NOT embed source
+or diff text inline. Workspace identity and lifecycle semantics are owned by
+[resources-workspaces-effects-v1.spec.md](./resources-workspaces-effects-v1.spec.md).
+
+### Target validation
+
+The compiler and runtime MUST validate:
+
+- every producer and consumer family resolves to one execution-plan schema pin;
+- producer output validates against the pinned family schema;
+- consumer aliases do not change the artifact family or schema version;
+- inline payloads satisfy size and redaction policy;
+- content-addressed bytes match their digest;
+- external references contain store-specific immutable identity;
+- recovery uses the recorded envelope and does not re-query a mutable latest artifact;
+- an unavailable reference fails with a typed artifact error before worker invocation.
+
 ### `schema:change` Produced Artifact
+
+The following shape documents shipped current behavior. It is not the target cross-family artifact model above.
 
 After a live developer change producer succeeds, the adapter records the agent's output with an attached `change`
 pointer:
@@ -170,6 +296,8 @@ guards still catch dynamic skips and stale paths.
 
 ## Changelog
 
+- 2026-07-11: Made this spec the artifact-family owner and added the Draft inline, content-addressed, and external
+  reference contract while preserving `schema:change` as current shipped behavior.
 - 2026-06-29: Normative-language / canon-discipline pass; no contract change.
 - 2026-06-27: Added issueRef propagation to produced change artifacts and integrator handoff.
 - 2026-06-27: Clarified that produced run outputs for retried runner nodes reference the winning physical attempt.

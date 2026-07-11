@@ -1,12 +1,21 @@
 # Getting started
 
 This guide starts the local Revo stack and verifies both front doors: MCP for agents and GraphQL for UI/scripts.
+It describes **Current shipped behavior**, not the Draft full-package `PlaybookVersion`/`ExecutionPlan` target.
+
+The current daemon seeds a product-owned executable graph from `control-plane/default-playbook/`. The canonical
+`@revisium/agent-playbook` catalogs can be inspected as authoring metadata, but the package cannot be installed and
+executed end to end by the shipped importer yet.
 
 ## Prerequisites
 
 - Node.js `>=24.11.1 <25`.
 - `pnpm install` in this repo for source checkout development.
 - `gh` auth and a clean target repo when the selected pipeline uses real GitHub/integrator behavior.
+
+Git/GitHub and worktree operations are external effects. Use a disposable or explicitly selected repository and
+expect their outcomes to depend on current local/remote state; Revo makes the transition over the recorded result
+durable, not the external operation deterministic.
 
 ## Start the daemon
 
@@ -50,6 +59,9 @@ Verify from the agent by calling:
 - `get_project`
 
 Core MCP verbs include run creation/start/cancel, `get_run_attention` (primary observation loop), `watch_run_changes` (cursor-based delivery), inbox gate resolution, repository diagnostics, and PR readiness. Normal observation loop: call `get_run_attention` after `start_run` and after each gate resolution; repeat until `nextAction` is `'done'`.
+
+MCP and GraphQL delegate to shared application services. Their response shapes differ, but neither is a separate
+workflow engine or a raw storage API.
 
 When you call `create_run` or `start_run`, the response includes a `monitoring` object that instructs you to act as operator/humanGate for the run. Follow the embedded `protocol` steps: poll `get_run_attention`, handle gates via inbox tools (`get_inbox_item` → `resolve_gate` / `approve_gate` / `reject_gate` / `answer_question`), and stop when `nextAction` is `"done"`. Pass `includeMonitoringGuidance: false` to suppress this directive if you manage orchestration externally. The full operator monitoring contract is documented in [specs/human-gates-v1.spec.md](./specs/human-gates-v1.spec.md).
 
@@ -163,3 +175,7 @@ pnpm run revo -- stop --profile dev
 
 Ctrl-C in an MCP or script client does not erase DBOS progress. Reconnect through MCP or GraphQL and reattach by
 run id.
+
+This recovery guarantee covers durable workflow progress and recorded results. The Draft
+[execution plan contract](./specs/execution-plan-v1.spec.md) extends the current route pin so recovery no longer needs
+any mutable playbook, capability, resource, or accepted-knowledge lookup.

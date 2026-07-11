@@ -1,9 +1,13 @@
 # Revo docs
 
-Documentation for `@revisium/orchestrator`, the local Revo host.
+Documentation for `@revisium/orchestrator`, the local Revo host and control plane.
 
-Revo turns a task into a playbook-driven state machine: agent steps, script steps, human gates, branches, loops,
-traceable outputs, and durable run history.
+Revo keeps deterministic algorithms and human gates in authority while short-lived AI workers propose and execute
+software-development work. The first wedge takes a task through an approved plan, an independently reviewed change,
+observed pull-request feedback, and a human-approved merge.
+
+Documents must label claims as **Current shipped behavior**, **Accepted target**, **Draft target**, or **Later** when
+the distinction matters. Implementation presence alone does not make a Draft decision Accepted.
 
 ## Read Order
 
@@ -32,19 +36,22 @@ There is no internal archive of obsolete plans. Git history is the archive.
 
 | If you change | Read first | Keep in sync |
 | --- | --- | --- |
-| Pipeline grammar, node kinds, verdicts, loops, branches | [pipeline state machine spec](./specs/pipeline-state-machine-v1.spec.md) | `src/pipeline-core/**`, default playbook pipeline templates |
+| Pipeline grammar, node kinds, verdicts, loops, branches | [pipeline state machine spec](./specs/pipeline-state-machine-v1.spec.md) | `src/pipeline-core/**`, built-in default playbook graph |
+| Installed playbook versions, resolved run pins, or replay inputs | [playbook storage v1](./specs/playbook-storage-v1.spec.md), [execution plan v1](./specs/execution-plan-v1.spec.md) | `src/playbook/**`, route creation, `TaskRun.routeDecision` |
 | Step output production or prompt hydration | [run dataflow spec](./specs/run-dataflow-v1.spec.md) | `src/pipeline-core/validate-dataflow.ts`, `src/pipeline/data-driven-task.workflow.ts`, `src/run/run-outputs.ts` |
 | Human approvals, questions, inbox semantics | [human gates spec](./specs/human-gates-v1.spec.md) | `src/pipeline/await-human.ts`, `src/control-plane/inbox.ts`, MCP and GraphQL gate methods |
 | GraphQL schema, resolver shape, UI contract | [GraphQL admin API v1 spec](./specs/graphql-admin-api-v1.spec.md) | `src/api/graphql-api/**`, feature API services, schema drift tests |
 | MCP tool surface or agent-facing verbs | [getting-started.md](./getting-started.md), [human gates spec](./specs/human-gates-v1.spec.md), [run profiles v1](./specs/run-profiles-v1.spec.md) | `src/mcp/**`, feature API services, MCP capability tests |
 | Control-plane tables or ownership classes | [control-plane-schema.md](./control-plane-schema.md) | `control-plane/bootstrap.config.json`, `src/control-plane/**`, `src/revisium/**` |
-| Playbook import or built-in playbook catalogs | [architecture-overview.md](./architecture-overview.md), [pipeline state machine spec](./specs/pipeline-state-machine-v1.spec.md), [default playbook policy spec](./specs/default-playbook-policy.spec.md) | `control-plane/default-playbook/**`, `src/playbook/**`, `@revisium/agent-playbook` catalog compatibility |
+| Playbook authoring/import or built-in bootstrap data | [architecture-overview.md](./architecture-overview.md), [playbook storage v1](./specs/playbook-storage-v1.spec.md), [execution plan v1](./specs/execution-plan-v1.spec.md) | `control-plane/default-playbook/**`, `src/playbook/**`, `@revisium/agent-playbook` authoring contract |
 | Model profiles, run profiles, routing policy, budgets, limits | [control-plane-schema.md](./control-plane-schema.md), [pipeline state machine spec](./specs/pipeline-state-machine-v1.spec.md), [run profiles v1](./specs/run-profiles-v1.spec.md) | `src/control-plane/definitions.ts`, `src/control-plane/run-profiles.ts`, `control-plane/default-playbook/catalog/run-profiles.json`, default playbook policy rows, cost tests |
 | Pipeline coverage strategy, DSL e2e cases, graph coverage, or hard skips | [pipeline test coverage v1](./specs/pipeline-test-coverage-v1.spec.md), [default playbook policy spec](./specs/default-playbook-policy.spec.md) | `src/e2e/support/pipeline-context.ts`, `src/e2e/pipeline/**`, `src/testing/policy/pipeline-coverage.ts`, `VERIFICATION.md` |
 | Test-layer boundaries, surface contexts, coverage evidence, semantic snapshots, or test timing | [test architecture v1](./specs/test-architecture-v1.spec.md), [current test coverage matrix](./specs/test-coverage-matrix-v1.json), [pipeline test coverage v1](./specs/pipeline-test-coverage-v1.spec.md) | `src/e2e/**`, `src/testing/policy/**`, `eslint-local-rules/test-architecture-boundaries.js`, `package.json`, `.github/workflows/ci.yml` |
 | Storage bootstrap, Prisma schema, DBOS placement, or embedded engine integration | [ADR-0007](./adr/0007-revo-storage-foundation.md), [storage database layout v1](./specs/storage-database-layout-v1.spec.md), [Revo Prisma and engine schema v1](./specs/revo-prisma-engine-schema-v1.spec.md) | `prisma/schema.prisma`, `src/storage/**`, `src/engine/**`, `src/revisium/**` |
-| Revo projects, ADR/KB stores, or template migrations | [ADR-0008](./adr/0008-revo-projects-and-versioned-knowledge.md), [Revo project knowledge and migrations v1](./specs/revo-project-knowledge-migrations-v1.spec.md) | future `src/projects/**`, future `src/revisium-store/**`, future `src/revisium-migrations/**` |
-| Runner behavior or external effects | [runner-contract.md](./runner-contract.md) | `src/runners/**`, `src/worker/**`, e2e runner scenarios |
+| Revo projects, ADR/KB stores, or template migrations | [ADR-0008](./adr/0008-revo-projects-and-versioned-knowledge.md), [Revo project knowledge and migrations v1](./specs/revo-project-knowledge-migrations-v1.spec.md) | `prisma/schema.prisma`, engine-backed project services as they land, project/knowledge tests |
+| Agent runner behavior | [runner-contract.md](./runner-contract.md) | `src/runners/**`, `src/worker/**`, e2e runner scenarios |
+| Script/effect registration or execution | [script runtime v1](./specs/script-runtime-v1.spec.md) | `src/pipeline/data-driven-task.workflow.ts`, product-owned script handlers, future effect registry |
+| Repository, worktree, or resource lifecycle | [resources, workspaces, and effects v1](./specs/resources-workspaces-effects-v1.spec.md) | `src/worker/git-worktree-manager.ts`, runner/effect adapters, artifact refs |
 | Context compression or prompt inputs | [context-budget.md](./context-budget.md) | `src/worker/build-context.ts`, run output references, role prompt composition |
 
 ## Diagrams
@@ -54,17 +61,22 @@ generated PNG diagrams unless the asset is genuinely visual and cannot be repres
 
 ## Decisions
 
-| ADR | Decision |
-| --- | --- |
-| [ADR-0001](./adr/0001-execution-engine-and-host.md) | DBOS durable engine and NestJS host |
-| [ADR-0002](./adr/0002-data-driven-pipeline-state-machine.md) | Pipeline-as-data engine |
-| [ADR-0003](./adr/0003-graphql-graph-shape.md) | GraphQL admin API graph-shaped contract |
-| [ADR-0004](./adr/0004-runner-execution-contract.md) | Runner execution contract |
-| [ADR-0005](./adr/0005-versioned-playbook-storage-and-revo-materialization.md) | Versioned playbook storage and Revo materialization |
-| [ADR-0006](./adr/0006-run-profiles-and-provider-neutral-pipelines.md) | Run profiles and provider-neutral feature-development |
-| [ADR-0007](./adr/0007-revo-storage-foundation.md) | Revo storage foundation |
-| [ADR-0008](./adr/0008-revo-projects-and-versioned-knowledge.md) | Revo projects and versioned knowledge |
-| [ADR-0009](./adr/0009-test-architecture-boundaries.md) | Accepted test-layer, context, and evidence-ownership boundaries |
+| ADR | Status | Decision |
+| --- | --- | --- |
+| [ADR-0001](./adr/0001-execution-engine-and-host.md) | Accepted | DBOS durable engine and NestJS host |
+| [ADR-0002](./adr/0002-data-driven-pipeline-state-machine.md) | Accepted | Pipeline-as-data engine |
+| [ADR-0003](./adr/0003-graphql-graph-shape.md) | Accepted | GraphQL admin API graph-shaped contract |
+| [ADR-0004](./adr/0004-runner-execution-contract.md) | Draft | Runner execution contract |
+| [ADR-0005](./adr/0005-versioned-playbook-storage-and-revo-materialization.md) | Draft | Versioned playbook storage, execution-plan input, and Revo materialization |
+| [ADR-0006](./adr/0006-run-profiles-and-provider-neutral-pipelines.md) | Draft | Run profiles and provider-neutral feature-development |
+| [ADR-0007](./adr/0007-revo-storage-foundation.md) | Draft | Revo storage foundation; substantial storage implementation has landed |
+| [ADR-0008](./adr/0008-revo-projects-and-versioned-knowledge.md) | Draft | Revo projects and versioned knowledge |
+| [ADR-0009](./adr/0009-test-architecture-boundaries.md) | Accepted | Test-layer, context, and evidence-ownership boundaries |
+
+ADR-0001 and ADR-0002 are immutable historical decisions. Their Revisium runtime-storage descriptions do not reflect
+shipped ownership; current facts live in [control-plane-schema.md](./control-plane-schema.md) and
+[repo-layer-contract.md](./repo-layer-contract.md). ADR-0007 proposes an amendment but remains Draft; the Accepted
+records stay unchanged unless that decision is accepted.
 
 ## Specs
 
@@ -72,6 +84,9 @@ generated PNG diagrams unless the asset is genuinely visual and cannot be repres
 | --- | --- |
 | [GraphQL admin API v1](./specs/graphql-admin-api-v1.spec.md) | Local GraphQL admin API transport, graph contract, compatibility, and verification |
 | [Pipeline state machine v1](./specs/pipeline-state-machine-v1.spec.md) | Template grammar, reducer, validation, versioning |
+| [Execution plan v1](./specs/execution-plan-v1.spec.md) | Draft immutable, fully resolved run inputs and replay boundary |
+| [Script runtime v1](./specs/script-runtime-v1.spec.md) | Draft versioned bounded-operation registry and typed result contract |
+| [Resources, workspaces, and effects v1](./specs/resources-workspaces-effects-v1.spec.md) | Draft repository/resource snapshots, workspace lifecycle, and effect boundary |
 | [Run dataflow v1](./specs/run-dataflow-v1.spec.md) | Step outputs, prompt hydration, output storage, validation |
 | [Human gates v1](./specs/human-gates-v1.spec.md) | Inbox-backed gates, questions, watch tools, PR review feedback loop |
 | [Default playbook policy](./specs/default-playbook-policy.spec.md) | Bundled `feature-development` policy rules, static verifier scope, and merge-gate recheck behavior |
@@ -96,7 +111,7 @@ generated PNG diagrams unless the asset is genuinely visual and cannot be repres
 | [architecture-overview.md](./architecture-overview.md) | Runtime layers, invariants, and lifecycle |
 | [developer-guide.md](./developer-guide.md) | Source map and contributor onboarding |
 | [getting-started.md](./getting-started.md) | Local daemon, MCP, and GraphQL workflow |
-| [control-plane-schema.md](./control-plane-schema.md) | Revisium table ownership and row classes |
-| [repo-layer-contract.md](./repo-layer-contract.md) | Current Revisium data-access boundary |
-| [runner-contract.md](./runner-contract.md) | Runner boundary and external-effect rules |
+| [control-plane-schema.md](./control-plane-schema.md) | Current DBOS, Prisma, Revisium, and file ownership |
+| [repo-layer-contract.md](./repo-layer-contract.md) | Product-service and storage-access boundary |
+| [runner-contract.md](./runner-contract.md) | Agent-runner boundary and relation to script/effect execution |
 | [context-budget.md](./context-budget.md) | Prompt context shape and token discipline |

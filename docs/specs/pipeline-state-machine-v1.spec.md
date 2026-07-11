@@ -1,24 +1,55 @@
 # Pipeline state machine v1 spec
 
-- **Status:** Accepted.
+- **Status:** Accepted
+- **Version:** v1
 - **Source files:** `src/pipeline-core/**`, `src/pipeline/data-driven-task.workflow.ts`,
   `src/pipeline/data-driven-template.ts`, `control-plane/default-playbook/catalog/pipelines.json`.
 - **Related ADRs:** [ADR-0002](../adr/0002-data-driven-pipeline-state-machine.md).
+- **Related specs:** [execution-plan-v1.spec.md](./execution-plan-v1.spec.md),
+  [script-runtime-v1.spec.md](./script-runtime-v1.spec.md),
+  [run-dataflow-v1.spec.md](./run-dataflow-v1.spec.md),
+  [human-gates-v1.spec.md](./human-gates-v1.spec.md).
 
 ## Scope
 
-This spec defines the versioned pipeline template grammar and the pure state-machine contract executed by the DBOS
-adapter. It covers routing and progress decisions, not runner implementation details or UI rendering.
+This spec is the canonical owner of the versioned pipeline graph grammar and the pure state-machine reducer contract
+executed by the DBOS adapter. It covers routing and progress decisions, not route-time resolution, script behavior,
+runner implementation details, storage projections, or UI rendering.
 
 The key words MUST, MUST NOT, SHOULD, SHOULD NOT, MAY are to be interpreted as in RFC 2119 / BCP 14.
 
 ## Invariants
 
-- Pipelines are data: a versioned graph template stored in a `pipelines.execution_policy_json` payload.
+- Pipelines are data. The shipped graph template is stored in a versioned
+  `pipelines.execution_policy_json` payload.
 - `pipeline-core` is pure, deterministic, and I/O-free.
-- DBOS owns live progress and replay; Revisium owns meaning, projections, events, and inbox rows.
+- DBOS owns durable workflow progress, waits, retries, checkpoints, and replay.
+- Revo Prisma owns mutable run, task, attempt, inbox, event, output, and cost rows.
+- Embedded Revisium owns versioned control-plane meaning such as installed pipeline definitions and policy.
 - Role and script identifiers in templates are opaque capability handles. The core MUST NOT hardcode role ids.
-- A run pins the template revision at start; later HEAD edits affect only new runs.
+- The core MUST NOT resolve runners, scripts, permissions, resources, schemas, secrets, or storage rows.
+- A reducer call consumes one graph, one state, and one recorded result, and emits exactly one decision.
+- A run pins the effective graph before execution; later source or registry edits affect only new runs.
+
+## Execution Boundary
+
+### Current shipped boundary
+
+The DBOS adapter receives the materialized template and partial route decision as workflow input. It invokes current
+runner and script adapters, persists runtime facts through Prisma data access, and feeds the recorded routing fields
+back to the pure reducer.
+
+### Draft target boundary
+
+The target adapter receives a pinned `ExecutionPlan` defined by
+[execution-plan-v1.spec.md](./execution-plan-v1.spec.md). The plan resolves the executable graph and every
+execution-affecting binding before the workflow starts. `pipeline-core` continues to consume only graph,
+state, and recorded results. It MUST NOT read a playbook source, mutable registry, repository, filesystem, Prisma,
+Revisium, DBOS internals, or network service.
+
+Script definitions, effect classes, and execution policy are owned by
+[script-runtime-v1.spec.md](./script-runtime-v1.spec.md). This spec owns only the opaque `scriptRef` in the
+graph and the `invokeScript` decision.
 
 ## Template Shape
 
@@ -47,7 +78,7 @@ The v1 node kind set is closed:
 | Kind | Purpose | Exit fields | Core decision |
 | --- | --- | --- | --- |
 | `agent` | Invoke a role capability | `next`, optional `catch` | `invokeRole` |
-| `script` | Invoke a system script capability | `next`, optional `catch` | `invokeScript` |
+| `script` | Invoke a pinned script/effect capability | `next`, optional `catch` | `invokeScript` |
 | `humanGate` | Suspend for human verdict | `branches`, optional `timeout` | `awaitGate` |
 | `choice` | Pure guard routing | `branches` | none; routes immediately |
 | `parallel` | Fork named branches | `branches[]`, `join` | `fork` |
@@ -106,9 +137,10 @@ defense-in-depth; it is not a substitute for giving the runner the active domain
 
 ## Failure and Timeout
 
-- Transient runner retry is a DBOS adapter concern, not a template concern. Templates MUST NOT declare retry policy;
+- Transient runner and script retry is a DBOS/effect-shell concern, not a template-grammar concern. Templates MUST
+  NOT declare retry policy;
   the adapter pins the resolved policy in the DBOS workflow input before enqueue and retries only eligible physical
-  runner attempts while keeping the logical node `stepKey` unchanged.
+  attempts while keeping the logical node `stepKey` unchanged.
 - `humanGate.timeout` is optional. If absent, the gate can wait indefinitely.
 - A gate timeout routes via `timeout.goto`; it is not matched by a verdict guard.
 - Effect failure precedence:
@@ -210,6 +242,8 @@ v1 reports safe/breaking information but does not migrate live in-flight runs.
 
 ## Changelog
 
+- 2026-07-11: Corrected runtime storage ownership to Revo Prisma, made this spec the pure graph/reducer owner, and
+  separated the current route input from the Draft pinned execution-plan boundary.
 - 2026-07-01: Added `cancelled` terminal status and documented reusable ordinary code-stuck recovery.
 - 2026-06-29: Normative-language / canon-discipline pass; no contract change.
 - 2026-06-27: Clarified that transient runner retry is implemented by the DBOS adapter around physical attempts,

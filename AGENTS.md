@@ -4,20 +4,28 @@ Repo-local context for coding agents. `CLAUDE.md` is a symlink to this file.
 
 ## Method vs. context
 
-Reusable method lives in the sibling `../agents` checkout. This repository keeps product context, source code,
+Reusable method lives in the sibling `../agent-playbook` checkout. This repository keeps product context, source code,
 ADRs, and specs. Do not copy canonical roles or pipelines into this repo's docs.
 
 ## What this is
 
-`agent-orchestrator` is the Revo host: a NestJS application that runs short-lived AI-agent steps through DBOS and
-stores product meaning in Revisium.
+`agent-orchestrator` is the Revo host: a NestJS application that runs short-lived AI-agent steps through DBOS.
+Revo is a deterministic, durable, local control plane over probabilistic AI workers. Agents may propose and execute
+work, but code and humans retain authority over transitions, budgets, gates, permissions, and irreversible actions.
 
 - **DBOS owns progress:** durable workflow cursor, retries, waits, and resume.
-- **Revisium owns meaning:** playbooks, roles, pipeline templates, model profiles, run profiles, and routing policy.
+- **Revisium owns versioned meaning:** installed playbook metadata, roles, pipeline definitions, model profiles, run
+  profiles, and routing policy.
 - **Prisma owns runtime state:** runs, tasks, attempts, inbox items, events, outputs, and costs.
+- **Git and files own source work:** repositories, worktrees, diffs, and large artifacts remain outside routing state.
 - **MCP is the agent front door:** local stdio bridge over product tools.
 - **GraphQL is the UI/script front door:** local NestJS/Yoga endpoint over the same feature services.
 - **CLI is lifecycle-first:** start, stop, status, restart, doctor, logs, and the MCP bridge.
+
+The current canonical `agent-playbook` pipeline catalog is discovery and execution-policy metadata, not an executable
+graph. The shipped built-in graph under `control-plane/default-playbook/` is product bootstrap data. The Draft target
+is a validated authoring package compiled into an immutable `PlaybookVersion`, then a fully resolved per-run
+`ExecutionPlan`; do not describe that target as shipped.
 
 Read [docs/architecture-overview.md](./docs/architecture-overview.md) and the specs in
 [docs/specs/](./docs/specs/) before changing runtime contracts.

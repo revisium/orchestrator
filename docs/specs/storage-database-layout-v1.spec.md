@@ -6,6 +6,9 @@
 - **Source files:** `src/config.ts`, `src/storage/ensure-storage.ts`, `src/storage/revo-database.ts`,
   `src/host/host.lifecycle.ts`, `src/engine/dbos.service.ts`, `prisma/schema.prisma`
 - **Related ADRs:** [ADR-0007](../adr/0007-revo-storage-foundation.md)
+- **Related specs:** [execution-plan-v1.spec.md](./execution-plan-v1.spec.md),
+  [resources-workspaces-effects-v1.spec.md](./resources-workspaces-effects-v1.spec.md),
+  [run-dataflow-v1.spec.md](./run-dataflow-v1.spec.md)
 
 ## Scope
 
@@ -38,6 +41,15 @@ product database, initializes the embedded Revisium engine in-process, and then 
 
 The previous external storage-daemon contract was replaced. Revo starts embedded storage itself and must not discover
 storage through external runtime files or local storage health endpoints during normal startup.
+
+Current ownership is split:
+
+- DBOS owns workflow progress, durable waits, retries, checkpoints, and replay;
+- Revo Prisma currently owns `RevoProject`, run/task repository-reference fields such as `TaskRun.repos` and
+  `RunTask.repoRef`, and run, task, attempt, inbox, event, output, and cost rows. It does not yet have a first-class
+  repository row;
+- embedded Revisium owns versioned control-plane meaning, not runtime projections;
+- Git and filesystem-backed storage own source changes, workspaces, diffs, and large artifacts.
 
 Profiles currently define DBOS database names:
 
@@ -81,6 +93,9 @@ The Revo product DB and DBOS system DB MUST be different database names.
 Revo product DB:
 
 - contains Revo-owned Prisma models;
+- contains immutable execution-plan bytes and digests when that Draft contract is implemented;
+- contains mutable repository/workspace-resource, artifact-index, and run projections when those Draft contracts are
+  implemented;
 - contains engine-required physical models as part of the Revo Prisma schema;
 - contains `_prisma_migrations` for Revo Prisma migrations;
 - may contain ordinary PostgreSQL indexes, check constraints, enum types, and advisory-lock usage owned by Revo.
@@ -135,6 +150,12 @@ Prisma migration seed. Concurrent bootstraps MUST converge on one `control-plane
 | DBOS system migrations | DBOS system DB schema `dbos` | `DBOS.launch()` | DBOS SDK |
 | File storage layout | local filesystem keys and metadata | storage bootstrap / lazy writes | Revo |
 
+Immutable execution-plan bytes and digests are persisted run records. Mutable workspace/resource records, artifact
+indexes, and other runtime projections belong in Revo Prisma. Immutable plan bytes or large referenced manifests MAY
+live in a content-addressed runtime store referenced by Prisma. Installed playbook and accepted ADR/KB revisions
+remain versioned Revisium meaning. Source, full diffs, and large blobs remain in Git or filesystem/content-addressed
+storage; they MUST NOT be copied into either database as routing state.
+
 Revo MUST NOT run DBOS system migrations manually. Revo MAY report the DBOS migration version for diagnostics by
 reading `dbos.dbos_migrations` in doctor/status commands.
 
@@ -165,6 +186,8 @@ not versioned product meaning.
 - whether non-branch engine rows, such as project file-usage rows, reference `projectId` values that no longer have a
   matching `RevoProject` row;
 - whether soft-deleted projects retain expected engine rows.
+- whether workspace/resource records point to valid contained paths and matching repository snapshots;
+- whether content-addressed artifact references resolve and match their digests.
 
 ## Validation
 
@@ -181,6 +204,8 @@ Required tests:
 - user APIs reject new writes for archived or soft-deleted projects;
 - startup does not serve requests when Revo migrations fail;
 - fresh bootstrap works without external storage-daemon runtime files or health checks.
+- runtime tables hold only bounded artifact/resource metadata while source, diffs, and large blobs remain in
+  Git/filesystem-backed storage.
 
 ## Compatibility
 
@@ -220,4 +245,6 @@ revo start
 
 ## Changelog
 
+- 2026-07-11: Clarified the DBOS/Prisma/Revisium/Git ownership split and placed execution-plan,
+  workspace/resource, and artifact-index runtime records outside versioned meaning.
 - 2026-07-06: Initial draft.
