@@ -1,6 +1,6 @@
 # Revo data-access contract
 
-This page describes the **Current shipped** product-service boundary, then identifies the **Draft target** for pinned
+This page describes the **Current shipped behavior** product-service boundary, then identifies the **Draft target** for pinned
 execution. It does not define storage schemas.
 
 Product services hide storage details from transport adapters. MCP and GraphQL call product services; product services

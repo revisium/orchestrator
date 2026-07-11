@@ -47,6 +47,9 @@ Every run worktree that executes a prompt-backed or code-backed role MUST contai
     catalog/
     roles/
     pipelines/
+    graphs/
+    scripts/
+    schemas/
     references/
     stacks/
     method/
@@ -317,6 +320,8 @@ playbook_selected_reference_missing.
 
 ## Changelog
 
+- 2026-07-11: Added `graphs/`, `scripts/`, and `schemas/` to the Draft materialized playbook layout to match the
+  canonical roots.
 - 2026-07-11: Made materialization depend only on the pinned playbook version, execution plan, and planned workspace;
   removed live-source and composed-prompt fallback from the Draft target.
 - 2026-07-01: Initial draft target contract for Revo worktree playbook materialization.

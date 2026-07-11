@@ -49,7 +49,9 @@ canonical `agent-playbook` catalogs are metadata and are not yet a runnable end-
 - Keep runtime rows in Prisma. Creating runs, resolving gates, recording attempts, appending events, and recording costs
   must not create committed engine revisions.
 - Treat external effects as externally dependent operations. Keep them bounded and idempotent by run, node, and
-  attempt identity where DBOS retry can repeat a call; deterministic routing consumes their recorded typed result.
+  attempt identity because the current DBOS adapter registers steps without a retry policy, and DBOS replay may
+  re-execute an in-flight step before its checkpoint. Retry remains a separate valid effect/runner mechanism; this does
+  not imply that completed checkpointed effects replay. Deterministic routing consumes their recorded typed result.
 - Keep code and diffs in git. Revo payloads store summaries, evidence, and artifact refs, not full repository
   snapshots.
 - Keep docs and contracts in the same PR as behavior changes. Specs get exact contract changes; guides get workflow

@@ -79,11 +79,11 @@ ADR/KB table initialization, one-proposal-per-branch discipline, review/acceptan
 future-run selection pins, repository resources, and attachment lifecycle remain Draft. This ADR stays Draft until
 those contracts and implementation are reviewed as one coherent boundary.
 
-## Direct Cutover
+## Draft target: Direct Cutover
 
-The target does not create mirrored Revisium `revo_projects` rows, separate ADR and KB engine projects, duplicate ADR
-bodies, Revo-specific copies of engine migration state, fallback reads, or dual-write knowledge stores. Internal alpha
-data does not require migration shims.
+The Draft target does not create mirrored Revisium `revo_projects` rows, separate ADR and KB engine projects, duplicate
+ADR bodies, Revo-specific copies of engine migration state, fallback reads, or dual-write knowledge stores. Internal
+alpha data does not require migration shims.
 
 ## Alternatives
 
