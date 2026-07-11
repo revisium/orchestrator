@@ -45,6 +45,8 @@ git history for old task text.
 ## Editing rules
 
 - Inspect current source before changing docs that describe runtime behavior.
+- Keep committed documentation in English as the canonical version. Russian mirrors are local-only under
+  `docs/**/ru/`; do not commit them or link to them from tracked documentation.
 - Keep ADRs concise; move exact schemas, APIs, validation rules, and examples to specs.
 - Do not describe GraphQL graph-shape migration as landed until the full v1 contract is implemented and
   legacy flat/run-scoped roots are removed from `src/api/graphql-api/schema.graphql`.
