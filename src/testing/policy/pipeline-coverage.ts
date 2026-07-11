@@ -983,18 +983,25 @@ function validatePrimaryTagsBelongToDeclarations(registry: PipelineCoverageRegis
 
 function primaryClaims(registry: PipelineCoverageRegistry): Map<PipelineCoverageCellId, string[]> {
   const claims = new Map<PipelineCoverageCellId, string[]>();
-  const add = (cellId: PipelineCoverageCellId, owner: string) => {
-    const owners = claims.get(cellId) ?? [];
-    owners.push(owner);
-    claims.set(cellId, owners);
-  };
   for (const scenario of registry.scenarios) {
-    for (const cellId of scenario.primaryCellIds) add(cellId, `scenario:${scenario.id}`);
+    for (const cellId of scenario.primaryCellIds) addPrimaryClaim(claims, cellId, `scenario:${scenario.id}`);
   }
   for (const ownership of registry.ownership) {
-    for (const cellId of ownership.primaryCellIds) add(cellId, `${ownership.owner}:${ownership.ownerSurface}`);
+    for (const cellId of ownership.primaryCellIds) {
+      addPrimaryClaim(claims, cellId, `${ownership.owner}:${ownership.ownerSurface}`);
+    }
   }
   return claims;
+}
+
+function addPrimaryClaim(
+  claims: Map<PipelineCoverageCellId, string[]>,
+  cellId: PipelineCoverageCellId,
+  owner: string,
+): void {
+  const owners = claims.get(cellId) ?? [];
+  owners.push(owner);
+  claims.set(cellId, owners);
 }
 
 function definePipelineCoverageManifest(
@@ -1100,11 +1107,17 @@ export function validatePipelineCoverageRegistry(input: {
   const definedCells = new Map(catalog.cells.map((cell) => [cell.id, cell]));
   const ownedCells = new Set<PipelineCoverageCellId>();
   const dslPrimaryCells = new Set<PipelineCoverageCellId>();
+  const ownerClaims = new Map<PipelineCoverageCellId, string[]>();
   const diagnostics: PipelineCoverageDiagnostic[] = [];
 
-  addOwnershipAlgebraDiagnostics(diagnostics, registry, input.currentStage ?? 'stage-2');
-  addScenarioDiagnostics(diagnostics, definedCells, ownedCells, dslPrimaryCells, registry.scenarios);
-  addOwnershipDiagnostics(diagnostics, definedCells, ownedCells, registry.ownership);
+  addScenarioDiagnostics(diagnostics, definedCells, ownedCells, dslPrimaryCells, ownerClaims, registry.scenarios);
+  addOwnershipDiagnostics(diagnostics, definedCells, ownedCells, ownerClaims, registry.ownership);
+  addOwnershipAlgebraDiagnostics(
+    diagnostics,
+    ownerClaims,
+    registry.waivers,
+    input.currentStage ?? 'stage-2',
+  );
   addWaiverDiagnostics(diagnostics, definedCells, ownedCells, registry.waivers, input.currentStage ?? 'stage-2');
   addUnownedCellDiagnostics(diagnostics, catalog.cells, ownedCells);
   addProfileRoutingSignatureDiagnostics(
@@ -1123,6 +1136,7 @@ function addScenarioDiagnostics(
   definedCells: ReadonlyMap<PipelineCoverageCellId, PipelineCoverageCell>,
   ownedCells: Set<PipelineCoverageCellId>,
   dslPrimaryCells: Set<PipelineCoverageCellId>,
+  ownerClaims: Map<PipelineCoverageCellId, string[]>,
   scenarios: readonly PipelineDslCoverageScenario[],
 ): void {
   for (const scenario of scenarios) {
@@ -1130,7 +1144,8 @@ function addScenarioDiagnostics(
       scenarioId: scenario.id,
       ownerSurface: scenario.ownerSurface,
     });
-    addPrimaryCellClaimDiagnostics(diagnostics, definedCells, ownedCells, dslPrimaryCells, {
+    addPrimaryCellClaimDiagnostics(diagnostics, definedCells, ownedCells, ownerClaims, dslPrimaryCells, {
+      ownerClaim: `scenario:${scenario.id}`,
       declaration: `scenario ${scenario.id}`,
       evidence: `DSL scenario ${scenario.id}`,
       tags: scenario.tags,
@@ -1147,13 +1162,15 @@ function addOwnershipDiagnostics(
   diagnostics: PipelineCoverageDiagnostic[],
   definedCells: ReadonlyMap<PipelineCoverageCellId, PipelineCoverageCell>,
   ownedCells: Set<PipelineCoverageCellId>,
+  ownerClaims: Map<PipelineCoverageCellId, string[]>,
   ownership: readonly PipelineCoverageOwnership[],
 ): void {
   for (const owner of ownership) {
     addDefinedCellDiagnostics(diagnostics, definedCells, owner.cellIds, {
       ownerSurface: owner.ownerSurface,
     });
-    addPrimaryCellClaimDiagnostics(diagnostics, definedCells, ownedCells, undefined, {
+    addPrimaryCellClaimDiagnostics(diagnostics, definedCells, ownedCells, ownerClaims, undefined, {
+      ownerClaim: `${owner.owner}:${owner.ownerSurface}`,
       declaration: `${owner.owner}:${owner.ownerSurface}`,
       evidence: `${owner.owner} evidence ${owner.ownerSurface}`,
       tags: owner.tags,
@@ -1167,6 +1184,7 @@ function addOwnershipDiagnostics(
 }
 
 type PrimaryCellClaim = Readonly<{
+  ownerClaim: string;
   declaration: string;
   evidence: string;
   tags: readonly PipelineCoverageTag[];
@@ -1177,36 +1195,110 @@ type PrimaryCellClaim = Readonly<{
   context: Readonly<{ scenarioId?: string; ownerSurface?: string }>;
 }>;
 
+type PrimaryCellClaimDerivation = Readonly<{
+  undeclaredPrimaryTags: readonly PipelineCoverageTag[];
+  claimedPrimaryCellIds: ReadonlySet<PipelineCoverageCellId>;
+  derivedPrimaryCellIds: ReadonlySet<PipelineCoverageCellId>;
+  materializedSelectors: string;
+}>;
+
+type PrimaryCellClaimValidationState = Readonly<{
+  diagnostics: PipelineCoverageDiagnostic[];
+  definedCells: ReadonlyMap<PipelineCoverageCellId, PipelineCoverageCell>;
+  ownedCells: Set<PipelineCoverageCellId>;
+  ownerClaims: Map<PipelineCoverageCellId, string[]>;
+  acceptedCells: Set<PipelineCoverageCellId> | undefined;
+}>;
+
 function addPrimaryCellClaimDiagnostics(
   diagnostics: PipelineCoverageDiagnostic[],
   definedCells: ReadonlyMap<PipelineCoverageCellId, PipelineCoverageCell>,
   ownedCells: Set<PipelineCoverageCellId>,
+  ownerClaims: Map<PipelineCoverageCellId, string[]>,
   acceptedCells: Set<PipelineCoverageCellId> | undefined,
   claim: PrimaryCellClaim,
 ): void {
+  const derivation = derivePrimaryCellClaim(claim);
+  const state = { diagnostics, definedCells, ownedCells, ownerClaims, acceptedCells };
+  addUndeclaredPrimaryTagDiagnostics(state, claim, derivation);
+  addDerivedPrimaryCellClaimDiagnostics(state, claim, derivation);
+  addSuppliedPrimaryCellClaimDiagnostics(state, claim, derivation);
+}
+
+function derivePrimaryCellClaim(claim: PrimaryCellClaim): PrimaryCellClaimDerivation {
   const undeclaredPrimaryTags = claim.primaryTags.filter((tag) => !claim.tags.includes(tag));
-  for (const tag of undeclaredPrimaryTags) {
-    diagnostics.push({
+  const declaredPrimaryTags = claim.primaryTags.filter((tag) => !undeclaredPrimaryTags.includes(tag));
+  return {
+    undeclaredPrimaryTags,
+    claimedPrimaryCellIds: new Set(claim.materialized.flatMap((identity) =>
+      cellIdsFor(identity, claim.primaryTags))),
+    derivedPrimaryCellIds: new Set(claim.materialized.flatMap((identity) =>
+      cellIdsFor(identity, declaredPrimaryTags))),
+    materializedSelectors: claim.materialized
+      .map((identity) => `${identity.pipelineId}/${identity.profileId}`)
+      .toSorted(compareStrings)
+      .join(', '),
+  };
+}
+
+function addUndeclaredPrimaryTagDiagnostics(
+  state: PrimaryCellClaimValidationState,
+  claim: PrimaryCellClaim,
+  derivation: PrimaryCellClaimDerivation,
+): void {
+  for (const tag of derivation.undeclaredPrimaryTags) {
+    state.diagnostics.push({
       code: 'PIPELINE_COVERAGE_INCONSISTENT_PRIMARY_CLAIM',
       message: `primary coverage tag ${tag} is not declared by ${claim.evidence} tags`,
       tag,
       ...claim.context,
     });
   }
-  const declaredPrimaryTags = claim.primaryTags.filter((tag) => !undeclaredPrimaryTags.includes(tag));
-  const claimedPrimaryCellIds = new Set(claim.materialized.flatMap((identity) =>
-    cellIdsFor(identity, claim.primaryTags)));
-  const derivedPrimaryCellIds = new Set(claim.materialized.flatMap((identity) =>
-    cellIdsFor(identity, declaredPrimaryTags)));
-  const materializedSelectors = claim.materialized
-    .map((identity) => `${identity.pipelineId}/${identity.profileId}`)
-    .toSorted(compareStrings)
-    .join(', ');
+}
 
+function addDerivedPrimaryCellClaimDiagnostics(
+  state: PrimaryCellClaimValidationState,
+  claim: PrimaryCellClaim,
+  derivation: PrimaryCellClaimDerivation,
+): void {
+  for (const cellId of derivation.derivedPrimaryCellIds) {
+    if (!state.definedCells.has(cellId)) {
+      if (!claim.cellIds.includes(cellId)) {
+        state.diagnostics.push({
+          code: 'PIPELINE_COVERAGE_UNDEFINED_CELL',
+          message: `coverage cell ${cellId} derived from ${claim.evidence} primary tags is not defined by the selected materialized catalog`,
+          cellId,
+          tag: tagFromCellId(cellId),
+          ...claim.context,
+        });
+      }
+      continue;
+    }
+    state.ownedCells.add(cellId);
+    addPrimaryClaim(state.ownerClaims, cellId, claim.ownerClaim);
+    if (!claim.primaryCellIds.includes(cellId)) {
+      state.diagnostics.push({
+        code: 'PIPELINE_COVERAGE_INCONSISTENT_PRIMARY_CLAIM',
+        message: `primary coverage cell ${cellId} derived from ${claim.evidence} primary tags under ${derivation.materializedSelectors} is missing from primaryCellIds`,
+        cellId,
+        tag: tagFromCellId(cellId),
+        ...claim.context,
+      });
+      continue;
+    }
+    if (claim.cellIds.includes(cellId)) state.acceptedCells?.add(cellId);
+  }
+}
+
+function addSuppliedPrimaryCellClaimDiagnostics(
+  state: PrimaryCellClaimValidationState,
+  claim: PrimaryCellClaim,
+  derivation: PrimaryCellClaimDerivation,
+): void {
   for (const cellId of claim.primaryCellIds) {
     const declared = claim.cellIds.includes(cellId);
     if (!declared) {
-      diagnostics.push({
+      state.diagnostics.push({
         code: 'PIPELINE_COVERAGE_UNDEFINED_CELL',
         message: `primary coverage cell ${cellId} is not declared by ${claim.declaration}`,
         cellId,
@@ -1214,19 +1306,15 @@ function addPrimaryCellClaimDiagnostics(
         ...claim.context,
       });
     }
-    const consistent = derivedPrimaryCellIds.has(cellId);
-    if (!consistent && !claimedPrimaryCellIds.has(cellId)) {
-      diagnostics.push({
+    const consistent = derivation.derivedPrimaryCellIds.has(cellId);
+    if (!consistent && !derivation.claimedPrimaryCellIds.has(cellId)) {
+      state.diagnostics.push({
         code: 'PIPELINE_COVERAGE_INCONSISTENT_PRIMARY_CLAIM',
-        message: `primary coverage cell ${cellId} is not derived from ${claim.evidence} primary tags under ${materializedSelectors}`,
+        message: `primary coverage cell ${cellId} is not derived from ${claim.evidence} primary tags under ${derivation.materializedSelectors}`,
         cellId,
         tag: tagFromCellId(cellId),
         ...claim.context,
       });
-    }
-    if (declared && consistent && definedCells.has(cellId)) {
-      ownedCells.add(cellId);
-      acceptedCells?.add(cellId);
     }
   }
 }
@@ -1259,12 +1347,12 @@ function addWaiverDiagnostics(
 
 function addOwnershipAlgebraDiagnostics(
   diagnostics: PipelineCoverageDiagnostic[],
-  registry: PipelineCoverageRegistry,
+  ownerClaims: ReadonlyMap<PipelineCoverageCellId, string[]>,
+  waivers: readonly PipelineCoverageWaiver[],
   currentStage: PipelineCoverageStage,
 ): void {
-  const ownerClaims = primaryClaims(registry);
   const waiverClaims = new Map<PipelineCoverageCellId, string[]>();
-  for (const waiver of registry.waivers) {
+  for (const waiver of waivers) {
     if (!isCompleteCoverageWaiver(waiver) || isExpiredCoverageWaiver(waiver, currentStage)) continue;
     for (const cellId of waiver.cellIds) {
       const claims = waiverClaims.get(cellId) ?? [];

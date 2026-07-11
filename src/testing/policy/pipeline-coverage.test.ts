@@ -554,13 +554,26 @@ test('pipeline coverage registry: rejects a defined primary cell forged under mi
   assert.ok(forgedOwner);
   assert.equal(forgedOwner.tags.includes(tag), false);
   assert.notEqual(pipelineCoverageCellId(forgedOwner.materialized, tag), cellId);
+  assert.equal(
+    PIPELINE_COVERAGE_REGISTRY.ownership.some((owner) => owner.primaryCellIds.includes(cellId)),
+    false,
+  );
 
   const registry = registryWith({
     scenarios: PIPELINE_COVERAGE_REGISTRY.scenarios.map((scenario) => {
+      const ownsTarget = scenario.primaryCellIds.includes(cellId);
+      const primaryTags = ownsTarget
+        ? scenario.primaryTags.filter((candidate) => candidate !== tag)
+        : scenario.primaryTags;
       const primaryCellIds = scenario.primaryCellIds.filter((candidate) => candidate !== cellId);
       return scenario.id === forgedOwner.id
-        ? { ...scenario, cellIds: [...scenario.cellIds, cellId], primaryCellIds: [...primaryCellIds, cellId] }
-        : { ...scenario, primaryCellIds };
+        ? {
+          ...scenario,
+          primaryTags,
+          cellIds: [...scenario.cellIds, cellId],
+          primaryCellIds: [...primaryCellIds, cellId],
+        }
+        : { ...scenario, primaryTags, primaryCellIds };
     }),
     ownership: PIPELINE_COVERAGE_REGISTRY.ownership.map((owner) => ({
       ...owner,
@@ -867,6 +880,54 @@ test('pipeline coverage registry: rejects a cell that is both owned and waived',
 
   assert.ok(diagnostics.some((diagnostic) =>
     diagnostic.code === 'PIPELINE_COVERAGE_OWNED_AND_WAIVED' && diagnostic.tag === tag));
+});
+
+test('pipeline coverage registry: a waiver cannot mask a missing derived primary cell', () => {
+  const owner = PIPELINE_COVERAGE_REGISTRY.ownership.find((candidate) =>
+    candidate.owner === 'static-policy' && candidate.materialized.length > 1 && candidate.primaryCellIds.length > 0);
+  const cellId = owner?.primaryCellIds[0];
+  const cell = PIPELINE_COVERAGE_MANIFEST.catalog.cells.find((candidate) => candidate.id === cellId);
+  assert.ok(owner);
+  assert.ok(cellId);
+  assert.ok(cell);
+  assert.equal(owner.primaryTags.includes(cell.tag), true);
+  assert.equal(owner.cellIds.includes(cellId), true);
+  assert.equal(owner.materialized.some((identity) =>
+    pipelineCoverageCellId(identity, cell.tag) === cellId), true);
+  const materializedSelectors = owner.materialized
+    .map((identity) => `${identity.pipelineId}/${identity.profileId}`)
+    .toSorted()
+    .join(', ');
+
+  const registry = registryWith({
+    ownership: PIPELINE_COVERAGE_REGISTRY.ownership.map((candidate) => candidate === owner
+      ? { ...candidate, primaryCellIds: candidate.primaryCellIds.filter((id) => id !== cellId) }
+      : candidate),
+    waivers: [waiverForCell({
+      id: 'missing-primary-cell-waiver',
+      tag: cell.tag,
+      materialized: cell.materialized,
+      reason: 'negative fixture',
+      ownerSurface: 'src/testing/policy/pipeline-coverage.test.ts',
+      expiry: { stage: 'stage-3' },
+    })],
+  });
+
+  assert.deepEqual(validatePipelineCoverageRegistry({ pipelines, runProfiles, registry }), [
+    {
+      code: 'PIPELINE_COVERAGE_INCONSISTENT_PRIMARY_CLAIM',
+      message: `primary coverage cell ${cellId} derived from static-policy evidence ${owner.ownerSurface} primary tags under ${materializedSelectors} is missing from primaryCellIds`,
+      cellId,
+      tag: cell.tag,
+      ownerSurface: owner.ownerSurface,
+    },
+    {
+      code: 'PIPELINE_COVERAGE_OWNED_AND_WAIVED',
+      message: `coverage cell ${cellId} is both owned and waived`,
+      cellId,
+      tag: cell.tag,
+    },
+  ]);
 });
 
 test('pipeline coverage registry: validates waiver expiry and keeps the committed set empty', () => {
