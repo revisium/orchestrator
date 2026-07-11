@@ -4,7 +4,8 @@
 - **Decision date:** 2026-06-29
 - **Specs:** [runner manifest v1](../specs/runner-manifest-v1.spec.md),
   [runner result envelope v1](../specs/runner-result-envelope-v1.spec.md),
-  [runner capabilities v1](../specs/runner-capabilities-v1.spec.md)
+  [runner capabilities v1](../specs/runner-capabilities-v1.spec.md),
+  [ACP runner session v1](../specs/acp-runner-session-v1.spec.md)
 - **Refines:** [ADR-0002](./0002-data-driven-pipeline-state-machine.md) (data-driven pipeline state machine)
 - **Relates-to:** [runner contract](../runner-contract.md)
 
@@ -28,18 +29,18 @@ The engine treats all of it as code, in the wrong layer.
 ## Decision
 
 Adopt a three-layer runner model that splits runner knowledge by what genuinely varies, so the engine grows by
-the number of code strategies (a small set of `stdoutParser` and `permissionStyle` ids, on the order of four or
-five of each ever), not by the number of runners.
+the number of code strategies (a small set of `protocolDriver`, `stdoutParser`, and `permissionStyle` ids), not by
+the number of runners.
 
-- **Layer 1 — code strategies.** A closed registry of code strategies, referenced by id, on two orthogonal axes.
-  `stdoutParser` is a pure function from the runner's raw output stream to a normalized result — irreducibly code,
-  because each vendor frames a bespoke event tree. `permissionStyle` maps portable `role.rights` and
-  `role.allowedTools` to the runner's native permission expression, a small interpreter over a data table. A
-  manifest references the two ids independently; there is no bundled `family` id. Code is added only when a new
-  parser or style appears, never when a new runner reuses an existing pair.
-- **Layer 2 — runner manifest (data).** A declarative record binding a concrete runner to a `stdoutParser` id, a
-  `permissionStyle` id, and declarable fields. Adding a runner that reuses an existing
-  `(stdoutParser, permissionStyle)` pair is a pure manifest change with no engine code.
+- **Layer 1 — code strategies.** A closed registry of code strategies, referenced by id, on three orthogonal axes.
+  `protocolDriver` coordinates an interactive request/response protocol over an executor-owned transport;
+  one-shot CLI runners use the built-in `one-shot` driver. `stdoutParser` is a pure function from already captured
+  output to a normalized result. `permissionStyle` maps portable `role.rights` and `role.allowedTools` to the
+  runner's native permission expression. A manifest references the three ids independently; there is no bundled
+  `family` id. Code is added only when a new driver, parser, or style appears.
+- **Layer 2 — runner manifest (data).** A declarative record binding a concrete runner to a `protocolDriver` id, a
+  `stdoutParser` id, a `permissionStyle` id, and declarable fields. Adding a runner that reuses an existing
+  `(protocolDriver, stdoutParser, permissionStyle)` triple is a pure manifest change with no engine code.
 - **Layer 3 — profile and registry (selection).** Which runner a role resolves to, per profile, and the registry
   that holds manifests, are a separate decision (#169 / #170 / #186, a future selection ADR). This ADR defines the
   contract a selected runner must satisfy; it does not define selection.
@@ -65,7 +66,9 @@ The exact replay model is in [runner-manifest-v1.spec.md](../specs/runner-manife
 
 ## Examples
 
-- A new runner that reuses `(jsonl-exec, sandbox-enum)` is a config-only PR: one manifest, zero source diff.
+- A new runner that reuses `(one-shot, jsonl-exec, sandbox-enum)` is a config-only PR: one manifest, zero source diff.
+- An ACP runner uses an interactive `acp-stdio-v1` protocol driver while keeping process creation, timeout, and kill
+  ownership in the shared process executor; see ADR-0010 and the ACP runner session spec.
 - A `tool-call`-tier runner whose provider ignores forced `tool_choice` degrades to the `prompt-only` floor within
   the same attempt; only output with no usable verdict fails the node to `revo.ResultInvalid`.
 - A run started against manifest digest `D` continues, replays, and recovers against `D`, even after an operator
@@ -82,17 +85,18 @@ The exact replay model is in [runner-manifest-v1.spec.md](../specs/runner-manife
   tree with no shared grammar (the honest example is the ~115-line bespoke Codex reduction at
   `src/worker/codex-runner.ts:261-376`), so a combinator adds an abstraction layer without removing the per-vendor
   work.
-- **Hybrid — code-strategy layer (O(parsers)+O(styles)) + manifest data (O(runners)). Chosen.** Code grows only
-  with a new `stdoutParser` or `permissionStyle`; runners reusing an existing pair are pure config.
+- **Hybrid — code-strategy layer (O(drivers)+O(parsers)+O(styles)) + manifest data (O(runners)). Chosen.** Code grows
+  only with a new `protocolDriver`, `stdoutParser`, or `permissionStyle`; runners reusing an existing triple are pure
+  config.
 
 ## Consequences
 
-- Adding a runner that shares an existing `(stdoutParser, permissionStyle)` pair with no engine diff is the
+- Adding a runner that shares an existing `(protocolDriver, stdoutParser, permissionStyle)` triple with no engine diff is the
   conformance test for this contract.
 - The route decision gains snapshot fields — a named schema change, not a silently deferred one (see the manifest
   spec target migration).
-- The system-entity ids (`stdoutParser`, `permissionStyle`) become a public versioned contract once manifests
-  reference them: a behavior-changing parser or style ships as a new id, and renaming or removing one migrates
+- The system-entity ids (`protocolDriver`, `stdoutParser`, `permissionStyle`) become a public versioned contract once manifests
+  reference them: a behavior-changing driver, parser, or style ships as a new id, and renaming or removing one migrates
   every manifest that references it. Plugin-API discipline; full policy in the manifest spec.
 - The audit's runner-id hardcode theme is resolved: the branch functions and the dispatch switch collapse into
   manifest lookups, and the Codex provider throw becomes declarative `constraints.allowedProviders`.
@@ -106,8 +110,10 @@ The exact replay model is in [runner-manifest-v1.spec.md](../specs/runner-manife
 
 - Where manifests live and load from (control-plane table, shipped config file, or both with override precedence)
   belongs to the registry decision (#186); flagged here because the system-entity contract depends on it.
-- Do `kind=api` / `kind=gateway` need capability fields beyond `authMode` / `provider`, or does the parser/style
-  pair fully capture the difference? Defer until the first non-`cli` runner lands.
+- Do `kind=api` / `kind=gateway` need capability fields beyond `authMode` / `provider`, or does the
+  driver/parser/style triple fully capture the difference? Defer until the first non-`cli` runner lands.
 - Is `privacyClass` a closed enum (`external` | `self-hosted` | `local`) or an open tag set? Closed enum proposed.
 - For `tool-call`-tier runners, is `submit_result` always engine-injected, or may a manifest opt a runner out?
   Defer until the first `tool-call` runner (OpenCode) lands.
+- Whether protocol drivers beyond `one-shot` and `acp-stdio-v1` need another transport abstraction is deferred until
+  the first API-native interactive runner. Process ownership remains in the shared executor either way.

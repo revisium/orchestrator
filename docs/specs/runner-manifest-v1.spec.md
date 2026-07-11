@@ -6,12 +6,14 @@
 - **Source files:** `src/pipeline/route-contract.ts`, `src/worker/runner-dispatch.ts`,
   `src/worker/claude-code-runner.ts`, `src/worker/codex-runner.ts`, `src/worker/process-executor.ts`,
   `src/control-plane/definitions.ts`, `src/pipeline/data-driven-task.workflow.ts`
-- **Related ADRs:** [ADR-0004](../adr/0004-runner-execution-contract.md), [ADR-0002](../adr/0002-data-driven-pipeline-state-machine.md)
+- **Related ADRs:** [ADR-0004](../adr/0004-runner-execution-contract.md),
+  [ADR-0010](../adr/0010-acp-process-and-session-isolation.md),
+  [ADR-0002](../adr/0002-data-driven-pipeline-state-machine.md)
 
 ## Scope
 
-This spec governs the runner manifest field schema and the two code system-entity contracts a manifest binds to:
-`StdoutParser` and `PermissionStyle`. It also pins the route-time snapshot that keeps capability resolution
+This spec governs the runner manifest field schema and the three code system-entity contracts a manifest binds to:
+`ProtocolDriver`, `StdoutParser`, and `PermissionStyle`. It also pins the route-time snapshot that keeps capability resolution
 deterministic across DBOS replay and recovery.
 
 It does not govern selection (which runner a role resolves to, run profiles) or manifest persistence/loading
@@ -69,29 +71,31 @@ that ships today; everything below is the proposed model (ADR-0004 is Status: Dr
 
 ### Two kinds of identifier
 
-- **Code-referenced ids** — strings naming a code strategy in a closed registry: the `stdoutParser` id and the
-  `permissionStyle` id, referenced as two independent axes (no bundled `family` id). Changing or removing one is a
+- **Code-referenced ids** — strings naming a code strategy in a closed registry: the `protocolDriver`, `stdoutParser`,
+  and `permissionStyle` ids, referenced as independent axes (no bundled `family` id). Changing or removing one is a
   breaking change to the system-entity contract (see Compatibility).
 - **Pure data** — strings/objects the engine substitutes or compares without dispatching to code: `binary`,
-  `argTemplate`, `schemaDelivery`, `promptDelivery`, `kind`, `constraints`, `capabilities`, `timeouts`,
-  `versionProbe`.
+  `argTemplate`, `schemaDelivery`, `promptDelivery`, `protocolVersion`, `kind`, `constraints`, `capabilities`,
+  `timeouts`, `versionProbe`.
 
 ### Manifest field schema
 
-One manifest binds a concrete runner id to a `stdoutParser` id and a `permissionStyle` id (two independent code
-axes — no bundled `family` id) and fills declarable fields.
+One manifest binds a concrete runner id to a `protocolDriver`, `stdoutParser`, and `permissionStyle` id (three
+independent code axes — no bundled `family` id) and fills declarable fields.
 
 | Field | Type | Req | Meaning |
 |---|---|---|---|
 | `id` | string | yes | The runner id used by `role.runner` today (`src/control-plane/definitions.ts:9,112`). Code-referenced key into the registry. |
+| `protocolDriver` | string | yes | Code-referenced id of the request/response lifecycle strategy. One-shot CLI runners use `one-shot`; interactive ACP uses `acp-stdio-v1`. Independent of parser and permission style. |
+| `protocolVersion` | integer | when required by `protocolDriver` | Pinned interactive protocol version. `acp-stdio-v1` requires `1`; `one-shot` omits it. |
 | `stdoutParser` | string | yes | Code-referenced id of the StdoutParser strategy (below). Independent of `permissionStyle`. |
 | `permissionStyle` | string | yes | Code-referenced id of the PermissionStyle strategy (below). Independent of `stdoutParser`. |
 | `kind` | enum `cli`\|`api`\|`gateway`\|`deterministic-script` | yes | The transport class (a manifest field, *not* a capability): `cli` spawns a binary, `api` calls a hosted endpoint, `gateway` routes `provider/model` through a provider gateway, `deterministic-script` is the in-process script runner. Data, not a code-dispatch key. |
 | `binary` | string | when `kind=cli` | Executable name or absolute path; feeds `ExecRequest.command` (`src/worker/process-executor.ts:13`). Replaces the literal default `'claude'` in code. |
 | `versionProbe` | object `{ args: string[], parse?: stdoutParserId }` | no | Argv to print a version (e.g. `['--version']`) for `needsLivePreflight`/doctor. See the normative rules below the table. |
 | `argTemplate` | string[] | when `kind=cli` | Ordered argv with placeholders, substituted before spawn (see Placeholders). |
-| `schemaDelivery` | enum `inline-flag`\|`file-flag`\|`none` | yes | How the result schema reaches the runner. Claude=`inline-flag` (`src/worker/claude-code-runner.ts:159`), Codex=`file-flag` (`src/worker/codex-runner.ts:161-162`, file written at `:97-102`), OpenCode=`none`. |
-| `promptDelivery` | enum `stdin`\|`stdin-dash`\|`arg` | yes | How the prompt reaches the runner. Claude pipes on stdin (`ExecRequest.input`, `src/worker/claude-code-runner.ts:254`); Codex uses stdin with a trailing `-` argv terminator (`src/worker/codex-runner.ts:175`, `:541`) → `stdin-dash`. |
+| `schemaDelivery` | enum `inline-flag`\|`file-flag`\|`none` | yes | How the result schema reaches a one-shot runner. Claude=`inline-flag`; Codex=`file-flag`; ACP MVP=`none` because the result contract is prompt-only. |
+| `promptDelivery` | enum `stdin`\|`stdin-dash`\|`arg`\|`protocol` | yes | How the top-level prompt reaches the runner. Claude pipes stdin; Codex uses stdin with a trailing `-`; ACP uses `protocol` and delegates delivery to its pinned protocol driver. |
 | `constraints` | object (see below) | no | Declarative provider/auth requirements. Replaces `requireCompatibleProfile` (`src/worker/codex-runner.ts:179-186`). |
 | `capabilities` | object (see [runner-capabilities-v1.spec.md](./runner-capabilities-v1.spec.md)) | yes | The fields that replace the four hardcoded branch functions plus the structured-output tier. `kind` is *not* under `capabilities`. |
 | `timeouts` | object `{ idleTimeoutMs?: number, wallClockLimitMs?: number }` | no | Runner-level defaults; role `timeoutMs` still overrides per role (`src/control-plane/definitions.ts:18-19`, `src/worker/claude-code-runner.ts:200-204`). Engine defaults remain `DEFAULT_RUNNER_IDLE_TIMEOUT_MS`/`DEFAULT_RUNNER_WALL_CLOCK_LIMIT_MS` (`src/worker/process-executor.ts:32-33`). Timeout policy itself is owned by the [runner contract](../runner-contract.md). |
@@ -107,6 +111,7 @@ axes — no bundled `family` id) and fills declarable fields.
 | Field | Type | Meaning |
 |---|---|---|
 | `allowedProviders` | string[] | If present, the resolved `ModelProfile.provider` (`src/control-plane/definitions.ts:46`) must match one entry (case-insensitive substring, matching today's `isOpenAiCompatibleProvider` at `src/worker/codex-runner.ts:109-112`). Empty/absent → any provider. A mismatch is a typed precondition failure routed to a lesson, replacing the throw at `src/worker/codex-runner.ts:183-185`. |
+| `requiresNonEmptyProvider` | boolean | Require a non-empty resolved `ModelProfile.provider`. Default `false`; ACP provider/model selector composition sets `true`. |
 | `requiresNonEmptyModelId` | boolean | Mirror of the model-id guard at `src/worker/codex-runner.ts:180-182`. Default `true`. |
 
 #### `RouteRoleBinding` gains snapshot fields (named schema change)
@@ -122,9 +127,19 @@ type RouteRoleBinding = {
   runnerId: string;
   resolvedRunnerId: string;
   runnerSource: 'playbook' | 'profile';
-  // added by ADR-0004 (the determinism fix, a named schema change):
+  // added by ADR-0004/ADR-0010 (the determinism fix, a named schema change):
+  protocolDriverId: string;
+  protocolVersion?: number;
   stdoutParserId: string;
   permissionStyleId: string;
+  resolvedModelProfile: {
+    level: string;
+    provider: string;
+    modelId: string;
+    params: unknown;
+    costPerInput: number;
+    costPerOutput: number;
+  };
   capabilities: RunnerCapabilities;   // the resolved capabilities block
   manifestDigest: string;             // audit / mismatch-detection only (see Replay model)
   manifestVersion: string;
@@ -155,6 +170,29 @@ immediately preceding flag token and the placeholder arg — and MUST NOT emit a
 today's behavior where `--allowedTools <value>` is pushed only when the list is non-empty
 (`src/worker/claude-code-runner.ts:161-163`); the same applies to `--json-schema {schemaInline}`,
 `--output-schema {schemaPath}`, and the `--sandbox {sandbox}` pair when `{sandbox}` is undefined.
+
+### ProtocolDriver contract (code system entity)
+
+A `ProtocolDriver` coordinates one top-level runner invocation over an executor-owned transport. It MAY send requests,
+correlate responses, answer server requests, and report generic activity or operation lifecycle. It MUST NOT create or
+supervise processes, enforce timeouts, call DBOS, decide retry, or store durable live-session state.
+
+```ts
+type ProtocolDriverContext = {
+  attemptId: string;
+  invocationId: string;
+  protocolVersion?: number;
+  input: string;
+  transport: ExecutorOwnedTransport;
+  activity: RunnerActivityTracker;
+  permissionPolicy?: PermissionRequestPolicy;
+};
+```
+
+`one-shot` writes one prompt through the existing `ExecRequest.input` seam and waits for process completion.
+`acp-stdio-v1` implements the lifecycle in [acp-runner-session-v1.spec.md](./acp-runner-session-v1.spec.md): initialize
+ACP version `1`, create one session, send one top-level prompt, reduce one result, and close best-effort. Protocol
+messages captured by the driver are then reduced by the manifest's pure `stdoutParser`.
 
 ### StdoutParser contract (code system entity)
 
@@ -218,9 +256,9 @@ Mapping to today's code:
 
 The normative live parser ids are `stream-json` (Claude) and `jsonl-exec` (Codex).
 
-> Informative: anticipated parser ids `parts-stream` (OpenCode), `openai-api`, and `acp` are unverified against
-> orchestrator source today (no `opencode`/`acp` references exist). They are not part of the normative id set until
-> a corresponding parser ships.
+> Informative: `acp-jsonrpc-v1` is reserved by the ACP runner session Draft spec but is not part of the shipped
+> registry until its parser and conformance fixtures land. `parts-stream` and `openai-api` remain unverified ideas,
+> not aliases for ACP.
 
 ### PermissionStyle contract (code system entity, data-driven)
 
@@ -234,6 +272,7 @@ Input:
 type PermissionStyleInput = {
   rights?: string;        // role.rights (src/control-plane/definitions.ts:17)
   allowedTools: string[]; // role.allowedTools (src/control-plane/definitions.ts:10)
+  permissionMode?: string;
 };
 ```
 
@@ -244,6 +283,13 @@ type PermissionStyleOutput = {
   // Named argv fragments the engine substitutes into argTemplate placeholders.
   fragments: Record<string, string | string[]>;
   // e.g. { allowedTools: ["edit","write"] }  or  { sandbox: "workspace-write" }
+  // Optional portable policy consumed by an interactive protocol driver.
+  requestPolicy?: {
+    defaultDecision: 'deny';
+    rights?: string;
+    allowedTools: string[];
+    permissionMode?: string;
+  };
 };
 ```
 
@@ -284,17 +330,21 @@ manifest/style declares for that fragment** — for `--allowedTools` (Claude-onl
   (`normalizedPolicyLabel`, `src/worker/codex-runner.ts:135-137`): trim, lowercase, `_`→`-`, collapse whitespace.
 - **`none` (stub).** Supplies no fragments. Used by the `script`/`stub-agent` dispatch
   (`src/worker/runner-dispatch.ts:14-17`).
+- **`acp-permission-v1` (target).** Supplies no argv fragments and emits a fail-closed `requestPolicy`. The
+  `acp-stdio-v1` driver evaluates ACP permission requests through this pinned policy. Unknown request kinds and
+  unmapped tools deny by default. It is reserved by the ACP session spec and does not enter the live registry until
+  permission conformance tests pass.
 
 ### Where the manifest plugs in
 
 - **Build-request:** the engine substitutes `argTemplate` placeholders, invokes the `PermissionStyle` for
-  `{allowedTools}`/`{sandbox}`, delivers the schema per `schemaDelivery` and the prompt per `promptDelivery`, then
-  builds an `ExecRequest` (`src/worker/process-executor.ts:12-24`) — unchanged.
+  `{allowedTools}`/`{sandbox}`, delivers the schema per `schemaDelivery`, builds an `ExecRequest`, and delegates the
+  invocation lifecycle to the pinned `ProtocolDriver`. The driver reuses the executor-owned transport.
 - **Parse-response:** the engine selects the manifest's `stdoutParser` and maps its output to `AttemptResult`
   (`src/worker/runner.ts:8-18`), lifting the envelope `verdict` as emitted; the engine normalizes it later via
   `domainVerdictOf` per the result-envelope spec.
 - The `switch (role.runner)` factory (`src/worker/runner-dispatch.ts:6-22`) becomes a registry lookup keyed by
-  `runner.id` → manifest → `(stdoutParser, permissionStyle)` pair.
+  `runner.id` → manifest → `(protocolDriver, stdoutParser, permissionStyle)` triple.
 
 ### Replay model (which fields are pinned, and why)
 
@@ -307,10 +357,17 @@ consulted during workflow execution or DBOS recovery.
 
 What is pinned, and why:
 
+- **Profile-dependent capability markers** such as `privacyClass: profile` MUST be resolved to a concrete value before
+  the snapshot is written. An unresolved marker MUST NOT enter DBOS workflow args.
+- **Resolved model profile** MUST be pinned before DBOS enqueue for runners whose provider/model/session configuration
+  is consumed by an external-effect step. Re-reading mutable `model_profiles` inside replacement execution would make
+  provider, model, params, privacy, and pricing nondeterministic.
+
 - **Capability fields consumed in the deterministic workflow body** — `needsLivePreflight`, `performsMerge`,
   `producesWorktreeChanges` — MUST be pinned. The workflow body re-runs on replay and would otherwise recompute
   them from a mutable registry, branching differently than the original run.
-- **`stdoutParser` / `permissionStyle` ids** are consumed inside the `runStep` effect (a memoized DBOS step). On a
+- **`protocolDriver` / `stdoutParser` / `permissionStyle` ids and `protocolVersion`** are consumed inside the
+  `runStep` effect (a memoized DBOS step). On a
   normal replay the recorded step result is replayed and the parser does not re-run; but on crash-recovery
   re-execution of an incomplete step the same ids must be used, so they MUST be pinned too.
 - **`manifestDigest`** is audit / mismatch-detection only: a stable hash over the canonicalized manifest. The
@@ -319,7 +376,8 @@ What is pinned, and why:
   determinism blocker. A later digest mismatch is an operator/audit signal, not a replay input.
 
 Invariant: a manifest-registry change mid-run MUST NOT alter `producesWorktreeChanges` / `performsMerge` /
-`needsLivePreflight` / the `stdoutParser` id / the `permissionStyle` id / the structured-output tier for an
+`needsLivePreflight` / the protocol driver and version / the `stdoutParser` id / the `permissionStyle` id /
+the structured-output tier for an
 in-flight run. A run started against digest `D` continues, replays, and recovers against `D` — even after the
 operator edits or replaces the manifest. (Whether a new run picks up the edited manifest is a selection concern,
 out of scope — #186.)
@@ -330,14 +388,16 @@ re-executed after the external world changed can diverge — and is explicitly o
 
 ## Validation
 
-- **Manifest schema validation at load time.** A manifest with an unknown `stdoutParser`/`permissionStyle` id, a
+- **Manifest schema validation at load time.** A manifest with an unknown `protocolDriver`/`stdoutParser`/
+  `permissionStyle` id, a
   missing required field, or an undeclared `kind` is a startup/validation error, not a silent fallback (mirrors
   today's `RUNNER_NOT_IMPLEMENTED` throw at `src/worker/runner-dispatch.ts:12,16,19`, surfaced at manifest-load
   time).
-- **Acceptance: manifest-only runner addition (zero code).** A same-`(parser, style)`-pair runner is added by a
-  manifest-only change with zero code edits, proven by a test: a new manifest reusing an existing pair routes,
+- **Acceptance: manifest-only runner addition (zero code).** A same-`(driver, parser, style)`-triple runner is added by a
+  manifest-only change with zero code edits, proven by a test: a new manifest reusing an existing triple routes,
   builds args, and parses output through the engine with no source diff.
-- **Golden-output immutability test per code-strategy id.** Each `stdoutParser` and each `permissionStyle` id has a
+- **Golden-output immutability test per code-strategy id.** Each `protocolDriver`, `stdoutParser`, and
+  `permissionStyle` id has a
   golden-output test pinning its observable behavior (a fixed input stream / rights set → a fixed normalized
   result / fragment set). This enforces the versioning rule (a behavior change → a new id) as a test, not just a
   documented policy: any behavior change to an existing id breaks its golden test, forcing the author to mint a new
@@ -352,7 +412,7 @@ re-executed after the external world changed can diverge — and is explicitly o
 
 ## Compatibility
 
-The system-entity ids (`stdoutParser`, `permissionStyle`) are a public, versioned contract once manifests reference
+The system-entity ids (`protocolDriver`, `stdoutParser`, `permissionStyle`) are a public, versioned contract once manifests reference
 them. Versioning policy:
 
 - **Ids are immutable public contracts.** An id names a fixed behavior; manifests in the wild depend on it.
@@ -377,6 +437,7 @@ timeout policy, and transient-retry policy) without contradicting it.
 ```json
 {
   "id": "claude-code",
+  "protocolDriver": "one-shot",
   "stdoutParser": "stream-json",
   "permissionStyle": "tool-allowlist",
   "kind": "cli",
@@ -414,6 +475,7 @@ a manifest field.
 ```json
 {
   "id": "codex",
+  "protocolDriver": "one-shot",
   "stdoutParser": "jsonl-exec",
   "permissionStyle": "sandbox-enum",
   "kind": "cli",
@@ -454,4 +516,5 @@ and stdin prompt at `:175` + `:541`; `constraints.allowedProviders` reproduces `
 
 ## Changelog
 
+- 2026-07-10: Added the independent `ProtocolDriver` strategy and ACP v1 protocol pin from ADR-0010.
 - 2026-06-29: Initial version.

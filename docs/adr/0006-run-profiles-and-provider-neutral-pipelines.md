@@ -2,7 +2,8 @@
 
 - **Status:** Draft
 - **Decision date:** 2026-07-03
-- **Specs:** [run profiles v1](../specs/run-profiles-v1.spec.md)
+- **Specs:** [run profiles v1](../specs/run-profiles-v1.spec.md),
+  [ACP runner session v1](../specs/acp-runner-session-v1.spec.md)
 - **Relates-to:** [pipeline state machine v1](../specs/pipeline-state-machine-v1.spec.md),
   [default playbook policy](../specs/default-playbook-policy.spec.md),
   [runner capabilities v1](../specs/runner-capabilities-v1.spec.md),
@@ -172,9 +173,11 @@ The pinned route decision records:
 - policy version;
 - resolved role/node launch bindings.
 
-Future route pins may add resolved GitHub auth provenance and model-profile provenance once those contracts are
-explicitly designed and implemented. The selected GitHub account alias is already replay-pinned through the normalized
-profile snapshot and launch bindings.
+ADR-0010 and the ACP runner session spec define the first target use of resolved model-profile provenance: the route
+pin carries the full resolved profile before DBOS enqueue so replacement invocation does not re-read mutable model
+configuration. This remains a target migration until its route schema and implementation land. Future route pins may
+still add resolved GitHub auth provenance. The selected GitHub account alias is already replay-pinned through the
+normalized profile snapshot and launch bindings.
 
 ## Alternatives
 

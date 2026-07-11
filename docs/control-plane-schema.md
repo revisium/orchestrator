@@ -140,8 +140,9 @@ stored `profileId` or an inline profile body, and Prisma stores the resolved nor
 Replay uses this pin, not the latest Revisium profile row.
 
 Launch configuration is stored in `routeDecision.profileSnapshot` and resolved launch bindings. There is no separate
-Prisma column for profile-like launch overrides. Future route pins may add model-profile provenance once model profile
-resolution becomes a versioned runtime contract.
+Prisma column for profile-like launch overrides. The ACP runner session v1 target extends each agent launch binding
+with a resolved model-profile snapshot before DBOS enqueue; the shipped schema still pins only `modelLevel` until that
+migration lands. Replacement execution MUST use the resolved pin rather than re-read mutable Revisium meaning.
 
 `routeDecision.profileSnapshot` stores the normalized launch payload, not the selected pipeline id. The selected pipeline
 is pinned separately as `requestedPipelineId` and `basePipelineId`.

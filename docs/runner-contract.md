@@ -28,6 +28,25 @@ or durable progress.
 - Developer roles must not change architecture or ADR decisions unless the selected pipeline explicitly routes
   that work through the right role/gate.
 
+## Interactive Runner Invocations
+
+Interactive protocols refine the short-lived-agent rule; they do not create durable live sessions. A physical agent
+attempt MAY own an attempt-scoped invocation whose protocol driver exchanges multiple messages over one
+executor-owned transport before yielding one `AttemptResult`.
+
+- The shared process executor owns the root process group, transport handles, timeout, termination, and artifacts.
+- The protocol driver owns request/response correlation and protocol activity, but MUST NOT supervise the process or
+  decide durable retry.
+- One top-level runner invocation MAY contain internal model turns, tool calls, and permission exchanges.
+- Provider session ids are provenance, not durable resumable state, unless a later ADR explicitly changes this rule.
+- DBOS re-execution of an incomplete external-effect step MAY repeat a spawn with the same `attemptId`; the adapter
+  MUST prevent concurrent live invocations for one attempt and preserve replacement-invocation provenance.
+- External effects remain idempotent by run, step, attempt, and operation identity where replay can repeat them.
+  Invocation identity is provenance and MUST NOT weaken attempt-level deduplication.
+
+ACP-specific cardinality and lifecycle rules are defined in
+[acp-runner-session-v1.spec.md](./specs/acp-runner-session-v1.spec.md).
+
 ## Timeout Policy
 
 Runner processes use two separate limits:

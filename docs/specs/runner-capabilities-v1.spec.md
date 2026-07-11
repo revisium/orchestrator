@@ -6,7 +6,9 @@
 - **Source files:** `src/pipeline/route-contract.ts`, `src/pipeline/data-driven-task.workflow.ts`,
   `src/worker/codex-runner.ts`, `src/worker/runner-dispatch.ts`, `src/control-plane/definitions.ts`,
   `src/pipeline/pipeline.service.ts`
-- **Related ADRs:** [ADR-0004](../adr/0004-runner-execution-contract.md), [ADR-0002](../adr/0002-data-driven-pipeline-state-machine.md)
+- **Related ADRs:** [ADR-0004](../adr/0004-runner-execution-contract.md),
+  [ADR-0010](../adr/0010-acp-process-and-session-isolation.md),
+  [ADR-0002](../adr/0002-data-driven-pipeline-state-machine.md)
 
 ## Scope
 
@@ -55,13 +57,18 @@ the `capabilities` block below is the proposal (ADR-0004 is Status: Draft).
 | Field | Type | Meaning |
 |---|---|---|
 | `provider` | string | Provider family the runner targets (e.g. `anthropic`, `openai-compatible`, `provider-gateway`). Data; recorded in provenance. Keep concrete account/model names out (canonical-method discipline). |
-| `authMode` | enum `cli-session`\|`api-key`\|`gateway-token`\|`none` | How the runner authenticates. Feeds `needsLivePreflight` doctor checks. |
-| `privacyClass` | enum `external`\|`self-hosted`\|`local` | Data-egress class of the provider. Lets routing/profile policy exclude external providers for sensitive runs. Consumed by selection (#170), not by this spec. |
+| `authMode` | enum `cli-session`\|`api-key`\|`gateway-token`\|`provider-config`\|`none` | How the runner authenticates. `provider-config` means a provider gateway such as OpenCode resolves credentials from its existing config for the pinned model profile. Feeds `needsLivePreflight` doctor checks. |
+| `privacyClass` | enum `external`\|`self-hosted`\|`local`\|`profile` | Data-egress class. `profile` means the effective class is resolved and pinned from the selected model profile rather than fixed by the runner. Lets routing/profile policy exclude external providers for sensitive runs. |
 | `supportsWorkspaceWrite` | boolean | Whether the runner can write the worktree at all. Distinct from per-role permission: a read-only role on a write-capable runner is fine. Relates to Codex `sandbox-enum` (`src/worker/codex-runner.ts:144-155`). |
 | `supportsStructuredOutput` | enum `native-schema`\|`tool-call`\|`prompt-only` | The structured-output tier (not a boolean). Defined in [runner-result-envelope-v1.spec.md](./runner-result-envelope-v1.spec.md). Routing may require a minimum tier. |
 | `needsLivePreflight` | boolean | Whether the runner requires a live auth/binary/reachability probe before dispatch. |
 | `performsMerge` | boolean | Not used for built-in Git/GitHub scripts; script behavior is selected by the pipeline node `scriptRef`. |
 | `producesWorktreeChanges` | boolean | Whether a successful run is expected to leave file changes in the worktree (so the engine captures a `change` artifact). |
+
+`privacyClass: profile` is a route-resolution marker, not a value that may remain unresolved in a DBOS workflow.
+Before enqueue, route resolution MUST replace it with the concrete `external`, `self-hosted`, or `local` value from
+the selected model profile policy (`ModelProfile.params.privacyClass` for this Draft). Missing or unknown values MUST
+resolve conservatively to `external`. The concrete value, not the marker, is pinned for replay.
 
 ### One-to-one replacement of the hardcoded functions
 
@@ -106,7 +113,7 @@ Grounded in the two live adapters. These are the `capabilities` objects only; `k
   "provider": "anthropic",
   "authMode": "cli-session",
   "privacyClass": "external",
-  "supportsWorkspaceWrite": true,
+  "supportsWorkspaceWrite": false,
   "supportsStructuredOutput": "native-schema",   // --json-schema (claude-code-runner.ts:159)
   "needsLivePreflight": true,                     // route-contract.ts:117
   "performsMerge": false,                         // built-in Git/GitHub scripts are selected by scriptRef
@@ -129,30 +136,32 @@ Grounded in the two live adapters. These are the `capabilities` objects only; `k
 }
 ```
 
-### opencode (anticipated — not yet implemented; `kind: "gateway"` on the manifest)
+### opencode-acp (anticipated — not yet implemented; `kind: "cli"` on the manifest)
 
 ```jsonc
 {
   "provider": "provider-gateway",
-  "authMode": "gateway-token",
-  "privacyClass": "external",
+  "authMode": "provider-config",
+  "privacyClass": "profile",
   "supportsWorkspaceWrite": true,
   "supportsStructuredOutput": "prompt-only",      // only "no --json-schema flag" is proven; tool-call unverified
   "needsLivePreflight": true,
   "performsMerge": false,
-  "producesWorktreeChanges": true
+  "producesWorktreeChanges": false
 }
 ```
 
-OpenCode is classified `prompt-only` until tool-call support (forced `tool_choice` / a `submit_result`-style tool)
+OpenCode ACP is classified `prompt-only` until tool-call support (forced `tool_choice` / a `submit_result`-style tool)
 is verified by a live probe; it is not asserted to be `tool-call` today. If a probe later confirms tool support,
 the tier is promoted to `tool-call`, which degrades to the `prompt-only` floor per
 [runner-result-envelope-v1.spec.md](./runner-result-envelope-v1.spec.md).
 
-> Informative: no `opencode`/`acp` code exists in the orchestrator today, so these values are unverified against
-> source. They come from a live CLI probe (2026-06-29: `opencode run --format json`, no schema flag; `opencode
-> models` lists `provider/model`; a session model carries
-> `providerID`/`modelID`/`tokens{input,output,reasoning,cache}`/`cost`). Only "no schema flag" is proven.
+> Informative: no `opencode`/ACP production code exists in the orchestrator today. The lifecycle, model selector,
+> protocol, and conformance target are defined in [acp-runner-session-v1.spec.md](./acp-runner-session-v1.spec.md).
+> `provider-config` and `privacyClass: profile` are required because the same OpenCode process can route a local model
+> or an external provider; the runner alone cannot truthfully pin either value.
+> Workspace write and expected worktree changes remain `false` until ACP permission allow/deny/tool-scope conformance
+> passes. Enabling them is a deliberate manifest capability change, not an assumption from the PoC.
 
 ### script / stub-agent (deterministic; `kind: "deterministic-script"` on the manifest)
 
@@ -175,6 +184,8 @@ into runners.
 
 ## Changelog
 
+- 2026-07-10: Corrected the OpenCode ACP transport to `kind: cli`, made provider auth/privacy profile-dependent, and
+  kept workspace write disabled until permission conformance passes.
 - 2026-07-09: Clarified that built-in Git/GitHub behavior is selected by pipeline `scriptRef`, not by
   runner ids; removed old integrator/merger runner-id semantics and kept unknown script/runner selection fail-closed.
 - 2026-06-29: Initial version.
