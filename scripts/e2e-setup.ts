@@ -34,7 +34,7 @@ import { RevisiumModule } from '../src/revisium/revisium.module.js';
 import { PlaybooksService } from '../src/revisium/playbooks.service.js';
 import { RevoPrismaService } from '../src/storage/revo-prisma.service.js';
 import { ensureStorage } from '../src/storage/ensure-storage.js';
-import { PLAYBOOK_SOURCE } from '../src/e2e/kit/env.js';
+import { PLAYBOOK_SOURCE } from '../src/e2e/support/env.js';
 
 const PLAYBOOK_ID = 'revisium-agent-playbook'; // matches scenarios.ts PLAYBOOK_ID
 const CLI_ENTRY = fileURLToPath(new URL('../src/cli/index.ts', import.meta.url));

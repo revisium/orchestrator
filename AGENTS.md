@@ -80,7 +80,7 @@ is test-only. Never set the knob to `0` (that means "await the full drain", i.e.
 
 The files run **4 at a time** (`--test-concurrency=4`). What makes that safe, fast, and deterministic:
 
-- **Per-file DBOS system db.** `src/e2e/kit/env.ts` derives `REVO_DBOS_DB` from the test file name (host boot
+- **Per-file DBOS system db.** `src/e2e/support/env.ts` derives `REVO_DBOS_DB` from the test file path (host boot
   CREATEs the db on demand), so queues and workflows never cross between files: no cross-file recovery, no
   shared dev-tasks slots. Crash-recovery child processes inherit the parent's env and stay in the parent's db.
   Historical context: on a SHARED db, `cancelRun` leaving DBOS workflows alive (it only patches the run row)
@@ -106,7 +106,7 @@ The files run **4 at a time** (`--test-concurrency=4`). What makes that safe, fa
 
 Target wall-clock: `pnpm test:e2e` ≈ 70–90 s. If it regresses toward ~150 s, suspect teardown (a dropped
 flag), the queue-tick knob, a dropped `--test-concurrency`, or per-file db derivation before blaming test
-bodies. `src/e2e/teardown-drain.e2e.test.ts` guards the drain cap: teardown with a parked gate must return
+bodies. `src/e2e/runtime/concurrency/teardown-drain.e2e.test.ts` guards the drain cap: teardown with a parked gate must return
 < 500 ms. The 30 s `WAIT_TIMEOUT_MS` in `drive.ts` is a deliberate stuck-detector — do not raise it to absorb
 slowness. Embedded Postgres headroom at 4-way parallelism: ~50 of 100 connections — do not raise the test
 concurrency without checking `pg_stat_activity`.

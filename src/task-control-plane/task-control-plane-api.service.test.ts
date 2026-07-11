@@ -21,6 +21,9 @@ import { materializeTemplate, MATERIALIZER_VERSION } from '../pipeline-core/mate
 import { POLICY_VERSION } from '../control-plane/default-playbook-policy.js';
 import { templateFromExecutionPolicy } from '../pipeline/data-driven-template.js';
 import { INTEGRATOR_PROGRESS_EVENT_TYPES } from '../pipeline/data-driven-task.workflow.js';
+import { focusedCaseTitle } from '../testing/policy/non-dsl-ownership.js';
+
+const focusedOwner = 'src/task-control-plane/task-control-plane-api.service.test.ts';
 
 /**
  * A minimal VALID data-driven template (one developer agent → success terminal). The cutover (plan
@@ -1412,12 +1415,94 @@ test('TaskControlPlaneApiService.approveGate leaves pending signal state when DB
   assert.deepEqual(events, ['gate_signal_pending']);
 });
 
-test('TaskControlPlaneApiService.answerQuestion refuses gate rows so workflows are not left parked', async () => {
+function gateReplayFixture() {
+  let inbox = makeInboxItem();
+  const signals: unknown[] = [];
+  const api = makeApi({
+    inboxService: {
+      async getInbox() {
+        return inbox;
+      },
+      async resolveInbox(_id, answer, resolvedBy) {
+        if (inbox.status === 'pending') {
+          inbox = {
+            ...inbox,
+            status: 'resolved',
+            answer,
+            resolvedBy,
+            resolvedAt: '2026-07-10T12:00:00.000Z',
+          };
+          return { status: 'pending' as const, answer };
+        }
+        return { status: 'resolved' as const, answer: inbox.answer };
+      },
+    },
+    dbosService: {
+      async signal(_workflowId, _topic, payload) {
+        signals.push(payload);
+      },
+    },
+  });
+  return { api, getInbox: () => inbox, signals };
+}
+
+test(focusedCaseTitle(
+  'B5',
+  focusedOwner,
+  'same-answer duplicate exposes resolved previousStatus and reuses the first stored answer',
+), async () => {
+  const fixture = gateReplayFixture();
+
+  const first = await fixture.api.approveGate({ inboxId: fixture.getInbox().id, resolvedBy: 'alice' });
+  const duplicate = await fixture.api.approveGate({ inboxId: fixture.getInbox().id, resolvedBy: 'alice-retry' });
+
+  assert.equal(first.previousStatus, 'pending');
+  assert.equal(duplicate.previousStatus, 'resolved');
+  assert.deepEqual(duplicate.answer, first.answer);
+  assert.equal(first.signaled, true);
+  assert.equal(duplicate.signaled, true);
+  assert.deepEqual(fixture.signals, [first.answer, first.answer]);
+});
+
+test(focusedCaseTitle(
+  'B6',
+  focusedOwner,
+  'different-answer conflict exposes resolved previousStatus and signals the first stored answer',
+), async () => {
+  const fixture = gateReplayFixture();
+
+  const approved = await fixture.api.approveGate({ inboxId: fixture.getInbox().id, resolvedBy: 'alice' });
+  const conflicting = await fixture.api.rejectGate({ inboxId: fixture.getInbox().id, resolvedBy: 'bob' });
+
+  assert.equal(approved.previousStatus, 'pending');
+  assert.equal(conflicting.previousStatus, 'resolved');
+  assert.deepEqual(conflicting.answer, approved.answer, 'first decision wins over a conflicting replay');
+  assert.equal(approved.signaled, true);
+  assert.equal(conflicting.signaled, true);
+  assert.deepEqual(fixture.signals, [approved.answer, approved.answer]);
+});
+
+test(focusedCaseTitle('B7', focusedOwner, 'answerQuestion refuses gate rows'), async () => {
   const api = makeApi();
   await assert.rejects(
     () => api.answerQuestion({ inboxId: 'inbox-1', answer: 'yes' }),
     (error: unknown) => error instanceof ControlPlaneError && error.code === 'VALIDATION_FAILURE',
   );
+});
+
+test(focusedCaseTitle('B9', focusedOwner, 'unknown inbox gate operations preserve ROW_NOT_FOUND'), async () => {
+  const missing = new ControlPlaneError('ROW_NOT_FOUND', 'inbox item not found: inbox-missing');
+  const api = makeApi({
+    inboxService: {
+      async getInbox() {
+        throw missing;
+      },
+    },
+  });
+
+  await assert.rejects(() => api.approveGate({ inboxId: 'inbox-missing' }), missing);
+  await assert.rejects(() => api.rejectGate({ inboxId: 'inbox-missing' }), missing);
+  await assert.rejects(() => api.getInboxItem('inbox-missing'), missing);
 });
 
 test('TaskControlPlaneApiService.answerQuestion resolves non-gate questions without signaling DBOS', async () => {
@@ -2769,7 +2854,11 @@ test('TaskControlPlaneApiService.createRun rejects conflicting top-level and par
   );
 });
 
-test('TaskControlPlaneApiService.createRun ignores public params for runner profile selection', async () => {
+test(focusedCaseTitle(
+  ['I4', 'H4'],
+  focusedOwner,
+  'createRun treats public route-looking params as inert data',
+), async () => {
   const starts: Array<{ override?: string; params: Record<string, unknown> }> = [];
   const api = makeApi({
     pipelineService: {
@@ -3236,7 +3325,7 @@ test('TaskControlPlaneApiService.previewPipelineSelection filters candidatePipel
   assert.ok(preview.candidatePipelines.every((p) => p.playbookId === 'pb'), 'all from correct playbook');
 });
 
-test('TaskControlPlaneApiService.simulateRoute rejects omitted pipelineId when no trigger matches', async () => {
+test(focusedCaseTitle('I2', focusedOwner, 'simulateRoute fails closed when no pipeline matches'), async () => {
   const api = makeApi();
 
   await assert.rejects(
@@ -3291,7 +3380,7 @@ test('TaskControlPlaneApiService.simulateRoute rejects ambiguous positive auto-r
   );
 });
 
-test('TaskControlPlaneApiService.simulateRoute allows explicit route decision with inline profile', async () => {
+test(focusedCaseTitle('I5', focusedOwner, 'simulateRoute applies an explicit inline profile'), async () => {
   const api = makeApi();
 
   const route = await api.simulateRoute({
@@ -3302,6 +3391,63 @@ test('TaskControlPlaneApiService.simulateRoute allows explicit route decision wi
 
   assert.equal(route.pipelineId, 'local-change');
   assert.deepEqual(route.roles, ['developer']);
+});
+
+test(focusedCaseTitle('I6', focusedOwner, 'unknown route resources fail closed with ROW_NOT_FOUND'), async () => {
+  const missingPipeline = makeApi({
+    playbooksService: {
+      async resolvePipeline() {
+        throw new ControlPlaneError('ROW_NOT_FOUND', 'pipeline not found: no-such-pipeline');
+      },
+    },
+  });
+  await assert.rejects(
+    () => missingPipeline.simulateRoute({
+      title: 'missing pipeline',
+      pipeline: 'no-such-pipeline',
+      profile: emptyInlineProfile(),
+    }),
+    (error: unknown) => error instanceof ControlPlaneError && error.code === 'ROW_NOT_FOUND',
+  );
+
+  const missingPlaybook = makeApi({
+    playbooksService: {
+      async resolvePlaybook() {
+        throw new ControlPlaneError('ROW_NOT_FOUND', 'playbook not found: no-such-playbook');
+      },
+    },
+  });
+  await assert.rejects(
+    () => missingPlaybook.simulateRoute({
+      title: 'missing playbook',
+      pipeline: 'local-change',
+      playbookId: 'no-such-playbook',
+      profile: emptyInlineProfile(),
+    }),
+    (error: unknown) => error instanceof ControlPlaneError && error.code === 'ROW_NOT_FOUND',
+  );
+});
+
+test(focusedCaseTitle('I7', focusedOwner, 'createRun and simulateRoute expose the same route projection'), async () => {
+  const api = makeApi();
+  const simulated = await api.simulateRoute({
+    title: 'route parity',
+    pipeline: 'local-change',
+    profile: LOCAL_CHANGE_PROFILE,
+  });
+  const created = await api.createRun({
+    title: 'route parity',
+    repo: '.',
+    pipelineId: 'local-change',
+    profile: LOCAL_CHANGE_PROFILE,
+    start: false,
+  });
+  if (!('route' in created)) throw new Error('createRun without start must return its pinned route');
+
+  assert.equal(created.route.pipelineId, simulated.pipelineId);
+  assert.deepEqual(created.route.roles, simulated.roles);
+  assert.deepEqual(created.route.routeGates, simulated.routeGates);
+  assert.deepEqual(created.route.roleBindings, simulated.roleBindings);
 });
 
 test('TaskControlPlaneApiService rejects stub-agent from production playbook role bindings', async () => {
@@ -3333,7 +3479,7 @@ test('TaskControlPlaneApiService rejects stub-agent from production playbook rol
   );
 });
 
-test('TaskControlPlaneApiService.simulateRoute binds every required playbook role in order', async () => {
+test(focusedCaseTitle('I3', focusedOwner, 'simulateRoute binds every required role in order'), async () => {
   const api = makeApi({
     rolesService: {
       async listRoles() {
@@ -3455,7 +3601,11 @@ test('TaskControlPlaneApiService.simulateRoute binds an unknown-id role purely f
   assert.equal('kind' in (pollerBinding ?? {}), false, 'no kind is threaded onto any binding');
 });
 
-test('TaskControlPlaneApiService.simulateRoute binds canonical feature-development roles and gates', async () => {
+test(focusedCaseTitle(
+  'I1',
+  focusedOwner,
+  'simulateRoute exposes canonical feature-development roles and gates',
+), async () => {
   const api = makeApi({
     rolesService: {
       async listRoles() {
@@ -3981,7 +4131,7 @@ function inlineLocalProfile(slot: Record<string, unknown>): Record<string, unkno
   };
 }
 
-test('PROFILE_SCHEMA_CLOSED: rejects bindingOverride with unknown runner (not in BUILTIN_RUNNERS)', async () => {
+test(focusedCaseTitle('I9', focusedOwner, 'profile rejects an unknown role runner before start'), async () => {
   const api = makeApiForProfileTests();
   await assert.rejects(
     () => api.simulateRoute({
@@ -3997,7 +4147,7 @@ test('PROFILE_SCHEMA_CLOSED: rejects bindingOverride with unknown runner (not in
   );
 });
 
-test('PROFILE_SCHEMA_CLOSED: rejects node-only override with unknown runner (regression: node-only validated pre-start)', async () => {
+test(focusedCaseTitle('I9b', focusedOwner, 'profile rejects an unknown node runner before start'), async () => {
   const api = makeApiForProfileTests();
   await assert.rejects(
     () => api.simulateRoute({
@@ -4342,7 +4492,7 @@ test('PROFILE_SCHEMA_CLOSED: rejects timeoutMs on script node bindings', async (
   );
 });
 
-test('PROFILE_SCHEMA_CLOSED: validates permissionMode against profile-selected runner', async () => {
+test(focusedCaseTitle('I10', focusedOwner, 'permission mode is validated against the selected runner'), async () => {
   const api = makeApi({
     rolesService: {
       async listRoles() {
@@ -4376,7 +4526,7 @@ test('PROFILE_SCHEMA_CLOSED: validates permissionMode against profile-selected r
   );
 });
 
-test('Phase B: resolveRouteRoles records provenance for modelLevel override', async () => {
+test(focusedCaseTitle('I8', focusedOwner, 'profile binding provenance is retained per axis'), async () => {
   const api = makeApiForProfileTests();
   const result = await api.simulateRoute({
     title: 'test',
@@ -4590,7 +4740,11 @@ function assertStoredProfileProvenance(route: RouteDecision): void {
   assert.equal(route.pipelineRowId, 'pb-feature-development');
 }
 
-test('resolveRouteDecision: stored run profile materializes template and stamps provenance', async () => {
+test(focusedCaseTitle(
+  ['I11', 'H9c'],
+  focusedOwner,
+  'stored profile simulation materializes and stamps pinned provenance',
+), async () => {
   const api = makeApiForStoredProfileTests();
   const route = await api.simulateRoute({
     title: 'test',
@@ -4643,7 +4797,11 @@ test('resolveRouteDecision: stored run profile payload is schema-validated at la
   );
 });
 
-test('resolveRouteDecision: stored run profile role and node bindings affect launch configuration', async () => {
+test(focusedCaseTitle(
+  ['I10b', 'H9d'],
+  focusedOwner,
+  'stored profile node binding carries the GitHub account into launch configuration',
+), async () => {
   const api = makeApiForStoredProfileTests();
   const route = await api.simulateRoute({
     title: 'test',

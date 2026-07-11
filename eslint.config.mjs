@@ -38,4 +38,11 @@ export default [
       'local/no-dead-pointers': 'error',
     },
   },
+  {
+    files: ['src/**/*.ts'],
+    plugins: { local: localRules },
+    rules: {
+      'local/test-architecture-boundaries': 'error',
+    },
+  },
 ];

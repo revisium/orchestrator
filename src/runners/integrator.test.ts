@@ -762,7 +762,9 @@ test('M4: >1 matching PR → { needsHuman } naming candidates, no duplicate crea
 
   const result = await integrate(BASE_INPUT, deps);
   assert.ok('needsHuman' in result, 'ambiguous PRs must return needsHuman');
-  assert.ok(result.lesson.includes('5') && result.lesson.includes('6'), `lesson must name candidates: ${result.lesson}`);
+  assert.ok(result.lesson.startsWith('Ambiguous: 2 open PRs '), `lesson must keep the stable ambiguity reason: ${result.lesson}`);
+  assert.ok(result.lesson.includes('candidates #5, #6'), `lesson must name candidates: ${result.lesson}`);
+  assert.ok(result.lesson.endsWith('manual review needed'), `lesson must require manual review: ${result.lesson}`);
   assert.equal(createCalled, false, 'pr create must NOT be called when ambiguous');
 });
 

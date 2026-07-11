@@ -483,7 +483,7 @@ test('A9 (G2+C2): resolveInbox on pending row returns stored (re-read) answer on
   assert.equal(result.answer, 'approve', 'returned answer must equal the stored/re-read value (C2)');
 });
 
-test('A9 (G2): resolveInbox on already-resolved row returns stored answer (not caller arg)', async () => {
+test('resolveInbox returns the stored answer when an already-resolved row is replayed', async () => {
   const inboxId = 'inbox-g2';
   const storedAnswer = { decision: 'approve' };
 
@@ -502,11 +502,8 @@ test('A9 (G2): resolveInbox on already-resolved row returns stored answer (not c
     },
   ]);
 
-  // Second call with a DIFFERENT answer (crash-after-resolve retry scenario).
   const result = await resolveInbox(da, inboxId, { decision: 'reject' }, 'bob', { now: FIXED_NOW });
 
-  // status is 'resolved' (was already resolved before this call).
   assert.equal(result.status, 'resolved', 'status must be resolved (was already)');
-  // answer is the STORED value, NOT the caller's argument.
   assert.deepEqual(result.answer, storedAnswer, 'stored answer must win over caller arg (G2)');
 });

@@ -1,14 +1,20 @@
 # Pipeline test coverage v1 spec
 
-- **Status:** Implemented policy.
-- **Source files:** `VERIFICATION.md`, `src/e2e/kit/scenario.ts`, `src/e2e/*.e2e.test.ts`,
+- **Status:** Accepted
+- **Version:** v1
+- **Implementation status:** The pipeline-specific policy and linked Stage 2 test-boundary migration are implemented;
+  Stage 3 observed-runtime evidence remains separately gated and unimplemented.
+- **Source files:** `VERIFICATION.md`, `src/e2e/support/pipeline-context.ts`, `src/e2e/pipeline/**/*.e2e.test.ts`,
   `src/control-plane/default-playbook-policy.test.ts`, `src/control-plane/seed-default-playbook.test.ts`,
-  `src/control-plane/pipeline-coverage-registry.ts`,
-  `src/control-plane/pipeline-coverage-registry.test.ts`, `src/e2e/hard-skip-issue-ref.test.ts`,
+  `src/testing/policy/pipeline-coverage.ts`,
+  `src/testing/policy/pipeline-coverage.test.ts`, `src/testing/policy/hard-skip-issue-ref.test.ts`,
   `src/poller/pr-readiness.test.ts`.
+- **Related architecture:** [ADR-0009](../adr/0009-test-architecture-boundaries.md) (Accepted).
+- **Current matrix:** [test coverage matrix v1](./test-coverage-matrix-v1.json) (current-state snapshot).
 - **Related specs:** [pipeline-state-machine-v1.spec.md](./pipeline-state-machine-v1.spec.md),
   [default-playbook-policy.spec.md](./default-playbook-policy.spec.md),
-  [run-profiles-v1.spec.md](./run-profiles-v1.spec.md).
+  [run-profiles-v1.spec.md](./run-profiles-v1.spec.md),
+  [test-architecture-v1.spec.md](./test-architecture-v1.spec.md).
 
 This spec defines how pipeline behavior is tested. It is agent-facing: before adding or changing tests for default
 pipelines, run profiles, gates, GitHub readiness, recovery, or consensus routing, agents MUST choose the test layer
@@ -23,6 +29,17 @@ It does not replace focused unit-test ownership for pure functions, nor the e2e 
 `AGENTS.md`.
 
 The key words MUST, MUST NOT, SHOULD, SHOULD NOT, MAY are to be interpreted as in RFC 2119 / BCP 14.
+
+## Relationship To The Target Architecture
+
+This spec remains the implemented v1 policy for pipeline-specific ownership and coverage declarations. The Accepted
+general test-architecture spec defines the implemented Stage 2 cross-layer boundaries, and the JSON matrix records
+current evidence. Neither document claims that Stage 3 runtime evidence is implemented.
+
+The current registry proves declared ownership and typed case attachment against pinned materialized templates and
+routing signatures. It rejects duplicate primary owners and incomplete or expired waivers; the committed waiver set
+is empty. It does not prove observed runtime traversal. Authoritative observed coverage will come only from runtime
+facts through a separately approved Stage 3 persistence, projection, and read design.
 
 ## Layer Ownership
 
@@ -40,8 +57,8 @@ contract.
 
 ## Declarative DSL Coverage
 
-New default-pipeline workflow coverage SHOULD use declarative `pipelineScenario` cases, not hand-rolled imperative
-e2e code, unless the subject is the harness, host lifecycle, GraphQL subscriptions, or another non-pipeline surface.
+New default-pipeline workflow coverage SHOULD use an immutable `PipelineCasePlan` through the typed pipeline context,
+not hand-rolled imperative E2E code. Host lifecycle and public transports belong to their own typed contexts.
 
 A DSL scenario MUST assert the behavior that proves the route:
 
@@ -59,26 +76,33 @@ workflow effect.
 The coverage model is a registry-backed matrix. Each declarative scenario SHOULD carry stable coverage tags. The
 meta-test MUST be cheap enough to run outside the real e2e lane, and MUST run in the required CI verification lane.
 
-Coverage tags use stable ids:
+Coverage tags are stable behavior descriptors:
 
 - `node:<nodeId>:outcome:<verdict>` for human-gate and choice outcomes;
 - `node:<nodeId>:catch:<errorCode>` for effect failure routes;
 - `node:<nodeId>:default` for default branches;
 - `profile:<profileId>:signature:<routingSignature>` for representative profile coverage.
 
+Ownership is assigned to materialized coverage cells, not to tags globally. A cell combines the pinned pipeline id,
+profile id, materialized-template hash, routing signature, and one descriptor tag. Reusing a tag in a cloned or changed
+template does not reuse ownership: the new materialized cell must receive its own explicit declaration.
+
 The graph-coverage meta-test MUST verify:
 
-- every product template edge/outcome is covered by a DSL tag, a static-policy diagnostic tag, a unit-owned tag, or an
-  explicit waiver;
-- every DSL tag references a defined edge/outcome or profile signature;
-- no scenario uses an undefined tag;
-- every waiver has a short reason and an owner surface.
+- every materialized product-template edge/outcome cell is covered by a DSL scenario, a static-policy diagnostic, a
+  unit owner, or an explicit waiver;
+- every DSL scenario references cells under its one selected pinned materialized identity;
+- static-policy, unit, and waiver declarations resolve to explicit pinned materialized identities and cell ids;
+- no declaration uses an undefined or stale cell;
+- every primary cell has exactly one owner and no cell is both owned and waived;
+- every waiver has stable cells, a short reason, an owner surface, and an expiry stage or condition.
 
 The shipped registry currently carries no waivers. If a future waiver is introduced, it MUST be deliberate,
 source-owned, and visible through the registry meta-test; waivers MUST NOT be used to close an audit milestone while the
 covered behavior still belongs to that milestone.
 
-Defensive edges, catch routes, default branches, and counter-bound conjuncts MAY be covered by static-policy diagnostics
+Tags remain descriptors for review and diagnostics; they MUST NOT act as a global ownership fallback. Defensive edges,
+catch routes, default branches, and counter-bound conjuncts MAY be covered by static-policy diagnostics
 instead of a runtime DSL scenario when a runtime scenario would duplicate lower-level proof or create low-value e2e
 churn. They MUST NOT disappear silently.
 
@@ -130,3 +154,6 @@ least one cap-exhaustion path for every user-visible recovery loop family.
   hard-skip/milestone guidance after the default-pipeline audit remediation work.
 - 2026-07-09: Marked the policy implemented after the default-pipeline audit remediation close-out: graph coverage is
   registry-backed in required CI, the waiver registry is empty, and hard skips are guarded.
+- 2026-07-10: Accepted ADR-0009 and the general test architecture specification, linked the current-state matrix,
+  and implemented Stage 2 typed pipeline plans, pinned materialized-cell ownership, waiver expiry validation, and
+  source-text-free case attachment; Stage 3 observed-runtime evidence remains separately gated.
