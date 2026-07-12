@@ -1,8 +1,6 @@
-import {
-  JsonRpcProtocolError,
-  parseJsonRpcMessage,
-  type JsonRpcMessage,
-} from './types.js';
+import { JsonRpcProtocolError } from './errors.js';
+import { parseJsonRpcMessage } from './parser.js';
+import type { JsonRpcMessage } from './types.js';
 
 export type JsonRpcFramer = {
   push(chunk: Uint8Array): JsonRpcMessage[];
@@ -42,9 +40,27 @@ export function createJsonRpcFramer(options: JsonRpcFramerOptions = {}): JsonRpc
   let text = '';
   let encodedFrameBytes = 0;
   let finished = false;
+  let failure: JsonRpcProtocolError | undefined;
 
   function ensureOpen(): void {
+    if (failure) throw failure;
     if (finished) throw new JsonRpcProtocolError('closed', 'JSON-RPC framer is finished');
+  }
+
+  function run<T>(operation: () => T): T {
+    ensureOpen();
+    try {
+      return operation();
+    } catch (error) {
+      if (error instanceof JsonRpcProtocolError &&
+          (error.code === 'overflow' || error.code === 'invalid_utf8' ||
+           error.code === 'invalid_json' || error.code === 'invalid_message')) {
+        failure = error;
+        text = '';
+        encodedFrameBytes = 0;
+      }
+      throw error;
+    }
   }
 
   function account(chunk: Uint8Array): void {
@@ -84,20 +100,22 @@ export function createJsonRpcFramer(options: JsonRpcFramerOptions = {}): JsonRpc
 
   return {
     push(chunk): JsonRpcMessage[] {
-      ensureOpen();
-      account(chunk);
-      text += decode(chunk, true);
-      return drainLines();
+      return run(() => {
+        account(chunk);
+        text += decode(chunk, true);
+        return drainLines();
+      });
     },
     finish(): JsonRpcMessage[] {
-      ensureOpen();
-      finished = true;
-      text += decode(new Uint8Array(), false);
-      const messages = drainLines();
-      const finalMessage = parseLine(text);
-      text = '';
-      if (finalMessage) messages.push(finalMessage);
-      return messages;
+      return run(() => {
+        text += decode(new Uint8Array(), false);
+        const messages = drainLines();
+        const finalMessage = parseLine(text);
+        text = '';
+        finished = true;
+        if (finalMessage) messages.push(finalMessage);
+        return messages;
+      });
     },
   };
 }

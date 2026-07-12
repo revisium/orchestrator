@@ -1,12 +1,19 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { JsonRpcProtocolError } from '../errors.js';
 import { createJsonRpcFramer } from '../framer.js';
-import { JsonRpcProtocolError, parseJsonRpcMessage } from '../types.js';
+import { parseJsonRpcMessage } from '../parser.js';
 
 const encoder = new TextEncoder();
 
 function assertFailure(code: JsonRpcProtocolError['code'], run: () => unknown): void {
   assert.throws(run, (error: unknown) => error instanceof JsonRpcProtocolError && error.code === code);
+}
+
+function nestedArray(depth: number): unknown {
+  let value: unknown = null;
+  for (let currentDepth = 1; currentDepth < depth; currentDepth += 1) value = [value];
+  return value;
 }
 
 test('parseJsonRpcMessage accepts the Slice 1 JSON-RPC 2.0 message subset', () => {
@@ -30,6 +37,7 @@ test('parseJsonRpcMessage rejects batch, invalid request, and invalid response s
   assertFailure('invalid_message', () => parseJsonRpcMessage({ jsonrpc: '1.0', method: 'run', id: 1 }));
   assertFailure('invalid_message', () => parseJsonRpcMessage({ jsonrpc: '2.0', method: ' ', id: 1 }));
   assertFailure('invalid_message', () => parseJsonRpcMessage({ jsonrpc: '2.0', method: 'run', id: 1.5 }));
+  assertFailure('invalid_message', () => parseJsonRpcMessage({ jsonrpc: '2.0', method: 'run', id: null }));
   assertFailure('invalid_message', () =>
     parseJsonRpcMessage({ jsonrpc: '2.0', method: 'run', params: 'not-structured', id: 1 }),
   );
@@ -61,6 +69,27 @@ test('parseJsonRpcMessage rejects sparse array params', () => {
 
   assertFailure('invalid_message', () =>
     parseJsonRpcMessage({ jsonrpc: '2.0', method: 'run', params: sparseParams, id: 1 }),
+  );
+});
+
+test('parseJsonRpcMessage accepts JSON values through depth 256 and rejects depth 257', () => {
+  const accepted = nestedArray(256);
+  assert.deepEqual(
+    parseJsonRpcMessage({ jsonrpc: '2.0', method: 'run', params: accepted, id: 1 }),
+    { jsonrpc: '2.0', method: 'run', params: accepted, id: 1 },
+  );
+
+  assertFailure('invalid_message', () =>
+    parseJsonRpcMessage({ jsonrpc: '2.0', method: 'run', params: nestedArray(257), id: 1 }),
+  );
+});
+
+test('parseJsonRpcMessage rejects cyclic JSON values with a typed failure', () => {
+  const cyclic: unknown[] = [];
+  cyclic.push(cyclic);
+
+  assertFailure('invalid_message', () =>
+    parseJsonRpcMessage({ jsonrpc: '2.0', method: 'run', params: cyclic, id: 1 }),
   );
 });
 
@@ -121,4 +150,49 @@ test('framer finish parses a valid final frame and rejects invalid or incomplete
   const invalidMessage = createJsonRpcFramer();
   invalidMessage.push(encoder.encode('[]'));
   assertFailure('invalid_message', () => invalidMessage.finish());
+});
+
+test('framer latches its first fatal failure and rejects every later operation with it', () => {
+  const cases: Array<{
+    code: JsonRpcProtocolError['code'];
+    create: () => ReturnType<typeof createJsonRpcFramer>;
+    fail: (framer: ReturnType<typeof createJsonRpcFramer>) => unknown;
+  }> = [
+    {
+      code: 'overflow',
+      create: () => createJsonRpcFramer({ maxFrameBytes: 1 }),
+      fail: (framer) => framer.push(encoder.encode('{}')),
+    },
+    {
+      code: 'invalid_utf8',
+      create: () => createJsonRpcFramer(),
+      fail: (framer) => framer.push(Uint8Array.from([0xff])),
+    },
+    {
+      code: 'invalid_json',
+      create: () => createJsonRpcFramer(),
+      fail: (framer) => framer.push(encoder.encode('{bad}\n')),
+    },
+    {
+      code: 'invalid_message',
+      create: () => createJsonRpcFramer(),
+      fail: (framer) => framer.push(encoder.encode('[]\n')),
+    },
+  ];
+
+  for (const entry of cases) {
+    const framer = entry.create();
+    let original: unknown;
+    try {
+      entry.fail(framer);
+    } catch (error) {
+      original = error;
+    }
+    assert.ok(original instanceof JsonRpcProtocolError);
+    assert.equal(original.code, entry.code);
+    assert.throws(() => framer.push(encoder.encode('{"jsonrpc":"2.0","method":"later"}\n')), (error) =>
+      error === original,
+    );
+    assert.throws(() => framer.finish(), (error) => error === original);
+  }
 });

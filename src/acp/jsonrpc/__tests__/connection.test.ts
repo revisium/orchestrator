@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createJsonRpcConnection } from '../connection.js';
-import { JsonRpcProtocolError, type JsonRpcMessage } from '../types.js';
+import { JsonRpcProtocolError } from '../errors.js';
+import type { JsonRpcMessage } from '../types.js';
 
 const decoder = new TextDecoder();
 
@@ -93,6 +94,12 @@ test('connection distinguishes unknown, duplicate, and null response ids', async
   await assertFailure('unknown_response_id', () =>
     connection.receive({ jsonrpc: '2.0', id: 99, result: true }),
   );
+  const numeric = connection.request('numeric');
+  await assertFailure('unknown_response_id', () =>
+    connection.receive({ jsonrpc: '2.0', id: '2', result: true }),
+  );
+  await connection.receive({ jsonrpc: '2.0', id: 2, result: 'numeric' });
+  assert.equal(await numeric, 'numeric');
   await assertFailure('uncorrelated_null_response', () =>
     connection.receive({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }),
   );
@@ -115,6 +122,83 @@ test('send failure rejects only its request and leaves other pending calls corre
   await assertFailure('unknown_response_id', () =>
     connection.receive({ jsonrpc: '2.0', id: 2, result: 'late' }),
   );
+  await connection.notify('still-writable');
+  assert.equal(writeNo, 3);
+});
+
+test('connection serializes notification, request, and server-response writes', async () => {
+  const started: JsonRpcMessage[] = [];
+  const releases: Array<() => void> = [];
+  const connection = createJsonRpcConnection({
+    async write(chunk) {
+      started.push(decodeWrite(chunk));
+      await new Promise<void>((resolve) => releases.push(resolve));
+    },
+    async onRequest() { return { kind: 'result', value: true }; },
+  });
+
+  const notification = connection.notify('first');
+  const request = connection.request('second');
+  const serverResponse = connection.receive({ jsonrpc: '2.0', method: 'third', id: 'server' });
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(started, [{ jsonrpc: '2.0', method: 'first' }]);
+
+  releases.shift()!();
+  await notification;
+  await Promise.resolve();
+  assert.deepEqual(started, [
+    { jsonrpc: '2.0', method: 'first' },
+    { jsonrpc: '2.0', method: 'second', id: 1 },
+  ]);
+
+  releases.shift()!();
+  await connection.receive({ jsonrpc: '2.0', id: 1, result: 'done' });
+  assert.equal(await request, 'done');
+  await Promise.resolve();
+  assert.deepEqual(started, [
+    { jsonrpc: '2.0', method: 'first' },
+    { jsonrpc: '2.0', method: 'second', id: 1 },
+    { jsonrpc: '2.0', id: 'server', result: true },
+  ]);
+  releases.shift()!();
+  await serverResponse;
+});
+
+test('close prevents queued and post-handler writes from starting', async () => {
+  const writes: JsonRpcMessage[] = [];
+  let releaseWrite!: () => void;
+  let releaseHandler!: () => void;
+  const handlerPending = new Promise<void>((resolve) => {
+    releaseHandler = resolve;
+  });
+  const connection = createJsonRpcConnection({
+    async write(chunk) {
+      writes.push(decodeWrite(chunk));
+      await new Promise<void>((resolve) => {
+        releaseWrite = resolve;
+      });
+    },
+    async onRequest() {
+      await handlerPending;
+      return { kind: 'result', value: true };
+    },
+  });
+
+  const inFlight = connection.notify('started');
+  const queued = connection.notify('queued');
+  const inbound = connection.receive({ jsonrpc: '2.0', method: 'server', id: 9 });
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(writes, [{ jsonrpc: '2.0', method: 'started' }]);
+
+  connection.close();
+  releaseWrite();
+  releaseHandler();
+  await inFlight;
+  await assertFailure('closed', () => queued);
+  await assertFailure('closed', () => inbound);
+  assert.deepEqual(writes, [{ jsonrpc: '2.0', method: 'started' }]);
 });
 
 test('remote error rejects its pending request with the original error details', async () => {
@@ -188,6 +272,56 @@ test('connection converts thrown server handler failures to internal errors', as
   assert.deepEqual(writes.map(decodeWrite), [
     { jsonrpc: '2.0', id: 8, error: { code: -32603, message: 'Internal error' } },
   ]);
+});
+
+test('connection converts invalid server handler outcomes to internal errors', async () => {
+  const invalidOutcomes: unknown[] = [
+    { kind: 'result', value: Number.NaN },
+    { kind: 'error', error: { code: 1.5, message: 'Bad' } },
+    { kind: 'error', error: { code: -32603, message: ' ' } },
+  ];
+
+  for (const [index, invalidOutcome] of invalidOutcomes.entries()) {
+    const writes: Uint8Array[] = [];
+    const connection = createJsonRpcConnection({
+      async write(chunk) { writes.push(chunk); },
+      async onRequest() {
+        return invalidOutcome as never;
+      },
+    });
+
+    await connection.receive({ jsonrpc: '2.0', method: 'invalid', id: index + 1 });
+    assert.deepEqual(writes.map(decodeWrite), [
+      { jsonrpc: '2.0', id: index + 1, error: { code: -32603, message: 'Internal error' } },
+    ]);
+  }
+});
+
+test('connection does not hide transport failure while sending an internal error', async () => {
+  const connection = createJsonRpcConnection({
+    async write() { throw new Error('broken pipe'); },
+    async onRequest() { return { kind: 'result', value: Number.NaN } as never; },
+  });
+
+  await assertFailure('send_failed', () =>
+    connection.receive({ jsonrpc: '2.0', method: 'invalid', id: 1 }),
+  );
+});
+
+test('connection bounds recent response history while retaining recent duplicates', async () => {
+  const connection = createJsonRpcConnection({ async write() {} });
+  for (let id = 1; id <= 1_025; id += 1) {
+    const pending = connection.request('settle');
+    await connection.receive({ jsonrpc: '2.0', id, result: id });
+    assert.equal(await pending, id);
+  }
+
+  await assertFailure('unknown_response_id', () =>
+    connection.receive({ jsonrpc: '2.0', id: 1, result: true }),
+  );
+  await assertFailure('duplicate_response_id', () =>
+    connection.receive({ jsonrpc: '2.0', id: 2, result: true }),
+  );
 });
 
 test('connection delegates notifications without writing a response', async () => {
