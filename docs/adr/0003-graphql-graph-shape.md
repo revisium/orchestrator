@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Decision date:** 2026-06-26
 - **Spec:** [GraphQL admin API v1](../specs/graphql-admin-api-v1.spec.md)
-- **Refines:** GraphQL front-door decision from the Revo host plan ADRs
+- **Refines:** [ADR-0001](./0001-execution-engine-and-host.md) (NestJS host and shared GraphQL front door)
 
 ## Context
 

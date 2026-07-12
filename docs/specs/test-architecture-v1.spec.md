@@ -207,6 +207,111 @@ only the actions and observations owned by its layer.
 Stage 3 MAY add a semantic-evidence reader to the pipeline, integration, and runtime contexts. That reader MUST expose
 only the persisted semantic projection defined by the Stage 3 contract.
 
+## A1 Authoring Contract (Target Migration)
+
+This section defines the Stage 2 authoring contract that A2 through A6 will
+implement. It does not change the current Stage 2 runtime behavior. It does
+not define Stage 3 persistence, projection, snapshots, timing, or budget
+behavior.
+
+### Authoring vocabulary
+
+Each test MUST use the vocabulary of its primary owning layer. Each test MUST
+keep its decisive proof at one semantic altitude. A context MAY hide mechanics
+that belong to its layer. A context MUST NOT hide the decisive behavior named
+by the test.
+
+The four context capabilities are:
+
+| Capability | Contract | Forbidden leakage |
+| --- | --- | --- |
+| Action | Performs one named operation and returns typed protocol or domain output. | An action MUST NOT assert a later terminal state, route, reason, persisted output, or side effect. |
+| Bounded wait | Polls for one named observation within the owning wait bound. | A wait MUST NOT substitute terminal state for missing route, reason, persisted-output, or side-effect evidence. |
+| Observation | Returns typed state or facts owned by the layer. | An observation MUST NOT decide whether the returned state is correct. |
+| Expectation | Asserts one named obligation against an explicit expected value. | An expectation MUST NOT hide unrelated obligations behind a vague or compound helper. |
+
+Context-internal assertions MAY enforce malformed protocol data, impossible
+fixture handles, startup failure, and cleanup failure. Those assertions are
+mechanical invariants and MUST NOT replace the behavior assertion owned by the
+test.
+
+### Per-layer authoring requirements
+
+The following requirements define exemplar ownership. A2 MUST implement one
+real executable exemplar for each layer in its ordinary required lane. A2 MUST
+NOT add a toy suite or a duplicate example suite. Documentation MUST link to
+the owning executable exemplar after it exists.
+
+| Layer | Primary abstraction level | Exemplar requirement |
+| --- | --- | --- |
+| Unit | Pure input, call, result, and focused decision assertion. | The test MUST expose the decision input partition and expected result without an E2E context. |
+| Static policy | Diagnostics, structural cells, and ownership algebra. | The test MUST expose the checked policy facts and diagnostics without creating a run or using a timer. |
+| Pipeline DSL | Declared coverage, pre-start inputs, named actions, and user-visible workflow obligations. | The test MUST expose coverage identity, the route or reason, the terminal outcome, and each required or forbidden side effect. |
+| Full integration | Real-host lifecycle and representative external-effect integration. | The test MUST expose start, settled lifecycle, and the representative external effect or its absence. |
+| MCP surface | Stdio tool call and protocol/application result. | The test MUST expose `isError` and the semantic response or error fields. |
+| GraphQL surface | Named document, variables, protocol response, and subscription result. | The test MUST expose status, data or errors, and path when the contract provides one. |
+| CLI surface | Visible argv, subprocess result, and process lifecycle. | The test MUST expose exit status, stdout, stderr, and lifecycle effects owned by the scenario. |
+| Runtime | Lifecycle action, recovery or concurrency state, and causal evidence. | The test MUST expose the action, settled state, reason, and replay or isolation proof required by the scenario. |
+
+The unit and static-policy exemplars MUST remain focused on their respective
+layers. The pipeline, integration, surface, and runtime exemplars MUST use
+their owning typed contexts. A lower layer MUST NOT duplicate a higher-layer
+workflow claim. A higher layer MUST NOT duplicate a lower-layer classifier
+partition.
+
+The executable owners for these eight examples are registered in
+[`test-coverage-matrix-v1.json`](./test-coverage-matrix-v1.json) and validated
+by the matrix policy test. The source tests are authoritative; the examples in
+this specification remain informative.
+
+### Enforcement split and review rubric
+
+TypeScript MUST enforce immutable plans, closed identifiers, branded targets,
+and typed context results. ESLint MUST enforce dependency direction, context
+imports, forbidden raw mechanics, and the absence of broad E2E barrels. Cheap
+meta-tests MUST enforce discovery, layer ownership, attachment identity,
+ownership algebra, waiver metadata, exemplar paths, and obsolete export
+absence. Runtime tests MUST enforce the approved runtime behavior in the
+existing real-E2E lane. Documentation MUST own rationale and normative rules.
+
+Review MUST decide semantic altitude, decisive proof sufficiency, abstraction
+minimality, and representative-versus-exhaustive coverage. Review MUST NOT
+delegate those judgments to source-text formatting, an AST readability rule,
+or a universal fluent DSL.
+
+### Migration and deletion boundary
+
+A2 MUST establish the typed descriptors and real per-layer exemplars. A2
+MUST refresh the current matrix only in its approved matrix slice.
+
+A3 MUST directly replace pipeline DSL authoring with the contract in this
+section. A4 MUST directly replace integration and runtime authoring. A5 MUST
+directly replace MCP, GraphQL, and CLI surface authoring.
+
+During A3 through A5, temporary coexistence MAY identify suites that have not
+yet migrated. Temporary coexistence MUST be bounded to those named suites. It
+MUST NOT add aliases, overloads, facades, dual-write paths, or fallback plan
+shapes.
+
+A6 MUST delete the remaining old helpers, old declaration paths, and temporary
+coexistence markers. A6 MUST activate final enforcement after deletion. A6
+MUST NOT preserve compatibility aliases for migrated APIs.
+
+Migration MUST preserve coverage-cell identity, layer ownership, assertion
+strength, required verification lanes, CI and local concurrency, timeout
+values, and the existing E2E performance envelope. Migration MUST NOT reduce
+scenarios or assertions, add waivers, or change product behavior.
+
+### Explicit non-goals
+
+This A1 contract MUST NOT introduce a universal fluent DSL. It MUST NOT
+introduce a source-text readability checker. It MUST NOT introduce a
+compatibility alias. It MUST NOT refresh the coverage matrix. It MUST NOT
+add a Stage 2 ADR or specification. It MUST NOT define Stage 3 runtime
+evidence, persistence, projection, snapshots, timing, or budget behavior. It
+MUST NOT change product code, test code, coverage partitions, concurrency,
+timeouts, waivers, or CI policy.
+
 ### Target examples
 
 The examples in this section are informative and show assertion altitude; exact implemented private identifiers may

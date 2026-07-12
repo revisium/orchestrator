@@ -2,184 +2,87 @@
 
 - **Status:** Draft
 - **Decision date:** 2026-07-06
+- **Implementation status:** The Revo-owned embedded PostgreSQL path, Prisma runtime models, engine-required tables,
+  separate DBOS database, and in-process engine integration have substantially landed. Acceptance and remaining
+  storage/knowledge contracts are still open.
 - **Specs:** [storage database layout v1](../specs/storage-database-layout-v1.spec.md),
-  [Revo Prisma and engine schema v1](../specs/revo-prisma-engine-schema-v1.spec.md)
-- **Relates-to:** [ADR-0001](./0001-execution-engine-and-host.md),
-  [ADR-0005](./0005-versioned-playbook-storage-and-revo-materialization.md),
-  [ADR-0006](./0006-run-profiles-and-provider-neutral-pipelines.md),
+  [Revo Prisma and engine schema v1](../specs/revo-prisma-engine-schema-v1.spec.md),
   [run dataflow v1](../specs/run-dataflow-v1.spec.md),
-  [human gates v1](../specs/human-gates-v1.spec.md),
-  [issue #285](https://github.com/revisium/orchestrator/issues/285)
+  [human gates v1](../specs/human-gates-v1.spec.md)
+- **Relates-to:** [ADR-0001](./0001-execution-engine-and-host.md),
+  [ADR-0002](./0002-data-driven-pipeline-state-machine.md)
 
 ## Context
 
-Storage v2 moves Revo away from an external local storage daemon. The earlier NestJS host bootstrap started or reused
-that daemon, discovered its embedded PostgreSQL port, created the DBOS system database, and then launched DBOS.
+The original host used an external local storage daemon and placed hot run projections in Revisium draft tables.
+That model made transactional run/gate behavior, lifecycle ownership, and recovery reconciliation harder while DBOS
+already owned durable workflow progress.
 
-That design was enough to bootstrap the product, but it now puts the wrong data in the wrong store:
+Revo needs first-class SQL product/runtime facts such as projects, runs, tasks, attempts, inbox items, events,
+outputs, costs, and indexes. It also needs the embedded Revisium engine for committed/versioned meaning and DBOS for
+workflow progress. These lifecycles require distinct owners even when they share one local PostgreSQL cluster.
 
-- hot runtime rows live in Revisium draft tables even though they need SQL transactions, retention, and single-writer
-  status semantics;
-- DBOS already owns durable workflow progress and replay, so runtime status reconciliation across multiple stores has
-  produced real consistency bugs;
-- an external storage service adds a second daemon boundary and a localhost HTTP hop even though the extracted
-  `@revisium/engine` package can be embedded in the host;
-- Revo needs first-class product/runtime data such as projects, repositories, runs, attempts, inbox items, events,
-  outputs, artifacts, and cost ledgers.
+Revo is an internal alpha. This redesign has no requirement to preserve pre-v2 local data or transitional authority
+models.
 
-The first issue #285 design capture proposed separate `engine`, `revo_runtime`, and `dbos` databases. Follow-up design
-review changed that: the engine does not own a project registry, and Revo needs one Prisma schema that includes both
-Revo-owned product/runtime tables and the engine-required physical tables. DBOS remains separate because its schema is
-owned and migrated by the DBOS SDK.
+## Draft Decision
 
-This ADR does not support pre-v2 local data. Revo is still an internal alpha, so there is no compatibility requirement
-to read or migrate existing user data directories.
+Use one Revo-owned embedded PostgreSQL cluster with two logical databases:
 
-## Decision
+| Database | Logical owner | Contents |
+| --- | --- | --- |
+| Revo product DB | Revo Prisma + embedded Revisium engine | Revo product/runtime models plus engine-required physical tables |
+| DBOS system DB | DBOS SDK, provisioned by Revo | DBOS workflow, queue, wait, event, and migration tables |
 
-Adopt a Revo-owned storage foundation with one embedded PostgreSQL cluster and two logical databases:
+Revo Prisma owns hot product/runtime facts. The embedded Revisium engine owns branch/revision/table meaning and
+committed/versioned control-plane or project knowledge. DBOS owns workflow progress and its own DDL. Git, worktrees,
+and files remain the authority for source changes and large artifacts.
 
-| Database | Owner | Contents | Migration owner |
-| --- | --- | --- | --- |
-| Revo product DB, profile-specific name such as `revo` / `revo_dev` | Revo | Revo product/runtime tables plus engine-required physical tables | Revo Prisma migrations |
-| DBOS system DB, profile-specific name such as `dbos` / `dbos_dev` | DBOS SDK, provisioned by Revo | DBOS workflow, queue, notification, schedule, event, stream, and migration tables under schema `dbos` | DBOS SDK system migrations at `DBOS.launch()` |
+The Revo host starts the embedded database, provisions both logical databases, applies Revo Prisma migrations,
+initializes the engine/control-plane store, launches DBOS, and serves front doors only after every required plane is
+ready. Product code uses the public Prisma/engine/DBOS service boundaries and does not query DBOS tables directly.
 
-The embedded PostgreSQL cluster is Revo-owned. The host is responsible for starting it directly, discovering its
-proven port, creating required databases, running Revo migrations through Prisma Migrate, configuring
-`@revisium/engine`, configuring DBOS, and failing startup if any plane is inconsistent.
+The Revo product database includes engine-required physical tables because the embedded engine needs them, but their
+presence does not make hot Prisma run rows versioned Revisium meaning. Logical ownership follows the API and mutation
+lifecycle, not table colocation.
 
-The Revo storage path is in-process. Revo must not discover storage through external runtime files or rely on a local
-storage-service health endpoint during normal startup.
+`RevoProject` is a Prisma product entity. The engine receives its id as an opaque project grouping key; it does not
+own project lifecycle. Exact project/ADR/KB meaning remains Draft under ADR-0008.
 
-### Revo product database
+## Current and Target Boundary
 
-The Revo product DB is the only Prisma database managed by Revo. It contains:
+The current Prisma schema confirms the hot runtime split: `RevoProject`, `TaskRun`, `RunTask`, `RunEvent`,
+`RunAttempt`, `InboxItem`, `RunOutput`, and `CostLedgerEntry` are Prisma-owned. No first-class `Repository` model is
+shipped; repository refs currently live on run/task data.
 
-- Revo business entities such as `RevoProject`, repositories, and project settings;
-- hot runtime entities such as runs, tasks, attempts, inbox items, events, outputs, costs, and artifact indexes;
-- engine-required physical tables: `Branch`, `Revision`, `Table`, `Row`, `FileBlob`, `ProjectFileUsage`, and
-  `TableMigration`.
+The embedded engine physical models and separate DBOS database are also current implementation. ADR/KB tables,
+proposal/acceptance flows, large attachment lifecycle, and the complete playbook/execution-plan storage target remain
+Draft. This partial landing does not automatically accept the ADR.
 
-Revo does not create a Revisium table named `revo_projects`. The Revo project registry is a Prisma model. The engine
-receives `projectId` strings and does not own project lifecycle. Revo adds an additive safety relation from
-`Branch.projectId` to `RevoProject.id`. Engine schema/data migration state stays inside the embedded engine's built-in
-migration mechanism, including `TableMigration` and engine system tables.
+## Direct Cutover
 
-### Engine embedding
-
-Embed `@revisium/engine` in the Revo host process instead of calling a separate local storage service over HTTP for
-product runtime paths. The engine remains a versioning library: branches, revisions, tables, rows, JSON Schema, diffs, file
-usage, and table migrations.
-
-Revo owns product/runtime rows through Prisma. Versioned table/schema changes are delegated to the embedded engine
-through its public APIs and are outside Revo's product-database transaction boundary. Engine idempotency and engine
-migration state are the safety boundary; Revo must not add a second migration state store on top of the engine
-mechanism.
-
-Engine-required Prisma models must be generated, imported, or checked from the engine package. Revo must not maintain
-a hand-copied schema fragment without drift detection.
-
-Field names used by the engine are part of the integration contract. In particular:
-
-- keep `Branch.projectId` as `projectId`;
-- allow Revo's additive foreign key from `Branch.projectId` to `RevoProject.id`;
-- keep `Revision.sequence Int @unique @default(autoincrement())`, matching `revisium-core` and `revisium-engine`;
-- do not rename engine fields through Prisma aliases unless the engine package explicitly supports that contract.
-
-### DBOS placement
-
-DBOS remains system-owned. Revo provisions the DBOS database, passes `systemDatabaseUrl` into `DBOS.setConfig`, and
-then calls `DBOS.launch()`. DBOS creates and upgrades its own `dbos` schema through its internal system migrations.
-
-Revo Prisma migrations must not create, modify, introspect, or depend on DBOS tables. Product code must continue to
-access DBOS through the sealed `DbosService` boundary, not raw DBOS SQL tables.
-
-The local PoC on 2026-07-06 verified this placement: a single embedded PostgreSQL cluster can host a product database
-and a DBOS database; DBOS creates its tables under the `dbos` schema inside the DBOS database; the product database
-does not receive DBOS tables. The initial storage-v2 implementation then proved the fresh Revo-owned cluster path
-without an external storage daemon.
-
-### Bootstrap summary
-
-The canonical storage-v2 bootstrap order is defined by
-[storage database layout v1](../specs/storage-database-layout-v1.spec.md#bootstrap-order). At a high level, the host
-bootstrap sequence:
-
-1. resolves profile, data directory, HTTP port, PostgreSQL port, and database names;
-2. starts or reuses the Revo-owned embedded PostgreSQL cluster;
-3. creates the Revo product DB and DBOS system DB if missing;
-4. runs `prisma migrate deploy` or an equivalent Prisma Migrate deploy invocation against the Revo product DB;
-5. seeds reserved system `RevoProject` rows such as `control-plane`;
-6. initializes the embedded engine with the Revo Prisma/database connection and file storage adapter;
-7. initializes or migrates the `control-plane` system project for playbooks and control-plane meaning;
-8. verifies and applies required Revo engine migrations for eligible user and system projects;
-9. configures and launches DBOS against the DBOS system DB;
-10. starts serving CLI/MCP/GraphQL/HTTP traffic.
-
-Any failure before the host is ready is fatal. The host must not accept requests with only some storage planes
-initialized.
-
-### Files
-
-Run artifacts and worktrees remain filesystem-managed with a retention contract.
-
-Knowledge-base attachments and larger file storage are a separate implementation slice. Storage v2 must keep an
-engine-compatible `IStorageService` boundary, but v1 ADR/KB project initialization does not need to deliver the full
-attachment lifecycle.
+The target does not support legacy draft runtime rows, external-daemon fallback, dual-write old/new stores, migration
+shims for internal alpha data, or DBOS tables in the Revo product database. Resetting the local alpha data directory is
+the migration path until a separately approved compatibility requirement exists.
 
 ## Alternatives
 
-- **Keep the external storage daemon and draft-stored runtime rows.** Rejected. It preserves stale reads, non-transactional
-  gate resolution, daemon lifecycle complexity, and unbounded draft growth.
-- **Use separate `engine`, `revo_runtime`, and `dbos` databases.** Rejected after follow-up design review. The engine
-  has requirements on physical tables, but Revo needs a single Prisma-managed product/runtime database that can
-  contain those tables and its own product entities. Separating engine and Revo runtime would add cross-database
-  coordination without giving engine-level ownership of projects. PostgreSQL has no cross-database foreign keys or
-  ordinary transactions, so a separate engine database would also make project initialization, engine migrations, and
-  ADR approval commits harder to coordinate.
-- **Put DBOS tables in the Revo product DB.** Rejected. DBOS owns and migrates its schema independently; mixing it
-  with Revo Prisma increases migration and introspection risk without improving product semantics.
-- **Maintain two Prisma schemas against the same database.** Rejected as the base contract. Revo owns one Prisma
-  schema for its product DB. Engine-required models are included through a generated or verified fragment rather than
-  a second runtime Prisma ownership plane.
-- **Model Revo projects inside Revisium tables.** Rejected. `RevoProject` is a product entity. Versioned project
-  knowledge is stored in engine tables for that Revo project, but the project registry remains Prisma-owned.
+- **Keep hot runtime facts in Revisium drafts.** Rejected because transactional status/gate semantics and retention are
+  runtime concerns, not accepted versioned meaning.
+- **Keep an external storage daemon.** Rejected because it adds a second daemon and HTTP boundary to a local in-process
+  product path.
+- **Use separate engine and Revo runtime databases.** Rejected because Revo owns one product schema and project
+  identity, while cross-database coordination adds no useful authority boundary.
+- **Put DBOS tables in the product database.** Rejected because DBOS independently owns and migrates its schema.
+- **Model Revo projects as Revisium rows.** Rejected because project lifecycle, relations, and API scoping are
+  Prisma-owned product concerns.
 
 ## Consequences
 
-- The storage bootstrap starts Revo-owned embedded PostgreSQL, provisions both Revo and DBOS databases, and runs Prisma
-  Migrate for the Revo DB.
-- Orchestrator has its own Prisma schema, migrations, and generated client.
-- The current control-plane data-access layer must be reimplemented over Revo Prisma for runtime tables while keeping
-  transport adapters thin.
-- The embedded engine package version and engine schema fragment become pinned build inputs.
-- The engine schema fragment should be generated from the pinned engine package and verified by CI using a stable
-  schema hash or diff. Revo must not rely on manual copy/paste review for engine-required tables.
-- DBOS upgrade behavior is tied to the installed DBOS SDK version; Revo can report DBOS DB/version status but does
-  not own DBOS DDL.
-- Local reset becomes simple during alpha: stop Revo, delete the data directory, start again.
-- The orchestrator must depend on the embedded PostgreSQL provider directly or through a Revo-owned wrapper, not
-  transitively through another storage daemon package.
-
-## Validation
-
-Implementing PRs must add tests and smokes for:
-
-- profile-specific database name resolution for Revo DB and DBOS DB;
-- bootstrap creates missing Revo and DBOS databases idempotently;
-- fresh-cluster bootstrap works without an external storage daemon;
-- DBOS launch creates or upgrades only the DBOS database and leaves the Revo product database free of DBOS tables;
-- Revo Prisma migrations create expected product/runtime and engine-required tables;
-- engine API can create a revision/table/row using `Branch.projectId = RevoProject.id`;
-- `Revision.sequence` remains globally unique and autoincrementing;
-- engine schema fragment drift fails CI;
-- product code cannot import raw DBOS SQL access outside the DBOS adapter boundary;
-- startup fails before serving when a required database or migration plane fails;
-- reset/dev flows can recreate a clean data directory without pre-v2 data assumptions.
-
-## Notes for implementation
-
-- Use Prisma Migrate for Revo DB DDL. The bootstrap service still owns database creation, ordering, readiness, and
-  failure behavior.
-- Use the embedded engine migration APIs for versioned table/schema changes. Do not add Revo-specific migration state
-  tables on top of the engine mechanism.
+- Revo owns database bootstrap and readiness ordering; Prisma and DBOS retain their migration ownership.
+- The engine package/schema integration is a pinned build input with drift verification.
+- MCP and GraphQL remain thin over application services regardless of physical table location.
+- Runtime retention and indexing can evolve without producing Revisium revisions.
+- Accepted ADR/KB and playbook meaning can use engine revisions without absorbing hot run facts.
+- Exact database names, engine model compatibility, bootstrap mechanics, migrations, and verification matrices remain
+  in the linked Draft specs.

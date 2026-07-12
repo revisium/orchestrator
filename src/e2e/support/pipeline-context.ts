@@ -122,7 +122,7 @@ function pipelineTarget(repo: TargetRepo): PipelineTarget {
   return target;
 }
 
-type ScenarioRepo = 'workspace' | PipelineTarget;
+export type ScenarioRepo = 'workspace' | PipelineTarget;
 
 const NO_EVENT_SETTLE_MS = 1_000;
 const NO_EVENT_POLL_MS = 100;
@@ -159,6 +159,50 @@ export type PipelineCasePlan = {
   readonly coverage: PipelineCaseAttachment;
   readonly expect: ScenarioExpect;
 };
+
+export type PipelineGiven = Readonly<{
+  title: string;
+  description?: string;
+  scope?: string;
+  repo: ScenarioRepo;
+  playbook?: 'fixture' | 'default';
+  playbookId?: string;
+  pipelineId?: string;
+  profile?: PipelineProfile;
+  profileId?: string;
+  gh?: GhScenario;
+  integrator?: IntegratorOutcome;
+  agent?: AgentSpec;
+  developerWrite?: boolean;
+  cleanup?: Readonly<{ releaseWorktreeFails?: boolean; dirtyWorktreeBeforeRelease?: boolean }>;
+}>;
+
+export type PipelineAction =
+  | Readonly<{ do: 'answer'; answer: unknown; summaryIncludes?: readonly string[] }>
+  | Readonly<{
+      do: 'resolveGate';
+      topic: GateTopic;
+      options: readonly string[];
+      outcome: string;
+      nodeId?: string;
+      note?: string;
+      reconcile?: 'keep';
+      mergeOverrideAudit?: Record<string, unknown>;
+      summaryIncludes?: readonly string[];
+      artifactHeadSha?: string;
+      requirePlanArtifact?: boolean;
+      pendingRisk?: Readonly<{ topic: string; kind: string }>;
+    }>
+  | Readonly<{ do: 'rejectGate'; topic: GateTopic; options: readonly string[]; nodeId?: string }>
+  | Readonly<{ do: 'cancelRun'; topic: GateTopic; options: readonly string[] }>;
+
+export type PipelineThen = ScenarioExpect;
+export type PipelineCase = Readonly<{
+  coverage: PipelineCaseAttachment;
+  given: PipelineGiven;
+  when: readonly PipelineAction[];
+  then: PipelineThen;
+}>;
 
 function repoPath(repo: ScenarioRepo | undefined): string {
   if (repo === undefined) throw new Error('pipelineScenario requires an explicit repo');
@@ -647,6 +691,33 @@ export class PipelineContext {
 
   run(plan: PipelineCasePlan): Promise<void> {
     return executePipelineCase(this.#host, plan);
+  }
+
+  execute(casePlan: PipelineCase): Promise<void> {
+    const gates: GateStep[] = casePlan.when.map((action): GateStep => {
+      const actionKind = action.do;
+      if (actionKind === 'answer') return { topic: 'question', answer: action.answer, summaryIncludes: action.summaryIncludes };
+      if (actionKind === 'rejectGate') {
+        return { topic: action.topic, options: action.options, nodeId: action.nodeId, action: 'reject' };
+      }
+      if (actionKind === 'cancelRun') {
+        return { topic: action.topic, options: action.options, action: 'cancel-run' };
+      }
+      return {
+        topic: action.topic,
+        options: action.options,
+        outcome: action.outcome,
+        nodeId: action.nodeId,
+        note: action.note,
+        reconcile: action.reconcile,
+        mergeOverrideAudit: action.mergeOverrideAudit,
+        summaryIncludes: action.summaryIncludes,
+        artifactHeadSha: action.artifactHeadSha,
+        requirePlanArtifact: action.requirePlanArtifact,
+        pendingRisk: action.pendingRisk,
+      };
+    });
+    return this.run({ ...casePlan.given, coverage: casePlan.coverage, gates, expect: casePlan.then });
   }
 
   target(): PipelineTarget {

@@ -77,7 +77,7 @@ Normative rules:
 - Validation MAY fail before spawn. Such an attempt has no invocation and records `processRef = null`.
 - Normal execution creates one invocation with `spawnNo = 1`.
 - `invocationId` MUST be unique within the attempt and MUST include or be derivable from `attemptId` and `spawnNo`.
-- No more than one invocation for an attempt MAY be live at a time.
+- Two invocations for the same attempt MUST NOT be live at the same time.
 - An invocation record is allocated immediately before spawn. Spawn failure leaves `processRef = null`; later startup
   failure may leave `sessionId = null` or may create a session without dispatching a prompt.
 - Each invocation MUST create at most one root process group, at most one ACP session, and at most one top-level

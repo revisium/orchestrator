@@ -28,7 +28,9 @@ pipelines, their seeded run profiles, and their runtime orchestration contract.
 It does not replace focused unit-test ownership for pure functions, nor the e2e performance contract in
 `AGENTS.md`.
 
-The key words MUST, MUST NOT, SHOULD, SHOULD NOT, MAY are to be interpreted as in RFC 2119 / BCP 14.
+The key words MUST, MUST NOT, SHOULD, SHOULD NOT, MAY, REQUIRED, and OPTIONAL
+are interpreted following RFC 2119 and BCP 14 when, and only when, they appear
+in all capitals. REQUIRED is a synonym of MUST. OPTIONAL is a synonym of MAY.
 
 ## Relationship To The Target Architecture
 
@@ -60,6 +62,39 @@ contract.
 New default-pipeline workflow coverage SHOULD use an immutable `PipelineCasePlan` through the typed pipeline context,
 not hand-rolled imperative E2E code. Host lifecycle and public transports belong to their own typed contexts.
 
+### Canonical case authoring contract
+
+This is the A1 target contract to be implemented by A2-A6; it does not describe
+the current compound `PipelineCasePlan` as already migrated.
+
+The canonical pipeline case MUST have four immutable parts: `coverage`,
+`given`, `when`, and `then`.
+
+The real executable pipeline exemplar is
+[`src/e2e/pipeline/recovery-graph.e2e.test.ts`](../../src/e2e/pipeline/recovery-graph.e2e.test.ts);
+its seven recovery-graph cases are authoritative for this authoring shape.
+
+`coverage` MUST contain the frozen attachment identity for the selected pinned
+materialized pipeline and profile. The identity MUST be validated before the
+run starts. A test MUST NOT derive ownership from its filename or source text.
+
+`given` MUST contain every controlled pre-start input required to create the
+case. `given` MUST NOT contain a post-start expectation.
+
+`when` MUST contain named actions in execution order. Each action MUST perform
+one operation. An action MUST NOT assert a later route, terminal state,
+persisted output, or side effect.
+
+`then` MUST contain named expectations. Each expectation MUST identify one
+obligation and its expected value or forbidden value. A context MAY perform
+bounded polling for that obligation, but it MUST NOT hide unrelated
+obligations in the same expectation.
+
+The four parts MUST be complete before execution begins. The test MUST expose
+the semantic actions and expectations at the call site. The contract does not
+require Given/When/Then spelling in source text and does not define a fluent
+English DSL.
+
 A DSL scenario MUST assert the behavior that proves the route:
 
 - expected terminal status or gate;
@@ -67,9 +102,25 @@ A DSL scenario MUST assert the behavior that proves the route:
 - expected persisted output or gate summary when it explains the route;
 - expected external side effect calls, including required no-call assertions for forbidden operations.
 
+The visible proof obligations are independent. A scenario MUST assert its
+terminal outcome. A scenario MUST assert the route or reason that explains the
+outcome. A scenario MUST assert persisted output when that output explains the
+route. A scenario MUST assert every required side effect and every forbidden
+side effect that belongs to the case.
+
+Terminal status alone MUST NOT prove route, reason, persisted output, or side
+effect behavior. A raw event dump MUST NOT substitute for a named route or
+reason expectation. A missing observation MUST remain a failed expectation.
+
 A DSL scenario MUST NOT assert private classifier implementation details. If a classifier maps many provider payloads
 to the same route verdict, the payload permutations belong in unit tests; the DSL scenario covers the route verdict's
 workflow effect.
+
+The pipeline context MUST expose actions, bounded waits, observations, and
+expectations as separate capabilities. An action MUST return typed output
+without asserting later behavior. A bounded wait MUST be limited to one named
+observation. An observation MUST return facts without deciding their
+correctness. An expectation MUST assert one named obligation.
 
 ## Coverage Matrix
 
@@ -147,6 +198,26 @@ skip, or leaves required real e2e failing is not mergeable under this contract.
 Loop coverage is not satisfied by saying that the graph is not acyclic. Static tests MUST prove an actual bounding
 mechanism: a declared counter cap, a monotone rank, or another explicit exit condition. DSL scenarios SHOULD cover at
 least one cap-exhaustion path for every user-visible recovery loop family.
+
+## A1 Migration Constraints
+
+A2 MUST establish the immutable descriptors and one real executable pipeline
+exemplar before suite migration. A3 MUST migrate pipeline cases to the four
+parts in this section. A6 MUST delete the old compound plan shape and obsolete
+helpers after A3 through A5 complete.
+
+Temporary coexistence MAY identify explicitly unmigrated suites during A3
+through A5. It MUST end at A6. It MUST NOT provide compatibility aliases,
+overloads, facades, dual-write paths, or fallback plan shapes.
+
+The migration MUST preserve the full `PipelineCoverageCellId`, selected pinned
+materialized identity, route and reason proof, terminal proof, persisted-output
+proof, side-effect proof, required verification lanes, concurrency, timeouts,
+and E2E performance envelope.
+
+This amendment MUST NOT change the coverage matrix, add a waiver, reduce an
+assertion or scenario, change a coverage partition, change CI policy, change
+product behavior, or define Stage 3 runtime evidence.
 
 ## Changelog
 

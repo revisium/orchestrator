@@ -189,6 +189,21 @@ type ProtocolDriverContext = {
 };
 ```
 
+`PermissionRequestPolicy` is the portable, fail-closed policy produced by a `PermissionStyle` for an interactive
+driver:
+
+```ts
+type PermissionRequestPolicy = {
+  defaultDecision: 'deny';
+  rights?: string;
+  allowedTools: string[];
+  permissionMode?: string;
+};
+```
+
+Unknown request kinds and tools not represented by this policy deny by default. A protocol driver MUST NOT widen the
+policy from provider-specific payload data.
+
 `one-shot` writes one prompt through the existing `ExecRequest.input` seam and waits for process completion.
 `acp-stdio-v1` implements the lifecycle in [acp-runner-session-v1.spec.md](./acp-runner-session-v1.spec.md): initialize
 ACP version `1`, create one session, send one top-level prompt, reduce one result, and close best-effort. Protocol
@@ -284,12 +299,7 @@ type PermissionStyleOutput = {
   fragments: Record<string, string | string[]>;
   // e.g. { allowedTools: ["edit","write"] }  or  { sandbox: "workspace-write" }
   // Optional portable policy consumed by an interactive protocol driver.
-  requestPolicy?: {
-    defaultDecision: 'deny';
-    rights?: string;
-    allowedTools: string[];
-    permissionMode?: string;
-  };
+  requestPolicy?: PermissionRequestPolicy;
 };
 ```
 

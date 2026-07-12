@@ -1,18 +1,37 @@
 # Runner contract
 
-Runners execute one agent or script step and return a recorded result to the DBOS adapter. They do not own routing
-or durable progress.
+This page owns the physical **agent-runner** boundary. A runner starts one short-lived AI worker and returns a recorded
+result to the DBOS adapter. It does not own routing, policy, gates, or durable progress.
+
+Current product code also dispatches named script handlers from the DBOS adapter. Those handlers are external effects,
+not AI runners and not deterministic outcomes. Their Draft registry/execution contract lives in
+[script-runtime-v1.spec.md](./specs/script-runtime-v1.spec.md); repository and worktree lifecycle lives in
+[resources-workspaces-effects-v1.spec.md](./specs/resources-workspaces-effects-v1.spec.md).
+
+## Status Boundary
+
+- **Current shipped behavior:** Claude Code/Codex agent runners, product-owned named script handlers, Prisma attempt
+  evidence, adapter-owned retries, and the timeout policy below.
+- **Accepted target:** agent/script decisions remain data emitted by the generic reducer under ADR-0002.
+- **Draft target:** runner capabilities, script definitions, resource bindings, and all execution-affecting digests are
+  resolved into one immutable `ExecutionPlan`; script operations are versioned and bounded.
+- **Later:** additional runners and trusted build/install-time custom scripts behind those contracts.
 
 ## Boundary
 
-- The pipeline core emits `invokeRole` or `invokeScript`.
-- The DBOS adapter resolves the capability handle to a runner/script.
-- The runner executes in the target repo/worktree and exits.
-- The adapter records attempts, events, costs, outputs, and routing signals.
+- The pipeline core emits `invokeRole` or `invokeScript` without performing I/O.
+- For `invokeRole`, the DBOS adapter resolves the pinned role/runner capability and starts one agent process.
+- For current `invokeScript`, the adapter resolves a product-owned handler. The Draft target resolves a pinned
+  `ScriptDefinition` plus declared resource/capability bindings.
+- The agent or bounded operation executes in its declared repository/workspace scope and exits.
+- The adapter validates and records attempts, events, costs, outputs, and the small routing signal.
+- The pipeline core alone consumes that recorded signal and chooses the next node.
 
 ## Rules
 
 - Agents are short-lived. Do not keep live sessions as durable state.
+- Agents are untrusted workers. A result may request human help, but it cannot advance the cursor, resolve a gate,
+  change budgets/iteration policy, grant permissions, or publish outside the graph.
 - Runner-specific CLI flags and protocol details stay inside runner implementations.
 - The shared process executor owns timeout policy. Runner implementations may translate protocol events into
   generic activity or operation signals, but the executor does not know Claude Code, Codex, tool names, or
@@ -46,6 +65,20 @@ executor-owned transport before yielding one `AttemptResult`.
 
 ACP-specific cardinality and lifecycle rules are defined in
 [acp-runner-session-v1.spec.md](./specs/acp-runner-session-v1.spec.md).
+
+## Script and Effect Boundary
+
+Git, GitHub, filesystem, process, and network results depend on external state. The deterministic part is the reducer
+transition over a validated recorded result. A script/effect performs one bounded domain operation, returns a typed
+result, and never chooses the next node or creates/resolves a human gate.
+
+The Draft script runtime pins stable behavior/implementation identity, input/output schemas, effect class,
+permissions/resources, timeout/retry/idempotency policy, redaction, and events. Exact fields and failure behavior stay
+in the Draft spec rather than this runner guide.
+
+Worktree creation and release are resource lifecycle, not a script mode. Long PR observation is a graph-owned
+snapshot -> wait -> recheck loop, not a script that owns routing or sleeps indefinitely. The current monolithic
+integration/PR handlers remain implementation truth until those Draft contracts are delivered.
 
 ## Timeout Policy
 

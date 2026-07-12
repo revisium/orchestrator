@@ -1,41 +1,33 @@
 flowchart LR
-  task[Task]
-  playbook[Playbook]
-  sm[State machine]
-  outputs[Outcome\nPull request\nEvidence\nDecisions\nRun history]
+  input[Pinned graph, state, and recorded result]
+  core[Pure pipeline reducer]
+  decision[One Decision]
+  shell[DBOS durable effect shell]
+  agent[Short-lived agent]
+  effect[Bounded script or effect]
+  gate[Human gate]
+  wait[Wait or fork]
+  recorded[Validated recorded result]
 
-  task --> playbook
-  playbook --> sm
-  sm --> outputs
+  input --> core --> decision --> shell
+  shell --> agent
+  shell --> effect
+  shell --> gate
+  shell --> wait
+  agent --> recorded
+  effect --> recorded
+  gate --> recorded
+  wait --> recorded
+  recorded --> input
 
-  subgraph machine[State machine nodes]
-    agent[Agent step]
-    script[Script step]
-    gate[Human gate]
-    branch{Branch}
-    loop((Loop))
-
-    agent --> script --> gate
-    gate --> branch
-    branch --> loop
-    loop -. retry .-> agent
-    loop -. reroute .-> script
-  end
-
-  sm -. expanded view .-> machine
-
-  classDef task fill:#fbfbfb,stroke:#7b7a75,color:#27231f
-  classDef playbook fill:#f4f8ff,stroke:#2e6ec7,color:#27231f
-  classDef agent fill:#f4fbf4,stroke:#4a8a52,color:#27231f
-  classDef script fill:#f4f8ff,stroke:#2e6ec7,color:#27231f
+  classDef input fill:#fbfbfb,stroke:#7b7a75,color:#27231f
+  classDef core fill:#f4f8ff,stroke:#2e6ec7,color:#27231f
+  classDef worker fill:#f4fbf4,stroke:#4a8a52,color:#27231f
   classDef gate fill:#fff7ea,stroke:#d38318,color:#27231f
-  classDef branch fill:#fbf7ff,stroke:#6f5aa8,color:#27231f
-  classDef output fill:#fffdfa,stroke:#ded7c8,color:#27231f
+  classDef output fill:#fbf7ff,stroke:#6f5aa8,color:#27231f
 
-  class task task
-  class playbook playbook
-  class agent agent
-  class script script
+  class input input
+  class core,decision,shell core
+  class agent,effect,wait worker
   class gate gate
-  class branch,loop branch
-  class outputs output
+  class recorded output
