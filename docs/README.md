@@ -50,8 +50,8 @@ There is no internal archive of obsolete plans. Git history is the archive.
 | Storage bootstrap, Prisma schema, DBOS placement, or embedded engine integration | [ADR-0007](./adr/0007-revo-storage-foundation.md), [storage database layout v1](./specs/storage-database-layout-v1.spec.md), [Revo Prisma and engine schema v1](./specs/revo-prisma-engine-schema-v1.spec.md) | `prisma/schema.prisma`, `src/storage/**`, `src/engine/**`, `src/revisium/**` |
 | Revo projects, ADR/KB stores, or template migrations | [ADR-0008](./adr/0008-revo-projects-and-versioned-knowledge.md), [Revo project knowledge and migrations v1](./specs/revo-project-knowledge-migrations-v1.spec.md) | `prisma/schema.prisma`, engine-backed project services as they land, project/knowledge tests |
 | Agent runner behavior | [runner-contract.md](./runner-contract.md) | `src/runners/**`, `src/worker/**`, e2e runner scenarios |
-| Script/effect registration or execution | [script runtime v1](./specs/script-runtime-v1.spec.md) | `src/system-scripts/**`, pipeline script refs, runtime effect adapter |
-| Repository, worktree, or resource lifecycle | [resources, workspaces, and effects v1](./specs/resources-workspaces-effects-v1.spec.md) | `src/run-resources/**`, `src/workspaces/**`, pipeline declarations, artifact refs |
+| Script/effect registration or execution | [script runtime v1](./specs/script-runtime-v1.spec.md) | Current: `src/pipeline/data-driven-task.workflow.ts`, `src/runners/integrator.ts`; Draft target: `src/system-scripts/**`, pipeline script refs, runtime effect adapter |
+| Repository, worktree, or resource lifecycle | [resources, workspaces, and effects v1](./specs/resources-workspaces-effects-v1.spec.md) | Current: `src/worker/git-worktree-manager.ts`; Draft target: `src/run-resources/**`, `src/workspaces/**`, pipeline declarations, artifact refs |
 | Context compression or prompt inputs | [context-budget.md](./context-budget.md) | `src/worker/build-context.ts`, run output references, role prompt composition |
 
 ## Diagrams

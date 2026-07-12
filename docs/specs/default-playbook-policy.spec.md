@@ -121,6 +121,7 @@ Target static-policy families:
 | Mark-ready, thread writes, and merge are separate registered operations. | `DEFAULT_POLICY_GITHUB_EFFECT_SPLIT_MISSING` |
 | Plan and merge approvals consume provider-neutral subjects at exact revisions. | `DEFAULT_POLICY_APPROVAL_SUBJECT_MISSING` |
 | Merge subject and post-approval readiness refer to the same head revision. | `DEFAULT_POLICY_APPROVAL_REVISION_FENCE_MISSING` |
+| Merge script catches MUST NOT route to a terminal node; base-drift and head-guard failures remain recoverable. | `DEFAULT_POLICY_MERGE_FAILURE_TERMINAL` |
 | No `script:cleanupWorktree` or old script ref remains. | `DEFAULT_POLICY_LEGACY_EFFECT_PRESENT` |
 | No lifecycle path depends on a graph edge after merge/cancel/failure. | `DEFAULT_POLICY_LIFECYCLE_OWNERSHIP_INVALID` |
 

@@ -11,6 +11,7 @@
   [ADR-0010](../adr/0010-run-resources-and-workspace-planning.md),
   [ADR-0011](../adr/0011-system-script-runtime-and-trusted-extensions.md)
 - **Related specs:** [playbook storage v1](./playbook-storage-v1.spec.md),
+  [Revo playbook materialization v1](./revo-playbook-materialization-v1.spec.md),
   [pipeline state machine v1](./pipeline-state-machine-v1.spec.md),
   [resources, workspaces, and effects v1](./resources-workspaces-effects-v1.spec.md),
   [script runtime v1](./script-runtime-v1.spec.md),
