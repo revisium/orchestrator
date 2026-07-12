@@ -214,3 +214,72 @@ test('test coverage matrix rejects a Stage 3 target that no longer records its u
     diagnostic.code === 'MATRIX_FUTURE_CLAIM' &&
     diagnostic.message.includes('runtime-recovery')));
 });
+
+const expectedExemplars = [
+  ['unit', 'src/pipeline-core/interpret.test.ts'],
+  ['static-policy', 'src/testing/policy/pipeline-coverage.test.ts'],
+  ['pipeline-dsl', 'src/e2e/pipeline/recovery-graph.e2e.test.ts'],
+  ['integration', 'src/e2e/integration/run-lifecycle.e2e.test.ts'],
+  ['mcp', 'src/e2e/surfaces/mcp/stdio.e2e.test.ts'],
+  ['graphql', 'src/e2e/surfaces/graphql/graphql.e2e.test.ts'],
+  ['cli', 'src/e2e/surfaces/cli/lifecycle.e2e.test.ts'],
+  ['runtime', 'src/e2e/runtime/recovery/recovery.e2e.test.ts'],
+] as const;
+
+test('test coverage matrix has exactly one correctly classified executable exemplar per layer', () => {
+  const exemplars = matrix['executableExemplars'] as Array<Record<string, unknown>>;
+  assert.deepEqual(exemplars.map((item) => [item['layer'], item['path']]), expectedExemplars);
+  assert.deepEqual(validateTestCoverageMatrix(matrix, repositoryRoot), []);
+});
+
+test('test coverage matrix rejects malformed executable exemplar paths and layers', () => {
+  const validEntries: Array<Record<string, string>> = expectedExemplars.map(([layer, path]) => ({ layer, path }));
+  const cases = [
+    ['missing', undefined, /executableExemplars must be/],
+    ['duplicate', [...validEntries, validEntries[0]], /must contain exactly one exemplar/],
+    ['unknown layer', validEntries.with(0, { layer: 'unknown', path: expectedExemplars[0][1] }), /unknown exemplar layer/],
+    ['absolute', validEntries.with(0, { layer: 'unit', path: '/tmp/example.test.ts' }), /must be repository-relative/],
+    ['escaping', validEntries.with(0, { layer: 'unit', path: 'src/../outside.test.ts' }), /must not escape repository root/],
+    ['missing path', validEntries.with(0, { layer: 'unit', path: 'src/missing.test.ts' }), /references missing path/],
+    ['wrong layer', validEntries.with(0, { layer: 'static-policy', path: expectedExemplars[0][1] }), /does not belong to exemplar layer/],
+  ] as const;
+
+  for (const [name, value, expected] of cases) {
+    const fixture = cloneMatrix();
+    fixture['executableExemplars'] = value;
+    assert.match(
+      validateTestCoverageMatrix(fixture, repositoryRoot).map((diagnostic) => diagnostic.message).join('\n'),
+      expected,
+      name,
+    );
+  }
+});
+
+test('test coverage matrix independently rejects each executable exemplar path boundary', () => {
+  const validEntries: Array<Record<string, string>> = expectedExemplars.map(([layer, path]) => ({ layer, path }));
+  const cases = [
+    ['drive-letter absolute path', validEntries.with(0, { layer: 'unit', path: 'C:\\tmp\\example.test.ts' }), /must be repository-relative/],
+    ['empty path', validEntries.with(0, { layer: 'unit', path: '' }), /\.path must be non-empty strings/],
+    ['empty path segment', validEntries.with(0, { layer: 'unit', path: 'src//pipeline-core/interpret.test.ts' }), /must be repository-relative/],
+    ['duplicate path', validEntries.with(1, { layer: 'static-policy', path: validEntries[0]!.path }), /paths must be unique/],
+    ['extra object key', validEntries.with(0, { layer: 'unit', path: validEntries[0]!.path, extra: 'rejected' }), /must contain only layer and path strings/],
+  ] as const;
+
+  for (const [name, value, expected] of cases) {
+    const fixture = cloneMatrix();
+    fixture['executableExemplars'] = value;
+    assert.match(
+      validateTestCoverageMatrix(fixture, repositoryRoot).map((diagnostic) => diagnostic.message).join('\n'),
+      expected,
+      name,
+    );
+  }
+});
+
+test('test coverage matrix does not classify an out-of-bucket E2E support test as unit', () => {
+  const fixture = cloneMatrix();
+  const exemplars = fixture['executableExemplars'] as Array<Record<string, unknown>>;
+  exemplars[0] = { layer: 'unit', path: 'src/e2e/support/pipeline-context.test.ts' };
+  assert.ok(validateTestCoverageMatrix(fixture, repositoryRoot).some((diagnostic) =>
+    diagnostic.code === 'MATRIX_SHAPE' && diagnostic.message.includes('does not belong to exemplar layer unit')));
+});

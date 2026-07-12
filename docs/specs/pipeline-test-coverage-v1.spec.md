@@ -70,6 +70,10 @@ the current compound `PipelineCasePlan` as already migrated.
 The canonical pipeline case MUST have four immutable parts: `coverage`,
 `given`, `when`, and `then`.
 
+The real executable pipeline exemplar is
+[`src/e2e/pipeline/recovery-graph.e2e.test.ts`](../../src/e2e/pipeline/recovery-graph.e2e.test.ts);
+its seven recovery-graph cases are authoritative for this authoring shape.
+
 `coverage` MUST contain the frozen attachment identity for the selected pinned
 materialized pipeline and profile. The identity MUST be validated before the
 run starts. A test MUST NOT derive ownership from its filename or source text.

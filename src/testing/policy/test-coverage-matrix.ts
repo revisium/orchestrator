@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { isAbsolute, resolve } from 'node:path';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 import { sameExactStringSet } from './exact-string-set.js';
 
 export type MatrixDiagnostic = Readonly<{
@@ -105,6 +105,91 @@ const CANONICAL_FAMILY_CONTRACTS = {
 } as const satisfies Readonly<Record<string, CanonicalFamilyContract>>;
 
 const CANONICAL_FAMILY_IDS = new Set(Object.keys(CANONICAL_FAMILY_CONTRACTS));
+
+const EXECUTABLE_EXEMPLAR_LAYERS = new Set([
+  'unit', 'static-policy', 'pipeline-dsl', 'integration', 'mcp', 'graphql', 'cli', 'runtime',
+]);
+
+function exemplarLayerForPath(path: string): string | undefined {
+  if (/^src\/testing\/policy\/.*\.test\.ts$/.test(path)) return 'static-policy';
+  if (/^src\/e2e\/pipeline\/.*\.e2e\.test\.ts$/.test(path)) return 'pipeline-dsl';
+  if (/^src\/e2e\/integration\/.*\.e2e\.test\.ts$/.test(path)) return 'integration';
+  if (/^src\/e2e\/surfaces\/(mcp|graphql|cli)\/.*\.e2e\.test\.ts$/.test(path)) {
+    return /^src\/e2e\/surfaces\/(mcp|graphql|cli)\//.exec(path)?.[1];
+  }
+  if (/^src\/e2e\/runtime\/.*\.e2e\.test\.ts$/.test(path)) return 'runtime';
+  if (/^src\/e2e\//.test(path)) return undefined;
+  if (/^src\/.*\.test\.ts$/.test(path)) return 'unit';
+  return undefined;
+}
+
+function validateExecutableExemplars(
+  diagnostics: MatrixDiagnostic[],
+  repositoryRoot: string,
+  value: unknown,
+): void {
+  const path = 'matrix.executableExemplars';
+  if (!Array.isArray(value) || value.length === 0) {
+    diagnostics.push({ code: 'MATRIX_SHAPE', message: `${path} must be a non-empty array` });
+    return;
+  }
+  const seenLayers = new Set<string>();
+  const seenPaths = new Set<string>();
+  const root = resolve(repositoryRoot);
+  for (const [index, entry] of value.entries()) {
+    const entryPath = `${path}[${index}]`;
+    const exemplar = record(entry);
+    if (!exemplar || Object.keys(exemplar).some((key) => key !== 'layer' && key !== 'path')) {
+      diagnostics.push({ code: 'MATRIX_SHAPE', message: `${entryPath} must contain only layer and path strings` });
+      continue;
+    }
+    if (!nonEmptyString(exemplar['layer']) || !nonEmptyString(exemplar['path'])) {
+      diagnostics.push({ code: 'MATRIX_SHAPE', message: `${entryPath}.layer and .path must be non-empty strings` });
+      continue;
+    }
+    const layer = exemplar['layer'];
+    const exemplarPath = exemplar['path'];
+    if (!EXECUTABLE_EXEMPLAR_LAYERS.has(layer)) {
+      diagnostics.push({ code: 'MATRIX_SHAPE', message: `${entryPath}.layer has unknown exemplar layer ${layer}` });
+    } else if (seenLayers.has(layer)) {
+      diagnostics.push({ code: 'MATRIX_SHAPE', message: `${path} must contain exactly one exemplar for layer ${layer}` });
+    }
+    seenLayers.add(layer);
+    if (seenPaths.has(exemplarPath)) {
+      diagnostics.push({ code: 'MATRIX_SHAPE', message: `${path} paths must be unique: ${exemplarPath}` });
+    }
+    seenPaths.add(exemplarPath);
+
+    const segments = exemplarPath.split(/[\\/]/);
+    const absolute = isAbsolute(exemplarPath) || /^[A-Za-z]:[\\/]/.test(exemplarPath);
+    if (absolute || segments.some((segment) => segment.length === 0)) {
+      diagnostics.push({ code: 'MATRIX_EVIDENCE_PATH', message: `${entryPath}.path must be repository-relative: ${exemplarPath}` });
+      continue;
+    }
+    if (segments.includes('..')) {
+      diagnostics.push({ code: 'MATRIX_EVIDENCE_PATH', message: `${entryPath}.path must not escape repository root: ${exemplarPath}` });
+      continue;
+    }
+    const absolutePath = resolve(root, exemplarPath);
+    if (relative(root, absolutePath).startsWith(`..${sep}`) || absolutePath !== root && !absolutePath.startsWith(`${root}${sep}`)) {
+      diagnostics.push({ code: 'MATRIX_EVIDENCE_PATH', message: `${entryPath}.path must not escape repository root: ${exemplarPath}` });
+      continue;
+    }
+    if (!existsSync(absolutePath)) {
+      diagnostics.push({ code: 'MATRIX_EVIDENCE_PATH', message: `${entryPath}.path references missing path ${exemplarPath}` });
+      continue;
+    }
+    const classifiedLayer = exemplarLayerForPath(exemplarPath.replaceAll('\\', '/'));
+    if (classifiedLayer !== layer) {
+      diagnostics.push({ code: 'MATRIX_SHAPE', message: `${entryPath}.path does not belong to exemplar layer ${layer}` });
+    }
+  }
+  for (const layer of EXECUTABLE_EXEMPLAR_LAYERS) {
+    if (!seenLayers.has(layer)) {
+      diagnostics.push({ code: 'MATRIX_SHAPE', message: `${path} is missing exemplar layer ${layer}` });
+    }
+  }
+}
 
 function record(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -529,6 +614,7 @@ export function validateTestCoverageMatrix(matrix: unknown, repositoryRoot: stri
   validateMatrixOwnership(diagnostics, root);
   const legends = validateMatrixLegends(diagnostics, root);
   validatePerformanceBaseline(diagnostics, root, repositoryRoot);
+  validateExecutableExemplars(diagnostics, repositoryRoot, root['executableExemplars']);
   const layerIds = validateMatrixLayers(diagnostics, root['layers']);
   const validFamilies = validateContractFamilies(
     diagnostics,

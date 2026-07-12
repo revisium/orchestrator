@@ -1,14 +1,24 @@
 {
   "artifactKind": "revo-test-coverage-current-state",
   "schemaVersion": "1.0.0",
-  "snapshotStatus": "stage-2-implemented-working-tree",
-  "snapshotNotice": "This file records source-backed Stage 2 implementation evidence from the current working tree. It does not claim Stage 3 observed-runtime coverage, semantic snapshots, or declared-versus-observed comparison.",
+  "snapshotStatus": "stage-2-merged",
+  "snapshotNotice": "This file records source-backed merged Stage 2 evidence. It does not claim Stage 3 observed-runtime coverage, semantic snapshots, or declared-versus-observed comparison.",
   "source": {
-    "revision": "a29bfbf6e0404ce95a278deebd3d0a5524eab3ec",
+    "revision": "c59e830403485e797bb44ef559c37b59834ceea7",
     "branch": "master",
-    "observedDate": "2026-07-10",
-    "workingTreeState": "Uncommitted approved Stage 2 implementation on the named base revision."
+    "observedDate": "2026-07-12",
+    "workingTreeState": "Merged Stage 2 evidence at the named revision."
   },
+  "executableExemplars": [
+    { "layer": "unit", "path": "src/pipeline-core/interpret.test.ts" },
+    { "layer": "static-policy", "path": "src/testing/policy/pipeline-coverage.test.ts" },
+    { "layer": "pipeline-dsl", "path": "src/e2e/pipeline/recovery-graph.e2e.test.ts" },
+    { "layer": "integration", "path": "src/e2e/integration/run-lifecycle.e2e.test.ts" },
+    { "layer": "mcp", "path": "src/e2e/surfaces/mcp/stdio.e2e.test.ts" },
+    { "layer": "graphql", "path": "src/e2e/surfaces/graphql/graphql.e2e.test.ts" },
+    { "layer": "cli", "path": "src/e2e/surfaces/cli/lifecycle.e2e.test.ts" },
+    { "layer": "runtime", "path": "src/e2e/runtime/recovery/recovery.e2e.test.ts" }
+  ],
   "ownership": {
     "owner": "Revo test architecture and CI verification",
     "normativeSpec": "docs/specs/test-architecture-v1.spec.md",
