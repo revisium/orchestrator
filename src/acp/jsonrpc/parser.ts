@@ -11,6 +11,8 @@ import type {
   JsonRpcValue,
 } from './types.js';
 
+const MAX_JSON_DEPTH = 256;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
   const prototype = Object.getPrototypeOf(value);
@@ -25,6 +27,38 @@ function isJsonRpcId(value: unknown): value is JsonRpcId {
   return typeof value === 'string' || (typeof value === 'number' && Number.isSafeInteger(value));
 }
 
+function jsonContainerValues(value: object): unknown[] | undefined {
+  if (Array.isArray(value)) {
+    if (Object.getPrototypeOf(value) !== Array.prototype) return undefined;
+    const keys = Reflect.ownKeys(value);
+    if (keys.length !== value.length + 1) return undefined;
+    const values: unknown[] = [];
+    for (let index = 0; index < value.length; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) return undefined;
+      values.push(descriptor.value);
+    }
+    for (const key of keys) {
+      if (typeof key !== 'string') return undefined;
+      if (key === 'length') continue;
+      const index = Number(key);
+      if (!Number.isSafeInteger(index) || index < 0 || index >= value.length || String(index) !== key) {
+        return undefined;
+      }
+    }
+    return values;
+  }
+  if (!isRecord(value)) return undefined;
+  const values: unknown[] = [];
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== 'string') return undefined;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) return undefined;
+    values.push(descriptor.value);
+  }
+  return values;
+}
+
 function isJsonRpcValue(value: unknown): value is JsonRpcValue {
   type Frame = { kind: 'enter'; value: unknown; depth: number } | { kind: 'leave'; value: object };
   const ancestors = new WeakSet<object>();
@@ -37,25 +71,18 @@ function isJsonRpcValue(value: unknown): value is JsonRpcValue {
         continue;
       }
       const current = frame.value;
-      if (frame.depth > 256) return false;
+      if (frame.depth > MAX_JSON_DEPTH) return false;
       if (current === null || typeof current === 'string' || typeof current === 'boolean') continue;
       if (typeof current === 'number') {
         if (!Number.isFinite(current)) return false;
         continue;
       }
       if (typeof current !== 'object') return false;
-      if (!Array.isArray(current) && !isRecord(current)) return false;
+      const values = jsonContainerValues(current);
+      if (!values) return false;
       if (ancestors.has(current)) return false;
       ancestors.add(current);
       stack.push({ kind: 'leave', value: current });
-      if (Array.isArray(current)) {
-        for (let index = current.length - 1; index >= 0; index -= 1) {
-          if (!hasOwn(current, String(index))) return false;
-          stack.push({ kind: 'enter', value: current[index], depth: frame.depth + 1 });
-        }
-        continue;
-      }
-      const values = Object.values(current);
       for (let index = values.length - 1; index >= 0; index -= 1) {
         stack.push({ kind: 'enter', value: values[index], depth: frame.depth + 1 });
       }
@@ -67,7 +94,7 @@ function isJsonRpcValue(value: unknown): value is JsonRpcValue {
 }
 
 function isJsonRpcParams(value: unknown): value is JsonRpcParams {
-  return (Array.isArray(value) || isRecord(value)) && isJsonRpcValue(value);
+  return value !== null && typeof value === 'object' && isJsonRpcValue(value);
 }
 
 function invalidMessage(message: string, details?: unknown): JsonRpcProtocolError {

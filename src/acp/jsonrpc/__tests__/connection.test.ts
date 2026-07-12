@@ -10,6 +10,14 @@ function decodeWrite(chunk: Uint8Array): JsonRpcMessage {
   return JSON.parse(decoder.decode(chunk).trim()) as JsonRpcMessage;
 }
 
+function unsafeToJsonObject(): Record<string, unknown> {
+  const value = { accepted: true };
+  Object.defineProperty(value, 'toJSON', {
+    value: () => 1n,
+  });
+  return value;
+}
+
 async function assertFailure(code: JsonRpcProtocolError['code'], run: () => Promise<unknown>): Promise<void> {
   let caught: unknown;
   try {
@@ -81,6 +89,20 @@ test('invalid outbound request does not allocate pending state or consume an id'
   assert.equal(await valid, 'accepted');
 });
 
+test('unsafe outbound params fail before pending allocation, id consumption, or write', async () => {
+  const writes: Uint8Array[] = [];
+  const connection = createJsonRpcConnection({
+    async write(chunk) { writes.push(chunk); },
+  });
+
+  await assertFailure('invalid_message', () => connection.request('unsafe', unsafeToJsonObject() as never));
+  const valid = connection.request('valid');
+  await Promise.resolve();
+  assert.deepEqual(writes.map(decodeWrite), [{ jsonrpc: '2.0', method: 'valid', id: 1 }]);
+  await connection.receive({ jsonrpc: '2.0', id: 1, result: true });
+  assert.equal(await valid, true);
+});
+
 test('connection distinguishes unknown, duplicate, and null response ids', async () => {
   const connection = createJsonRpcConnection({ async write() {} });
   const pending = connection.request('known');
@@ -124,6 +146,44 @@ test('send failure rejects only its request and leaves other pending calls corre
   );
   await connection.notify('still-writable');
   assert.equal(writeNo, 3);
+});
+
+test('write queue advances queued work after an already-queued write fails', async () => {
+  const started: string[] = [];
+  let releaseFirst!: () => void;
+  const firstBlocked = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  const connection = createJsonRpcConnection({
+    async write(chunk) {
+      const message = decodeWrite(chunk);
+      assert.ok('method' in message);
+      started.push(message.method);
+      if (message.method === 'first') await firstBlocked;
+      if (message.method === 'second') throw new Error('broken pipe');
+    },
+  });
+
+  const first = connection.notify('first');
+  const secondFailure = assertFailure('send_failed', () => connection.notify('second'));
+  const third = connection.notify('third');
+  const thirdOutcome = third.then(
+    () => 'resolved' as const,
+    (error: unknown) => error,
+  );
+  assert.deepEqual(started, ['first']);
+
+  try {
+    releaseFirst();
+    await first;
+    await secondFailure;
+    await Promise.resolve();
+    assert.deepEqual(started, ['first', 'second', 'third']);
+    assert.equal(await thirdOutcome, 'resolved');
+  } finally {
+    connection.close();
+    await thirdOutcome;
+  }
 });
 
 test('connection serializes notification, request, and server-response writes', async () => {
@@ -295,6 +355,21 @@ test('connection converts invalid server handler outcomes to internal errors', a
       { jsonrpc: '2.0', id: index + 1, error: { code: -32603, message: 'Internal error' } },
     ]);
   }
+});
+
+test('connection converts a serialization-hostile server result to an internal error', async () => {
+  const writes: Uint8Array[] = [];
+  const connection = createJsonRpcConnection({
+    async write(chunk) { writes.push(chunk); },
+    async onRequest() {
+      return { kind: 'result', value: unsafeToJsonObject() } as never;
+    },
+  });
+
+  await connection.receive({ jsonrpc: '2.0', method: 'unsafe', id: 7 });
+  assert.deepEqual(writes.map(decodeWrite), [
+    { jsonrpc: '2.0', id: 7, error: { code: -32603, message: 'Internal error' } },
+  ]);
 });
 
 test('connection does not hide transport failure while sending an internal error', async () => {

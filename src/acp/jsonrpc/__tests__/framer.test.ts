@@ -93,6 +93,32 @@ test('parseJsonRpcMessage rejects cyclic JSON values with a typed failure', () =
   );
 });
 
+test('parseJsonRpcMessage accepts only stable JSON container properties', () => {
+  const accessor = Object.defineProperty({}, 'value', {
+    enumerable: true,
+    get: () => true,
+  });
+  const nonEnumerable = Object.defineProperty({}, 'value', { value: true });
+  const symbolKey = { value: true };
+  Object.defineProperty(symbolKey, Symbol('hidden'), { value: true, enumerable: true });
+  const arrayAccessor = [true];
+  Object.defineProperty(arrayAccessor, '0', { enumerable: true, get: () => true });
+  const arrayExtra = [true];
+  Object.defineProperty(arrayExtra, 'extra', { value: true, enumerable: true });
+  const arraySubclass = new (class extends Array<unknown> {})(true);
+
+  for (const params of [accessor, nonEnumerable, symbolKey, arrayAccessor, arrayExtra, arraySubclass]) {
+    assertFailure('invalid_message', () =>
+      parseJsonRpcMessage({ jsonrpc: '2.0', method: 'run', params, id: 1 }),
+    );
+  }
+
+  assert.deepEqual(
+    parseJsonRpcMessage({ jsonrpc: '2.0', method: 'run', params: { toJSON: 'ordinary' }, id: 1 }),
+    { jsonrpc: '2.0', method: 'run', params: { toJSON: 'ordinary' }, id: 1 },
+  );
+});
+
 test('framer accepts fragmented multibyte UTF-8 and multiple LF or CRLF frames', () => {
   const framer = createJsonRpcFramer();
   const bytes = encoder.encode(
@@ -195,4 +221,20 @@ test('framer latches its first fatal failure and rejects every later operation w
     );
     assert.throws(() => framer.finish(), (error) => error === original);
   }
+});
+
+test('framer latches a failure originating from finish', () => {
+  const framer = createJsonRpcFramer();
+  framer.push(Uint8Array.from([0xe2, 0x82]));
+  let original: unknown;
+  try {
+    framer.finish();
+  } catch (error) {
+    original = error;
+  }
+
+  assert.ok(original instanceof JsonRpcProtocolError);
+  assert.equal(original.code, 'invalid_utf8');
+  assert.throws(() => framer.push(encoder.encode('{}\n')), (error) => error === original);
+  assert.throws(() => framer.finish(), (error) => error === original);
 });

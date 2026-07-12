@@ -48,7 +48,12 @@ type QueuedWrite = {
 const encoder = new TextEncoder();
 
 function encode(message: JsonRpcMessage): Uint8Array {
-  return encoder.encode(`${JSON.stringify(parseJsonRpcMessage(message))}\n`);
+  try {
+    return encoder.encode(`${JSON.stringify(parseJsonRpcMessage(message))}\n`);
+  } catch (error) {
+    if (error instanceof JsonRpcProtocolError) throw error;
+    throw new JsonRpcProtocolError('invalid_message', 'JSON-RPC message cannot be serialized safely', error);
+  }
 }
 
 function requestMessage(method: string, params: JsonRpcParams | undefined, id: JsonRpcId): JsonRpcRequest {
@@ -107,9 +112,8 @@ class JsonRpcConnectionImpl implements JsonRpcConnection {
     );
   }
 
-  #write(message: JsonRpcMessage): Promise<void> {
+  #write(chunk: Uint8Array): Promise<void> {
     this.#ensureOpen();
-    const chunk = encode(message);
     const operation = new Promise<void>((resolve, reject) => {
       this.#writeQueue.push({ chunk, resolve, reject });
     });
@@ -143,22 +147,23 @@ class JsonRpcConnectionImpl implements JsonRpcConnection {
   }
 
   async #receiveRequest(message: JsonRpcRequest): Promise<void> {
-    let response: JsonRpcMessage;
+    let chunk: Uint8Array;
     try {
       const outcome: JsonRpcServerRequestOutcome = this.#deps.onRequest
         ? await this.#deps.onRequest(message)
         : { kind: 'error', error: { code: -32601, message: 'Method not found' } };
-      response = outcome.kind === 'result'
+      const response = outcome.kind === 'result'
         ? parseJsonRpcMessage({ jsonrpc: '2.0', id: message.id, result: outcome.value })
         : parseJsonRpcMessage({ jsonrpc: '2.0', id: message.id, error: outcome.error });
+      chunk = encode(response);
     } catch {
-      response = parseJsonRpcMessage({
+      chunk = encode(parseJsonRpcMessage({
         jsonrpc: '2.0',
         id: message.id,
         error: { code: -32603, message: 'Internal error' },
-      });
+      }));
     }
-    await this.#write(response);
+    await this.#write(chunk);
   }
 
   async #receiveNotification(message: Extract<JsonRpcMessage, { method: string }>): Promise<void> {
@@ -180,11 +185,12 @@ class JsonRpcConnectionImpl implements JsonRpcConnection {
     }
     const id = this.#nextId;
     const message = requestMessage(method, params, id);
+    const chunk = encode(message);
     this.#nextId += 1;
     const result = new Promise<JsonRpcValue>((resolve, reject) => {
       this.#pending.set(id, { resolve, reject });
     });
-    void this.#write(message).catch((error: unknown) => {
+    void this.#write(chunk).catch((error: unknown) => {
       const call = this.#pending.get(id);
       if (call) {
         this.#pending.delete(id);
@@ -201,7 +207,7 @@ class JsonRpcConnectionImpl implements JsonRpcConnection {
       method,
       ...(params === undefined ? {} : { params }),
     });
-    await this.#write(message);
+    await this.#write(encode(message));
   }
 
   async receive(message: JsonRpcMessage): Promise<void> {
