@@ -1,36 +1,31 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { createJsonRpcFramer } from '../framer.js';
 import { JsonRpcProtocolError, parseJsonRpcMessage } from '../types.js';
+
+const encoder = new TextEncoder();
 
 function assertFailure(code: JsonRpcProtocolError['code'], run: () => unknown): void {
   assert.throws(run, (error: unknown) => error instanceof JsonRpcProtocolError && error.code === code);
 }
 
 test('parseJsonRpcMessage accepts the Slice 1 JSON-RPC 2.0 message subset', () => {
-  assert.deepEqual(
-    parseJsonRpcMessage({ jsonrpc: '2.0', method: 'subtract', params: [42, 23], id: 1 }),
-    { jsonrpc: '2.0', method: 'subtract', params: [42, 23], id: 1 },
-  );
-  assert.deepEqual(
-    parseJsonRpcMessage({ jsonrpc: '2.0', method: 'update', params: { value: true } }),
-    { jsonrpc: '2.0', method: 'update', params: { value: true } },
-  );
+  assert.deepEqual(parseJsonRpcMessage({ jsonrpc: '2.0', method: 'subtract', params: [42, 23], id: 1 }), {
+    jsonrpc: '2.0', method: 'subtract', params: [42, 23], id: 1,
+  });
+  assert.deepEqual(parseJsonRpcMessage({ jsonrpc: '2.0', method: 'update', params: { value: true } }), {
+    jsonrpc: '2.0', method: 'update', params: { value: true },
+  });
   assert.deepEqual(parseJsonRpcMessage({ jsonrpc: '2.0', result: 19, id: 'request-1' }), {
-    jsonrpc: '2.0',
-    result: 19,
-    id: 'request-1',
+    jsonrpc: '2.0', result: 19, id: 'request-1',
   });
   assert.deepEqual(
-    parseJsonRpcMessage({
-      jsonrpc: '2.0',
-      error: { code: -32700, message: 'Parse error' },
-      id: null,
-    }),
+    parseJsonRpcMessage({ jsonrpc: '2.0', error: { code: -32700, message: 'Parse error' }, id: null }),
     { jsonrpc: '2.0', error: { code: -32700, message: 'Parse error' }, id: null },
   );
 });
 
-test('parseJsonRpcMessage rejects batch and invalid request shapes', () => {
+test('parseJsonRpcMessage rejects batch, invalid request, and invalid response shapes', () => {
   assertFailure('invalid_message', () => parseJsonRpcMessage([]));
   assertFailure('invalid_message', () => parseJsonRpcMessage({ jsonrpc: '1.0', method: 'run', id: 1 }));
   assertFailure('invalid_message', () => parseJsonRpcMessage({ jsonrpc: '2.0', method: ' ', id: 1 }));
@@ -38,6 +33,20 @@ test('parseJsonRpcMessage rejects batch and invalid request shapes', () => {
   assertFailure('invalid_message', () =>
     parseJsonRpcMessage({ jsonrpc: '2.0', method: 'run', params: 'not-structured', id: 1 }),
   );
+  assertFailure('invalid_message', () => parseJsonRpcMessage({ jsonrpc: '2.0', id: 1 }));
+  assertFailure('invalid_message', () =>
+    parseJsonRpcMessage({ jsonrpc: '2.0', result: true, error: { code: -32603, message: 'Internal' }, id: 1 }),
+  );
+  assertFailure('invalid_message', () =>
+    parseJsonRpcMessage({ jsonrpc: '2.0', error: { code: 1.5, message: 'Bad' }, id: 1 }),
+  );
+  assertFailure('invalid_message', () =>
+    parseJsonRpcMessage({ jsonrpc: '2.0', error: { code: -32603, message: ' ' }, id: 1 }),
+  );
+  assertFailure('invalid_message', () =>
+    parseJsonRpcMessage({ jsonrpc: '2.0', error: { code: -32603, message: 'Internal' }, id: null }),
+  );
+  assertFailure('invalid_message', () => parseJsonRpcMessage({ jsonrpc: '2.0', result: null, id: null }));
 });
 
 test('parseJsonRpcMessage rejects non-plain object params', () => {
@@ -55,19 +64,61 @@ test('parseJsonRpcMessage rejects sparse array params', () => {
   );
 });
 
-test('parseJsonRpcMessage requires exactly one response branch and validates null ids', () => {
-  assertFailure('invalid_message', () => parseJsonRpcMessage({ jsonrpc: '2.0', id: 1 }));
-  assertFailure('invalid_message', () =>
-    parseJsonRpcMessage({ jsonrpc: '2.0', result: true, error: { code: -32603, message: 'Internal' }, id: 1 }),
+test('framer accepts fragmented multibyte UTF-8 and multiple LF or CRLF frames', () => {
+  const framer = createJsonRpcFramer();
+  const bytes = encoder.encode(
+    '{"jsonrpc":"2.0","method":"echo","params":{"text":"🙂"},"id":1}\r\n' +
+    '\n{"jsonrpc":"2.0","method":"notify"}\n',
   );
-  assertFailure('invalid_message', () =>
-    parseJsonRpcMessage({ jsonrpc: '2.0', error: { code: 1.5, message: 'Bad' }, id: 1 }),
+  const emojiStart = bytes.findIndex((value) => value === 0xf0);
+
+  assert.deepEqual(framer.push(bytes.slice(0, emojiStart + 2)), []);
+  assert.deepEqual(framer.push(bytes.slice(emojiStart + 2)), [
+    { jsonrpc: '2.0', method: 'echo', params: { text: '🙂' }, id: 1 },
+    { jsonrpc: '2.0', method: 'notify' },
+  ]);
+  assert.deepEqual(framer.finish(), []);
+});
+
+test('framer ignores truly empty lines but rejects whitespace-only lines', () => {
+  const framer = createJsonRpcFramer();
+
+  assert.deepEqual(framer.push(encoder.encode('\n\r\n')), []);
+  assertFailure('invalid_json', () => framer.push(encoder.encode('  \n')));
+});
+
+test('framer reports encoded frame overflow', () => {
+  const framer = createJsonRpcFramer({ maxFrameBytes: 32 });
+
+  assertFailure('overflow', () =>
+    framer.push(encoder.encode('{"jsonrpc":"2.0","method":"message-too-large"}\n')),
   );
-  assertFailure('invalid_message', () =>
-    parseJsonRpcMessage({ jsonrpc: '2.0', error: { code: -32603, message: ' ' }, id: 1 }),
-  );
-  assertFailure('invalid_message', () =>
-    parseJsonRpcMessage({ jsonrpc: '2.0', error: { code: -32603, message: 'Internal' }, id: null }),
-  );
-  assertFailure('invalid_message', () => parseJsonRpcMessage({ jsonrpc: '2.0', result: null, id: null }));
+
+  const defaultLimit = createJsonRpcFramer();
+  assertFailure('overflow', () => defaultLimit.push(new Uint8Array(1_048_577).fill(0x20)));
+});
+
+test('framer distinguishes invalid UTF-8, invalid JSON, and invalid message', () => {
+  assertFailure('invalid_utf8', () => createJsonRpcFramer().push(Uint8Array.from([0xff, 0x0a])));
+  assertFailure('invalid_json', () => createJsonRpcFramer().push(encoder.encode('{bad}\n')));
+  assertFailure('invalid_message', () => createJsonRpcFramer().push(encoder.encode('[]\n')));
+});
+
+test('framer finish parses a valid final frame and rejects invalid or incomplete tails', () => {
+  const valid = createJsonRpcFramer();
+  valid.push(encoder.encode('{"jsonrpc":"2.0","method":"final"'));
+  valid.push(encoder.encode(',"id":7}'));
+  assert.deepEqual(valid.finish(), [{ jsonrpc: '2.0', method: 'final', id: 7 }]);
+
+  const invalidJson = createJsonRpcFramer();
+  invalidJson.push(encoder.encode('{"jsonrpc":"2.0"'));
+  assertFailure('invalid_json', () => invalidJson.finish());
+
+  const invalidUtf8 = createJsonRpcFramer();
+  invalidUtf8.push(Uint8Array.from([0xe2, 0x82]));
+  assertFailure('invalid_utf8', () => invalidUtf8.finish());
+
+  const invalidMessage = createJsonRpcFramer();
+  invalidMessage.push(encoder.encode('[]'));
+  assertFailure('invalid_message', () => invalidMessage.finish());
 });
