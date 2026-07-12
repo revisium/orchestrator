@@ -259,6 +259,11 @@ their owning typed contexts. A lower layer MUST NOT duplicate a higher-layer
 workflow claim. A higher layer MUST NOT duplicate a lower-layer classifier
 partition.
 
+The executable owners for these eight examples are registered in
+[`test-coverage-matrix-v1.json`](./test-coverage-matrix-v1.json) and validated
+by the matrix policy test. The source tests are authoritative; the examples in
+this specification remain informative.
+
 ### Enforcement split and review rubric
 
 TypeScript MUST enforce immutable plans, closed identifiers, branded targets,
