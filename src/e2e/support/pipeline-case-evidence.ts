@@ -387,14 +387,10 @@ function eventPathExpectation(
   expectation: Extract<PipelineExpectation, { check: "eventPath" }>,
   evidence: CaseEvidence,
 ): void {
-  let start = 0;
-  for (const expected of expectation.events) {
-    const found = evidence.events.findIndex(
-      (event, index) => index >= start && eventMatches(event, expected),
-    );
-    assert.ok(found >= start, "event path is incomplete");
-    start = found + 1;
-  }
+  assert.ok(
+    pathMatches(evidence.events, expectation.events),
+    "event path is incomplete",
+  );
 }
 
 function terminalExpectation(

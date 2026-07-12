@@ -160,6 +160,8 @@ test(
         summary("529"),
         expectEvent({ type: "runner_retry_exhausted" }),
         expectEvent({ type: "pipeline_blocked" }),
+        forbidEvent("run_completed"),
+        forbidEvent("run_recovery_created"),
       ],
     });
   },
