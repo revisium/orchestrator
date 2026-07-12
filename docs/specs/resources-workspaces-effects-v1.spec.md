@@ -2,311 +2,461 @@
 
 - **Status:** Draft
 - **Version:** v1
-- **Owners:** repository service, workspace/resource manager, filesystem artifact store
-- **Source files:** `src/worker/git-worktree-manager.ts`, `src/runners/worktree.service.ts`,
-  `src/control-plane/resolve-cwd.ts`, `src/run/run-outputs.ts`
-- **Related ADRs:** [ADR-0002](../adr/0002-data-driven-pipeline-state-machine.md),
-  [ADR-0005](../adr/0005-versioned-playbook-storage-and-revo-materialization.md)
-- **Related specs:** [execution-plan-v1.spec.md](./execution-plan-v1.spec.md),
-  [script-runtime-v1.spec.md](./script-runtime-v1.spec.md),
-  [run-dataflow-v1.spec.md](./run-dataflow-v1.spec.md),
-  [revo-playbook-materialization-v1.spec.md](./revo-playbook-materialization-v1.spec.md),
-  [storage-database-layout-v1.spec.md](./storage-database-layout-v1.spec.md)
+- **Owners:** Revo runtime, repository service, workspace lifecycle, filesystem artifact store
+- **Source files:** `src/run-resources/**`, `src/workspaces/**`, `src/run/create-run.ts`,
+  `src/runners/worktree.service.ts`, `src/runners/integrator-branch-naming.ts`, `prisma/schema.prisma`
+- **Related ADRs:** [ADR-0010](../adr/0010-run-resources-and-workspace-planning.md),
+  [ADR-0004](../adr/0004-runner-execution-contract.md),
+  [ADR-0006](../adr/0006-run-profiles-and-provider-neutral-pipelines.md),
+  [ADR-0008](../adr/0008-revo-projects-and-versioned-knowledge.md)
+- **Related specs:** [execution plan v1](./execution-plan-v1.spec.md),
+  [pipeline state machine v1](./pipeline-state-machine-v1.spec.md),
+  [run profiles v1](./run-profiles-v1.spec.md),
+  [runner manifest v1](./runner-manifest-v1.spec.md),
+  [script runtime v1](./script-runtime-v1.spec.md),
+  [run dataflow v1](./run-dataflow-v1.spec.md),
+  [playbook materialization v1](./revo-playbook-materialization-v1.spec.md),
+  [storage and database layout v1](./storage-database-layout-v1.spec.md)
 
 ## Scope
 
-This spec defines repository snapshots, workspace plans, resource identities, filesystem/worktree capabilities, and
-allocate, reuse, retain, release, dirty, failure, and recovery semantics.
+This spec defines portable pipeline resource declarations, node access/capture requirements, run launch resource
+bindings, resolved repository and workspace plans, scratch and Git-worktree lifecycle, effect-capability boundaries,
+validation, and replay rules.
 
-It does not define pipeline routing, script behavior, artifact-family schemas, or playbook materialization content.
-Scripts request resource capabilities; the resource manager owns lifecycle and paths.
+It does not define artifact payloads, gate transitions, script handlers, runner selection, repository CRUD APIs,
+cross-repository transactions, fragments, or a provider-neutral delivery facade. Artifact schemas remain owned by
+[run dataflow v1](./run-dataflow-v1.spec.md); gate behavior remains owned by
+[human gates v1](./human-gates-v1.spec.md).
 
-The key words MUST, MUST NOT, SHOULD, SHOULD NOT, MAY, REQUIRED, and OPTIONAL are to be interpreted as described in
-RFC 2119 and BCP 14.
+The key words MUST, MUST NOT, SHOULD, SHOULD NOT, MAY are interpreted as in RFC 2119 / BCP 14.
 
 ## Current Contract
 
-The shipped worktree manager derives one path from the run id, fetches a named base branch, and executes
-`git worktree add -B <branch> <path> origin/<base>`. If that path is already a worktree, it is reused without
-checking a persisted repository snapshot or workspace-plan digest. Dependency provisioning attempts a frozen
-`pnpm install` and can fall back to a base-checkout `node_modules` symlink.
+The shipped runtime requires a non-empty `repo` at run creation and copies it into legacy run/task fields. It has no
+first-class repository-free launch. The workflow infers whether it needs a live worktree from concrete runner and
+script ids, worktree preparation derives a branch at execution time, and `script:cleanupWorktree` is a graph node.
+Run profiles expand one GitHub alias across a hardcoded list of PR-lifecycle node ids.
 
-Release refuses a dirty worktree unless forced. Forced release removes the Git worktree and may recursively remove the
-directory. The current runtime has no explicit `RepositorySnapshot`, `WorkspacePlan`, resource lease,
-retention decision, or recoverable lifecycle record.
+`TaskRun.routeDecision` currently pins pipeline/profile/template provenance. ADR-0004's draft runner contract adds
+runner snapshots to that route decision. Neither current shape is a complete resource/workspace/effect execution plan.
 
-## Draft Target Contract
+The target below is not shipped. V1 is an atomic replacement: no legacy `repo` alias, dual route/execution input,
+fallback cwd, cleanup script, or historical-run migration is retained.
 
-### Repository snapshot
+## Target Contract
+
+### Pipeline declarations
+
+`Template` gains portable resource and workspace intent:
 
 ```ts
-type RepositorySnapshot = {
-  schemaVersion: 'repository-snapshot/v1';
-  repositoryId: string;
-  canonicalRemote: string;
-  objectFormat: 'sha1' | 'sha256';
-  commit: string;
-  tree: string;
-  requestedRef?: string;
-  resolvedAt: string;
-  submodules: Array<{
-    path: string;
-    repositoryId: string;
-    commit: string;
-  }>;
-  digest: string;
+type Template = {
+  // existing pipeline-state-machine-v1 fields
+  resources?: Record<ResourceName, PipelineResourceDecl>;
+  workspace: PipelineWorkspacePolicy;
+  nodes: Record<string, Node>;
+};
+
+type ResourceName = string;
+
+type PipelineResourceDecl = {
+  kind: 'repository';
+  cardinality: 'one';
+  required: boolean;
+};
+
+type PipelineWorkspacePolicy =
+  | { isolation: 'scratch'; retention: RetentionPolicy }
+  | {
+      isolation: 'resource';
+      resource: ResourceName;
+      mutability: 'read-only' | 'mutable';
+      identity: { template: string };
+      retention: RetentionPolicy;
+    };
+
+type RetentionPolicy = {
+  onSuccess: 'release' | 'retain';
+  onFailure: 'release' | 'retain';
+  onCancel: 'release' | 'retain';
+  onBlocked: 'release' | 'retain';
 };
 ```
 
-`commit` is the immutable execution base. `requestedRef` is provenance only. Runtime MUST NOT
-re-resolve `requestedRef` during replay or recovery. The snapshot digest MUST cover repository identity,
-object format, commit, tree, and submodule commits.
+Rules:
 
-Route planning MUST resolve every repository used by the graph to a commit before creating an execution plan. Missing
-objects MUST fail planning or trigger an explicit fetch authorized by the route. A moving branch name MUST NOT be the
-execution identity.
+- resource names MUST match `^[a-z][a-z0-9-]{0,62}$` and be unique in one template;
+- `resources` absent or empty is valid;
+- a resource workspace MUST reference one declared required repository resource;
+- repository-free pipelines MUST use `isolation: 'scratch'`;
+- `identity.template` supports only `{runId}`, `{taskId}`, and `{resource}` placeholders in V1;
+- the portable template does not contain a local path, remote URL, Git ref, branch, provider account, or token;
+- `retention` is explicit. The bundled feature-development target uses `release` on success/cancel and `retain` on
+  failure/blocked so recoverable dirty evidence is not destroyed before operator action.
 
-### Workspace plan
+V1 cardinality is one value per resource name and a launchable V1 pipeline may declare at most one repository resource.
+The names/record shape avoids a positional `repo` contract and leaves room for a later multi-resource schema, but V1
+does not define secondary workspace roots or cross-repository coordination.
+
+### Node requirements
+
+Agent and script nodes gain the same declarative requirement shape:
 
 ```ts
-type WorkspacePlan = {
-  schemaVersion: 'workspace-plan/v1';
-  workspacePlanId: string;
-  digest: string;
-  runId: string;
-  resources: WorkspaceResource[];
-  retention: {
-    onSuccess: 'release' | 'retain';
-    onFailure: 'retain' | 'release-if-clean';
-    onCancel: 'retain' | 'release-if-clean';
+type NodeRequirements = {
+  resources?: Record<ResourceName, {
+    access: 'read' | 'write' | 'publish' | 'admin';
+    captures?: CaptureKind[];
+  }>;
+};
+
+type CaptureKind =
+  | 'workspaceChange'
+  | 'gitChange'
+  | 'githubPullRequest'
+  | 'githubReadiness'
+  | 'approvalSubject';
+```
+
+Access is ordered: `read < write < publish < admin`. A node receives only its declared resource handles. A capture is
+desired output behavior, not runner ability. The adapter MUST NOT derive access or captures from a runner id, script
+id, role id, or node id.
+
+Artifact payload types and capture provenance are defined in run-dataflow-v1. This spec owns only the declarations and
+their resolution into the execution plan.
+
+### Launch resource bindings
+
+Run creation supplies bindings separately from the portable pipeline:
+
+```ts
+type RunResourceBindings = Record<ResourceName, RepositoryLaunchBinding>;
+
+type RepositoryLaunchBinding = {
+  repositoryId: string;
+  revision?: string;
+  credentialAliases?: {
+    git?: string;
+    github?: string;
   };
 };
-
-type WorkspaceResource = {
-  resourceId: string;
-  repositorySnapshotDigest: string;
-  kind: 'git-worktree' | 'read-only-checkout' | 'directory';
-  logicalName: string;
-  branch?: string;
-  access: 'read' | 'write';
-  isolation: 'run' | 'node';
-  dependencyMode: 'none' | 'locked-install' | 'shared-read-only-cache';
-  capabilities: WorkspaceCapability[];
-};
-
-type WorkspaceCapability =
-  | 'filesystem.read'
-  | 'filesystem.write'
-  | 'git.read'
-  | 'git.index.write'
-  | 'git.refs.write'
-  | 'process.exec';
 ```
 
-`workspacePlanId` and each `resourceId` MUST be stable for the run. The plan digest MUST cover all
-resource identities, repository snapshot digests, branches, access, isolation, dependency modes, capabilities, and
-retention rules.
+`repositoryId` resolves a `RevoRepository`. `revision` is an optional user-requested base selector; the compiler must
+resolve it to an immutable commit id before enqueue. Credential values are aliases. Secrets, tokens, cookies, private
+keys, and resolved session material MUST be rejected from launch data.
 
-Physical paths are runtime allocations. They MUST NOT be used as resource identities.
+The launch MUST provide exactly the required names and no undeclared names. Optional resources are reserved for a
+future schema version; V1 templates use `required: true` for declared resources.
 
-### Resource record
+### Resolved resource and workspace plans
 
-Prisma runtime storage MAY project resource state:
+This spec owns the resource and workspace types embedded by
+[execution-plan-v1](./execution-plan-v1.spec.md):
 
 ```ts
-type WorkspaceResourceRecord = {
-  resourceId: string;
-  workspacePlanId: string;
-  runId: string;
-  state:
-    | 'planned'
-    | 'allocating'
-    | 'ready'
-    | 'retained'
-    | 'releasing'
-    | 'released'
-    | 'failed';
-  allocationGeneration: number;
-  physicalPathRef?: string;
-  repositorySnapshotDigest: string;
-  observedHead?: string;
-  dirtyState: 'unknown' | 'clean' | 'dirty';
-  leaseOwner?: string;
-  failureCode?: string;
-  createdAt: string;
-  updatedAt: string;
+type ResolvedResourcePlan = {
+  kind: 'repository';
+  repositoryId: string;
+  projectId: string;
+  displayName: string;
+  snapshot: GitRepositorySnapshot;
+};
+
+type GitRepositorySnapshot = {
+  provider: 'git';
+  remoteUrl: string; // canonical, credential-free URL
+  remoteIdentity: string; // canonical host/repository identity, without user-info or credentials
+  github?: {
+    owner: string;
+    repository: string;
+  };
+  baseRef: string;
+  baseCommit: string;
+  defaultBranch: string;
+};
+
+type ResolvedWorkspacePlan = ScratchWorkspacePlan | GitWorktreePlan;
+
+type ScratchWorkspacePlan = {
+  provider: 'scratch';
+  workspaceId: string;
+  retention: RetentionPolicy;
+};
+
+type GitWorktreePlan = {
+  provider: 'git-worktree';
+  workspaceId: string;
+  resource: ResourceName;
+  repositoryId: string;
+  baseCommit: string;
+  branch: string;
+  mutability: 'read-only' | 'mutable';
+  retention: RetentionPolicy;
 };
 ```
 
-This record is mutable runtime state and MUST live in Revo Prisma or an equivalent runtime projection. It MUST NOT be
-committed as versioned Revisium meaning. DBOS owns durable lifecycle progress and retry/wait checkpoints; it does not
-own repository content.
+Repository URLs MUST be canonicalized without user-info or embedded credentials. The compiler rejects credentialized
+URLs rather than persisting them and uses credential aliases for authenticated access. `remoteIdentity` is derived
+from the canonical URL as a credential-free host/repository identity; it MUST NOT include user-info, a token, an SSH
+account, or an email address. Absolute paths are private allocation facts keyed by `workspaceId`; they are not resource
+identity and MUST NOT appear in a plan, public API, output, or event.
 
-### Allocate
+`github` is an optional explicit provider coordinate, not a generic delivery abstraction. The compiler populates it
+only when the canonical remote is a validated GitHub repository and the graph contains a GitHub operation for that
+resource. Such an operation requires the coordinate and a pinned `github` credential alias; it MUST NOT parse
+owner/repository from a mutable remote at execution time. A Git-only or repository-free pipeline omits it.
 
-Allocation MUST:
+### Workspace and branch identity
 
-1. load the pinned workspace plan and repository snapshot;
-2. claim the stable resource id and allocation generation idempotently;
-3. choose a path under the configured resource root;
-4. verify path containment and reject symlink escapes;
-5. ensure the pinned commit object is available;
-6. create the declared checkout/worktree at the pinned commit;
-7. create or validate the declared branch without moving an unrelated branch;
-8. apply only the declared dependency mode;
-9. verify capabilities and record `ready`.
+For a mutable Git workspace, the compiler renders `identity.template`, sanitizes it to Git ref rules, and pins the
+result before workspace preparation. V1 rules:
 
-Allocation MUST NOT fetch a mutable branch and substitute its new head for the pinned commit. A fetch used to obtain
-the pinned object MUST be recorded as a bounded read effect.
+- the rendered branch is deterministic for the same `(template, runId, taskId, resource)`;
+- it MUST start with `revo/` for the bundled policy;
+- it MUST NOT contain credential, title, prompt, or model-generated text;
+- first compilation rejects any pre-existing local or remote branch at the rendered identity with
+  `revo.BranchCollision`;
+- recovery reuses the pinned branch and MUST NOT rerender it.
 
-### Reuse
+The bundled policy uses `revo/{taskId}-{runId}` with bounded normalized identifiers. Exact truncation and hash-suffix
+rules are compiler-versioned and covered by golden tests. Execution-plan-v1 owns compilation, canonical hashing,
+persistence, and the rule that branch identity is resolved before workspace preparation.
 
-An existing allocation MAY be reused only when all of these match:
+### Lifecycle state machine
 
-- resource id and workspace-plan digest;
-- repository snapshot digest and object format;
-- allocation generation accepted by the recovery record;
-- physical path marker and repository identity;
-- branch, access mode, isolation mode, and capabilities;
-- dependency mode.
+Workspace lifecycle is outside pipeline graph topology:
 
-A writable resource MUST also have the expected recorded HEAD. Dirty state MAY be reused only when it belongs to the
-same run/resource generation and the recovery path explicitly retains it. A foreign or unproven dirty directory MUST
-NOT be adopted automatically.
+```text
+planned -> preparing -> ready -> releasing -> released
+              |          |          |  \-> retained (dirty or policy)
+              |          |          \-> release_failed -> releasing | retained
+              |          \-> retained (terminal policy)
+              \-> prepare_failed -> preparing | retained
 
-If a candidate fails reuse validation, the manager MUST retain it for inspection or quarantine it. It MUST NOT delete
-or overwrite it to make allocation succeed.
-
-### Retain and release
-
-Retention preserves the workspace and records why it remains:
-
-```ts
-type RetentionReason =
-  | 'dirty'
-  | 'run_failed'
-  | 'run_cancelled'
-  | 'human_requested'
-  | 'release_failed'
-  | 'recovery_pending';
+planned | preparing --cancel--> releasing | retained
 ```
 
-A dirty writable workspace MUST be retained unless a separately authorized destructive action identifies the exact
-resource and expected state. Ordinary release MUST NOT force-delete it.
+Rules:
 
-Release MUST:
+- preparation is idempotent by `(runId, workspaceId, executionPlanHash)`;
+- lifecycle uses a single-writer lock for every `(runId, workspaceId)` transition and records its fencing token;
+- lifecycle owns a durable allocation record containing `runId`, `workspaceId`, `executionPlanHash`, provider,
+  absolute path under the trusted Revo data root, state, fencing token, and timestamps;
+- scratch preparation first creates an empty directory with no inherited repository or process-cwd content;
+- Git-worktree preparation verifies the pinned repository identity and base commit before creation;
+- after allocation, preparation materializes the Revo-owned `.revo/**` bundle from the immutable playbook/route pin as
+  required by revo-playbook-materialization-v1; `ready` is impossible until that verification succeeds;
+- runner launch receives the allocation's resolved path as cwd, never host cwd; system scripts receive bounded
+  resource clients and never the raw path;
+- release runs after terminal success, cancel, failure, and blocked according to the corresponding retention field;
+- release is idempotent and checks workspace identity before deletion;
+- a dirty workspace scheduled for release transitions to `retained` plus an actionable lifecycle event; it is never
+  force-deleted;
+- a parked human gate is not terminal and does not release the workspace;
+- cancellation during `planned` or `preparing` stops further preparation and applies `onCancel`; any partial allocation
+  is released or retained through the same fenced lifecycle rather than deleted ad hoc;
+- `prepare_failed` blocks runner/script dispatch, emits actionable evidence, and permits only fenced idempotent retry or
+  operator-selected retention/cancellation; it does not silently mark a run successful;
+- `release_failed` retains ownership of the allocation and permits fenced retry or operator-selected `retained`; it
+  never reports `released` until identity-checked cleanup succeeds;
+- host restart reconstructs the next lifecycle action from the persisted plan, durable run status, and allocation
+  record for every nonterminal state; it re-materializes/verifies `.revo/**` from the immutable pin when needed;
+- graph nodes cannot invoke preparation or release.
 
-1. transition `ready` or `retained` to `releasing` idempotently;
-2. verify resource identity, marker, repository snapshot, and current dirty state;
-3. apply the pinned retention policy;
-4. detach the Git worktree when applicable;
-5. remove only the validated allocation path;
-6. prune resource-manager-owned metadata;
-7. record `released`.
+Lifecycle emits `workspace.preparing`, `workspace.ready`, `workspace.retained`, `workspace.releasing`,
+`workspace.released`, `workspace.prepare_failed`, and `workspace.release_failed` events with run/workspace/resource ids
+and redacted reasons. Events and API/MCP/GraphQL projections expose `workspaceId`, provider, resource, and state, never
+the allocation's absolute path.
 
-An absent path with a matching previously released record is idempotent success. An absent path without such evidence
-is a typed inconsistency, not silent success.
+`workspace.retained` additionally carries a closed `cause` enum:
+`policy-success | policy-failure | policy-cancel | policy-blocked | dirty | prepare-failed | release-failed`. Free-form
+provider/filesystem evidence remains redacted and is not used as the cause discriminator.
 
-### Recovery
+### Replay and recovery
 
-Recovery MUST load the pinned workspace plan and resource records. It MUST NOT scan the filesystem to discover a
-workspace by convention. It MAY recreate a missing clean workspace at the same repository snapshot with a new
-allocation generation. It MUST retain and surface an unexpected dirty or identity-mismatched workspace.
+Execution, resume, and recovery MUST consume the persisted `ExecutionPlanV1`. They MUST NOT:
 
-A recovered script invocation receives the same logical resource id even when the physical path changes.
+- re-read playbook/profile HEAD;
+- re-resolve a repository row or default branch;
+- rerender a branch;
+- expand account aliases by node id;
+- re-resolve runner abilities or script manifests from mutable data;
+- infer workspace need or capture from concrete ids;
+- substitute host cwd;
+- expose or accept an arbitrary workspace path.
 
-## Effect Capabilities
+The host necessarily resolves trusted runner strategies and script handlers from startup registries. It MUST require
+the exact ids/digests pinned by the plan. Missing or mismatched code blocks recovery before a new side effect and emits
+`revo.ExecutionDependencyUnavailable`.
 
-The resource manager exposes capability-scoped operations:
+### Effect capability boundary
 
-| Capability | Allowed behavior |
-| --- | --- |
-| `repository.snapshot.read` | Read repository identity and pinned commit/tree metadata. |
-| `workspace.allocate` | Allocate or idempotently reuse one planned resource. |
-| `workspace.inspect` | Read identity, HEAD, status, and dirty state. |
-| `workspace.retain` | Record retention without deleting content. |
-| `workspace.release` | Release one exact resource under its retention rules. |
-| `filesystem.read` | Read beneath the validated resource root. |
-| `filesystem.write` | Write beneath one writable resource root. |
+Resources grant bounded capabilities; they do not execute product operations. At plan compilation, the effective
+capability set for a node is the intersection of:
 
-Scripts MUST use these capabilities through
-[script-runtime-v1.spec.md](./script-runtime-v1.spec.md). A generic script MUST NOT construct a worktree path, run
-recursive deletion, or broaden its filesystem root.
+- the pipeline node's declared resource access and captures;
+- the resolved resource/workspace plan;
+- the selected runner manifest or pinned script manifest maximum;
+- the pinned credential aliases required by that operation.
 
-## Artifact and Storage Boundary
+The generic adapter may construct only the clients allowed by that intersection. Script-runtime-v1 owns effect
+declarations, operation invocation, retries, idempotency, and result validation. This spec owns repository and
+workspace identity, access order, allocation, fencing, retention, and release. Worktree preparation/release therefore
+cannot be registered as ordinary scripts, and no script may derive a path or silently allocate another workspace.
 
-Git owns source history, commits, branches, and diffs. The filesystem or a content-addressed blob store owns large
-files, logs, patches, and archives. Revo Prisma owns mutable artifact/resource index rows and typed references for a
-run. Embedded Revisium owns versioned meaning, not run workspaces or large blobs. DBOS owns lifecycle progress, not
-artifact bytes.
+Source history, full diffs, large files, logs, and archives remain in Git or filesystem/content-addressed storage.
+Execution plans and Prisma lifecycle rows contain identities and bounded metadata only. Produced values use the typed
+artifact references owned by run-dataflow-v1; they do not copy large content into the reducer, inbox rows, or versioned
+knowledge.
 
-Source, full diffs, and large blobs MUST NOT be copied into `ExecutionPlan`, pipeline reducer state, inbox
-rows, or versioned knowledge rows. Producers MUST emit typed artifact references defined by
-[run-dataflow-v1.spec.md](./run-dataflow-v1.spec.md). An external reference MUST include enough immutable identity to
-detect moved or replaced content.
+## Validation
 
-## Security
+Static template validation adds:
 
-- Resource roots MUST be configured outside repository-controlled input.
-- All paths MUST be normalized and containment-checked before filesystem access.
-- Symlink traversal outside the resource root MUST fail.
-- Repository remotes and Git config MUST be treated as untrusted input.
-- Credentials MUST be provided through pinned secret bindings and MUST NOT be written into remotes, markers, logs, or
-  artifact metadata.
-- Process execution MUST use an allowlisted binary/capability contract and structured argv.
-- Release MUST verify exact identity before deletion.
-- Destructive force release requires a separate human-approved action and is outside ordinary lifecycle behavior.
+- `RESOURCE_NAME_INVALID`;
+- `RESOURCE_REF_UNRESOLVED`;
+- `RESOURCE_BINDING_EXTRA`;
+- `RESOURCE_BINDING_MISSING`;
+- `RESOURCE_COUNT_UNSUPPORTED`;
+- `WORKSPACE_POLICY_INVALID`;
+- `SCRATCH_WITH_RESOURCES_INVALID`;
+- `RESOURCE_ACCESS_INVALID`;
+- `CAPTURE_REQUIRES_ACCESS`.
+
+Plan compilation additionally fails on unresolved repositories/revisions, inactive projects, duplicate remote
+identity where ambiguous, unsafe workspace roots, branch collisions, missing credential aliases, unsupported runner
+ability, missing script definitions, schema/digest mismatch, a GitHub operation without a validated `github`
+coordinate, or any secret-shaped credential value.
+
+Required automated proof:
+
+- no DBOS enqueue or side effect after any compile diagnostic;
+- repository-free scratch isolation and zero Git/GitHub calls;
+- mutable Git plan pins base commit and branch before preparation;
+- arbitrary valid node/runner/script ids work through declarations;
+- access/capture violations fail before handler/runner dispatch;
+- registry, repository, profile, and playbook mutation after enqueue does not change recovery;
+- exact handler/runner dependency mismatch blocks rather than falls back;
+- success/cancel/failure lifecycle behavior, dirty retention, and idempotent recovery;
+- blocked retention, cancel-during-prepare, prepare/release failure retry, and restart from every lifecycle state;
+- `.revo/**` materialization and re-materialization use only the immutable route/playbook pin;
+- plan, artifact, event, error, and public projection fixtures contain no absolute workspace path;
+- no `cleanupWorktree` graph node in the target bundled pipeline.
+
+Test ownership follows pipeline-test-coverage-v1: execution-plan tests own compiler/hash decisions; resource/workspace
+unit tests own branch, lifecycle, fencing, and capability-intersection decisions; static policy owns declaration and
+forbidden-cleanup graph shape; declarative DSL scenarios own workspace paths, gates, outputs, and Git/GitHub
+call/no-call behavior; full integration remains limited to representative GitHub-first and scratch-run proofs.
 
 ## Failure Model
 
-Required failure classes:
-
-| Code | Meaning |
+| Condition | Required result |
 | --- | --- |
-| `repository_snapshot_missing` | The pinned commit/tree is unavailable. |
-| `repository_identity_mismatch` | The checkout remote/object identity differs from the plan. |
-| `workspace_allocation_failed` | A planned resource could not be created. |
-| `workspace_identity_mismatch` | An existing path does not match the resource record. |
-| `workspace_dirty` | Release or unsafe reuse encountered unapproved changes. |
-| `workspace_path_escape` | A path or symlink escapes the resource root. |
-| `workspace_capability_denied` | The caller requested an undeclared capability. |
-| `workspace_release_failed` | Detach or removal failed after retention checks. |
-| `workspace_recovery_inconsistent` | Durable state and physical state cannot be reconciled safely. |
+| Resource root is absent, outside trusted configuration, or unsafe | preparation fails before directory mutation |
+| Derived path escapes the trusted root or crosses a symlink | `prepare_failed`; no adoption or deletion |
+| Pinned repository object is unavailable | bounded exact-object fetch or `prepare_failed`; never substitute current branch head |
+| Existing allocation identity differs from plan/allocation record | retain evidence and fail closed |
+| Existing Git worktree is dirty or has unexpected branch/HEAD/common directory | retain; never reset or force-delete |
+| Concurrent lifecycle transition has a stale fencing token | reject the stale writer |
+| Materialized `.revo/**` verification fails | `prepare_failed`; runner/script dispatch remains forbidden |
+| Release identity check fails | `release_failed` or `retained`; never report `released` |
+| Host restarts in a nonterminal state | resume one fenced action from plan plus allocation record |
 
-Failures MUST record the resource id and safe evidence. They MUST NOT include credentials or unrestricted local paths
-in public surfaces.
+## Security
 
-## Validation and Tests
-
-Required coverage:
-
-- repository snapshots pin commits and remain unchanged when branch heads move;
-- snapshot and workspace-plan digests are canonical and change on execution-affecting edits;
-- allocate creates the exact pinned commit and rejects unavailable or substituted commits;
-- concurrent duplicate allocation converges on one logical resource;
-- reuse accepts only matching identity, generation, snapshot, branch, capabilities, and dependency mode;
-- foreign or unproven dirty workspaces are retained and never adopted or deleted;
-- clean release is idempotent and dirty release retains the resource;
-- path traversal and symlink escape fixtures fail before filesystem mutation;
-- recovery recreates a missing clean allocation without scanning for alternatives;
-- recovery surfaces mismatched durable/physical state;
-- capability adapters prevent writes from read-only resources;
-- source, diffs, and large blobs remain in Git/filesystem stores while runtime rows carry typed references.
+- Resource roots come from trusted host startup configuration, never pipeline, profile, launch, repository, or prompt
+  data.
+- Every derived allocation/cache path is normalized and containment-checked beneath its configured root before
+  filesystem access; symlink traversal outside that root fails closed.
+- Scratch and Git providers write an ownership marker bound to `(runId, workspaceId, executionPlanHash)` and verify it
+  together with the allocation fencing token before reuse or deletion.
+- Repository remotes, Git config, checkout contents, and provider responses are untrusted input.
+- Credentials are resolved only through pinned aliases and MUST NOT be written into remotes, config, markers, events,
+  errors, or artifacts.
+- Git execution uses structured argv through the bounded adapter. Workspace lifecycle accepts no caller-authored shell
+  command or process environment.
+- Release removes only one exact identity-checked Revo-owned allocation. Destructive force release is outside ordinary
+  lifecycle and outside this milestone.
 
 ## Compatibility
 
-This is a direct-cutover contract for internal alpha runs. The target manager MUST NOT fall back to path-by-run-id
-discovery, live base-branch resolution, unverified worktree reuse, or forced dirty deletion. Current worktrees MAY be
-retained for manual inspection, but they are not automatically adopted into a v1 workspace plan.
+This is a direct alpha replacement. There are no aliases for `repo`, no legacy route-only execution input, no
+cleanup-script compatibility node, no fallback worktree inference, and no historical-run migration. A plan with an
+unknown `schemaVersion` or `compilerVersion` fails closed under execution-plan-v1. Existing runs keep their persisted
+resource and workspace decisions.
 
-## Open Questions
+## Open Implementation-shape Questions
 
-- Which Prisma models project workspace leases and allocation generations?
-- Which content-addressed store is the default for non-Git large artifacts?
-- Which dependency cache mechanisms can prove read-only sharing across isolated workspaces?
+These questions do not reopen the architecture above:
 
-These questions keep this spec Draft.
+- whether query-oriented repository/resource audit rows are worth normalizing beside the canonical JSON plan;
+- which operator command expires or removes a retained dirty workspace after evidence is preserved;
+- how a later schema should represent several workspace roots and cross-resource coordination; V1 rejects more than
+  one repository resource and never promises atomic cross-repository effects.
+
+## Examples
+
+Repository-free pipeline excerpt:
+
+```json
+{
+  "specVersion": "pipeline/v1",
+  "pipelineId": "analysis-only",
+  "workspace": {
+    "isolation": "scratch",
+    "retention": {
+      "onSuccess": "release",
+      "onFailure": "retain",
+      "onCancel": "release",
+      "onBlocked": "retain"
+    }
+  },
+  "resources": {},
+  "nodes": {
+    "analyze": { "kind": "agent", "role": "analyst", "next": "done" },
+    "done": { "kind": "terminal", "status": "succeeded" }
+  }
+}
+```
+
+Git pipeline excerpt:
+
+```json
+{
+  "resources": {
+    "source": { "kind": "repository", "cardinality": "one", "required": true }
+  },
+  "workspace": {
+    "isolation": "resource",
+    "resource": "source",
+    "mutability": "mutable",
+    "identity": { "template": "revo/{taskId}-{runId}" },
+    "retention": {
+      "onSuccess": "release",
+      "onFailure": "retain",
+      "onCancel": "release",
+      "onBlocked": "retain"
+    }
+  },
+  "nodes": {
+    "implement": {
+      "kind": "agent",
+      "role": "developer",
+      "requirements": {
+        "resources": {
+          "source": { "access": "write", "captures": ["workspaceChange", "gitChange"] }
+        }
+      },
+      "next": "review"
+    }
+  }
+}
+```
 
 ## Changelog
 
+- 2026-07-12: Consolidated ADR-0010's concrete resource declarations, resolved plans, isolated lifecycle, capability
+  intersection, and direct-cutover rules into the canonical resource/workspace owner created by PR #320.
 - 2026-07-11: Initial Draft contract for pinned repositories, explicit workspace plans, and safe resource lifecycle.

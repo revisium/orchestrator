@@ -7,6 +7,9 @@
   `src/worker/claude-code-runner.ts`, `src/worker/codex-runner.ts`, `src/worker/process-executor.ts`,
   `src/control-plane/definitions.ts`, `src/pipeline/data-driven-task.workflow.ts`
 - **Related ADRs:** [ADR-0004](../adr/0004-runner-execution-contract.md), [ADR-0002](../adr/0002-data-driven-pipeline-state-machine.md)
+- **Related specs:** [execution plan v1](./execution-plan-v1.spec.md),
+  [resources, workspaces, and effects v1](./resources-workspaces-effects-v1.spec.md),
+  [script runtime v1](./script-runtime-v1.spec.md)
 
 ## Scope
 
@@ -84,23 +87,24 @@ axes — no bundled `family` id) and fills declarable fields.
 | Field | Type | Req | Meaning |
 |---|---|---|---|
 | `id` | string | yes | The runner id used by `role.runner` today (`src/control-plane/definitions.ts:9,112`). Code-referenced key into the registry. |
+| `version` | string | yes | Immutable version of the serializable runner execution contract. Behavior-changing manifest edits require a new version. |
 | `stdoutParser` | string | yes | Code-referenced id of the StdoutParser strategy (below). Independent of `permissionStyle`. |
 | `permissionStyle` | string | yes | Code-referenced id of the PermissionStyle strategy (below). Independent of `stdoutParser`. |
-| `kind` | enum `cli`\|`api`\|`gateway`\|`deterministic-script` | yes | The transport class (a manifest field, *not* a capability): `cli` spawns a binary, `api` calls a hosted endpoint, `gateway` routes `provider/model` through a provider gateway, `deterministic-script` is the in-process script runner. Data, not a code-dispatch key. |
+| `kind` | enum `cli`\|`api`\|`gateway` | yes | The transport class (a manifest field, *not* a capability): `cli` spawns a binary, `api` calls a hosted endpoint, and `gateway` routes `provider/model` through a provider gateway. System scripts are governed by script-runtime-v1 and are not runners. |
 | `binary` | string | when `kind=cli` | Executable name or absolute path; feeds `ExecRequest.command` (`src/worker/process-executor.ts:13`). Replaces the literal default `'claude'` in code. |
-| `versionProbe` | object `{ args: string[], parse?: stdoutParserId }` | no | Argv to print a version (e.g. `['--version']`) for `needsLivePreflight`/doctor. See the normative rules below the table. |
+| `versionProbe` | object `{ args: string[], parse?: stdoutParserId }` | no | Argv to print a version (e.g. `['--version']`) for host doctor/availability reporting. It does not select workspace behavior or node preflight policy. |
 | `argTemplate` | string[] | when `kind=cli` | Ordered argv with placeholders, substituted before spawn (see Placeholders). |
 | `schemaDelivery` | enum `inline-flag`\|`file-flag`\|`none` | yes | How the result schema reaches the runner. Claude=`inline-flag` (`src/worker/claude-code-runner.ts:159`), Codex=`file-flag` (`src/worker/codex-runner.ts:161-162`, file written at `:97-102`), OpenCode=`none`. |
 | `promptDelivery` | enum `stdin`\|`stdin-dash`\|`arg` | yes | How the prompt reaches the runner. Claude pipes on stdin (`ExecRequest.input`, `src/worker/claude-code-runner.ts:254`); Codex uses stdin with a trailing `-` argv terminator (`src/worker/codex-runner.ts:175`, `:541`) → `stdin-dash`. |
 | `constraints` | object (see below) | no | Declarative provider/auth requirements. Replaces `requireCompatibleProfile` (`src/worker/codex-runner.ts:179-186`). |
-| `capabilities` | object (see [runner-capabilities-v1.spec.md](./runner-capabilities-v1.spec.md)) | yes | The fields that replace the four hardcoded branch functions plus the structured-output tier. `kind` is *not* under `capabilities`. |
+| `capabilities` | object (see [runner-capabilities-v1.spec.md](./runner-capabilities-v1.spec.md)) | yes | Runner abilities used for selection and compatibility validation. Desired resource access, captures, merge behavior, and preflight policy are not runner capabilities. |
 | `timeouts` | object `{ idleTimeoutMs?: number, wallClockLimitMs?: number }` | no | Runner-level defaults; role `timeoutMs` still overrides per role (`src/control-plane/definitions.ts:18-19`, `src/worker/claude-code-runner.ts:200-204`). Engine defaults remain `DEFAULT_RUNNER_IDLE_TIMEOUT_MS`/`DEFAULT_RUNNER_WALL_CLOCK_LIMIT_MS` (`src/worker/process-executor.ts:32-33`). Timeout policy itself is owned by the [runner contract](../runner-contract.md). |
 
 `versionProbe` rules:
 
 - When `versionProbe` is absent, the engine MUST skip the binary-version check; its absence MUST NOT be a failure.
-- When `versionProbe` is absent and `needsLivePreflight: true`, the engine MUST still run the clean/base preflight
-  (auth + worktree state); only the binary-version probe is omitted.
+- Host doctor MAY execute the probe. Run compilation MAY validate that a selected transport is installed/available,
+  but it MUST NOT infer repository, workspace, auth, or capture policy from probe presence.
 
 #### `constraints`
 
@@ -109,7 +113,7 @@ axes — no bundled `family` id) and fills declarable fields.
 | `allowedProviders` | string[] | If present, the resolved `ModelProfile.provider` (`src/control-plane/definitions.ts:46`) must match one entry (case-insensitive substring, matching today's `isOpenAiCompatibleProvider` at `src/worker/codex-runner.ts:109-112`). Empty/absent → any provider. A mismatch is a typed precondition failure routed to a lesson, replacing the throw at `src/worker/codex-runner.ts:183-185`. |
 | `requiresNonEmptyModelId` | boolean | Mirror of the model-id guard at `src/worker/codex-runner.ts:180-182`. Default `true`. |
 
-#### `RouteRoleBinding` gains snapshot fields (named schema change)
+#### `RouteRoleBinding` gains one self-contained runner pin (named schema change)
 
 `RouteRoleBinding` today is `{roleId, rowId, modelLevel, runnerId, resolvedRunnerId, runnerSource}`
 (`src/pipeline/route-contract.ts:9-16`). Under this spec it gains snapshot fields:
@@ -123,13 +127,14 @@ type RouteRoleBinding = {
   resolvedRunnerId: string;
   runnerSource: 'playbook' | 'profile';
   // added by ADR-0004 (the determinism fix, a named schema change):
-  stdoutParserId: string;
-  permissionStyleId: string;
-  capabilities: RunnerCapabilities;   // the resolved capabilities block
-  manifestDigest: string;             // audit / mismatch-detection only (see Replay model)
-  manifestVersion: string;
+  runnerManifest: RunnerManifestV1;   // complete serializable manifest snapshot
+  manifestDigest: string;             // hash of canonical runnerManifest
 };
 ```
+
+The earlier draft listed parser/style ids and `capabilities` as sibling snapshot fields. ADR-0010 tightens the contract:
+the complete serializable manifest is pinned once, so request construction never needs a mutable manifest-registry
+read. Parser/style ids and abilities are read from `runnerManifest`; duplicating them as siblings is invalid.
 
 > Informative: this is a named schema change (the ADR-0004 determinism fix), carried in the contract rather than
 > deferred to a later revision.
@@ -285,6 +290,10 @@ manifest/style declares for that fragment** — for `--allowedTools` (Claude-onl
 - **`none` (stub).** Supplies no fragments. Used by the `script`/`stub-agent` dispatch
   (`src/worker/runner-dispatch.ts:14-17`).
 
+The sentence above records shipped test transport. In the ADR-0010/0011 target, deterministic `stub-agent` support is a
+test-only adapter outside the public runner-manifest/launch registry. It does not reintroduce a production
+`deterministic-script` transport kind and is not the system-script runtime.
+
 ### Where the manifest plugs in
 
 - **Build-request:** the engine substitutes `argTemplate` placeholders, invokes the `PermissionStyle` for
@@ -298,8 +307,9 @@ manifest/style declares for that fragment** — for `--allowedTools` (Claude-onl
 
 ### Replay model (which fields are pinned, and why)
 
-The resolved capability set MUST be snapshotted into `RouteRoleBinding` (inside `RouteDecision`) at route time,
-pinned into the DBOS workflow args, and read from that pin on replay. The route already rides this durability seam:
+The complete resolved runner manifest MUST be snapshotted into `RouteRoleBinding` (inside `RouteDecision`) at route
+time. Under ADR-0010, that route decision is nested once inside the persisted `ExecutionPlan`, which is passed to DBOS
+and read on replay. The shipped route already rides the predecessor durability seam:
 `DataDrivenTaskOpts.route: RouteDecision` is a DBOS workflow argument (`src/pipeline/data-driven-task.workflow.ts:94`),
 and the sibling pinned fields are documented as "a DBOS workflow arg ⇒ durable on recovery" / "pinned before DBOS
 workflow enqueue so recovery cannot branch on changed process env" (`:92-98`). The manifest registry MUST NOT be
@@ -307,20 +317,25 @@ consulted during workflow execution or DBOS recovery.
 
 What is pinned, and why:
 
-- **Capability fields consumed in the deterministic workflow body** — `needsLivePreflight`, `performsMerge`,
-  `producesWorktreeChanges` — MUST be pinned. The workflow body re-runs on replay and would otherwise recompute
-  them from a mutable registry, branching differently than the original run.
-- **`stdoutParser` / `permissionStyle` ids** are consumed inside the `runStep` effect (a memoized DBOS step). On a
+- **Runner abilities used by selection or request construction** — provider/auth/privacy class, workspace-write
+  support, structured-output tier, and future ability fields — MUST be pinned so compatibility checks and recovery do
+  not change when the registry changes.
+- **The complete serializable manifest** is consumed to construct the runner request: transport, binary/endpoint,
+  argv, schema/prompt delivery, constraints, timeouts, parser/style ids, and abilities all come from the pin. On a
+  normal replay a recorded step result is replayed; on crash-recovery re-execution of an incomplete step the exact
+  same manifest must be available from the plan without a registry read.
+- **`stdoutParser` / `permissionStyle` ids** are consumed inside the `runStep` effect. On a
   normal replay the recorded step result is replayed and the parser does not re-run; but on crash-recovery
   re-execution of an incomplete step the same ids must be used, so they MUST be pinned too.
-- **`manifestDigest`** is audit / mismatch-detection only: a stable hash over the canonicalized manifest. The
-  snapshot is self-contained (it already carries the full ids + `capabilities` block), so replay/recovery reads
+- **`manifestDigest`** is audit / mismatch-detection only: a stable hash over the canonicalized `runnerManifest`. The
+  snapshot is self-contained, so replay/recovery reads
   everything from the snapshot and MUST NOT do a content-address lookup-by-digest — that would reopen the
   determinism blocker. A later digest mismatch is an operator/audit signal, not a replay input.
 
-Invariant: a manifest-registry change mid-run MUST NOT alter `producesWorktreeChanges` / `performsMerge` /
-`needsLivePreflight` / the `stdoutParser` id / the `permissionStyle` id / the structured-output tier for an
-in-flight run. A run started against digest `D` continues, replays, and recovers against `D` — even after the
+Invariant: a manifest-registry change mid-run MUST NOT alter runner abilities, the `stdoutParser` id, the
+`permissionStyle` id, or the structured-output tier for an in-flight run. Desired workspace access/captures come from
+the execution plan's node requirements and never from this manifest. A run started against digest `D` continues,
+replays, and recovers against `D` — even after the
 operator edits or replaces the manifest. (Whether a new run picks up the edited manifest is a selection concern,
 out of scope — #186.)
 
@@ -347,8 +362,9 @@ re-executed after the external world changed can diverge — and is explicitly o
 - **Provider-constraint failure is typed, not a throw.** A provider outside `constraints.allowedProviders` produces
   a typed precondition failure routed to a lesson (not an adapter throw), covered by a test.
 - **Replay/recovery uses the pin.** A test mutates the registry mid-run and asserts the in-flight run continues
-  against its snapshot digest `D` for `producesWorktreeChanges` / `performsMerge` / `needsLivePreflight` / the
-  parser/style ids / the tier.
+  against its complete manifest snapshot/digest `D`, including argv, delivery, constraints, timeouts,
+  provider/auth/privacy abilities, workspace-write support, parser/style ids, and structured-output tier. Separate
+  resource tests prove captures/access do not come from runner data.
 
 ## Compatibility
 
@@ -377,6 +393,7 @@ timeout policy, and transient-retry policy) without contradicting it.
 ```json
 {
   "id": "claude-code",
+  "version": "1",
   "stdoutParser": "stream-json",
   "permissionStyle": "tool-allowlist",
   "kind": "cli",
@@ -393,9 +410,6 @@ timeout policy, and transient-retry policy) without contradicting it.
   "promptDelivery": "stdin",
   "constraints": {},
   "capabilities": {
-    "needsLivePreflight": true,
-    "performsMerge": false,
-    "producesWorktreeChanges": true,
     "supportsStructuredOutput": "native-schema",
     "provider": "anthropic",
     "authMode": "cli-session",
@@ -414,6 +428,7 @@ a manifest field.
 ```json
 {
   "id": "codex",
+  "version": "1",
   "stdoutParser": "jsonl-exec",
   "permissionStyle": "sandbox-enum",
   "kind": "cli",
@@ -436,9 +451,6 @@ a manifest field.
     "requiresNonEmptyModelId": true
   },
   "capabilities": {
-    "needsLivePreflight": true,
-    "performsMerge": false,
-    "producesWorktreeChanges": true,
     "supportsStructuredOutput": "native-schema",
     "provider": "openai-compatible",
     "authMode": "cli-session",
@@ -453,5 +465,8 @@ and stdin prompt at `:175` + `:541`; `constraints.allowedProviders` reproduces `
 (`:109-112`).
 
 ## Changelog
+
+- 2026-07-11: Clarified ADR-0010/0011 composition: manifests state runner ability, scripts are not deterministic
+  runners, route pins nest in the execution plan, and runner-driven preflight/workspace/capture policy is removed.
 
 - 2026-06-29: Initial version.

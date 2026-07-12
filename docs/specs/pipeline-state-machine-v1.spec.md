@@ -4,9 +4,12 @@
 - **Version:** v1
 - **Source files:** `src/pipeline-core/**`, `src/pipeline/data-driven-task.workflow.ts`,
   `src/pipeline/data-driven-template.ts`, `control-plane/default-playbook/catalog/pipelines.json`.
-- **Related ADRs:** [ADR-0002](../adr/0002-data-driven-pipeline-state-machine.md).
+- **Related ADRs:** [ADR-0002](../adr/0002-data-driven-pipeline-state-machine.md),
+  [ADR-0010](../adr/0010-run-resources-and-workspace-planning.md),
+  [ADR-0011](../adr/0011-system-script-runtime-and-trusted-extensions.md).
 - **Related specs:** [execution-plan-v1.spec.md](./execution-plan-v1.spec.md),
   [script-runtime-v1.spec.md](./script-runtime-v1.spec.md),
+  [resources-workspaces-effects-v1.spec.md](./resources-workspaces-effects-v1.spec.md),
   [run-dataflow-v1.spec.md](./run-dataflow-v1.spec.md),
   [human-gates-v1.spec.md](./human-gates-v1.spec.md).
 
@@ -71,6 +74,14 @@ type Template = {
 
 Each node has a stable map key id. Node ids are permanent: a removed id MUST NOT be reused for a different meaning.
 
+### Target resource composition
+
+Under ADR-0010, `Template` also declares portable named `resources` and one `workspace` policy, while effect nodes
+declare `requirements.resources` access/capture needs. Resources-workspaces-effects-v1 owns the exact grammar.
+
+The pure core validates names, references, and access/capture shape. It does not resolve repositories, Git worktrees,
+credentials, runner abilities, or script handlers. The pre-enqueue compiler performs that resolution.
+
 ## Node Kinds
 
 The v1 node kind set is closed:
@@ -86,6 +97,12 @@ The v1 node kind set is closed:
 | `wait` | Timed auto-resume | `duration`, `next` | `startTimer` |
 | `terminal` | Finish the run | none | `complete` |
 
+The target adapter MUST implement `startTimer` as one DBOS-backed durable sleep before resuming `wait.next`; returning
+immediately is invalid. V1 wait durations match
+`^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)(?:\.(\d{1,3}))?S)?$`, require at least one component and a positive safe-integer
+millisecond total, and fail static validation as `WAIT_DURATION_INVALID` otherwise. Unit tests inject the adapter sleep
+dependency; a recovery test proves an outstanding timer survives host restart without repeating the preceding effect.
+
 Effect nodes share:
 
 ```ts
@@ -100,6 +117,48 @@ type EffectNodeFields = {
   consumes?: ConsumesRef[];
 };
 ```
+
+Target script nodes additionally declare a closed top-level input map:
+
+```ts
+type ScriptInputBindingV1 =
+  | { source: 'output'; alias: string; pointer?: string; optional?: boolean }
+  | { source: 'plan'; pointer: string; optional?: boolean }
+  | { source: 'literal'; value: JsonValue };
+
+type ScriptNodeV1Target = EffectNodeFields & {
+  kind: 'script';
+  scriptRef: { id: string; version: string };
+  inputBindings: Record<string, ScriptInputBindingV1>;
+};
+```
+
+`source: output` reads one already hydrated `consumes[].as` alias. The pointer base is the complete
+run-dataflow-v1 `HydratedOutputV1` envelope: `/value` enters the domain payload, while `/artifactId`,
+`/contentDigest`, `/schema`, and `/provenance` select host metadata. `pointer` is an RFC 6901 JSON Pointer over that
+envelope; absent pointer selects the whole envelope. `source: plan` reads only the persisted, redacted execution
+plan and MUST point to an existing field. `source: literal` accepts a JSON value fixed in portable pipeline data.
+
+Bindings build only the top-level script input object. A map containing the sole reserved key `$` binds the complete
+script input value; `$` cannot coexist with named fields. Bindings do not evaluate expressions, templates, conditionals,
+array maps, provider calls, or arbitrary code. A binding with `optional:true` omits its target field when the alias or
+pointer is absent; every other missing alias/pointer is `revo.InputMissing`. Compilation rejects an unknown alias,
+invalid pointer, forbidden
+secret/path-bearing plan field, duplicate target field, non-JSON literal, or binding whose statically known type cannot
+satisfy the pinned input schema. Runtime resolves the pinned map generically, validates the complete result against the
+pinned schema, and never branches on node or script id.
+
+Static failures use `SCRIPT_INPUT_BINDING_INVALID` with node id, target field, source alias/pointer, and a safe reason.
+Runtime absence after an optional branch/replay path uses `revo.InputMissing` before bounded-client construction.
+
+In the ADR-0010/0011 target, agent and script nodes carry resource requirements. A script node uses the closed
+`{ id: string, version: string }` reference; compilation resolves only that version and pins its definition digest.
+String-only refs, implicit latest selection, ranges, and fallbacks are invalid. Worktree preparation/release is not a
+node kind and MUST NOT be represented as a script.
+
+When a script manifest declares a verdict JSON pointer, run-dataflow-v1 validates and extracts the domain verdict
+generically before `choice` routing. Core routing consumes `LastResult.verdict`; it never recognizes a concrete script
+or node id.
 
 ## Conditions and Branches
 
@@ -205,6 +264,10 @@ type LastResult = {
 - `startTimer`
 - `complete`
 
+The target adapter receives `ExecutionPlanV1`, not a template plus ambient host assumptions. `RouteDecision` remains
+the selection-provenance component nested in that plan. Generic core and adapter behavior MUST NOT compare concrete
+runner, script, role, resource, or node ids.
+
 ## Validation
 
 `validateTemplate(template)` returns all diagnostics from the full validation pass. Diagnostic codes are a stable
@@ -224,6 +287,7 @@ public contract. Rule groups:
 12. Id/namespace hygiene.
 13. Capability reference shape.
 14. Dataflow produce/consume checks.
+15. Resource/workspace declarations and node access/capture checks from resources-workspaces-effects-v1.
 
 Notable diagnostic families include `LOOP_UNBOUNDED`, `VERDICT_CORE_IN_GUARD`,
 `FAILURE_ROUTE_NO_CATCH`, `SCOPE_SPANS_PARALLEL`, `MERGE_LASTWRITE_REJECTED`, and the dataflow codes documented
@@ -242,6 +306,9 @@ v1 reports safe/breaking information but does not migrate live in-flight runs.
 
 ## Changelog
 
+- 2026-07-12: Fixed target wait-duration grammar and DBOS-backed durable timer/recovery semantics.
+- 2026-07-12: Consolidated ADR-0010/0011 resource declarations, exact script refs, lifecycle-owned workspaces, and
+  id-agnostic plan-backed execution into the PR #320 target boundary.
 - 2026-07-11: Corrected runtime storage ownership to Revo Prisma, made this spec the pure graph/reducer owner, and
   separated the current route input from the Draft pinned execution-plan boundary.
 - 2026-07-01: Added `cancelled` terminal status and documented reusable ordinary code-stuck recovery.
