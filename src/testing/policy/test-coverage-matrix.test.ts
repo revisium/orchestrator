@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { sameExactStringSet } from './exact-string-set.js';
-import { validateTestCoverageMatrix } from './test-coverage-matrix.js';
+import { validateTestCoverageMatrix } from './coverage-matrix.js';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const matrixPath = resolve(repositoryRoot, 'docs/specs/test-coverage-matrix-v1.json');
@@ -274,6 +274,24 @@ test('test coverage matrix independently rejects each executable exemplar path b
       name,
     );
   }
+});
+
+test('test coverage matrix rejects duplicate executable paths after separator normalization', () => {
+  const fixture = cloneMatrix();
+  const exemplars = fixture['executableExemplars'] as Array<Record<string, unknown>>;
+  exemplars[1] = { ...exemplars[1], path: 'src\\pipeline-core\\interpret.test.ts' };
+
+  assert.ok(validateTestCoverageMatrix(fixture, repositoryRoot).some((diagnostic) =>
+    diagnostic.code === 'MATRIX_SHAPE' && diagnostic.message.includes('paths must be unique')));
+});
+
+test('test coverage matrix rejects an executable exemplar directory', () => {
+  const fixture = cloneMatrix();
+  const exemplars = fixture['executableExemplars'] as Array<Record<string, unknown>>;
+  exemplars[1] = { layer: 'static-policy', path: 'src/testing/policy' };
+
+  assert.ok(validateTestCoverageMatrix(fixture, repositoryRoot).some((diagnostic) =>
+    diagnostic.code === 'MATRIX_EVIDENCE_PATH' && diagnostic.message.includes('must be a file')));
 });
 
 test('test coverage matrix does not classify an out-of-bucket E2E support test as unit', () => {
