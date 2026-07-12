@@ -7,6 +7,8 @@
 - **Specs:** [run profiles v1](../specs/run-profiles-v1.spec.md),
   [execution plan v1](../specs/execution-plan-v1.spec.md),
   [resources, workspaces, and effects v1](../specs/resources-workspaces-effects-v1.spec.md)
+- **Refined by:** [ADR-0010](./0010-run-resources-and-workspace-planning.md),
+  [ADR-0011](./0011-system-script-runtime-and-trusted-extensions.md)
 - **Refines:** [ADR-0002](./0002-data-driven-pipeline-state-machine.md)
 - **Relates-to:** [ADR-0004](./0004-runner-execution-contract.md),
   [ADR-0005](./0005-versioned-playbook-storage-and-revo-materialization.md)
@@ -63,6 +65,12 @@ Those are shipped implementation facts while this ADR remains Draft.
 The Draft target adds the complete execution pin, generic resource/effect binding, immutable playbook-version
 relationship, and removal of domain-node expansion from generic runtime code. Acceptance requires the Draft specs and
 implementation to agree; landed subsets do not change this ADR's status.
+
+ADR-0010/0011 fix the target binding shape without changing profile ownership: agent slots retain
+runner/model/permission/timeout bindings, while Git/GitHub credential aliases move from named script-node expansion to
+named resource bindings. Scripts are selected by versioned pipeline refs and do not receive runner bindings or account
+fields. The amended run-profile, execution-plan, resource, and script-runtime specs are authoritative for the atomic
+target.
 
 ## Direct Cutover
 

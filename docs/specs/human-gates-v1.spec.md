@@ -50,6 +50,39 @@ Rules:
 - A gate MAY `produce` a gate-resolution artifact for downstream nodes. The adapter payload includes
   `outcome`, optional `note`, `resolvedBy`, `resolvedAt`, `inboxId`, and the legacy `decision`.
 
+### Target approval-subject composition
+
+The node shape above is shipped behavior. In the ADR-0010/0011 atomic target, `gatedArtifact` and `verdictFrom` are
+replaced by explicit typed references:
+
+```ts
+type HumanGateNodeV1Target = {
+  kind: 'humanGate';
+  reason: string;
+  outcomes: string[];
+  branches: Branch[];
+  timeout?: { after: string; goto: string };
+  incrementCounters?: string[];
+  produces?: { name: string };
+  subjectFrom?: { node: string; iteration?: 'latest' | 'all' | number };
+  recommendationFrom?: { node: string; iteration?: 'latest' | 'all' | number };
+};
+```
+
+`subjectFrom`, when present, MUST resolve to `schema:approvalSubject/v1`. `recommendationFrom` enriches presentation
+with a typed domain verdict but never routes automatically; only the human-selected outcome routes the gate.
+
+`subjectFrom` is REQUIRED when a gate approves a versioned plan/artifact or authorizes an external mutation. Bundled
+plan and merge approval require it. Question, triage, and recovery gates MAY omit it when they only select continuation;
+policy MUST NOT insert synthetic subject-builder nodes for those gates.
+
+At resolution, a gate with `subjectFrom` MUST produce `mode=subject-approval`; a gate without it MUST produce
+`mode=continuation`. The resolver cannot choose the mode and cannot attach a subject to continuation or omit one from
+subject approval.
+
+The target resolution artifact removes legacy `decision`. The named-outcome resolver is the sole public gate mutation;
+`approve_gate`, `reject_gate`, and GraphQL equivalents are deleted in the atomic cutover with no wrappers.
+
 ## Inbox Contract
 
 Inbox rows are Prisma runtime rows and MUST NOT be committed as versioned meaning. Logical fields:
@@ -82,99 +115,124 @@ The shipped adapter has merge-specific freshness handling keyed to domain node i
 That behavior remains current until the target below is implemented. The target replaces domain knowledge in the
 generic runtime with a typed approval subject.
 
-This section is the canonical owner of approval-subject identity, revision, freshness, and invalidation semantics.
-[execution-plan-v1.spec.md](./execution-plan-v1.spec.md) pins the schema id/version/digest only. It MUST NOT redefine
-these semantics.
+Run-dataflow-v1 is the canonical owner of `ApprovalSubjectV1` fields and provenance. This section owns which gates
+require a subject, inbox projection, human resolution, invalidation, and protected-effect authorization.
 
 ### Subject and record
 
 ```ts
-type ApprovalSubject = {
-  schemaVersion: 'approval-subject/v1';
-  kind: string;
-  resource: {
-    type: 'artifact' | 'repository' | 'pull-request' | 'knowledge' | 'other';
-    id: string;
-  };
-  revision: {
-    type: 'digest' | 'git-commit' | 'github-head' | 'revisium-revision' | 'version';
-    value: string;
-  };
-  policyContextDigest: string;
-  subjectDigest: string;
-};
+type GateResolutionAuditV1 =
+  | {
+      kind: 'merge-override/v1';
+      threadIds: string[];
+      actor: string;
+      reason: string;
+      risk: string;
+      verificationResponsibility: string;
+      headCommit: string;
+      fingerprint?: string;
+    };
 
-type ApprovalRecord = {
+type GateDecisionBaseV1 = {
   gateInstanceId: string;
-  subject: ApprovalSubject;
   outcome: string;
   note?: string;
   decidedBy: string;
   decidedAt: string;
+};
+
+type SubjectApprovalRecordV1 = GateDecisionBaseV1 & {
+  mode: 'subject-approval';
+  subject: {
+    outputNode: string;
+    outputOrdinal: number;
+    identity: { scheme: string; value: string };
+    revision: { scheme: string; value: string };
+    executionPlanHash: string;
+  };
+  audit?: GateResolutionAuditV1;
   status: 'active' | 'invalidated';
   invalidatedAt?: string;
-  invalidationReason?: 'subject_changed' | 'policy_changed' | 'explicit_revoke';
+  invalidationReason?: 'subject_changed' | 'explicit_revoke';
 };
+
+type ContinuationDecisionRecordV1 = GateDecisionBaseV1 & {
+  mode: 'continuation';
+  subject?: never;
+  audit?: never;
+  status: 'active';
+  invalidatedAt?: never;
+  invalidationReason?: never;
+};
+
+type GateResolutionRecordV1 = SubjectApprovalRecordV1 | ContinuationDecisionRecordV1;
 ```
 
-`kind` and `resource.type` are generic vocabularies. The gate runtime MUST NOT branch on a pipeline
-node id, GitHub lifecycle name, or role id to interpret them.
+`subject-approval` is required for every gate that authorizes a versioned artifact or irreversible effect. Its
+`subject` is copied from one validated immutable `schema:approvalSubject/v1` output. The complete plan/policy context
+is already pinned by `executionPlanHash`; human-gate storage does not create a second policy digest. Identity and
+revision schemes are provider-neutral. Gate code MUST NOT branch on a pipeline node id, GitHub lifecycle name, provider
+payload field, or role id.
 
-`subjectDigest` MUST be the canonical hash of `schemaVersion`, `kind`, `resource`, and `revision`.
-`policyContextDigest` MUST be computed separately from the canonical policy-context input. Display text, inbox title,
-and resolver transport metadata MUST NOT affect either digest.
+An approval cannot transfer to another identity, revision, execution plan, or output ordinal.
 
-An approval outcome is valid only when both the `subjectDigest` and `policyContextDigest` recorded in the approval
-record match the current values. It MUST NOT be transferred to another artifact, commit, PR head, knowledge revision,
-or policy context.
+`continuation` is the only valid record for question, triage, and recovery gates that omit `subjectFrom`. It records
+the named outcome, note, resolver, and time but cannot carry a subject, invalidation metadata, or authorization audit.
+It does not authorize a protected write. Pipeline policy decides which later bounded operation may consume its domain
+answer under that operation's independent resource/revision fences.
+
+`audit` is the sole extension point for subject-approval outcome-specific authorization evidence in V1. `approved` forbids an audit.
+`override_merge` requires exactly one `merge-override/v1` audit, a non-empty note, sorted unique thread ids, and
+`audit.actor === decidedBy`. Its `headCommit` MUST equal the approved subject revision before an irreversible effect.
+Unknown audit kinds or audit data on any other outcome fail resolution. Free-text fields are bounded, secret-redacted,
+and fingerprinted before they enter operation results or public events.
 
 ### Freshness and invalidation
 
-Before an irreversible or approval-protected write, the graph MUST execute the declared read effect that produces the
-current subject and policy context. The generic gate/effect adapter MUST construct separate comparison inputs:
+At inbox creation, the adapter copies the subject identity, revision, title, summary, and bounded evidence references
+from the immutable output. At resolution it reloads that output from the workflow-local/durable artifact accumulator
+and verifies the copied identity/revision/plan hash still match.
+
+Before an irreversible write, the graph MUST execute any declared fresh observation and supply it with the approval
+record to the bounded operation. The operation compares its expected identity/revision with the provider-neutral
+subject; generic gate code performs no provider I/O.
 
 ```ts
 type ApprovalFreshnessComparison = {
-  subject: {
-    recordedDigest: string;
-    currentDigest: string;
+  recorded: {
+    identity: { scheme: string; value: string };
+    revision: { scheme: string; value: string };
+    executionPlanHash: string;
   };
-  policyContext: {
-    recordedDigest: string;
-    currentDigest: string;
+  current: {
+    identity: { scheme: string; value: string };
+    revision: { scheme: string; value: string };
+    executionPlanHash: string;
   };
 };
 
 type ApprovalFreshnessResult =
   | { status: 'active' }
-  | { status: 'invalidated'; reason: 'subject_changed' | 'policy_changed' };
+  | { status: 'invalidated'; reason: 'subject_changed' };
 ```
 
-The adapter MUST evaluate those inputs in this order:
-
-1. If `subject.recordedDigest` differs from `subject.currentDigest`, invalidate with `subject_changed`.
-2. Otherwise, if `policyContext.recordedDigest` differs from `policyContext.currentDigest`, invalidate with
-   `policy_changed`.
-3. Otherwise, preserve the active approval with `status: 'active'`.
-
-The result is deterministic when both values change: a subject mismatch takes precedence and the result is
-`subject_changed`, never `policy_changed`.
+Any identity, revision, or execution-plan mismatch invalidates with `subject_changed`. Exact equality preserves the
+active approval.
 
 Examples:
 
-| Recorded `(subjectDigest, policyContextDigest)` | Current `(subjectDigest, policyContextDigest)` | Result |
+| Recorded `(identity, revision, plan)` | Current `(identity, revision, plan)` | Result |
 | --- | --- | --- |
-| `('subject-a', 'policy-a')` | `('subject-a', 'policy-a')` | `active` |
-| `('subject-a', 'policy-a')` | `('subject-b', 'policy-a')` | `subject_changed` |
-| `('subject-a', 'policy-a')` | `('subject-a', 'policy-b')` | `policy_changed` |
-| `('subject-a', 'policy-a')` | `('subject-b', 'policy-b')` | `subject_changed` |
+| `('pr-1', 'head-a', 'plan-a')` | `('pr-1', 'head-a', 'plan-a')` | `active` |
+| `('pr-1', 'head-a', 'plan-a')` | `('pr-1', 'head-b', 'plan-a')` | `subject_changed` |
+| `('pr-1', 'head-a', 'plan-a')` | `('pr-2', 'head-a', 'plan-a')` | `subject_changed` |
+| `('pr-1', 'head-a', 'plan-a')` | `('pr-1', 'head-a', 'plan-b')` | `subject_changed` |
 
 Freshness invariants:
 
-- a subject mismatch MUST produce `subject_changed`, even when the policy context also mismatches;
-- `policy_changed` MUST be produced only when the subject digest matches and the policy context digest differs;
-- matching subject and policy context digests preserve the active approval;
-- a missing or unreadable current subject or policy context fails closed;
+- any subject identity/revision/plan mismatch produces `subject_changed`;
+- exact identity/revision/plan equality preserves the active approval;
+- missing or unreadable subject evidence fails closed;
 - an invalidated approval cannot authorize a write.
 
 The comparison consumes recorded typed results. It MUST NOT perform hidden GitHub, Git, filesystem, or Revisium I/O.
@@ -189,16 +247,17 @@ as other gate mutations. Resolver transports MUST NOT delete or overwrite the or
 A target gate-resolution artifact includes:
 
 ```ts
-type GateResolutionArtifact = {
-  approval: ApprovalRecord;
+type GateResolutionArtifactV1 = {
+  schemaVersion: 'gate-resolution/v1';
+  resolution: GateResolutionRecordV1;
   inboxId: string;
 };
 ```
 
-The nested `ApprovalRecord` is the sole authoritative representation of the resolution: consumers MUST read
-`outcome`, `note`, `decidedBy`, `decidedAt`, `status`, and invalidation fields through `approval`. The artifact MUST
-NOT duplicate those fields at the top level. `inboxId` identifies the source inbox row and is artifact metadata, not a
-second decision representation.
+The nested `GateResolutionRecord` is the sole authoritative representation of the resolution: consumers MUST read
+`mode`, `outcome`, `note`, `decidedBy`, `decidedAt`, `audit`, `status`, and invalidation fields through `resolution`. The artifact
+MUST NOT duplicate those fields at the top level. `inboxId` identifies the source inbox row and is artifact metadata,
+not a second decision representation.
 
 The artifact family and reference modes are owned by
 [run-dataflow-v1.spec.md](./run-dataflow-v1.spec.md). Inbox context MAY project a bounded subject summary, but the
@@ -206,26 +265,25 @@ full artifact or large evidence remains referenced rather than copied into the i
 
 ### Security and validation
 
-- Subject resolvers MUST use execution-plan resource and permission bindings.
-- Resolver output MUST be schema-validated and secret-redacted before persistence.
-- A resolver MUST NOT accept a caller-supplied digest without verifying the canonical subject fields.
+- Subject construction uses the pure `script:approval/subject` definition from script-runtime-v1.
+- Subject output MUST be schema-validated, provenance-stamped, bounded, and secret-redacted before persistence.
+- A resolver MUST NOT accept caller-authored provenance or an unverified identity/revision copy.
 - An approval resolver MUST reject outcomes outside the gate's declared menu.
 - A write effect MUST prove an active matching approval when its definition requires one.
 - Approval comparison and invalidation events MUST be append-only audit evidence.
 
 Required target tests:
 
-- canonical subject and policy-context inputs hash identically across transports;
-- changing resource identity or revision changes `subjectDigest`;
-- changing policy context changes `policyContextDigest` without changing `subjectDigest`;
-- a subject-only mismatch returns `subject_changed`;
-- a policy-only mismatch returns `policy_changed`;
-- a mismatch in both inputs returns `subject_changed`;
+- subject identity/revision/plan copies are identical across transports;
+- changing identity, revision, or plan hash returns `subject_changed`;
 - unchanged subjects preserve approval across replay;
 - changed subjects invalidate approval before a protected write;
 - explicit revocation preserves the original decision and blocks use;
-- missing subject or policy-context evidence fails closed;
-- gate-resolution artifacts expose resolution fields only through the nested `ApprovalRecord`;
+- missing subject evidence fails closed;
+- gate-resolution artifacts expose resolution fields only through the nested `GateResolutionRecord`;
+- continuation records contain no subject, audit, or invalidation fields and cannot authorize a protected write;
+- merge-override resolution rejects missing/mismatched actor, note, head, threads, or audit kind;
+- normal approval and non-merge outcomes reject a merge-override audit;
 - generic runtime tests contain no domain node-id or merge-specific condition;
 - MCP and GraphQL resolve the same gate command and persist the same approval record.
 
@@ -483,16 +541,25 @@ Contracts:
 - Known informational bots (`sonarqubecloud`, `cursor`, `linear-app`, `deepsource-autofix`) MUST be suppressed into
   `ignoredNoise`; all other bot comments MUST surface in `developerFixes` with `source: 'bot_comment'`.
 
-### Draft script-boundary replacement
+### Target readiness/wait/mutation split
 
-The loop above documents shipped default-playbook behavior. Under
-[script-runtime-v1.spec.md](./script-runtime-v1.spec.md), `pollPr` is replaced by one bounded readiness
-snapshot read. Wait, cap, and recheck behavior remains explicit pipeline graph data. Marking a draft PR ready for
-review becomes a separate write effect. Approval freshness uses the generic subject contract above rather than
-`mergeGate` or `mergeApproveReverify` knowledge in the adapter.
+The loop above documents shipped behavior. The atomic target replaces coupled operations:
+
+- `script:github/pull-request/readiness` captures one `schema:githubReadiness/v1` output and never waits or mutates;
+- `choice` plus `wait` nodes own bounded rechecks and cap exhaustion;
+- `script:github/pull-request/mark-ready` is a separate mutation before observation when policy requires it;
+- `script:github/review-threads/respond` and `/resolve` are separate mutations;
+- `script:github/pull-request/merge` consumes the approved subject and a fresh readiness snapshot for the same head;
+- provider terminal states are typed outputs routed by policy, not special cases in gate code.
+
+Exact gate transitions remain owned here and in default-playbook-policy. Operation definitions belong to
+script-runtime-v1; artifact fields belong to run-dataflow-v1.
 
 ## Changelog
 
+- 2026-07-12: Consolidated provider-neutral `subjectFrom`, exact identity/revision/plan freshness, named-only
+  resolution, canonical nested gate-resolution/override-audit fields, and the readiness/wait/mutation split for the
+  ADR-0010/0011 target.
 - 2026-07-11: Split subject and policy freshness comparison inputs with subject-first invalidation precedence, and
   made the nested `ApprovalRecord` authoritative for gate-resolution fields.
 - 2026-07-11: Added the Draft generic `ApprovalSubject`, revision/freshness/invalidation owner contract and

@@ -115,14 +115,14 @@ value pinned in `.revo/context/run.json`. Runtime MUST fail before worker invoca
 type RevoRunContext = {
   runId: string;
   attemptId?: string;
-  executionPlanId: string;
-  executionPlanDigest: string;
+  executionPlanHash: string;
   playbookVersionId: string;
   snapshotHash: string;
   contentTreeHash: string;
   selectedPipelineId: string;
-  repositorySnapshotDigest: string;
-  workspaceResourceId: string;
+  resource?: string;
+  repositoryId?: string;
+  workspaceId: string;
 };
 ```
 
@@ -137,14 +137,14 @@ concurrent pipeline shares one run worktree.
 
 ```ts
 type RevoSelectedReferences = {
-  executionPlanDigest: string;
+  executionPlanHash: string;
   playbookVersionId: string;
   snapshotHash: string;
   contentTreeHash: string;
   pipelineId: string;
   nodeId: string;
   roleId: string;
-  workspaceResourceId: string;
+  workspaceId: string;
   roleDocuments: string[];
   sharedReferences: string[];
   stacks: string[];
@@ -160,7 +160,7 @@ document and role core reference. The materialized bundle MAY contain the full c
 list is the role's first-read contract.
 
 The materialized selected-reference file MUST be a faithful path projection of the matching resolved role binding in
-the immutable `ExecutionPlan`. Runtime MUST validate that `executionPlanDigest`,
+the immutable `ExecutionPlanV1`. Runtime MUST validate that `executionPlanHash`,
 `playbookVersionId`, `snapshotHash`, and `contentTreeHash` match `run.json` before
 invoking the worker.
 
@@ -267,7 +267,7 @@ The runtime MUST NOT reconstruct missing snapshots from mutable current source.
 
 For new runs, crash recovery MAY recreate a missing clean workspace through the resource manager and MUST
 re-materialize `.revo` from the immutable execution plan before resuming worker execution.
-Re-materialization MUST be idempotent for the same `executionPlanDigest`, `workspaceResourceId`,
+Re-materialization MUST be idempotent for the same `executionPlanHash`, `workspaceId`,
 `playbookVersionId`, and `contentTreeHash`.
 
 ## Examples
@@ -276,14 +276,14 @@ Minimal `selected-references.json` for a developer role:
 
 ```json
 {
-  "executionPlanDigest": "sha256:plan",
+  "executionPlanHash": "sha256:plan",
   "playbookVersionId": "revisium-agent-playbook@0.1.0:sha256:abc",
   "snapshotHash": "sha256:abc",
   "contentTreeHash": "sha256:def",
   "pipelineId": "feature-development",
   "nodeId": "developer-implementation",
   "roleId": "developer",
-  "workspaceResourceId": "workspace:run-01:repo-main",
+  "workspaceId": "workspace:run-01:repo-main",
   "roleDocuments": [
     "roles/developer/ROLE.md",
     "roles/developer/references/core.md"

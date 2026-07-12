@@ -6,7 +6,8 @@
 - **Source files:** `prisma/schema.prisma`, `src/storage/**`, `src/revisium/**`,
   `node_modules/@revisium/engine/prisma/schema.prisma`, `revisium-core/prisma/schema.prisma`
 - **Related ADRs:** [ADR-0007](../adr/0007-revo-storage-foundation.md),
-  [ADR-0008](../adr/0008-revo-projects-and-versioned-knowledge.md)
+  [ADR-0008](../adr/0008-revo-projects-and-versioned-knowledge.md),
+  [ADR-0010](../adr/0010-run-resources-and-workspace-planning.md)
 - **Related specs:** [execution-plan-v1.spec.md](./execution-plan-v1.spec.md),
   [resources-workspaces-effects-v1.spec.md](./resources-workspaces-effects-v1.spec.md),
   [run-dataflow-v1.spec.md](./run-dataflow-v1.spec.md)
@@ -198,6 +199,11 @@ registry, migration state table, or mirror project rows into Revisium.
 `RevoRepository` uses `onDelete: Restrict` because v1 project deletion is soft-only and repository cleanup must be an
 explicit product operation, not a cascade side effect.
 
+ADR-0010 makes `RevoRepository` the launch-resolution identity for named repository resources. The row is mutable
+configuration for future runs, not replay input. Before enqueue, compilation snapshots its credential-free remote
+identity, requested/default ref provenance, and immutable base commit into the execution plan. Recovery does not
+re-read the row.
+
 ### Runtime table groups
 
 The first Revo Prisma runtime schema SHOULD include these groups:
@@ -215,6 +221,27 @@ The first Revo Prisma runtime schema SHOULD include these groups:
 | Costs | cost ledger by run/node/attempt/provider/model |
 | Workspaces/resources | workspace plan/resource identity, allocation generation, lease, lifecycle, dirty state |
 | Artifacts | typed artifact envelope/index rows pointing to Git, filesystem, content-addressed, GitHub, or Revisium storage |
+
+For the target, `TaskRun` owns one immutable plan:
+
+```prisma
+model TaskRun {
+  // existing runtime identity/status fields omitted
+  executionPlan     Json
+  executionPlanHash String
+
+  @@index([executionPlanHash])
+}
+```
+
+`executionPlan` contains `RouteDecision` once plus resolved resources, workspace, node grants, script pins, and
+credential aliases. No standalone route-decision field remains an execution source after cutover. Query projections
+may read nested provenance but cannot recompile or mutate the plan.
+
+Workspace allocation is a separate mutable runtime fact. A Prisma-owned allocation row durably maps
+`(runId, workspaceId, executionPlanHash)` to provider, host-private path, lifecycle state, fencing token, retained
+cause, safe failure code, and timestamps. Lifecycle may read it to resume prepare/release only after verifying plan
+identity. The path never enters plans, artifacts, events, or public projections.
 
 Runtime constraints SHOULD include:
 
@@ -278,10 +305,18 @@ Required tests:
 - workspace/resource identity and allocation-generation constraints protect replayed allocation and release;
 - artifact index fixtures retain typed immutable references while source, diffs, and large blobs remain outside
   Prisma.
+- plan and hash persist atomically before DBOS enqueue;
+- route provenance is read from `executionPlan.routeDecision`, not a duplicate source;
+- changing/deleting `RevoRepository` after enqueue does not change recovery;
+- plan JSON contains aliases but no token, session, private key, cookie, environment map, or workspace path;
+- allocation fencing rejects concurrent prepare/release writers and restart resumes every nonterminal state.
 
 ## Compatibility
 
 Existing pre-v1 local data is outside this contract and is not migrated.
+
+The execution-plan cutover provides no historical-run migration, dual `routeDecision` fallback, or old/new runtime
+branch. Alpha data is reset and old in-flight runs are not resumed through a compatibility adapter.
 
 If `@revisium/engine` changes its required schema, Revo must update the generated/imported fragment and create a
 normal Revo Prisma migration. Revo must not let engine schema drift silently.
@@ -323,6 +358,8 @@ Control-plane tables: playbooks, roles, pipelines
 
 ## Changelog
 
+- 2026-07-12: Consolidated ADR-0010 plan/hash, repository snapshot, and fenced private workspace-allocation ownership
+  into the PR #320 schema target.
 - 2026-07-11: Corrected Current Contract runtime ownership to Prisma and added Draft execution-plan,
   workspace/resource, and typed artifact-index model groups without moving large content into the database.
 - 2026-07-06: Initial draft.
