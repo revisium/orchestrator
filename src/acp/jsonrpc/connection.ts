@@ -48,12 +48,7 @@ type QueuedWrite = {
 const encoder = new TextEncoder();
 
 function encode(message: JsonRpcMessage): Uint8Array {
-  try {
-    return encoder.encode(`${JSON.stringify(parseJsonRpcMessage(message))}\n`);
-  } catch (error) {
-    if (error instanceof JsonRpcProtocolError) throw error;
-    throw new JsonRpcProtocolError('invalid_message', 'JSON-RPC message cannot be serialized safely', error);
-  }
+  return encoder.encode(`${JSON.stringify(parseJsonRpcMessage(message))}\n`);
 }
 
 function requestMessage(method: string, params: JsonRpcParams | undefined, id: JsonRpcId): JsonRpcRequest {

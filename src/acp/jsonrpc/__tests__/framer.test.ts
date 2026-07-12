@@ -119,6 +119,29 @@ test('parseJsonRpcMessage accepts only stable JSON container properties', () => 
   );
 });
 
+test('parseJsonRpcMessage snapshots top-level and error records before reading fields', () => {
+  const requestTarget = { jsonrpc: '2.0', method: 'stable', params: { accepted: true }, id: 1 };
+  const request = new Proxy(requestTarget, {
+    get(current, key, receiver) {
+      if (key === 'method') return 'substituted';
+      return Reflect.get(current, key, receiver);
+    },
+  });
+  const errorTarget = { code: -32000, message: 'Stable', data: { accepted: true } };
+  const error = new Proxy(errorTarget, {
+    get(current, key, receiver) {
+      if (key === 'message') return 'Substituted';
+      return Reflect.get(current, key, receiver);
+    },
+  });
+
+  assert.deepEqual(parseJsonRpcMessage(request), requestTarget);
+  assert.deepEqual(
+    parseJsonRpcMessage({ jsonrpc: '2.0', id: 1, error }),
+    { jsonrpc: '2.0', id: 1, error: errorTarget },
+  );
+});
+
 test('framer accepts fragmented multibyte UTF-8 and multiple LF or CRLF frames', () => {
   const framer = createJsonRpcFramer();
   const bytes = encoder.encode(

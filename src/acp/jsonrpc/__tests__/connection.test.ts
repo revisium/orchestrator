@@ -18,6 +18,19 @@ function unsafeToJsonObject(): Record<string, unknown> {
   return value;
 }
 
+function substitutingJsonProxy(): Record<string, unknown> {
+  const target = { accepted: true };
+  return new Proxy(target, {
+    get(current, key, receiver) {
+      if (key === 'toJSON') return () => ({ substituted: true });
+      return Reflect.get(current, key, receiver);
+    },
+    getOwnPropertyDescriptor: (current, key) => Reflect.getOwnPropertyDescriptor(current, key),
+    getPrototypeOf: (current) => Reflect.getPrototypeOf(current),
+    ownKeys: (current) => Reflect.ownKeys(current),
+  });
+}
+
 async function assertFailure(code: JsonRpcProtocolError['code'], run: () => Promise<unknown>): Promise<void> {
   let caught: unknown;
   try {
@@ -101,6 +114,21 @@ test('unsafe outbound params fail before pending allocation, id consumption, or 
   assert.deepEqual(writes.map(decodeWrite), [{ jsonrpc: '2.0', method: 'valid', id: 1 }]);
   await connection.receive({ jsonrpc: '2.0', id: 1, result: true });
   assert.equal(await valid, true);
+});
+
+test('outbound request serializes canonical params instead of proxy substitution', async () => {
+  const writes: Uint8Array[] = [];
+  const connection = createJsonRpcConnection({
+    async write(chunk) { writes.push(chunk); },
+  });
+
+  const pending = connection.request('proxy', substitutingJsonProxy() as never);
+  await Promise.resolve();
+  assert.deepEqual(writes.map(decodeWrite), [
+    { jsonrpc: '2.0', method: 'proxy', params: { accepted: true }, id: 1 },
+  ]);
+  await connection.receive({ jsonrpc: '2.0', id: 1, result: true });
+  assert.equal(await pending, true);
 });
 
 test('connection distinguishes unknown, duplicate, and null response ids', async () => {
@@ -369,6 +397,21 @@ test('connection converts a serialization-hostile server result to an internal e
   await connection.receive({ jsonrpc: '2.0', method: 'unsafe', id: 7 });
   assert.deepEqual(writes.map(decodeWrite), [
     { jsonrpc: '2.0', id: 7, error: { code: -32603, message: 'Internal error' } },
+  ]);
+});
+
+test('connection serializes a canonical handler result instead of proxy substitution', async () => {
+  const writes: Uint8Array[] = [];
+  const connection = createJsonRpcConnection({
+    async write(chunk) { writes.push(chunk); },
+    async onRequest() {
+      return { kind: 'result', value: substitutingJsonProxy() } as never;
+    },
+  });
+
+  await connection.receive({ jsonrpc: '2.0', method: 'proxy', id: 8 });
+  assert.deepEqual(writes.map(decodeWrite), [
+    { jsonrpc: '2.0', id: 8, result: { accepted: true } },
   ]);
 });
 
