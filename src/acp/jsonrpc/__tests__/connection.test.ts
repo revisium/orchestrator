@@ -415,6 +415,68 @@ test('connection serializes a canonical handler result instead of proxy substitu
   ]);
 });
 
+test('object prototype JSON hook cannot substitute outbound params or handler result', async () => {
+  const original = Object.getOwnPropertyDescriptor(Object.prototype, 'toJSON');
+  let connection: ReturnType<typeof createJsonRpcConnection> | undefined;
+  try {
+    Object.defineProperty(Object.prototype, 'toJSON', {
+      configurable: true,
+      value: () => ({ substituted: 'object-prototype' }),
+      writable: true,
+    });
+    const writes: Uint8Array[] = [];
+    connection = createJsonRpcConnection({
+      async write(chunk) { writes.push(chunk); },
+      async onRequest() { return { kind: 'result', value: { accepted: true } }; },
+    });
+
+    const pending = connection.request('object', { accepted: true, toJSON: 'ordinary' });
+    await Promise.resolve();
+    await connection.receive({ jsonrpc: '2.0', id: 1, result: true });
+    assert.equal(await pending, true);
+    await connection.receive({ jsonrpc: '2.0', method: 'object-result', id: 9 });
+    assert.deepEqual(writes.map(decodeWrite), [
+      { jsonrpc: '2.0', method: 'object', params: { accepted: true, toJSON: 'ordinary' }, id: 1 },
+      { jsonrpc: '2.0', id: 9, result: { accepted: true } },
+    ]);
+  } finally {
+    connection?.close();
+    if (original) Object.defineProperty(Object.prototype, 'toJSON', original);
+    else Reflect.deleteProperty(Object.prototype, 'toJSON');
+  }
+});
+
+test('array prototype JSON hook cannot substitute outbound params or handler result', async () => {
+  const original = Object.getOwnPropertyDescriptor(Array.prototype, 'toJSON');
+  let connection: ReturnType<typeof createJsonRpcConnection> | undefined;
+  try {
+    Object.defineProperty(Array.prototype, 'toJSON', {
+      configurable: true,
+      value: () => ['substituted-array-prototype'],
+      writable: true,
+    });
+    const writes: Uint8Array[] = [];
+    connection = createJsonRpcConnection({
+      async write(chunk) { writes.push(chunk); },
+      async onRequest() { return { kind: 'result', value: [3, 4] }; },
+    });
+
+    const pending = connection.request('array', [1, 2]);
+    await Promise.resolve();
+    await connection.receive({ jsonrpc: '2.0', id: 1, result: true });
+    assert.equal(await pending, true);
+    await connection.receive({ jsonrpc: '2.0', method: 'array-result', id: 10 });
+    assert.deepEqual(writes.map(decodeWrite), [
+      { jsonrpc: '2.0', method: 'array', params: [1, 2], id: 1 },
+      { jsonrpc: '2.0', id: 10, result: [3, 4] },
+    ]);
+  } finally {
+    connection?.close();
+    if (original) Object.defineProperty(Array.prototype, 'toJSON', original);
+    else Reflect.deleteProperty(Array.prototype, 'toJSON');
+  }
+});
+
 test('connection does not hide transport failure while sending an internal error', async () => {
   const connection = createJsonRpcConnection({
     async write() { throw new Error('broken pipe'); },

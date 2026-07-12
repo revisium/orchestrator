@@ -27,13 +27,29 @@ function isJsonRpcId(value: unknown): value is JsonRpcId {
   return typeof value === 'string' || (typeof value === 'number' && Number.isSafeInteger(value));
 }
 
+function isolateInheritedJsonHook<T extends object>(value: T): T {
+  Object.defineProperty(value, 'toJSON', {
+    configurable: true,
+    enumerable: false,
+    value: undefined,
+    writable: true,
+  });
+  return value;
+}
+
+function isJsonHookSentinel(key: PropertyKey, descriptor: PropertyDescriptor | undefined): boolean {
+  return key === 'toJSON' && descriptor !== undefined && !descriptor.enumerable &&
+    descriptor.configurable === true && descriptor.writable === true && descriptor.value === undefined;
+}
+
 function snapshotRecord(value: unknown): Record<string, unknown> | undefined {
   try {
     if (!isRecord(value)) return undefined;
-    const snapshot: Record<string, unknown> = {};
+    const snapshot = isolateInheritedJsonHook<Record<string, unknown>>({});
     for (const key of Reflect.ownKeys(value)) {
       if (typeof key !== 'string') return undefined;
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (isJsonHookSentinel(key, descriptor)) continue;
       if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) return undefined;
       Object.defineProperty(snapshot, key, {
         configurable: true,
@@ -63,7 +79,6 @@ function jsonContainerEntries(value: object): JsonContainerEntries | undefined {
     }
     const length = lengthDescriptor.value as number;
     const keys = Reflect.ownKeys(value);
-    if (keys.length !== length + 1) return undefined;
     const entries: JsonContainerEntries['entries'] = [];
     for (let index = 0; index < length; index += 1) {
       const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
@@ -73,6 +88,8 @@ function jsonContainerEntries(value: object): JsonContainerEntries | undefined {
     for (const key of keys) {
       if (typeof key !== 'string') return undefined;
       if (key === 'length') continue;
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (isJsonHookSentinel(key, descriptor)) continue;
       const index = Number(key);
       if (!Number.isSafeInteger(index) || index < 0 || index >= length || String(index) !== key) {
         return undefined;
@@ -85,6 +102,7 @@ function jsonContainerEntries(value: object): JsonContainerEntries | undefined {
   for (const key of Reflect.ownKeys(value)) {
     if (typeof key !== 'string') return undefined;
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (isJsonHookSentinel(key, descriptor)) continue;
     if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) return undefined;
     entries.push({ key, value: descriptor.value });
   }
@@ -138,7 +156,9 @@ function canonicalizeJsonRpcValue(value: unknown): JsonRpcValue | undefined {
       if (typeof current !== 'object') return undefined;
       const containerEntries = jsonContainerEntries(current);
       if (!containerEntries || ancestors.has(current)) return undefined;
-      const canonical: Container = containerEntries.kind === 'array' ? [] : {};
+      const canonical: Container = containerEntries.kind === 'array'
+        ? isolateInheritedJsonHook<JsonRpcValue[]>([])
+        : isolateInheritedJsonHook<{ [key: string]: JsonRpcValue }>({});
       assign(frame, canonical);
       ancestors.add(current);
       stack.push({ kind: 'leave', value: current });
@@ -179,11 +199,11 @@ function parseErrorObject(value: unknown): JsonRpcErrorObject {
   if (hasData && data === undefined) {
     throw invalidMessage('JSON-RPC error data must be a JSON value', record.data);
   }
-  return {
+  return isolateInheritedJsonHook({
     code: record.code as number,
     message: record.message,
     ...(hasData ? { data: data! } : {}),
-  };
+  });
 }
 
 function parseRequest(value: Record<string, unknown>): JsonRpcRequest | JsonRpcNotification {
@@ -200,9 +220,9 @@ function parseRequest(value: Record<string, unknown>): JsonRpcRequest | JsonRpcN
     method: value.method,
     ...(hasParams ? { params: params! } : {}),
   };
-  if (!hasOwn(value, 'id')) return base;
+  if (!hasOwn(value, 'id')) return isolateInheritedJsonHook(base);
   if (!isJsonRpcId(value.id)) throw invalidMessage('JSON-RPC request id must be a string or safe integer', value.id);
-  return { ...base, id: value.id };
+  return isolateInheritedJsonHook({ ...base, id: value.id });
 }
 
 function parseResponse(value: Record<string, unknown>): JsonRpcSuccessResponse | JsonRpcErrorResponse {
@@ -215,17 +235,17 @@ function parseResponse(value: Record<string, unknown>): JsonRpcSuccessResponse |
     if (!isJsonRpcId(value.id) || result === undefined) {
       throw invalidMessage('JSON-RPC success response requires a correlatable id and JSON result', value);
     }
-    return { jsonrpc: '2.0', id: value.id, result };
+    return isolateInheritedJsonHook({ jsonrpc: '2.0', id: value.id, result });
   }
   const error = parseErrorObject(value.error);
   if (value.id === null) {
     if (error.code !== -32700 && error.code !== -32600) {
       throw invalidMessage('Null response id is only valid for parse or invalid-request errors', value);
     }
-    return { jsonrpc: '2.0', id: null, error };
+    return isolateInheritedJsonHook({ jsonrpc: '2.0', id: null, error });
   }
   if (!isJsonRpcId(value.id)) throw invalidMessage('JSON-RPC error response id must be null, string, or safe integer');
-  return { jsonrpc: '2.0', id: value.id, error };
+  return isolateInheritedJsonHook({ jsonrpc: '2.0', id: value.id, error });
 }
 
 export function parseJsonRpcMessage(value: unknown): JsonRpcMessage {
