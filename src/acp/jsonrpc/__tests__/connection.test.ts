@@ -153,3 +153,85 @@ test('notify writes no id and close idempotently rejects every pending request',
   await Promise.all([firstClosed, secondClosed]);
   await assertFailure('closed', () => connection.request('after-close'));
 });
+
+test('connection delegates server requests and serializes success or declared error responses', async () => {
+  const writes: Uint8Array[] = [];
+  const methods: string[] = [];
+  const connection = createJsonRpcConnection({
+    async write(chunk) { writes.push(chunk); },
+    async onRequest(request) {
+      methods.push(request.method);
+      if (request.method === 'allowed') return { kind: 'result', value: { accepted: true } };
+      return { kind: 'error', error: { code: -32601, message: 'Method not found' } };
+    },
+  });
+
+  await connection.receive({ jsonrpc: '2.0', method: 'allowed', id: 'server-1' });
+  await connection.receive({ jsonrpc: '2.0', method: 'missing', id: 'server-2' });
+
+  assert.deepEqual(methods, ['allowed', 'missing']);
+  assert.deepEqual(writes.map(decodeWrite), [
+    { jsonrpc: '2.0', id: 'server-1', result: { accepted: true } },
+    { jsonrpc: '2.0', id: 'server-2', error: { code: -32601, message: 'Method not found' } },
+  ]);
+});
+
+test('connection converts thrown server handler failures to internal errors', async () => {
+  const writes: Uint8Array[] = [];
+  const connection = createJsonRpcConnection({
+    async write(chunk) { writes.push(chunk); },
+    async onRequest() { throw new Error('secret provider failure'); },
+  });
+
+  await connection.receive({ jsonrpc: '2.0', method: 'explode', id: 8 });
+
+  assert.deepEqual(writes.map(decodeWrite), [
+    { jsonrpc: '2.0', id: 8, error: { code: -32603, message: 'Internal error' } },
+  ]);
+});
+
+test('connection delegates notifications without writing a response', async () => {
+  const writes: Uint8Array[] = [];
+  const notifications: Array<{ method: string; params?: unknown }> = [];
+  const connection = createJsonRpcConnection({
+    async write(chunk) { writes.push(chunk); },
+    async onNotification(notification) { notifications.push(notification); },
+  });
+
+  await connection.receive({ jsonrpc: '2.0', method: 'progress', params: { done: 2 } });
+
+  assert.deepEqual(notifications, [{ method: 'progress', params: { done: 2 } }]);
+  assert.deepEqual(writes, []);
+});
+
+test('connection reports a notification handler failure without sending a response', async () => {
+  const writes: Uint8Array[] = [];
+  let called = false;
+  const connection = createJsonRpcConnection({
+    async write(chunk) { writes.push(chunk); },
+    async onNotification() {
+      called = true;
+      throw new Error('notification failed');
+    },
+  });
+
+  await assertFailure('handler_failed', () =>
+    connection.receive({ jsonrpc: '2.0', method: 'progress' }),
+  );
+  assert.equal(called, true);
+  assert.deepEqual(writes, []);
+});
+
+test('connection applies absent request and notification handler defaults', async () => {
+  const writes: Uint8Array[] = [];
+  const connection = createJsonRpcConnection({
+    async write(chunk) { writes.push(chunk); },
+  });
+
+  await connection.receive({ jsonrpc: '2.0', method: 'missing', id: 'server-default' });
+  await connection.receive({ jsonrpc: '2.0', method: 'progress' });
+
+  assert.deepEqual(writes.map(decodeWrite), [
+    { jsonrpc: '2.0', id: 'server-default', error: { code: -32601, message: 'Method not found' } },
+  ]);
+});

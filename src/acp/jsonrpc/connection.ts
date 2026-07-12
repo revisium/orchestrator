@@ -88,6 +88,33 @@ export function createJsonRpcConnection(deps: JsonRpcConnectionDeps): JsonRpcCon
     call.reject(new JsonRpcProtocolError('remote_error', message.error.message, message.error));
   }
 
+  async function receiveRequest(message: JsonRpcRequest): Promise<void> {
+    let outcome: JsonRpcServerRequestOutcome;
+    try {
+      outcome = deps.onRequest
+        ? await deps.onRequest(message)
+        : { kind: 'error', error: { code: -32601, message: 'Method not found' } };
+    } catch {
+      outcome = { kind: 'error', error: { code: -32603, message: 'Internal error' } };
+    }
+    const response = outcome.kind === 'result'
+      ? parseJsonRpcMessage({ jsonrpc: '2.0', id: message.id, result: outcome.value })
+      : parseJsonRpcMessage({ jsonrpc: '2.0', id: message.id, error: outcome.error });
+    await write(response);
+  }
+
+  async function receiveNotification(message: Extract<JsonRpcMessage, { method: string }>): Promise<void> {
+    if (!deps.onNotification) return;
+    try {
+      await deps.onNotification({
+        method: message.method,
+        ...('params' in message ? { params: message.params } : {}),
+      });
+    } catch (error) {
+      throw new JsonRpcProtocolError('handler_failed', 'JSON-RPC notification handler failed', error);
+    }
+  }
+
   return {
     request(method, params): Promise<JsonRpcValue> {
       ensureOpen();
@@ -125,9 +152,11 @@ export function createJsonRpcConnection(deps: JsonRpcConnectionDeps): JsonRpcCon
         receiveResponse(valid);
         return;
       }
-      if (isJsonRpcRequest(valid) || isJsonRpcNotification(valid)) {
-        throw new JsonRpcProtocolError('handler_failed', 'Inbound JSON-RPC request handlers are not configured');
+      if (isJsonRpcRequest(valid)) {
+        await receiveRequest(valid);
+        return;
       }
+      if (isJsonRpcNotification(valid)) await receiveNotification(valid);
     },
     close(): void {
       if (closed) return;
