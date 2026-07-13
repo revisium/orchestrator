@@ -19,7 +19,7 @@ the boundary.
 
 The key words MUST, MUST NOT, SHOULD, SHOULD NOT, MAY are to be interpreted as in RFC 2119 / BCP 14.
 
-The manifest field schema and the StdoutParser/PermissionStyle contracts are in
+The manifest field schema and the ProtocolDriver/StdoutParser/PermissionStyle contracts are in
 [runner-manifest-v1.spec.md](./runner-manifest-v1.spec.md); the full `capabilities` field list is in
 [runner-capabilities-v1.spec.md](./runner-capabilities-v1.spec.md).
 

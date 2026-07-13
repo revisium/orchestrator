@@ -121,8 +121,9 @@ protocolVersion = 1
 activity tracker supplied by the shared process executor. `acp-jsonrpc-v1` MUST remain pure under the
 `StdoutParser` contract.
 
-An ACP manifest snapshot MUST pin `protocolDriver`, `stdoutParser`, and `protocolVersion` before DBOS enqueue. A
-protocol-version mismatch MUST fail as a typed, non-retryable precondition error before `session/new`.
+An ACP manifest snapshot MUST pin `protocolDriver`, `stdoutParser`, `permissionStyle`, and `protocolVersion` before
+DBOS enqueue. A protocol-version mismatch MUST fail as a typed, non-retryable precondition error before
+`session/new`.
 
 The target manifest shape is:
 

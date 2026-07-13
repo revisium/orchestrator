@@ -8,7 +8,8 @@
   [ACP runner session v1](../specs/acp-runner-session-v1.spec.md)
 - **Refines:** [ADR-0002](./0002-data-driven-pipeline-state-machine.md) (data-driven pipeline state machine)
 - **Refined by:** [ADR-0010](./0010-run-resources-and-workspace-planning.md),
-  [ADR-0011](./0011-system-script-runtime-and-trusted-extensions.md)
+  [ADR-0011](./0011-system-script-runtime-and-trusted-extensions.md),
+  [ADR-0012](./0012-acp-process-and-session-isolation.md)
 - **Relates-to:** [runner contract](../runner-contract.md),
   [script runtime v1](../specs/script-runtime-v1.spec.md),
   [execution plan v1](../specs/execution-plan-v1.spec.md)
@@ -77,7 +78,8 @@ The exact replay model is in [runner-manifest-v1.spec.md](../specs/runner-manife
 
 - A new runner that reuses `(one-shot, jsonl-exec, sandbox-enum)` is a config-only PR: one manifest, zero source diff.
 - An ACP runner uses an interactive `acp-stdio-v1` protocol driver while process creation, timeout, termination, and
-  reaping remain owned by the shared process executor; see ADR-0010 and the ACP runner session spec.
+  reaping remain owned by the shared process executor; see [ADR-0012](./0012-acp-process-and-session-isolation.md)
+  and the ACP runner session spec.
 - A `tool-call`-tier runner whose provider ignores forced `tool_choice` degrades to the `prompt-only` floor within
   the same attempt; only output with no usable verdict fails the node to `revo.ResultInvalid`.
 - A run started against manifest digest `D` continues, replays, and recovers against `D`, even after an operator
