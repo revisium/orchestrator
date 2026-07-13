@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import type { AgentNode, ConsumesRef, JoinMode, JoinVerdictReducer, MergeReducer, Node, Template } from './types.js';
+import type { AgentNode, ConsumesRef, Node, Template } from './types.js';
 
 export type TopologyProfile = {
   profileId: string;
@@ -11,19 +11,14 @@ export type ConsensusToggle = {
   target: string;
   baseName?: string;
   fanout: { branches: number };
-  join: {
-    joinMode: JoinMode;
-    verdictReducer?: JoinVerdictReducer;
-    merge?: Record<string, MergeReducer>;
-  };
 };
 
 export const MATERIALIZE_CODES = [
   'MATERIALIZE_UNKNOWN_PROFILE',
   'MATERIALIZE_UNKNOWN_PROFILE_KEY',
-  'MATERIALIZE_TOGGLE_NOT_ALLOWLISTED',
   'MATERIALIZE_TOGGLE_UNRESOLVED',
   'MATERIALIZE_TOGGLE_NOT_AGENT',
+  'MATERIALIZE_TOGGLE_UNSUPPORTED',
   'MATERIALIZE_TOGGLE_DUPLICATE_TARGET',
   'MATERIALIZE_TOGGLE_INVALID_BRANCH_COUNT',
 ] as const;
@@ -43,12 +38,11 @@ export type MaterializeResult = {
 };
 
 const PROFILE_KEYS = new Set<string>(['profileId', 'pipelineId', 'toggles']);
-const TOGGLE_KEYS = new Set<string>(['target', 'baseName', 'fanout', 'join']);
+const TOGGLE_KEYS = new Set<string>(['target', 'baseName', 'fanout']);
 
 export function materializeTemplate(
   base: Template,
   profile: TopologyProfile,
-  opts: { allowlist: string[] },
 ): MaterializeResult {
   const diagnostics: MaterializeDiagnostic[] = [];
 
@@ -102,16 +96,6 @@ export function materializeTemplate(
     }
     seenTargets.add(toggle.target);
 
-    if (!opts.allowlist.includes(toggle.target)) {
-      diagnostics.push({
-        code: 'MATERIALIZE_TOGGLE_NOT_ALLOWLISTED',
-        severity: 'error',
-        message: `toggle target "${toggle.target}" is not in the allowlist`,
-        target: toggle.target,
-      });
-      continue;
-    }
-
     const targetNode = base.nodes[toggle.target];
     if (!targetNode) {
       diagnostics.push({
@@ -128,6 +112,16 @@ export function materializeTemplate(
         code: 'MATERIALIZE_TOGGLE_NOT_AGENT',
         severity: 'error',
         message: `toggle target "${toggle.target}" is kind "${targetNode.kind}", expected "agent"`,
+        target: toggle.target,
+      });
+      continue;
+    }
+
+    if (!supportsConsensusSemantic(targetNode)) {
+      diagnostics.push({
+        code: 'MATERIALIZE_TOGGLE_UNSUPPORTED',
+        severity: 'error',
+        message: `toggle target "${toggle.target}" has unsupported consensus semantics; expected resultSchema "schema:analysis" with produces.name "analysis" or resultSchema "schema:reviewVerdict" with a declared produces artifact`,
         target: toggle.target,
       });
       continue;
@@ -150,12 +144,19 @@ export function materializeTemplate(
   }
 
   let nodes: Record<string, Node> = structuredClone(base.nodes);
+  let entry = base.entry;
   for (const toggle of profile.toggles) {
+    if (entry === toggle.target) entry = `${toggle.baseName ?? toggle.target}Fanout`;
     nodes = applyToggle(nodes, toggle);
   }
 
-  const template: Template = { ...structuredClone(base), nodes };
+  const template: Template = { ...structuredClone(base), entry, nodes };
   return { template, materializedTemplateHash: hashTemplate(template), diagnostics };
+}
+
+function supportsConsensusSemantic(node: AgentNode): boolean {
+  if (node.resultSchema === 'schema:analysis') return node.produces?.name === 'analysis';
+  return node.resultSchema === 'schema:reviewVerdict' && node.produces?.name !== undefined;
 }
 
 const BRANCH_NAMES = ['Primary', 'Secondary', 'Tertiary', 'Quaternary', 'Quinary', 'Senary', 'Septenary', 'Octonary'];
@@ -193,9 +194,20 @@ function applyToggle(nodes: Record<string, Node>, toggle: ConsensusToggle): Reco
   const joinNode: Node = {
     id: joinId,
     kind: 'join',
-    joinMode: toggle.join.joinMode,
-    ...(toggle.join.verdictReducer !== undefined && { verdictReducer: toggle.join.verdictReducer }),
-    ...(toggle.join.merge !== undefined && { merge: toggle.join.merge }),
+    joinMode: { kind: 'all' },
+    ...(collapsed.resultSchema === 'schema:reviewVerdict'
+        ? {
+            verdictReducer: {
+              kind: 'allIn',
+              pass: ['approved', 'clean'],
+              passVerdict: 'approved',
+              failVerdict: 'changes_requested',
+            },
+          }
+        : {}),
+    ...(collapsed.produces !== undefined
+        ? { merge: { [collapsed.produces.name]: 'appendByBranchOrder' } }
+        : {}),
     next: collapsed.next,
   };
 
@@ -272,7 +284,7 @@ function stableStringify(value: unknown): string {
   return JSON.stringify(value);
 }
 
-export const MATERIALIZER_VERSION = '1';
+export const MATERIALIZER_VERSION = '2';
 
 export function hashTemplate(template: Template): string {
   return createHash('sha256').update(stableStringify(template)).digest('hex');

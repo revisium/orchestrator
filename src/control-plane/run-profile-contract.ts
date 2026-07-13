@@ -8,6 +8,7 @@ export type ProfileContractErrorCode =
   | 'profile_not_found'
   | 'profile_not_launchable'
   | 'profile_schema_invalid'
+  | 'profile_topology_unsupported'
   | 'profile_pipeline_mismatch'
   | 'profile_slot_unknown'
   | 'profile_binding_unresolved'

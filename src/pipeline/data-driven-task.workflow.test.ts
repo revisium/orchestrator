@@ -125,7 +125,6 @@ function defaultConsensusProfileTemplate(): Template {
   const { template } = materializeTemplate(
     base,
     topologyProfileFromRunProfile(profile as never),
-    { allowlist: ['planReviewer', 'codeReview'] },
   );
   return template;
 }
@@ -149,6 +148,7 @@ type Recorder = {
   respondTriage: unknown[];
   events: string[];
   eventRecords: AppendEventInput[];
+  timeline: string[];
   /** Persisted step outputs (0016 dataflow). */
   outputs: Array<{ nodeId: string; ordinal: number; name: string; payload: unknown; attemptId?: string }>;
   /** Captured change artifacts (issue #140 handoff contract). */
@@ -211,6 +211,7 @@ function buildAdapter(opts: {
     respondTriage: [],
     events: [],
     eventRecords: [],
+    timeline: [],
     outputs: [],
     capturedChanges: [],
     worktreeIssueRefs: [],
@@ -271,8 +272,8 @@ function buildAdapter(opts: {
         if (typeof lesson === 'string') rec.blockedLessons.push(lesson);
       }
     },
-    appendRunOutput: async (o) => { rec.outputs.push({ nodeId: o.nodeId, ordinal: o.ordinal, name: o.name, payload: o.payload, attemptId: o.attemptId }); },
-    setProgress: async (_runId, cursor) => { rec.progress.push(cursor); },
+    appendRunOutput: async (o) => { rec.timeline.push(`output:${o.nodeId}`); rec.outputs.push({ nodeId: o.nodeId, ordinal: o.ordinal, name: o.name, payload: o.payload, attemptId: o.attemptId }); },
+    setProgress: async (_runId, cursor) => { rec.timeline.push(`progress:${cursor.activeNodeIds.join(',')}`); rec.progress.push(cursor); },
     sleep: async (ms) => {
       rec.retrySleeps.push(ms);
       await opts.onSleep?.(ms);
@@ -470,6 +471,28 @@ function parallelConsensusTemplate(): Template {
       node.choice('reviewRouter', [on(verdictEq('approved'), 'done'), otherwise('blocked')]),
       node.terminal('done', 'succeeded'),
       node.terminal('blocked', 'blocked'),
+    )
+    .build();
+}
+
+function analysisConsensusTemplate(): Template {
+  return template('analysis-only')
+    .specVersion('1.0')
+    .entry('analystFanout')
+    .domain('approved')
+    .add(
+      node.parallel('analystFanout', [
+        { id: 'primary', entry: 'analystPrimary' },
+        { id: 'secondary', entry: 'analystSecondary' },
+      ], 'analystJoin'),
+      node.agent('analystPrimary', 'role:analyst', 'analystJoin', {
+        onFailure: 'abort', resultSchema: 'schema:analysis', produces: { name: 'analysis' },
+      }),
+      node.agent('analystSecondary', 'role:analyst', 'analystJoin', {
+        onFailure: 'abort', resultSchema: 'schema:analysis', produces: { name: 'analysis' },
+      }),
+      node.join('analystJoin', joinAll(), 'done', { merge: { analysis: 'appendByBranchOrder' } }),
+      node.terminal('done', 'succeeded'),
     )
     .build();
 }
@@ -769,6 +792,31 @@ test('DD-parallel: fork executes both reviewer branches and feeds two join arriv
     cursor.activeNodeIds[0] === 'reviewJoin' &&
     cursor.lastResult?.joinArrivals?.length === 2,
   );
+  assert.deepEqual(joinProgress?.lastResult?.joinArrivals, [
+    { branchId: 'primary', seq: 1, verdict: 'approved' },
+    { branchId: 'secondary', seq: 2, verdict: 'approved' },
+  ]);
+});
+
+test('DD-parallel analysis consensus keeps separate branch outputs before join progress', async () => {
+  const { run, rec } = buildAdapter({ template: analysisConsensusTemplate() });
+
+  const result = await run();
+  assert.equal(result.status, 'succeeded');
+  assert.deepEqual(rec.runStepAttempts.map((attempt) => attempt.stepKey).sort(), ['analystPrimary', 'analystSecondary']);
+  assert.deepEqual(rec.outputs.map((output) => ({ nodeId: output.nodeId, ordinal: output.ordinal, name: output.name })).sort((a, b) => a.nodeId.localeCompare(b.nodeId)), [
+    { nodeId: 'analystPrimary', ordinal: 1, name: 'analysis' },
+    { nodeId: 'analystSecondary', ordinal: 1, name: 'analysis' },
+  ]);
+  assert.equal(rec.outputs.some((output) => output.nodeId === 'analystJoin'), false);
+  const joinProgressIndex = rec.timeline.findIndex((entry) => entry === 'progress:analystJoin');
+  assert.ok(joinProgressIndex >= 0, `expected analystJoin progress; timeline=${rec.timeline.join(',')}`);
+  for (const nodeId of ['analystPrimary', 'analystSecondary']) {
+    const outputIndex = rec.timeline.indexOf(`output:${nodeId}`);
+    assert.ok(outputIndex >= 0, `expected persisted output for ${nodeId}`);
+    assert.ok(outputIndex < joinProgressIndex, `${nodeId} output must be persisted before join progress`);
+  }
+  const joinProgress = rec.progress.find((cursor) => cursor.activeNodeIds.length === 1 && cursor.activeNodeIds[0] === 'analystJoin');
   assert.deepEqual(joinProgress?.lastResult?.joinArrivals, [
     { branchId: 'primary', seq: 1, verdict: 'approved' },
     { branchId: 'secondary', seq: 2, verdict: 'approved' },

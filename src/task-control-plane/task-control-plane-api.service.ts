@@ -38,6 +38,7 @@ import {
   topologyStageTargetsFromRunProfile,
 } from '../control-plane/run-profiles.js';
 import { materializeTemplate, MATERIALIZER_VERSION } from '../pipeline-core/materialize.js';
+import { validateTemplate } from '../pipeline-core/validate.js';
 import type { Template } from '../pipeline-core/types.js';
 import { DbosService } from '../engine/dbos.service.js';
 import type { GateTopic } from '../pipeline/await-human.js';
@@ -1854,13 +1855,28 @@ export class TaskControlPlaneApiService {
     const { template: materializedTemplate, materializedTemplateHash, diagnostics } = materializeTemplate(
       baseTemplate as Parameters<typeof materializeTemplate>[0],
       topologyProfile,
-      { allowlist: topologyProfile.toggles.map((toggle) => toggle.target) },
     );
     if (diagnostics.length > 0) {
       throw new ControlPlaneError(
         'VALIDATION_FAILURE',
         `run profile cannot be materialized: ${diagnostics.map((item) => item.message).join('; ')}`,
-        { details: { diagnostics } },
+        {
+          details: {
+            code: diagnostics.some((item) => item.code === 'MATERIALIZE_TOGGLE_UNSUPPORTED' || item.code === 'MATERIALIZE_TOGGLE_NOT_AGENT')
+              ? 'profile_topology_unsupported'
+              : 'profile_schema_invalid',
+            diagnostics,
+          },
+        },
+      );
+    }
+
+    const graphDiagnostics = validateTemplate(materializedTemplate).filter((diagnostic) => diagnostic.severity === 'error');
+    if (graphDiagnostics.length > 0) {
+      throw new ControlPlaneError(
+        'VALIDATION_FAILURE',
+        `materialized template is invalid: ${graphDiagnostics.map((item) => `${item.code}: ${item.message}`).join('; ')}`,
+        { details: { code: 'execution_plan_invalid', diagnostics: graphDiagnostics } },
       );
     }
 
