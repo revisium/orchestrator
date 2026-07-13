@@ -29,7 +29,7 @@ test('GraphQL facade services wrap query-bus requests', async () => {
   await new RunsApiService(queryBus, commandBus).getAgentLog({ runId: 'run_1', stream: 'stdout' });
   await new RunsApiService(queryBus, commandBus).getRunProgress({ runId: 'run_1' });
   await new RunsApiService(queryBus, commandBus).getRunDigest({ runId: 'run_1' });
-  await new RunsApiService(queryBus, commandBus).simulateRoute({ title: 'Build', pipeline: 'local-change' });
+  await new RunsApiService(queryBus, commandBus).simulateRoute({ title: 'Build', pipelineId: 'local-change' });
   await new RunsApiService(queryBus, commandBus).createRun({ title: 'Build', repo: '.', pipelineId: 'local-change' });
   await new InboxApiService(queryBus, commandBus).listInbox({});
   await new InboxApiService(queryBus, commandBus).getInboxItem({ inboxId: 'inbox_1' });
@@ -46,11 +46,11 @@ test('GraphQL facade services wrap query-bus requests', async () => {
   await new MethodApiService(queryBus, commandBus).listPipelines({});
   await new MethodApiService(queryBus, commandBus).getPipeline({ pipelineId: 'pipe_1' });
   await new MethodApiService(queryBus, commandBus).listRunProfiles({ pipelineId: 'local-change' });
-  await new MethodApiService(queryBus, commandBus).getRunProfile({ pipelineId: 'local-change', profileId: 'custom-standard' });
+  await new MethodApiService(queryBus, commandBus).getRunProfile({ pipelineId: 'local-change', profileId: 'custom-exact' });
   await new MethodApiService(queryBus, commandBus).validateRunProfile({ pipelineId: 'local-change', profile: {} });
-  await new MethodApiService(queryBus, commandBus).createRunProfile({ pipelineId: 'local-change', profileId: 'custom-standard', displayName: 'Custom', profile: {} });
-  await new MethodApiService(queryBus, commandBus).updateRunProfile({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileRevisionHash: 'hash' });
-  await new MethodApiService(queryBus, commandBus).deprecateRunProfile({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileRevisionHash: 'hash' });
+  await new MethodApiService(queryBus, commandBus).createRunProfile({ pipelineId: 'local-change', profileId: 'custom-exact', displayName: 'Custom', profile: {} });
+  await new MethodApiService(queryBus, commandBus).updateRunProfile({ pipelineId: 'local-change', profileId: 'custom-exact', expectedProfileRevisionHash: 'hash' });
+  await new MethodApiService(queryBus, commandBus).deprecateRunProfile({ pipelineId: 'local-change', profileId: 'custom-exact', expectedProfileRevisionHash: 'hash' });
   await new PrApiService(queryBus).prReadiness({ repo: 'revisium/orchestrator' });
   await new PrApiService(queryBus).prFeedback({ repo: 'revisium/orchestrator' });
 

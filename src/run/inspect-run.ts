@@ -1,4 +1,5 @@
 import type { ControlPlaneDataAccess, ControlPlaneRow } from '../control-plane/index.js';
+import { ControlPlaneError } from '../control-plane/errors.js';
 import type { RowWhereInput } from '../control-plane/query-types.js';
 import { issueActionFromParams, issueRefFromParams, type IssueAction, type IssueRef } from './issue-ref.js';
 
@@ -41,11 +42,13 @@ export type AttemptSummary = {
   iteration: number;
   status: string;
   verdict: string;
-  modelProfile: string;
-  inputTokens: number;
-  outputTokens: number;
-  costAmount: number;
-  currency: string;
+  runnerId: string;
+  provider: string;
+  modelId: string;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  costAmount: number | null;
+  currency: string | null;
   durationMs: number;
   outputSummary: string;
   artifactRef: string;
@@ -64,6 +67,15 @@ function str(v: unknown): string {
 
 function num(v: unknown): number {
   return typeof v === 'number' ? v : 0;
+}
+
+function nullableNum(v: unknown): number | null {
+  return typeof v === 'number' ? v : null;
+}
+
+function requiredProvenance(v: unknown, field: 'runner_id' | 'provider' | 'model_id'): string {
+  if (typeof v === 'string' && v.trim().length > 0) return v;
+  throw new ControlPlaneError('VALIDATION_FAILURE', `${field} must be a non-empty exact provenance value`);
 }
 
 function strArr(v: unknown): string[] {
@@ -142,11 +154,13 @@ function toAttemptSummary(row: ControlPlaneRow): AttemptSummary {
     iteration: num(row.data.iteration),
     status: str(row.data.status),
     verdict: str(row.data.verdict),
-    modelProfile: str(row.data.model_profile),
-    inputTokens: num(row.data.input_tokens),
-    outputTokens: num(row.data.output_tokens),
-    costAmount: num(row.data.cost_amount),
-    currency: str(row.data.currency) || 'USD',
+    runnerId: requiredProvenance(row.data.runner_id, 'runner_id'),
+    provider: requiredProvenance(row.data.provider, 'provider'),
+    modelId: requiredProvenance(row.data.model_id, 'model_id'),
+    inputTokens: nullableNum(row.data.input_tokens),
+    outputTokens: nullableNum(row.data.output_tokens),
+    costAmount: nullableNum(row.data.cost_amount),
+    currency: row.data.currency === null || row.data.currency === undefined ? null : str(row.data.currency),
     durationMs: num(row.data.duration_ms),
     outputSummary: str(row.data.output_summary),
     artifactRef: str(row.data.artifact_ref),
@@ -362,7 +376,8 @@ export function formatEventListVerbose(events: EventSummary[]): string {
 }
 
 
-function fmtUsd(amount: number): string {
+function fmtUsd(amount: number | null): string {
+  if (amount === null) return '?';
   return amount > 0 && amount < 0.01 ? `$${amount.toFixed(4)}` : `$${amount.toFixed(2)}`;
 }
 
@@ -373,8 +388,8 @@ export function formatAttemptList(attempts: AttemptSummary[]): string {
   const blocks = attempts.map((a) => {
     const lines = [
       `attempt  ${a.attemptId}  step=${a.stepId}`,
-      `  iter=${a.iteration}  status=${a.status}  verdict=${a.verdict || '-'}  model=${a.modelProfile || '-'}`,
-      `  tokens=${a.inputTokens}in/${a.outputTokens}out  cost=${fmtUsd(a.costAmount)}  duration=${a.durationMs}ms`,
+      `  iter=${a.iteration}  status=${a.status}  verdict=${a.verdict || '-'}  runner=${a.runnerId || '-'} provider=${a.provider || '-'} model=${a.modelId || '-'}`,
+      `  tokens=${a.inputTokens ?? '?'}in/${a.outputTokens ?? '?'}out  cost=${fmtUsd(a.costAmount)} ${a.currency ?? ''}`.trimEnd() + `  duration=${a.durationMs}ms`,
     ];
     if (a.artifactRef) lines.push(`  artifact ${a.artifactRef}`);
     if (a.outputSummary) lines.push(`  output   ${a.outputSummary}`);

@@ -198,7 +198,7 @@ test('appendRunCost: costId length ≤ 64 with max-length runId', async () => {
     stepId: 'step-1',
     stepKey: 'architect',
     attemptId: 'attempt-1',
-    cost: { modelProfile: 'deep', inputTokens: 100, outputTokens: 50, costAmount: 0.01 },
+    cost: { runnerId: 'codex', provider: 'openai', modelId: 'gpt-test', inputTokens: 100, outputTokens: 50, costAmount: 0.01, currency: 'USD' },
     index: 0,
   });
   assert.equal(rows.length, 1);
@@ -214,7 +214,7 @@ test('appendRunCost: costId is deterministic (same inputs → same id)', async (
     stepId: 'step-1',
     stepKey: 'reviewer#1',
     attemptId: 'attempt-1',
-    cost: { modelProfile: 'standard', inputTokens: 0, outputTokens: 0, costAmount: 0 },
+    cost: { runnerId: 'codex', provider: 'openai', modelId: 'gpt-test', inputTokens: 0, outputTokens: 0, costAmount: 0, currency: 'USD' },
     index: 0,
   };
   await appendRunCost(da1, input);
@@ -229,7 +229,7 @@ test('appendRunCost: ROW_CONFLICT on second call is a no-op', async () => {
     stepId: 'step-1',
     stepKey: 'developer',
     attemptId: 'attempt-1',
-    cost: { modelProfile: 'standard', inputTokens: 0, outputTokens: 0, costAmount: 0 },
+    cost: { runnerId: 'codex', provider: 'openai', modelId: 'gpt-test', inputTokens: 0, outputTokens: 0, costAmount: 0, currency: 'USD' },
     index: 0,
   });
   // No throw = pass
@@ -243,7 +243,7 @@ test('appendRunCost: different index produces different costId', async () => {
     stepId: 'step-1',
     stepKey: 'developer',
     attemptId: 'attempt-1',
-    cost: { modelProfile: 'standard', inputTokens: 0, outputTokens: 0, costAmount: 0 },
+    cost: { runnerId: 'codex', provider: 'openai', modelId: 'gpt-test', inputTokens: 0, outputTokens: 0, costAmount: 0, currency: 'USD' },
   };
   await appendRunCost(da1, { ...base, index: 0 });
   await appendRunCost(da2, { ...base, index: 1 });
@@ -257,7 +257,7 @@ test('appendRunCost: different attemptId produces different costId for the same 
     runId: 'run-1',
     stepId: 'step-1',
     stepKey: 'developer',
-    cost: { modelProfile: 'standard', inputTokens: 0, outputTokens: 0, costAmount: 0 },
+    cost: { runnerId: 'codex', provider: 'openai', modelId: 'gpt-test', inputTokens: 0, outputTokens: 0, costAmount: 0, currency: 'USD' },
     index: 0,
   };
   await appendRunCost(da1, { ...base, attemptId: 'attempt_1' });
@@ -276,11 +276,14 @@ test('appendRunAttempt: persists the attempt with attemptId as the row id (deter
     attemptNo: 2,
     iteration: 1,
     status: 'succeeded',
-    modelProfile: 'standard',
+    runnerId: 'codex',
+    provider: 'openai',
+    modelId: 'gpt-test',
     verdict: 'PASS',
     inputTokens: 100,
     outputTokens: 50,
     costAmount: 0.01,
+    currency: 'USD',
     durationMs: 1234,
     output: { verdict: 'PASS' },
     artifactRef: 'run-1/attempt_deadbeef',
@@ -307,11 +310,14 @@ test('appendRunAttempt: redacts secret-shaped output keys + token shapes before 
     attemptNo: 1,
     iteration: 0,
     status: 'succeeded',
-    modelProfile: 'standard',
+    runnerId: 'codex',
+    provider: 'openai',
+    modelId: 'gpt-test',
     verdict: 'PASS',
     inputTokens: 0,
     outputTokens: 0,
     costAmount: 0,
+    currency: 'USD',
     durationMs: 1,
     output: { token: 'gho_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345', note: 'ok' },
     error: 'leaked gho_ABCDEFGHIJKLMNOPQRSTUVWXYZ012345',
@@ -330,8 +336,8 @@ test('appendRunAttempt: ROW_CONFLICT on replay is a silent no-op', async () => {
   const { da } = makeFakeDa({ throwConflict: true });
   await appendRunAttempt(da, {
     runId: 'run-1', stepId: 's', attemptId: 'attempt_y', attemptNo: 1, iteration: 0,
-    status: 'succeeded', modelProfile: 'standard', verdict: 'PASS',
-    inputTokens: 0, outputTokens: 0, costAmount: 0, durationMs: 0, output: null,
+    status: 'succeeded', runnerId: 'codex', provider: 'openai', modelId: 'gpt-test', verdict: 'PASS',
+    inputTokens: 0, outputTokens: 0, costAmount: 0, currency: 'USD', durationMs: 0, output: null,
   });
   // No throw = pass (idempotent replay).
 });

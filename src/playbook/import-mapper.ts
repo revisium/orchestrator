@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { RoleCatalogRecord, PipelineCatalogRecord, PlaybookCatalogs, RunProfileCatalogRecord } from './catalog-loader.js';
 import type { PlaybookManifest } from './manifest.js';
-import { PlaybookError } from './errors.js';
 import type { ResolvedPlaybookSource } from './source-resolver.js';
 import { composeRolePrompt } from './prompt-composer.js';
 import { normalizeRouteGates } from '../pipeline/route-contract.js';
@@ -104,12 +103,6 @@ export function scopedRunProfileRowId(playbookId: string, pipelineId: string, pr
 }
 
 function mapRole(root: string, playbookId: string, role: RoleCatalogRecord, now: string): VersionedRow {
-  if (role.runnerId === 'stub-agent') {
-    throw new PlaybookError(
-      'PLAYBOOK_INVALID_CATALOG',
-      `Production playbook role ${role.id} must not bind runner_id stub-agent; use a run profile binding for test stubs`,
-    );
-  }
   const prompt = composeRolePrompt(root, role, true);
   const importedRoleId = scopedImportRowId(playbookId, role.id);
   return {
@@ -119,17 +112,12 @@ function mapRole(root: string, playbookId: string, role: RoleCatalogRecord, now:
       id: importedRoleId,
       name: role.id,
       system_prompt: prompt.prompt || `Code-backed role imported from playbook role ${role.id}.`,
-      model_level: role.defaultModelLevel,
-      effort: role.defaultModelLevel.endsWith('cheap') ? 'low' : 'high',
-      runner: role.runnerId,
-      runner_id: role.runnerId,
       allowed_tools: [...role.allowedTools],
       scope_rules: JSON.stringify({
         surface: role.surface,
         rights: role.rights,
         playbook_role_id: role.id,
         runtime_role_id: role.id,
-        runner_id: role.runnerId,
       }),
       playbook_id: playbookId,
       playbook_role_id: role.id,
@@ -137,8 +125,6 @@ function mapRole(root: string, playbookId: string, role: RoleCatalogRecord, now:
       source_hash: prompt.sourceHash,
       surface: role.surface,
       rights: role.rights,
-      timeout_ms: 0,
-      permission_mode: 'default',
       status: 'active',
       updated_at: now,
     },
@@ -156,9 +142,6 @@ function mapPipeline(playbookId: string, pipeline: PipelineCatalogRecord, now: s
       pipeline_id: pipeline.id,
       path: pipeline.path,
       triggers: pipeline.triggers,
-      required_roles: pipeline.requiredRoles,
-      alternative_roles_json: JSON.stringify(pipeline.alternativeRoles),
-      optional_roles: pipeline.optionalRoles,
       route_gates: normalizeRouteGates(pipeline.routeGates),
       platform_invocation: pipeline.platformInvocation,
       execution_policy_json: JSON.stringify(pipeline.executionPolicy),

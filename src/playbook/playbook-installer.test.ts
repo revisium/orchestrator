@@ -36,8 +36,6 @@ function makePlaybookRoot(): string {
         surface: 'any',
         rights: 'write-working-tree',
         allowed_tools: ['Read', 'Edit', 'Write', 'Bash'],
-        default_model_level: 'standard',
-        runner_id: 'claude-code',
       },
     ]),
   );
@@ -48,9 +46,6 @@ function makePlaybookRoot(): string {
         id: 'feature-development',
         path: 'pipelines/feature-development/PIPELINE.md',
         triggers: ['new feature'],
-        required_roles: ['developer'],
-        alternative_roles: [],
-        optional_roles: [],
         route_gates: ['merge approval'],
         platform_invocation: 'canonical-only',
         execution_policy: { iteration_cap: 3 },
@@ -142,19 +137,19 @@ test('PlaybookInstaller: preserves edited run profiles during catalog re-import'
     join(root, 'catalog', 'run-profiles.json'),
     JSON.stringify([
       {
-        id: 'codex-standard',
+        id: 'codex-gpt-5-6-luna',
         pipelineId: 'feature-development',
         schemaVersion: 'run-profile/v1',
         version: '1',
-        displayName: 'Codex standard',
-        summary: 'Codex standard profile',
+        displayName: 'Codex exact gpt-5.6-luna',
+        summary: 'Codex exact model profile',
         topology: { stages: { planReviewer: { mode: 'single' } } },
-        bindings: { slots: { developer: { runnerId: 'codex', modelLevel: 'codex-standard' } } },
+        bindings: { slots: { 'role:developer': { runnerId: 'codex', provider: 'openai', modelId: 'gpt-5.6-luna', modelParams: {} } } },
         status: 'active',
       },
     ]),
   );
-  const rowId = scopedRunProfileRowId('pb', 'feature-development', 'codex-standard');
+  const rowId = scopedRunProfileRowId('pb', 'feature-development', 'codex-gpt-5-6-luna');
   const fake = fakeAccess([
     {
       table: 'run_profiles',
@@ -163,7 +158,7 @@ test('PlaybookInstaller: preserves edited run profiles during catalog re-import'
         id: rowId,
         playbook_id: 'pb',
         pipeline_id: 'feature-development',
-        profile_id: 'codex-standard',
+        profile_id: 'codex-gpt-5-6-luna',
         profile_hash: 'user-edited-hash',
         source_hash: 'catalog-hash',
         status: 'active',

@@ -92,7 +92,7 @@ function defaultVerdictFor(role: string): string {
 
 function runBehavior(
   behavior: RoleBehavior,
-  ctx: { logicalRole: string; runner: string; attemptId: string; runId: string; taskId: string; level: string; context: string },
+  ctx: { logicalRole: string; runnerId: string; provider: string; modelId: string; attemptId: string; runId: string; taskId: string; context: string },
   sink: AgentSink,
   callIndex: number,
   reporter?: AgentActivityReporter,
@@ -114,7 +114,7 @@ function runBehavior(
       },
       verdict: decision,
       nextSteps: [],
-      costs: [{ modelProfile: ctx.level, currency: 'USD', inputTokens: 10, outputTokens: 5, costAmount: 0.001 }],
+      costs: [{ runnerId: ctx.runnerId, provider: ctx.provider, modelId: ctx.modelId, currency: 'USD', inputTokens: 10, outputTokens: 5, costAmount: 0.001 }],
       needsHuman: false,
     };
   }
@@ -129,7 +129,7 @@ function runBehavior(
       verdict: 'approved',
       artifacts: { process: { ref: `test-artifacts/${ctx.attemptId}`, stdoutTail: behavior.marker, stderrTail: '' } },
       nextSteps: [],
-      costs: [{ modelProfile: ctx.level, currency: 'USD', inputTokens: 1, outputTokens: 1, costAmount: 0 }],
+      costs: [{ runnerId: ctx.runnerId, provider: ctx.provider, modelId: ctx.modelId, currency: 'USD', inputTokens: 1, outputTokens: 1, costAmount: 0 }],
       needsHuman: false,
     };
   }
@@ -153,13 +153,13 @@ function runBehavior(
       ? { inputTokens: behavior.inputTokens, outputTokens: behavior.outputTokens, costAmount: behavior.costAmount }
       : { inputTokens: 10, outputTokens: 5, costAmount: 0.001 };
   return {
-    output: { role: ctx.logicalRole, runner: ctx.runner },
+    output: { role: ctx.logicalRole, runner: ctx.runnerId },
     verdict,
     artifacts: {
       process: { ref: `test-artifacts/${ctx.attemptId}`, stdoutTail: `stdout from ${ctx.logicalRole}`, stderrTail: '' },
     },
     nextSteps: [],
-    costs: [{ modelProfile: ctx.level, currency: 'USD', ...cost }],
+    costs: [{ runnerId: ctx.runnerId, provider: ctx.provider, modelId: ctx.modelId, currency: 'USD', ...cost }],
     needsHuman: behavior.kind === 'needsHuman',
     lesson: behavior.kind === 'needsHuman' ? behavior.lesson : undefined,
   };
@@ -167,20 +167,21 @@ function runBehavior(
 
 export function plannedAgent(sink: AgentSink): RunAgent {
   const counts = new Map<string, number>();
-  return async ({ role, profile, attemptId, step, context, reporter }): Promise<AttemptResult> => {
+  return async ({ role, binding, attemptId, step, context, reporter }): Promise<AttemptResult> => {
     const logicalRole = role.playbookRoleId ?? role.name;
-    recordAgentCall(sink.agentCalls, { logicalRole, runner: role.runner, attemptId, runId: step.runId, taskId: step.taskId, context, stepInput: step.input });
+    recordAgentCall(sink.agentCalls, { logicalRole, runner: binding.runner.runnerId, attemptId, runId: step.runId, taskId: step.taskId, context, stepInput: step.input });
     const key = `${step.taskId}::${logicalRole}`;
     const n = counts.get(key) ?? 0;
     counts.set(key, n + 1);
     const spec = sink.casePlans.get(step.taskId)?.agent ?? {};
     return runBehavior(pickBehavior(spec, logicalRole, n), {
       logicalRole,
-      runner: role.runner,
+      runnerId: binding.runner.runnerId,
       attemptId,
       runId: step.runId,
       taskId: step.taskId,
-      level: profile.level,
+      provider: binding.provider,
+      modelId: binding.modelId,
       context,
     }, sink, n, reporter);
   };

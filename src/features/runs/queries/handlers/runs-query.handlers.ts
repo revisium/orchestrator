@@ -77,41 +77,45 @@ function mapRun(run: RunLike) {
 }
 
 function mapAttempt(runId: string, attempt: {
-  attemptId?: string;
-  stepId?: string;
-  iteration?: number;
-  status?: string;
-  verdict?: string;
-  modelProfile?: string;
-  inputTokens?: number;
-  outputTokens?: number;
-  costAmount?: number;
-  currency?: string;
-  durationMs?: number;
-  outputSummary?: string;
-  artifactRef?: string;
-  lesson?: string;
-  error?: string;
-  startedAt?: Date | string;
+  attemptId: string;
+  stepId: string;
+  iteration: number;
+  status: string;
+  verdict: string;
+  runnerId: string;
+  provider: string;
+  modelId: string;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  costAmount: number | null;
+  currency: string | null;
+  durationMs: number;
+  outputSummary: string;
+  artifactRef: string;
+  lesson: string;
+  error: string;
+  startedAt: Date | string;
 }) {
   return {
-    id: attempt.attemptId ?? '',
+    id: attempt.attemptId,
     runId,
-    stepId: attempt.stepId ?? '',
-    stepKey: attempt.stepId ?? '',
-    iteration: attempt.iteration ?? 0,
-    status: attempt.status ?? '',
-    verdict: attempt.verdict ?? '',
-    modelProfile: attempt.modelProfile ?? '',
-    inputTokens: attempt.inputTokens ?? 0,
-    outputTokens: attempt.outputTokens ?? 0,
-    costAmount: attempt.costAmount ?? 0,
-    currency: attempt.currency ?? 'USD',
-    durationMs: attempt.durationMs ?? 0,
-    outputSummary: attempt.outputSummary ?? '',
-    artifactRef: attempt.artifactRef ?? '',
-    lesson: attempt.lesson ?? '',
-    error: attempt.error ?? '',
+    stepId: attempt.stepId,
+    stepKey: attempt.stepId,
+    iteration: attempt.iteration,
+    status: attempt.status,
+    verdict: attempt.verdict,
+    runnerId: attempt.runnerId,
+    provider: attempt.provider,
+    modelId: attempt.modelId,
+    inputTokens: attempt.inputTokens,
+    outputTokens: attempt.outputTokens,
+    costAmount: attempt.costAmount,
+    currency: attempt.currency,
+    durationMs: attempt.durationMs,
+    outputSummary: attempt.outputSummary,
+    artifactRef: attempt.artifactRef,
+    lesson: attempt.lesson,
+    error: attempt.error,
     startedAt: date(attempt.startedAt),
   };
 }

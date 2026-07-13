@@ -52,10 +52,8 @@ import {
   type DataDrivenTaskOpts,
   type RunnerTransientRetryPolicy,
 } from './data-driven-task.workflow.js';
-import {
-  dispatchRunnerId,
-  type LaunchOverrides,
-} from './route-contract.js';
+import type { ResolvedAgentBinding } from '../control-plane/run-profile-contract.js';
+import { aggregateReportedUsage } from '../control-plane/usage-aggregation.js';
 
 
 const DEV_TASKS_QUEUE = 'dev-tasks';
@@ -115,8 +113,6 @@ function pinRunnerTransientRetryPolicy(
 
 
 
-export type RunnerMode = 'script' | 'live';
-
 export type RunStepPhysicalAttempt = {
   attemptNo: number;
   attemptId: string;
@@ -130,7 +126,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 export type RunStepDeps = {
   loadRole: RolesService['loadRole'];
-  loadModelProfile: RolesService['loadModelProfile'];
   loadPipelineContext: RunService['loadPipelineContext'];
   appendEvent: (input: AppendEventInput) => Promise<void>;
   appendCost: RunService['appendCost'];
@@ -218,6 +213,7 @@ type StepAttemptContext = {
   attemptId: string;
   attemptNo: number;
   step: Step;
+  binding: ResolvedAgentBinding;
   durationMs: number;
 };
 
@@ -281,11 +277,14 @@ async function appendRunnerFailureAttempt(
       attemptNo: attemptContext.attemptNo,
       iteration: iterationOf(attemptContext.stepKey),
       status: 'failed',
-      modelProfile: attemptContext.step.modelProfile,
+      runnerId: attemptContext.binding.runner.runnerId,
+      provider: attemptContext.binding.provider,
+      modelId: attemptContext.binding.modelId,
       verdict: 'BLOCKER',
-      inputTokens: 0,
-      outputTokens: 0,
-      costAmount: 0,
+      inputTokens: null,
+      outputTokens: null,
+      costAmount: null,
+      currency: null,
       durationMs: attemptContext.durationMs,
       output: failure.output,
       lesson: failure.reason,
@@ -348,17 +347,12 @@ async function appendAttemptCosts(
   }
 }
 
-function aggregateCostTotals(
-  costs: readonly (Partial<CostRecord> | undefined)[],
-): { inputTokens: number; outputTokens: number; costAmount: number } {
-  return costs.reduce<{ inputTokens: number; outputTokens: number; costAmount: number }>(
-    (sum, cost) => ({
-      inputTokens: sum.inputTokens + (cost?.inputTokens ?? 0),
-      outputTokens: sum.outputTokens + (cost?.outputTokens ?? 0),
-      costAmount: sum.costAmount + (cost?.costAmount ?? 0),
-    }),
-    { inputTokens: 0, outputTokens: 0, costAmount: 0 },
-  );
+export function aggregateCostTotals(costs: readonly (Partial<CostRecord> | undefined)[]) {
+  return aggregateReportedUsage(costs.map((cost) => ({
+    inputTokens: cost?.inputTokens,
+    outputTokens: cost?.outputTokens,
+    costAmount: cost?.costAmount,
+  })));
 }
 
 async function appendSuccessfulAttempt(
@@ -376,11 +370,14 @@ async function appendSuccessfulAttempt(
       attemptNo: attemptContext.attemptNo,
       iteration: iterationOf(attemptContext.stepKey),
       status: result.needsHuman ? 'awaiting_approval' : 'succeeded',
-      modelProfile: attemptContext.step.modelProfile,
+      runnerId: attemptContext.binding.runner.runnerId,
+      provider: attemptContext.binding.provider,
+      modelId: attemptContext.binding.modelId,
       verdict: verdictForAttemptRow(result),
       inputTokens,
       outputTokens,
       costAmount,
+      currency: result.costs.find((cost) => cost?.currency !== null && cost?.currency !== undefined)?.currency ?? null,
       durationMs: attemptContext.durationMs,
       output: result.output,
       lesson: result.lesson,
@@ -389,7 +386,7 @@ async function appendSuccessfulAttempt(
   } catch (err) {
     console.warn(
       `[pipeline] attempt-row write failed for ${attemptContext.stepKey} (${attemptContext.attemptId}) — observability only, step still succeeds. ` +
-        `If this is a schema-drift error, migrate the control-plane attempts table to the 0008 fields. ${String(err)}`,
+        `If this is a schema-drift error, migrate the control-plane attempts table to the exact provenance fields. ${String(err)}`,
     );
   }
 }
@@ -402,7 +399,6 @@ async function appendSuccessfulAttempt(
 export function makeRunStep(deps: RunStepDeps) {
   const {
     loadRole,
-    loadModelProfile,
     loadPipelineContext,
     appendEvent,
     appendCost,
@@ -417,22 +413,21 @@ export function makeRunStep(deps: RunStepDeps) {
     role: string,
     stepKey: string,
     stepInput: unknown,
-    resolvedRunnerId?: string,
+    binding: ResolvedAgentBinding,
     physicalAttempt?: RunStepPhysicalAttempt,
     acceptedVerdicts?: readonly string[],
-    launchOverrides?: LaunchOverrides,
   ): Promise<AttemptResult> {
-    const loadedRole = await loadRole(role);
-
-    const effectiveModelLevel = launchOverrides?.modelLevel ?? loadedRole.modelLevel;
-    const profile = await loadModelProfile(effectiveModelLevel);
+    // The compiled plan owns the exact playbook document identity. The role name is
+    // dispatch metadata; loading by it would reintroduce a global-key lookup and can
+    // select a different playbook revision when the same role exists in multiple
+    // installed playbooks.
+    const loadedRole = await loadRole(binding.roleDocumentId);
 
     const { da, step, runContext } = await loadPipelineContext(
       runId,
       role,
       stepKey,
       stepInput,
-      profile.level,
     );
 
     const { attemptId, attemptNo } = resolvePhysicalAttempt(runId, stepKey, physicalAttempt);
@@ -461,15 +456,8 @@ export function makeRunStep(deps: RunStepDeps) {
       throw err;
     }
 
-    const effectiveRunner = dispatchRunnerId(
-      launchOverrides?.runnerId ?? resolveStepRunner(loadedRole.runner, resolvedRunnerId),
-    );
-    const dispatchRole = {
-      ...loadedRole,
-      runner: effectiveRunner,
-      ...(launchOverrides?.timeoutMs !== undefined ? { timeoutMs: launchOverrides.timeoutMs } : {}),
-      ...(launchOverrides?.permissionMode !== undefined ? { permissionMode: launchOverrides.permissionMode } : {}),
-    };
+    const effectiveRunner = binding.runner.runnerId;
+    const dispatchRole = loadedRole;
     const reporter = writeAgentOutputEvent
       ? createAgentActivityReporter(
           {
@@ -489,7 +477,7 @@ export function makeRunStep(deps: RunStepDeps) {
     try {
       result = await runAgentWithReporterFlush(runAgent, {
         role: dispatchRole,
-        profile,
+        binding,
         context,
         attemptId,
         step,
@@ -498,10 +486,10 @@ export function makeRunStep(deps: RunStepDeps) {
       });
     } catch (err) {
       const durationMs = Math.max(0, clock() - startedAt);
-      return handleRunnerFailure(appendEvent, appendAttempt, { runId, role, stepKey, attemptId, attemptNo, step, durationMs }, err);
+      return handleRunnerFailure(appendEvent, appendAttempt, { runId, role, stepKey, attemptId, attemptNo, step, binding, durationMs }, err);
     }
     const durationMs = Math.max(0, clock() - startedAt);
-    const attemptContext = { runId, role, stepKey, attemptId, attemptNo, step, durationMs };
+    const attemptContext = { runId, role, stepKey, attemptId, attemptNo, step, binding, durationMs };
     const artifactFields = processArtifactFields(result.artifacts);
 
     await appendEvent({
@@ -522,15 +510,6 @@ export function makeRunStep(deps: RunStepDeps) {
   };
 }
 
-function resolveStepRunner(
-  roleRunner: string,
-  resolvedRunnerId?: string,
-): string {
-  if (resolvedRunnerId && resolvedRunnerId !== 'live') return resolvedRunnerId;
-  if (resolvedRunnerId === 'script') return 'script';
-  return roleRunner;
-}
-
 @Injectable()
 export class PipelineService {
 
@@ -539,10 +518,9 @@ export class PipelineService {
     role: string,
     stepKey: string,
     stepInput: unknown,
-    resolvedRunnerId?: string,
+    binding: ResolvedAgentBinding,
     physicalAttempt?: RunStepPhysicalAttempt,
     acceptedVerdicts?: readonly string[],
-    launchOverrides?: LaunchOverrides,
   ) => Promise<AttemptResult>;
 
 
@@ -575,7 +553,6 @@ export class PipelineService {
 
     const stepDeps: RunStepDeps = {
       loadRole: this.rolesService.loadRole.bind(this.rolesService),
-      loadModelProfile: this.rolesService.loadModelProfile.bind(this.rolesService),
       loadPipelineContext: this.runService.loadPipelineContext.bind(this.runService),
       appendEvent: this.runService.appendEvent.bind(this.runService),
       appendCost: this.runService.appendCost.bind(this.runService),

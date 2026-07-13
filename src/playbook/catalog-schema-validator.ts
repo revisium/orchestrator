@@ -1,6 +1,6 @@
 import { Ajv, type ValidateFunction } from 'ajv';
 import { FAILURE_POLICIES, TERMINAL_STATUSES } from '../pipeline-core/types.js';
-import { VALID_MODEL_LEVELS } from '../control-plane/definitions.js';
+import { RunProfileContractError, validateRunProfile } from '../control-plane/run-profile-contract.js';
 import { PlaybookError } from './errors.js';
 import { formatAjvErrors } from '../schema/ajv-errors.js';
 
@@ -360,123 +360,7 @@ const pipelineExecutionPolicySchema: JsonSchema = {
   },
 };
 
-const stageSchema: JsonSchema = {
-  type: 'object',
-  required: ['mode'],
-  properties: {
-    mode: { enum: ['single', 'consensus'] },
-    branches: { type: 'integer', minimum: 2, maximum: 8 },
-  },
-  additionalProperties: false,
-  allOf: [
-    {
-      if: { properties: { mode: { const: 'consensus' } }, required: ['mode'] },
-      then: { required: ['branches'] },
-    },
-    {
-      if: { properties: { mode: { const: 'single' } }, required: ['mode'] },
-      then: { not: { required: ['branches'] } },
-    },
-  ],
-};
-
-const runProfileTopologySchema = (minProperties: number): JsonSchema => ({
-  type: 'object',
-  required: ['stages'],
-  properties: {
-    stages: {
-      type: 'object',
-      minProperties,
-      additionalProperties: stageSchema,
-    },
-  },
-  additionalProperties: false,
-});
-
-const runProfileSlotBindingSchema: JsonSchema = {
-  type: 'object',
-  properties: {
-    runnerId: NON_EMPTY_STRING,
-    modelLevel: { enum: VALID_MODEL_LEVELS },
-    timeoutMs: { type: 'integer', minimum: 1 },
-    permissionMode: NON_EMPTY_STRING,
-    accounts: {
-      type: 'object',
-      properties: {
-        github: NON_EMPTY_STRING,
-      },
-      additionalProperties: false,
-      required: ['github'],
-    },
-  },
-  additionalProperties: false,
-  anyOf: [
-    { required: ['runnerId'] },
-    { required: ['modelLevel'] },
-    { required: ['timeoutMs'] },
-    { required: ['permissionMode'] },
-    { required: ['accounts'] },
-  ],
-};
-
-const runProfileBindingsSchema = (minProperties: number): JsonSchema => ({
-  type: 'object',
-  required: ['slots'],
-  properties: {
-    slots: {
-      type: 'object',
-      minProperties,
-      additionalProperties: runProfileSlotBindingSchema,
-    },
-  },
-  additionalProperties: false,
-});
-
-const runProfileCatalogRecordSchema: JsonSchema = {
-  type: 'object',
-  required: [
-    'id',
-    'pipelineId',
-    'schemaVersion',
-    'version',
-    'displayName',
-    'summary',
-    'topology',
-    'bindings',
-    'status',
-  ],
-  properties: {
-    id: NON_EMPTY_STRING,
-    pipelineId: NON_EMPTY_STRING,
-    schemaVersion: { const: 'run-profile/v1' },
-    version: NON_EMPTY_STRING,
-    displayName: NON_EMPTY_STRING,
-    summary: NON_EMPTY_STRING,
-    topology: runProfileTopologySchema(1),
-    bindings: runProfileBindingsSchema(1),
-    status: { enum: ['active', 'deprecated'] },
-  },
-  additionalProperties: false,
-};
-
-const runProfileInlineSchema: JsonSchema = {
-  type: 'object',
-  required: [
-    'schemaVersion',
-    'topology',
-    'bindings',
-  ],
-  properties: {
-    schemaVersion: { const: 'run-profile/v1' },
-    topology: runProfileTopologySchema(0),
-    bindings: runProfileBindingsSchema(0),
-  },
-  additionalProperties: false,
-};
-
 const validatePipelineExecutionPolicy = ajv.compile(pipelineExecutionPolicySchema);
-const validateRunProfileCatalogRecord = ajv.compile(runProfileCatalogRecordSchema);
-const validateInlineRunProfile = ajv.compile(runProfileInlineSchema);
 
 function assertValid(validate: ValidateFunction, value: unknown, context: string, schemaName: string): void {
   if (validate(value)) return;
@@ -491,9 +375,72 @@ export function assertValidPipelineExecutionPolicy(value: unknown, context: stri
 }
 
 export function assertValidRunProfileCatalogRecord(value: unknown, context: string): void {
-  assertValid(validateRunProfileCatalogRecord, value, context, 'run-profile/v1');
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new PlaybookError('PLAYBOOK_INVALID_CATALOG', `${context} violates run-profile/v1: profile must be an object`, {
+      code: 'profile_schema_invalid',
+      path: context,
+    });
+  }
+  const record = value as Record<string, unknown>;
+  const required = ['id', 'pipelineId', 'schemaVersion', 'version', 'displayName', 'summary', 'topology', 'bindings', 'status'];
+  for (const key of required) {
+    if (!(key in record)) {
+      throw new PlaybookError('PLAYBOOK_INVALID_CATALOG', `${context} violates run-profile/v1: missing ${key}`, {
+        code: 'profile_schema_invalid',
+        path: `${context}.${key}`,
+      });
+    }
+  }
+  for (const key of Object.keys(record)) {
+    if (!required.includes(key)) {
+      throw new PlaybookError('PLAYBOOK_INVALID_CATALOG', `${context} violates run-profile/v1: unknown field ${key}`, {
+        code: 'profile_schema_invalid',
+        path: `${context}.${key}`,
+      });
+    }
+  }
+  for (const key of ['id', 'pipelineId', 'schemaVersion', 'version', 'displayName', 'summary']) {
+    if (typeof record[key] !== 'string' || (record[key] as string).trim() === '') {
+      throw new PlaybookError('PLAYBOOK_INVALID_CATALOG', `${context}.${key} must be a non-empty string`, {
+        code: 'profile_schema_invalid',
+        path: `${context}.${key}`,
+      });
+    }
+  }
+  if (record.status !== 'active' && record.status !== 'deprecated') {
+    throw new PlaybookError('PLAYBOOK_INVALID_CATALOG', `${context}.status must be active or deprecated`, {
+      code: 'profile_schema_invalid',
+      path: `${context}.status`,
+    });
+  }
+  try {
+    const normalized = validateRunProfile({
+      schemaVersion: record.schemaVersion,
+      topology: record.topology,
+      bindings: record.bindings,
+    });
+    if (Object.keys(normalized.topology.stages).length === 0 || Object.keys(normalized.bindings.slots).length === 0) {
+      throw new RunProfileContractError('profile_schema_invalid', 'catalog profiles require at least one stage and binding', context);
+    }
+  } catch (error) {
+    const contractError = error instanceof RunProfileContractError ? error : undefined;
+    throw new PlaybookError(
+      'PLAYBOOK_INVALID_CATALOG',
+      `${context} violates run-profile/v1: ${error instanceof Error ? error.message : String(error)}`,
+      { code: contractError?.code ?? 'profile_schema_invalid', path: contractError?.path ?? context },
+    );
+  }
 }
 
 export function assertValidInlineRunProfile(value: unknown, context: string): void {
-  assertValid(validateInlineRunProfile, value, context, 'run-profile/v1');
+  try {
+    validateRunProfile(value);
+  } catch (error) {
+    const contractError = error instanceof RunProfileContractError ? error : undefined;
+    throw new PlaybookError(
+      'PLAYBOOK_INVALID_CATALOG',
+      `${context} violates run-profile/v1: ${error instanceof Error ? error.message : String(error)}`,
+      { code: contractError?.code ?? 'profile_schema_invalid', path: contractError?.path ?? context },
+    );
+  }
 }

@@ -13,7 +13,7 @@ const tick = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, 
 const profileBody = {
   schemaVersion: 'run-profile/v1',
   topology: { stages: { developer: { mode: 'single' } } },
-  bindings: { slots: { developer: { runnerId: 'codex', modelLevel: 'codex-standard' } } },
+  bindings: { slots: { 'node:developer': { runnerId: 'codex', provider: 'openai', modelId: 'gpt-5.6-luna', modelParams: {} } } },
 };
 
 async function withMcpClient<T>(facade: McpFacadeService, fn: (client: Client) => Promise<T>): Promise<T> {
@@ -108,7 +108,7 @@ test('McpHttpService: tool handler application errors are surfaced as MCP tool e
         profile: {
           schemaVersion: 'run-profile/v1',
           topology: { stages: { analyst: { mode: 'single' } } },
-          bindings: { slots: { analyst: { runnerId: 'codex', modelLevel: 'codex-deep' } } },
+          bindings: { slots: { 'node:analyst': { runnerId: 'codex', provider: 'openai', modelId: 'gpt-5.6-luna', modelParams: {} } } },
         },
       },
     });
@@ -116,7 +116,7 @@ test('McpHttpService: tool handler application errors are surfaced as MCP tool e
     assert.equal(result.isError, true, 'application failures must be marked as MCP tool errors');
     const toolResult = result as CallToolResult;
     assert.throws(() => assertMcpToolSuccess(toolResult, 'validate_profile'), McpToolError);
-    assert.match(mcpToolText(toolResult), /PROFILE_SCHEMA_CLOSED/);
+    assert.equal(mcpToolText(toolResult), '{"code":"INTERNAL_ERROR","message":"Internal MCP tool error"}');
   } finally {
     await client.close().catch(() => undefined);
     httpServer.close();
@@ -126,10 +126,10 @@ test('McpHttpService: tool handler application errors are surfaced as MCP tool e
 test('McpHttpService: profile management tools work over the real MCP HTTP transport', async () => {
   const calls: Array<[string, unknown]> = [];
   const compactProfile = {
-    profileId: 'custom-standard',
+    profileId: 'custom-exact',
     pipelineId: 'local-change',
     version: '1',
-    displayName: 'Custom standard',
+    displayName: 'Custom exact',
     summary: 'Custom profile',
     profileHash: 'profile-hash',
     profileRevisionHash: 'revision-hash',
@@ -160,33 +160,33 @@ test('McpHttpService: profile management tools work over the real MCP HTTP trans
 
   await withMcpClient(facade, async (client) => {
     const list = await client.callTool({ name: 'list_profiles', arguments: { pipelineId: 'local-change' } });
-    const get = await client.callTool({ name: 'get_profile', arguments: { pipelineId: 'local-change', profileId: 'custom-standard' } });
+    const get = await client.callTool({ name: 'get_profile', arguments: { pipelineId: 'local-change', profileId: 'custom-exact' } });
     const create = await client.callTool({
       name: 'create_profile',
-      arguments: { pipelineId: 'local-change', profileId: 'custom-standard', displayName: 'Custom standard', profile: profileBody },
+      arguments: { pipelineId: 'local-change', profileId: 'custom-exact', displayName: 'Custom exact', profile: profileBody },
     });
     const update = await client.callTool({
       name: 'update_profile',
-      arguments: { pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileRevisionHash: 'revision-hash', profile: profileBody },
+      arguments: { pipelineId: 'local-change', profileId: 'custom-exact', expectedProfileRevisionHash: 'revision-hash', profile: profileBody },
     });
     const deprecate = await client.callTool({
       name: 'deprecate_profile',
-      arguments: { pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileRevisionHash: 'revision-hash-2' },
+      arguments: { pipelineId: 'local-change', profileId: 'custom-exact', expectedProfileRevisionHash: 'revision-hash-2' },
     });
 
     for (const result of [list, get, create, update, deprecate]) {
       const toolResult = result as CallToolResult;
       assertMcpToolSuccess(toolResult);
-      assert.ok(mcpToolText(toolResult).includes('custom-standard'));
+      assert.ok(mcpToolText(toolResult).includes('custom-exact'));
     }
   });
 
   assert.deepEqual(calls, [
     ['list', { pipelineId: 'local-change' }],
-    ['get', { pipelineId: 'local-change', profileId: 'custom-standard' }],
-    ['create', { pipelineId: 'local-change', profileId: 'custom-standard', displayName: 'Custom standard', profile: profileBody }],
-    ['update', { pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileRevisionHash: 'revision-hash', profile: profileBody }],
-    ['deprecate', { pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileRevisionHash: 'revision-hash-2' }],
+    ['get', { pipelineId: 'local-change', profileId: 'custom-exact' }],
+    ['create', { pipelineId: 'local-change', profileId: 'custom-exact', displayName: 'Custom exact', profile: profileBody }],
+    ['update', { pipelineId: 'local-change', profileId: 'custom-exact', expectedProfileRevisionHash: 'revision-hash', profile: profileBody }],
+    ['deprecate', { pipelineId: 'local-change', profileId: 'custom-exact', expectedProfileRevisionHash: 'revision-hash-2' }],
   ]);
 });
 
@@ -203,7 +203,7 @@ test('McpHttpService: invalid profile management requests are MCP tool errors an
     },
     async listProfiles(input: unknown) {
       calls.push('list');
-      return [{ profileId: 'custom-standard', pipelineId: (input as { pipelineId?: string }).pipelineId ?? 'local-change' }];
+      return [{ profileId: 'custom-exact', pipelineId: (input as { pipelineId?: string }).pipelineId ?? 'local-change' }];
     },
   } as unknown as McpFacadeService;
 
@@ -212,8 +212,8 @@ test('McpHttpService: invalid profile management requests are MCP tool errors an
       name: 'create_profile',
       arguments: {
         pipelineId: 'local-change',
-        profileId: 'custom-standard',
-        displayName: 'Custom standard',
+        profileId: 'custom-exact',
+        displayName: 'Custom exact',
         profile: { ...profileBody, pipelineId: 'local-change' },
       },
     });
@@ -226,7 +226,7 @@ test('McpHttpService: invalid profile management requests are MCP tool errors an
       name: 'update_profile',
       arguments: {
         pipelineId: 'local-change',
-        profileId: 'custom-standard',
+        profileId: 'custom-exact',
         profile: profileBody,
       },
     });

@@ -8,7 +8,6 @@ import type { ConsumesRef, Node, Template } from '../../pipeline-core/types.js';
 
 type PipelineCatalogEntry = {
   id: string;
-  required_roles?: string[];
   execution_policy?: {
     template_json?: Template;
   };
@@ -62,9 +61,23 @@ test('L0: the data-driven fixture carries a complete state-machine template and 
 
   assert.equal(template.specVersion, '1.0');
   assert.ok(template.nodes['analyst']);
-  for (const roleId of ['analyst', 'developer', 'reviewer', 'watcher', 'integrator']) {
-    assert.ok(pipeline.required_roles?.includes(roleId), `${roleId} is declared by the fixture pipeline`);
-  }
+  const roleRefs = new Set(
+    Object.values(template.nodes)
+      .filter((node) => node.kind === 'agent')
+      .map((node) => node.roleRef),
+  );
+  assert.deepEqual([...roleRefs].sort(), [
+    'role:analyst',
+    'role:developer',
+    'role:reviewer',
+    'role:watcher',
+  ]);
+  const integratorNode = effectNode(template, 'integrator');
+  assert.equal(
+    integratorNode.kind === 'script' ? integratorNode.scriptRef : undefined,
+    'script:integrator',
+    'integrator is a script obligation, not a role catalog entry',
+  );
 });
 
 for (const [caseId, pipelineId, roleId] of [
@@ -72,7 +85,6 @@ for (const [caseId, pipelineId, roleId] of [
   ['K5', 'feature-pr-poll', 'pr-poller'],
 ] as const) {
   test(`${caseId}: the post-integrator role is bound by template placement`, () => {
-    const pipeline = pipelineFrom(e2eFixtureCatalog, pipelineId);
     const template = templateFrom(e2eFixtureCatalog, pipelineId);
     const integrator = effectNode(template, 'integrator');
     const postIntegrator = effectNode(template, 'watcherPost');
@@ -80,12 +92,10 @@ for (const [caseId, pipelineId, roleId] of [
     assert.equal(integrator.next, 'watcherPost');
     assert.equal(postIntegrator.kind, 'agent');
     assert.equal('roleRef' in postIntegrator ? postIntegrator.roleRef : undefined, `role:${roleId}`);
-    const roles = pipeline.required_roles ?? [];
-    const integratorIndex = roles.indexOf('integrator');
-    const postIntegratorIndex = roles.indexOf(roleId);
-    assert.notEqual(integratorIndex, -1, 'integrator is declared by the fixture pipeline');
-    assert.notEqual(postIntegratorIndex, -1, `${roleId} is declared by the fixture pipeline`);
-    assert.ok(postIntegratorIndex > integratorIndex);
+    const graphRoleRefs = Object.values(template.nodes)
+      .filter((node) => node.kind === 'agent')
+      .map((node) => node.roleRef);
+    assert.ok(graphRoleRefs.includes(`role:${roleId}`), `${roleId} is bound by the template graph`);
   });
 }
 

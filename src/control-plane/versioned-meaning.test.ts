@@ -107,11 +107,11 @@ test('createVersionedMeaningAccess: creates missing rows and updates existing ro
 
 test('createVersionedMeaningAccess: preserves edited catalog run profiles during import', async () => {
   const fake = fakeScope({
-    'run_profiles/pb-feature-development-codex-standard': {
-      id: 'pb-feature-development-codex-standard',
+    'run_profiles/pb-feature-development-codex-gpt-5-6-luna': {
+      id: 'pb-feature-development-codex-gpt-5-6-luna',
       playbook_id: 'pb',
       pipeline_id: 'feature-development',
-      profile_id: 'codex-standard',
+      profile_id: 'codex-gpt-5-6-luna',
       profile_hash: 'user-edited-hash',
       source_hash: 'catalog-hash',
       status: 'active',
@@ -121,21 +121,21 @@ test('createVersionedMeaningAccess: preserves edited catalog run profiles during
 
   const op = await access.upsertRow({
     table: 'run_profiles',
-    rowId: 'pb-feature-development-codex-standard',
+    rowId: 'pb-feature-development-codex-gpt-5-6-luna',
     data: {
-      id: 'pb-feature-development-codex-standard',
+      id: 'pb-feature-development-codex-gpt-5-6-luna',
       playbook_id: 'pb',
       pipeline_id: 'feature-development',
-      profile_id: 'codex-standard',
+      profile_id: 'codex-gpt-5-6-luna',
       profile_hash: 'new-catalog-hash',
       source_hash: 'new-catalog-hash',
       status: 'active',
     },
   });
 
-  assert.deepEqual(op, { action: 'preserve', table: 'run_profiles', rowId: 'pb-feature-development-codex-standard' });
-  assert.equal(fake.rows.get('run_profiles/pb-feature-development-codex-standard')?.profile_hash, 'user-edited-hash');
-  assert.equal(fake.calls.includes('update:run_profiles/pb-feature-development-codex-standard'), false);
+  assert.deepEqual(op, { action: 'preserve', table: 'run_profiles', rowId: 'pb-feature-development-codex-gpt-5-6-luna' });
+  assert.equal(fake.rows.get('run_profiles/pb-feature-development-codex-gpt-5-6-luna')?.profile_hash, 'user-edited-hash');
+  assert.equal(fake.calls.includes('update:run_profiles/pb-feature-development-codex-gpt-5-6-luna'), false);
 });
 
 test('createVersionedMeaningAccess: retires catalog rows removed from the playbook import', async () => {

@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { ControlPlaneError } from '../control-plane/errors.js';
@@ -11,17 +10,19 @@ import { AgentObservabilityError, AgentObservabilityService } from '../observabi
 import type { PipelineService } from '../pipeline/pipeline.service.js';
 import type { RouteDecision } from '../pipeline/route-contract.js';
 import type { InboxService } from '../revisium/inbox.service.js';
-import type { PlaybooksService, RunProfileSummary } from '../revisium/playbooks.service.js';
+import type { PlaybooksService } from '../revisium/playbooks.service.js';
 import type { RolesService } from '../revisium/roles.service.js';
 import type { RunService } from '../revisium/run.service.js';
 import { CreateRunWorkflowError, previewCreateRunIds } from '../run/create-run.js';
 import { hasWorkflowProgress, TaskControlPlaneApiService } from './task-control-plane-api.service.js';
-import { runProfileHash, runProfileRevisionHash, topologyProfileFromRunProfile } from '../control-plane/run-profiles.js';
-import { materializeTemplate, MATERIALIZER_VERSION } from '../pipeline-core/materialize.js';
+import { hashTemplate, MATERIALIZER_VERSION } from '../pipeline-core/materialize.js';
+import { compileExecutionPlan } from '../control-plane/run-profile-contract.js';
+import { executionPlanFromRouteDecision, routeDecisionFromCompiledPlan } from '../pipeline/route-contract.js';
+import { runnerManifests } from '../runners/runner-manifest.js';
 import { POLICY_VERSION } from '../control-plane/default-playbook-policy.js';
-import { templateFromExecutionPolicy } from '../pipeline/data-driven-template.js';
 import { INTEGRATOR_PROGRESS_EVENT_TYPES } from '../pipeline/data-driven-task.workflow.js';
 import { focusedCaseTitle } from '../testing/policy/non-dsl-ownership.js';
+import type { Template } from '../pipeline-core/types.js';
 
 const focusedOwner = 'src/task-control-plane/task-control-plane-api.service.test.ts';
 
@@ -47,74 +48,88 @@ const LOCAL_CHANGE_PROFILE = {
   topology: { stages: { developer: { mode: 'single' } } },
   bindings: {
     slots: {
-      developer: { runnerId: 'stub-agent', modelLevel: 'standard' },
+      'node:developer': {
+        runnerId: 'codex',
+        provider: 'openai',
+        modelId: 'gpt-5.6-luna',
+        modelParams: {},
+        permissionMode: 'workspace-write',
+      },
     },
   },
 };
-function inlineProfileFor(slots: Record<string, Record<string, unknown>> = {}): Record<string, unknown> {
-  return {
-    schemaVersion: 'run-profile/v1',
-    topology: { stages: { developer: { mode: 'single' } } },
-    bindings: { slots: Object.keys(slots).length ? slots : { 'node:doneEnd': { modelLevel: 'standard' } } },
-  };
-}
-
-function emptyInlineProfile(): Record<string, unknown> {
-  return {
-    schemaVersion: 'run-profile/v1',
-    topology: { stages: {} },
-    bindings: { slots: {} },
-  };
-}
-
-function policyFor(pipelineId: string): Record<string, unknown> {
-  return {
-    template_json: {
-      specVersion: '1.0',
-      pipelineId,
-      entry: 'doneEnd',
-      verdicts: { domain: ['approved'] },
-      nodes: {
-        doneEnd: { id: 'doneEnd', kind: 'terminal', status: 'succeeded' },
-      },
+function routeForTemplate(template: Template, pipelineId = template.pipelineId): RouteDecision {
+  const manifest = runnerManifests().codex!;
+  const agentBindings = Object.values(template.nodes).flatMap((node) => {
+    if (node.kind !== 'agent') return [];
+    const roleId = node.roleRef.replace(/^role:/, '');
+    return [{
+      slotKey: `node:${node.id}`,
+      nodeId: node.id,
+      roleId,
+      roleDocumentId: roleId,
+      runnerId: 'codex',
+      provider: 'openai',
+      modelId: 'gpt-5.6-luna',
+      modelParams: {},
+      permissionMode: 'workspace-write',
+      permissionSource: 'profile' as const,
+      runner: manifest,
+    }];
+  });
+  const scriptBindings = Object.values(template.nodes).flatMap((node) => node.kind === 'script'
+    ? [{ nodeId: node.id, scriptRef: node.scriptRef, accountAliases: { github: 'profile-bot' } }]
+    : []);
+  return routeDecisionFromCompiledPlan(compileExecutionPlan({
+    selection: { playbookId: 'pb', pipelineId, pipelineRowId: `pb-${pipelineId}`, source: 'explicit' },
+    businessParams: {},
+    profile: { source: 'inline', profileHash: `sha256:${'0'.repeat(64)}` },
+    pipeline: {
+      executableGraph: template,
+      graphDigest: hashTemplate(template),
+      materializerVersion: MATERIALIZER_VERSION,
+      policyVersion: POLICY_VERSION,
+      routeGates: [],
+      executionPolicy: { template_json: template },
     },
-  };
+    agentBindings,
+    scriptBindings,
+  }));
 }
 
-const LOCAL_CHANGE_ROUTE: RouteDecision = {
-  playbookId: 'pb',
-  pipelineId: 'local-change',
-  pipelineRowId: 'pb-local-change',
-  source: 'explicit',
-  roles: ['developer'],
-  requiredRoles: ['developer'],
-  optionalRoles: [],
-  routeGates: [],
-  executionPolicy: LOCAL_CHANGE_POLICY,
-  launchBindings: [{ match: { roleId: 'developer' }, runnerId: 'stub-agent', modelLevel: 'standard' }],
-  roleBindings: [
-    {
-      roleId: 'developer',
-      rowId: 'pb-developer',
-      modelLevel: 'standard',
-      runnerId: 'claude-code',
-      resolvedRunnerId: 'stub-agent',
-      runnerSource: 'profile',
-      resolvedModelLevel: 'standard',
-      modelSource: 'profile',
-    },
-  ],
-  profileSource: 'inline',
-  profileHash: 'test-profile-hash',
-  profileSnapshot: LOCAL_CHANGE_PROFILE,
-  requestedPipelineId: 'local-change',
-  basePipelineId: 'local-change',
-  materializedTemplateHash: 'test-template-hash',
-  materializedTemplate: LOCAL_CHANGE_TEMPLATE,
-  materializerVersion: MATERIALIZER_VERSION,
-  policyVersion: POLICY_VERSION,
-  params: { ticket: 'T-1' },
-};
+const LOCAL_CHANGE_MANIFEST = runnerManifests().codex!;
+const LOCAL_CHANGE_ROUTE: RouteDecision = routeDecisionFromCompiledPlan(compileExecutionPlan({
+  selection: {
+    playbookId: 'pb',
+    pipelineId: 'local-change',
+    pipelineRowId: 'pb-local-change',
+    source: 'explicit',
+  },
+  businessParams: { ticket: 'T-1' },
+  profile: { source: 'inline', profileHash: 'sha256:' + '0'.repeat(64) },
+  pipeline: {
+    executableGraph: LOCAL_CHANGE_TEMPLATE,
+    graphDigest: hashTemplate(LOCAL_CHANGE_TEMPLATE as never),
+    materializerVersion: MATERIALIZER_VERSION,
+    policyVersion: POLICY_VERSION,
+    routeGates: [],
+    executionPolicy: LOCAL_CHANGE_POLICY,
+  },
+  agentBindings: [{
+    slotKey: 'node:developer',
+    nodeId: 'developer',
+    roleId: 'developer',
+    roleDocumentId: 'pb-developer',
+    runnerId: 'codex',
+    provider: 'openai',
+    modelId: 'gpt-5.6-luna',
+    modelParams: {},
+    permissionMode: 'workspace-write',
+    permissionSource: 'profile',
+    runner: LOCAL_CHANGE_MANIFEST,
+  }],
+  scriptBindings: [],
+}));
 
 function makeInboxItem(overrides: Partial<InboxItem> = {}): InboxItem {
   return {
@@ -199,24 +214,12 @@ function makeApi(overrides: {
         {
           id: 'pb-developer',
           name: 'developer',
-          modelLevel: 'standard',
-          runner: 'claude-code',
           surface: 'any',
           rights: 'write-working-tree',
           playbookId: 'pb',
           playbookRoleId: 'developer',
         },
       ];
-    },
-    async loadModelProfile(level: string) {
-      return {
-        level: level as 'standard',
-        provider: 'anthropic',
-        modelId: 'claude-sonnet',
-        params: {},
-        costPerInput: 3,
-        costPerOutput: 15,
-      };
     },
     ...overrides.rolesService,
   };
@@ -239,9 +242,6 @@ function makeApi(overrides: {
           pipelineId: 'local-change',
           path: 'pipelines/local-change/PIPELINE.md',
           triggers: ['small local edit'],
-          requiredRoles: ['developer'],
-          alternativeRoles: [],
-          optionalRoles: [],
           routeGates: [],
           executionPolicy: LOCAL_CHANGE_POLICY,
         },
@@ -254,9 +254,6 @@ function makeApi(overrides: {
         pipelineId: 'local-change',
         path: 'pipelines/local-change/PIPELINE.md',
         triggers: ['small local edit'],
-        requiredRoles: ['developer'],
-        alternativeRoles: [],
-        optionalRoles: [],
         routeGates: [],
         executionPolicy: LOCAL_CHANGE_POLICY,
       };
@@ -474,27 +471,7 @@ test('TaskControlPlaneApiService.getRunWorkflow returns UI projection through se
             title: 'Run',
             playbook_id: 'pb',
             pipeline_id: 'local-change',
-            route_decision: {
-              playbookId: 'pb',
-              pipelineId: 'local-change',
-              pipelineRowId: 'pb-local-change',
-              source: 'explicit',
-              roles: ['developer'],
-              requiredRoles: ['developer'],
-              optionalRoles: [],
-              routeGates: [],
-              executionPolicy: LOCAL_CHANGE_POLICY,
-              launchBindings: [],
-              roleBindings: [{
-                roleId: 'developer',
-                rowId: 'pb-developer',
-                modelLevel: 'standard',
-                runnerId: 'claude-code',
-                resolvedRunnerId: 'claude-code',
-                runnerSource: 'playbook',
-              }],
-              params: {},
-            },
+            route_decision: LOCAL_CHANGE_ROUTE,
           },
         };
       },
@@ -543,7 +520,9 @@ test('TaskControlPlaneApiService.getRunWorkflow returns UI projection through se
             iteration: 0,
             status: 'succeeded',
             verdict: 'approved',
-            modelProfile: 'standard',
+            runnerId: 'codex',
+            provider: 'openai',
+            modelId: 'gpt-5.6-luna',
             inputTokens: 10,
             outputTokens: 5,
             costAmount: 0.2,
@@ -616,14 +595,7 @@ test('TaskControlPlaneApiService.getRunWorkflow marks signaled question step pay
             id: 'run-1',
             title: 'Run',
             route_decision: {
-              ...LOCAL_CHANGE_ROUTE,
-              pipelineId: 'question-projection',
-              pipelineRowId: 'pb-question-projection',
-              requestedPipelineId: 'question-projection',
-              basePipelineId: 'question-projection',
-              executionPolicy: { template_json: questionTemplate },
-              materializedTemplate: questionTemplate,
-              materializedTemplateHash: 'question-template-hash',
+              ...routeForTemplate(questionTemplate as never, 'question-projection'),
             },
           },
         };
@@ -1713,8 +1685,8 @@ test('TaskControlPlaneApiService.createRun can immediately start the workflow', 
       async startDataDrivenTask(runId, opts) {
         starts.push({
           runId,
-          pipelineId: opts.route.pipelineId,
-          override: opts.route.launchBindings.find((binding) => binding.match.roleId === 'developer')?.runnerId,
+          pipelineId: executionPlanFromRouteDecision(opts.route).selection.pipelineId,
+          override: executionPlanFromRouteDecision(opts.route).agentBindings.find((binding) => binding.roleId === 'developer')?.runnerId,
         });
         return { workflowID: runId } as Awaited<ReturnType<PipelineService['startDataDrivenTask']>>;
       },
@@ -1730,7 +1702,7 @@ test('TaskControlPlaneApiService.createRun can immediately start the workflow', 
   });
 
   assert.equal(result.started, true);
-  assert.deepEqual(starts, [{ runId: 'run-1', pipelineId: 'local-change', override: 'stub-agent' }]);
+  assert.deepEqual(starts, [{ runId: 'run-1', pipelineId: 'local-change', override: 'codex' }]);
 });
 
 test('TaskControlPlaneApiService.startRun reports terminal preflight recovery without retrying', async () => {
@@ -1796,7 +1768,7 @@ test('TaskControlPlaneApiService.startRun reports terminal preflight recovery wi
   assert.equal(record.blockedReason, 'preflight');
   assert.equal(record.alreadyStarted, true);
   assert.equal(record.engine, 'data-driven');
-  assert.equal((record.route as RouteDecision).pipelineId, 'local-change');
+  assert.equal((record.route as RouteDecision).projection.pipelineId, 'local-change');
 });
 
 test('TaskControlPlaneApiService.resumeRun creates and reuses a preflight recovery child run', async () => {
@@ -2864,8 +2836,8 @@ test(focusedCaseTitle(
     pipelineService: {
       async startDataDrivenTask(runId, opts) {
         starts.push({
-          override: opts.route.launchBindings.find((binding) => binding.match.roleId === 'developer')?.runnerId,
-          params: opts.route.params ?? {},
+          override: executionPlanFromRouteDecision(opts.route).agentBindings.find((binding) => binding.roleId === 'developer')?.runnerId,
+          params: executionPlanFromRouteDecision(opts.route).businessParams,
         });
         return { workflowID: runId } as Awaited<ReturnType<PipelineService['startDataDrivenTask']>>;
       },
@@ -2879,13 +2851,13 @@ test(focusedCaseTitle(
     profile: {
       schemaVersion: 'run-profile/v1',
       topology: { stages: { developer: { mode: 'single' } } },
-      bindings: { slots: { developer: { runnerId: 'claude-code', modelLevel: 'standard' } } },
+      bindings: { slots: { 'node:developer': { runnerId: 'codex', provider: 'openai', modelId: 'gpt-5.6-luna', modelParams: {} } } },
     },
     params: { profileLike: { runner: 'stub-agent' }, ticket: 'ABC-1' },
     start: true,
   });
 
-  assert.deepEqual(starts, [{ override: 'claude-code', params: { profileLike: { runner: 'stub-agent' }, ticket: 'ABC-1' } }]);
+  assert.deepEqual(starts, [{ override: 'codex', params: { profileLike: { runner: 'stub-agent' }, ticket: 'ABC-1' } }]);
 });
 
 test('TaskControlPlaneApiService.resolveRunState exposes issueRef from run params', async () => {
@@ -3234,9 +3206,6 @@ test('TaskControlPlaneApiService.previewPipelineSelection returns wouldAutoRoute
             pipelineId: 'a',
             path: 'pipelines/a/PIPELINE.md',
             triggers: ['review task'],
-            requiredRoles: ['developer'],
-            alternativeRoles: [],
-            optionalRoles: [],
             routeGates: [],
             executionPolicy: {},
           },
@@ -3246,9 +3215,6 @@ test('TaskControlPlaneApiService.previewPipelineSelection returns wouldAutoRoute
             pipelineId: 'b',
             path: 'pipelines/b/PIPELINE.md',
             triggers: ['review task'],
-            requiredRoles: ['developer'],
-            alternativeRoles: [],
-            optionalRoles: [],
             routeGates: [],
             executionPolicy: {},
           },
@@ -3280,9 +3246,6 @@ test('TaskControlPlaneApiService.previewPipelineSelection filters candidatePipel
             pipelineId: 'z-pipeline',
             path: 'pipelines/z/PIPELINE.md',
             triggers: [],
-            requiredRoles: [],
-            alternativeRoles: [],
-            optionalRoles: [],
             routeGates: [],
             executionPolicy: {},
           },
@@ -3292,9 +3255,6 @@ test('TaskControlPlaneApiService.previewPipelineSelection filters candidatePipel
             pipelineId: 'a-pipeline',
             path: 'pipelines/a/PIPELINE.md',
             triggers: [],
-            requiredRoles: [],
-            alternativeRoles: [],
-            optionalRoles: [],
             routeGates: [],
             executionPolicy: {},
           },
@@ -3304,9 +3264,6 @@ test('TaskControlPlaneApiService.previewPipelineSelection filters candidatePipel
             pipelineId: 'x-pipeline',
             path: 'pipelines/x/PIPELINE.md',
             triggers: [],
-            requiredRoles: [],
-            alternativeRoles: [],
-            optionalRoles: [],
             routeGates: [],
             executionPolicy: {},
           },
@@ -3325,1819 +3282,130 @@ test('TaskControlPlaneApiService.previewPipelineSelection filters candidatePipel
   assert.ok(preview.candidatePipelines.every((p) => p.playbookId === 'pb'), 'all from correct playbook');
 });
 
-test(focusedCaseTitle('I2', focusedOwner, 'simulateRoute fails closed when no pipeline matches'), async () => {
+
+test('TaskControlPlaneApiService requires pipelineId and exactly one exact profile source', async () => {
   const api = makeApi();
 
   await assert.rejects(
-    () => api.simulateRoute({ title: 'unrelated request text' }),
-    (error: unknown) =>
-      error instanceof ControlPlaneError &&
-      error.code === 'VALIDATION_FAILURE' &&
-      error.message.includes('pipelineId'),
+    () => api.simulateRoute({ title: 'Task', pipelineId: undefined as never, profile: LOCAL_CHANGE_PROFILE }),
+    (error: unknown) => error instanceof ControlPlaneError && error.message.includes('pipelineId is required'),
   );
-});
-
-test('TaskControlPlaneApiService.simulateRoute rejects ambiguous positive auto-route decisions', async () => {
-  const api = makeApi({
-    playbooksService: {
-      async listPipelines() {
-        return [
-          {
-            id: 'pb-a',
-            playbookId: 'pb',
-            pipelineId: 'a',
-            path: 'pipelines/a/PIPELINE.md',
-            triggers: ['review task'],
-            requiredRoles: ['developer'],
-            alternativeRoles: [],
-            optionalRoles: [],
-            routeGates: [],
-            executionPolicy: {},
-          },
-          {
-            id: 'pb-b',
-            playbookId: 'pb',
-            pipelineId: 'b',
-            path: 'pipelines/b/PIPELINE.md',
-            triggers: ['review task'],
-            requiredRoles: ['developer'],
-            alternativeRoles: [],
-            optionalRoles: [],
-            routeGates: [],
-            executionPolicy: {},
-          },
-        ];
-      },
-    },
-  });
-
   await assert.rejects(
-    () => api.simulateRoute({ title: 'review task' }),
-    (error: unknown) =>
-      error instanceof ControlPlaneError &&
-      error.code === 'VALIDATION_FAILURE' &&
-      error.message.includes('pipelineId'),
+    () => api.simulateRoute({ title: 'Task', pipelineId: 'local-change', profileId: 'local', profile: LOCAL_CHANGE_PROFILE }),
+    (error: unknown) => error instanceof ControlPlaneError && error.message.includes('exactly one of profileId or profile'),
   );
 });
 
-test(focusedCaseTitle('I5', focusedOwner, 'simulateRoute applies an explicit inline profile'), async () => {
-  const api = makeApi();
-
-  const route = await api.simulateRoute({
-    title: 'small local edit',
-    pipeline: 'local-change',
-    profile: LOCAL_CHANGE_PROFILE,
-  });
-
-  assert.equal(route.pipelineId, 'local-change');
-  assert.deepEqual(route.roles, ['developer']);
-});
-
-test(focusedCaseTitle('I6', focusedOwner, 'unknown route resources fail closed with ROW_NOT_FOUND'), async () => {
-  const missingPipeline = makeApi({
-    playbooksService: {
-      async resolvePipeline() {
-        throw new ControlPlaneError('ROW_NOT_FOUND', 'pipeline not found: no-such-pipeline');
-      },
-    },
-  });
-  await assert.rejects(
-    () => missingPipeline.simulateRoute({
-      title: 'missing pipeline',
-      pipeline: 'no-such-pipeline',
-      profile: emptyInlineProfile(),
-    }),
-    (error: unknown) => error instanceof ControlPlaneError && error.code === 'ROW_NOT_FOUND',
-  );
-
-  const missingPlaybook = makeApi({
-    playbooksService: {
-      async resolvePlaybook() {
-        throw new ControlPlaneError('ROW_NOT_FOUND', 'playbook not found: no-such-playbook');
-      },
-    },
-  });
-  await assert.rejects(
-    () => missingPlaybook.simulateRoute({
-      title: 'missing playbook',
-      pipeline: 'local-change',
-      playbookId: 'no-such-playbook',
-      profile: emptyInlineProfile(),
-    }),
-    (error: unknown) => error instanceof ControlPlaneError && error.code === 'ROW_NOT_FOUND',
-  );
-});
-
-test(focusedCaseTitle('I7', focusedOwner, 'createRun and simulateRoute expose the same route projection'), async () => {
-  const api = makeApi();
-  const simulated = await api.simulateRoute({
-    title: 'route parity',
-    pipeline: 'local-change',
-    profile: LOCAL_CHANGE_PROFILE,
-  });
-  const created = await api.createRun({
-    title: 'route parity',
-    repo: '.',
-    pipelineId: 'local-change',
-    profile: LOCAL_CHANGE_PROFILE,
-    start: false,
-  });
-  if (!('route' in created)) throw new Error('createRun without start must return its pinned route');
-
-  assert.equal(created.route.pipelineId, simulated.pipelineId);
-  assert.deepEqual(created.route.roles, simulated.roles);
-  assert.deepEqual(created.route.routeGates, simulated.routeGates);
-  assert.deepEqual(created.route.roleBindings, simulated.roleBindings);
-});
-
-test('TaskControlPlaneApiService rejects stub-agent from production playbook role bindings', async () => {
-  const api = makeApi({
-    rolesService: {
-      async listRoles() {
-        return [
-          {
-            id: 'pb-developer',
-            name: 'developer',
-            modelLevel: 'standard',
-            runner: 'stub-agent',
-            surface: 'any',
-            rights: 'write-working-tree',
-            playbookId: 'pb',
-            playbookRoleId: 'developer',
-          },
-        ];
-      },
-    },
-  });
-
-  await assert.rejects(
-    () => api.simulateRoute({ title: 'small local edit', pipeline: 'local-change', profile: inlineProfileFor() }),
-    (error: unknown) =>
-      error instanceof ControlPlaneError &&
-      error.code === 'VALIDATION_FAILURE' &&
-      error.message.includes('stub-agent'),
-  );
-});
-
-test(focusedCaseTitle('I3', focusedOwner, 'simulateRoute binds every required role in order'), async () => {
-  const api = makeApi({
-    rolesService: {
-      async listRoles() {
-        return [
-          {
-            id: 'pb-architect',
-            name: 'architect',
-            modelLevel: 'deep',
-            runner: 'claude-code',
-            surface: 'any',
-            rights: 'read-only',
-            playbookId: 'pb',
-            playbookRoleId: 'architect',
-          },
-          {
-            id: 'pb-analyst',
-            name: 'analyst',
-            modelLevel: 'standard',
-            runner: 'claude-code',
-            surface: 'any',
-            rights: 'read-only',
-            playbookId: 'pb',
-            playbookRoleId: 'analyst',
-          },
-          {
-            id: 'pb-watcher',
-            name: 'watcher',
-            modelLevel: 'cheap',
-            runner: 'claude-code',
-            surface: 'any',
-            rights: 'read-only',
-            playbookId: 'pb',
-            playbookRoleId: 'watcher',
-          },
-        ];
-      },
-    },
-    playbooksService: {
-      async resolvePipeline() {
-        return {
-          id: 'pb-analysis-only',
-          playbookId: 'pb',
-          pipelineId: 'analysis-only',
-          path: 'pipelines/analysis-only/PIPELINE.md',
-          triggers: ['analysis'],
-          requiredRoles: ['architect', 'analyst', 'watcher'],
-          alternativeRoles: [],
-          optionalRoles: [],
-          routeGates: [],
-          executionPolicy: policyFor('analysis-only'),
-        };
-      },
-    },
-  });
-
-  const route = await api.simulateRoute({
-    title: 'Analyze this',
-    pipeline: 'analysis-only',
-    profile: emptyInlineProfile(),
-  });
-
-  assert.deepEqual(route.requiredRoles, ['architect', 'analyst', 'watcher']);
-  assert.deepEqual(route.roleBindings.map((item) => item.roleId), ['architect', 'analyst', 'watcher']);
-  assert.deepEqual(route.roleBindings.map((item) => item.rowId), ['pb-architect', 'pb-analyst', 'pb-watcher']);
-});
-
-test('TaskControlPlaneApiService.simulateRoute binds an unknown-id role purely from pipeline data (no kind)', async () => {
-  const api = makeApi({
-    rolesService: {
-      async listRoles() {
-        return [
-          {
-            id: 'pb-developer',
-            name: 'developer',
-            modelLevel: 'standard',
-            runner: 'claude-code',
-            surface: 'any',
-            rights: 'write-working-tree',
-            playbookId: 'pb',
-            playbookRoleId: 'developer',
-          },
-          {
-            id: 'pb-pr-poller',
-            name: 'pr-poller',
-            modelLevel: 'cheap',
-            runner: 'claude-code',
-            surface: 'any',
-            rights: 'read-only',
-            playbookId: 'pb',
-            playbookRoleId: 'pr-poller',
-          },
-        ];
-      },
-    },
-    playbooksService: {
-      async resolvePipeline() {
-        return {
-          id: 'pb-poll',
-          playbookId: 'pb',
-          pipelineId: 'poll',
-          path: 'pipelines/poll/PIPELINE.md',
-          triggers: ['poll'],
-          requiredRoles: ['developer', 'pr-poller'],
-          alternativeRoles: [],
-          optionalRoles: [],
-          routeGates: [],
-          executionPolicy: policyFor('poll'),
-        };
-      },
-    },
-  });
-
-  const route = await api.simulateRoute({ title: 'route poll', pipeline: 'poll', profile: emptyInlineProfile() });
-
-  // The binding resolves the unknown-id role by id alone; the route carries NO role `kind` (the
-  // role-kind machinery was removed in slice 4 — the data-driven engine reads no `kind`).
-  const pollerBinding = route.roleBindings.find((item) => item.roleId === 'pr-poller');
-  assert.ok(pollerBinding, 'pr-poller binds purely from the pipeline data');
-  assert.equal('kind' in (pollerBinding ?? {}), false, 'no kind is threaded onto any binding');
-});
-
-test(focusedCaseTitle(
-  'I1',
-  focusedOwner,
-  'simulateRoute exposes canonical feature-development roles and gates',
-), async () => {
-  const api = makeApi({
-    rolesService: {
-      async listRoles() {
-        return [
-          {
-            id: 'pb-orchestrator',
-            name: 'orchestrator',
-            modelLevel: 'standard',
-            runner: 'claude-code',
-            surface: 'any',
-            rights: 'state and routing only',
-            playbookId: 'pb',
-            playbookRoleId: 'orchestrator',
-          },
-          {
-            id: 'pb-analyst',
-            name: 'analyst',
-            modelLevel: 'deep',
-            runner: 'claude-code',
-            surface: 'any',
-            rights: 'read-only',
-            playbookId: 'pb',
-            playbookRoleId: 'analyst',
-          },
-          {
-            id: 'pb-reviewer',
-            name: 'reviewer',
-            modelLevel: 'deep',
-            runner: 'claude-code',
-            surface: 'any',
-            rights: 'read-only',
-            playbookId: 'pb',
-            playbookRoleId: 'reviewer',
-          },
-          {
-            id: 'pb-developer',
-            name: 'developer',
-            modelLevel: 'standard',
-            runner: 'claude-code',
-            surface: 'any',
-            rights: 'write-working-tree',
-            playbookId: 'pb',
-            playbookRoleId: 'developer',
-          },
-          {
-            id: 'pb-integrator',
-            name: 'integrator',
-            modelLevel: 'standard',
-            runner: 'script',
-            surface: 'repo',
-            rights: 'git and GitHub writes',
-            playbookId: 'pb',
-            playbookRoleId: 'integrator',
-          },
-          {
-            id: 'pb-watcher',
-            name: 'watcher',
-            modelLevel: 'cheap',
-            runner: 'claude-code',
-            surface: 'repo',
-            rights: 'read-only PR inspection',
-            playbookId: 'pb',
-            playbookRoleId: 'watcher',
-          },
-        ];
-      },
-    },
-    playbooksService: {
-      async resolvePipeline() {
-        return {
-          id: 'pb-feature-development',
-          playbookId: 'pb',
-          pipelineId: 'feature-development',
-          path: 'pipelines/feature-development/PIPELINE.md',
-          triggers: ['new feature'],
-          requiredRoles: ['orchestrator', 'analyst', 'reviewer', 'developer', 'integrator', 'watcher'],
-          alternativeRoles: [],
-          optionalRoles: [],
-          routeGates: ['task spec approval', 'merge approval'],
-          executionPolicy: policyFor('feature-development'),
-        };
-      },
-    },
-  });
-
-  const route = await api.simulateRoute({
-    title: 'Build feature',
-    pipeline: 'feature-development',
-    profile: emptyInlineProfile(),
-  });
-
-  assert.deepEqual(route.requiredRoles, ['orchestrator', 'analyst', 'reviewer', 'developer', 'integrator', 'watcher']);
-  assert.deepEqual(route.roleBindings.map((item) => item.roleId), [
-    'orchestrator',
-    'analyst',
-    'reviewer',
-    'developer',
-    'integrator',
-    'watcher',
-  ]);
-  assert.deepEqual(route.routeGates, ['plan', 'merge']);
-  assert.equal(route.roleBindings.find((item) => item.roleId === 'watcher')?.rowId, 'pb-watcher');
-});
-
-// Plan 0015 slice 3: the old phase-order hardcode (`insertBeforeFirstDeveloperRole`) was removed with
-// the hardcoded engine. Route role ORDER is no longer load-bearing — the data-driven template owns node
-// sequencing — so an alternative-group selection (analyst for bugfix's defect-analysis group) now simply
-// APPENDS. The route's job is to BIND the right capability handles, not to order them.
-test('TaskControlPlaneApiService.simulateRoute binds the bugfix defect-analysis alternative role (appended; order no longer load-bearing)', async () => {
-  const api = makeApi({
-    rolesService: {
-      async listRoles() {
-        return [
-          {
-            id: 'pb-orchestrator',
-            name: 'orchestrator',
-            modelLevel: 'standard',
-            runner: 'claude-code',
-            surface: 'any',
-            rights: 'state and routing only',
-            playbookId: 'pb',
-            playbookRoleId: 'orchestrator',
-          },
-          {
-            id: 'pb-analyst',
-            name: 'analyst',
-            modelLevel: 'deep',
-            runner: 'claude-code',
-            surface: 'any',
-            rights: 'read-only',
-            playbookId: 'pb',
-            playbookRoleId: 'analyst',
-          },
-          {
-            id: 'pb-developer',
-            name: 'developer',
-            modelLevel: 'standard',
-            runner: 'claude-code',
-            surface: 'any',
-            rights: 'write-working-tree',
-            playbookId: 'pb',
-            playbookRoleId: 'developer',
-          },
-          {
-            id: 'pb-integrator',
-            name: 'integrator',
-            modelLevel: 'standard',
-            runner: 'script',
-            surface: 'repo',
-            rights: 'git and GitHub writes',
-            playbookId: 'pb',
-            playbookRoleId: 'integrator',
-          },
-          {
-            id: 'pb-watcher',
-            name: 'watcher',
-            modelLevel: 'cheap',
-            runner: 'claude-code',
-            surface: 'repo',
-            rights: 'read-only PR inspection',
-            playbookId: 'pb',
-            playbookRoleId: 'watcher',
-          },
-        ];
-      },
-    },
-    playbooksService: {
-      async resolvePipeline() {
-        return {
-          id: 'pb-bugfix',
-          playbookId: 'pb',
-          pipelineId: 'bugfix',
-          path: 'pipelines/bugfix/PIPELINE.md',
-          triggers: ['known defect'],
-          requiredRoles: ['orchestrator', 'developer', 'integrator', 'watcher'],
-          alternativeRoles: [{ group_id: 'defect-analysis', roles: ['analyst', 'reviewer'], resolution: 'at_least_one' }],
-          optionalRoles: [],
-          routeGates: ['merge'],
-          executionPolicy: policyFor('bugfix'),
-        };
-      },
-    },
-  });
-
-  const route = await api.simulateRoute({ title: 'Fix bug', pipeline: 'bugfix', profile: emptyInlineProfile() });
-
-  assert.deepEqual(route.requiredRoles, ['orchestrator', 'developer', 'integrator', 'watcher']);
-  // analyst (the resolved defect-analysis alternative) is appended after the required roles; the
-  // data-driven `bugfix` template sequences analyst→developer→… itself, so this order is fine.
-  assert.deepEqual(route.roleBindings.map((item) => item.roleId), [
-    'orchestrator',
-    'developer',
-    'integrator',
-    'watcher',
-    'analyst',
-  ]);
-});
-
-test('TaskControlPlaneApiService.validateRepository reports non-existent paths without throwing', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'revo-mcp-test-'));
-  const result = await makeApi().validateRepository(join(dir, 'missing'));
-
-  assert.equal(result.exists, false);
-  assert.equal(result.isDirectory, false);
-  assert.equal(result.gitRoot, '');
-  assert.equal(result.error, 'Path does not exist.');
-});
-
-test('TaskControlPlaneApiService.getRepositoryContext reports malformed package metadata without throwing', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'revo-mcp-test-'));
-  execFileSync('git', ['init'], { cwd: dir, stdio: 'ignore' });
-  writeFileSync(join(dir, 'package.json'), '{ not json', 'utf8');
-
-  const result = await makeApi().getRepositoryContext(dir);
-
-  assert.notEqual(result.gitRoot, '');
-  assert.equal(result.packageName, '');
-  assert.deepEqual(result.scripts, []);
-  assert.match(result.packageError, /JSON/);
-});
-
-test('TaskControlPlaneApiService.getRepositoryContext ignores non-object package scripts metadata', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'revo-mcp-test-'));
-  execFileSync('git', ['init'], { cwd: dir, stdio: 'ignore' });
-  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'pkg', scripts: 'oops' }), 'utf8');
-
-  const result = await makeApi().getRepositoryContext(dir);
-
-  assert.equal(result.packageName, 'pkg');
-  assert.deepEqual(result.scripts, []);
-  assert.equal(result.packageError, '');
-});
-
-// ── resolveInboxItem smoke: merge gate completion ─────────────────────────────
-
-test('TaskControlPlaneApiService.resolveInboxItem: merge gate signals without completing run when signalGate is true', async () => {
-  const completed: Array<{ runId: string; source?: string; actor?: string }> = [];
-  const api = makeApi({
-    inboxService: {
-      async getInbox() {
-        return makeInboxItem({ title: 'Merge approval', context: { topic: 'merge' } });
-      },
-    },
-    runService: {
-      async completeRun(runId, opts) {
-        completed.push({ runId, source: opts?.source, actor: opts?.actor });
-        return { runId, previousStatus: 'ready', status: 'completed' };
-      },
-    },
-  });
-
-  const result = await api.resolveInboxItem({ inboxId: 'inbox-1', answer: { decision: 'approve' } });
-
-  assert.equal(result.topic, 'merge');
-  assert.equal(result.signaled, true);
-  assert.deepEqual(completed, []);
-});
-
-test('TaskControlPlaneApiService.resolveInboxItem: merge gate skips completeRun when signalGate is false', async () => {
-  let completeRunCalled = false;
-  const api = makeApi({
-    inboxService: {
-      async getInbox() {
-        return makeInboxItem({ title: 'Merge approval', context: { topic: 'merge' } });
-      },
-    },
-    runService: {
-      async completeRun() {
-        completeRunCalled = true;
-        return null;
-      },
-    },
-  });
-
-  const result = await api.resolveInboxItem({ inboxId: 'inbox-1', answer: { decision: 'approve' }, signalGate: false });
-
-  assert.equal(result.signaled, false);
-  assert.equal(completeRunCalled, false, 'completeRun must not be called when signalGate is false');
-});
-
-test('TaskControlPlaneApiService.resolveInboxItem: plan gate does not call completeRun', async () => {
-  let completeRunCalled = false;
+test('simulateRoute and createRun share canonical plan bytes and createRun persists before start', async () => {
+  let persistedRoute: RouteDecision | undefined;
   const api = makeApi({
     runService: {
-      async completeRun() {
-        completeRunCalled = true;
-        return null;
+      async createRun(input) {
+        persistedRoute = input.routeDecision as RouteDecision;
+        return { runId: 'run-1', taskId: 'task-1', stepId: 'step-1', eventId: 'event-1', status: 'ready' };
       },
     },
   });
 
-  const result = await api.resolveInboxItem({ inboxId: 'inbox-1', answer: { decision: 'approve' } });
+  const simulated = await api.simulateRoute({ title: 'Task', repo: '.', pipelineId: 'local-change', profile: LOCAL_CHANGE_PROFILE, params: { ticket: 'T-1' } });
+  const created = await api.createRun({ title: 'Task', repo: '.', pipelineId: 'local-change', profile: LOCAL_CHANGE_PROFILE, params: { ticket: 'T-1' } });
 
-  assert.equal(result.topic, 'plan');
-  assert.equal(result.signaled, true);
-  assert.equal(completeRunCalled, false, 'plan gates must not trigger completeRun');
+  assert.ok(persistedRoute);
+  assert.equal(simulated.executionPlanBytes, persistedRoute.executionPlanBytes);
+  assert.equal(simulated.executionPlanDigest, persistedRoute.executionPlanDigest);
+  assert.ok('route' in created);
+  assert.equal(created.route.executionPlanBytes, simulated.executionPlanBytes);
+  assert.equal(created.route.executionPlanDigest, simulated.executionPlanDigest);
+  assert.deepEqual(created.route.executionPlan.agentBindings, simulated.executionPlan.agentBindings);
+  assert.deepEqual(created.route.executionPlan.scriptBindings, simulated.executionPlan.scriptBindings);
+  const plan = executionPlanFromRouteDecision(simulated);
+  assert.equal(plan.agentBindings[0]?.runnerId, 'codex');
+  assert.equal(plan.agentBindings[0]?.provider, 'openai');
+  assert.equal(plan.agentBindings[0]?.modelId, 'gpt-5.6-luna');
+  assert.deepEqual(plan.agentBindings[0]?.modelParams, {});
+  assert.equal(plan.businessParams.ticket, 'T-1');
 });
 
-// ─────────────────────── blockedReason ───────────────────────
-
-test('resolveRunState: surfaces blockedReason from pipeline_blocked event reason', async () => {
+test('startRun uses only the stored plan after the source profile object is mutated', async () => {
+  let storedRoute: RouteDecision | undefined;
+  let startedRoute: RouteDecision | undefined;
   const api = makeApi({
     runService: {
-      async showRun() {
-        return {
-          run: { runId: 'run-1', title: 'R', status: 'running', priority: 0, createdAt: '', description: '', scope: '', repos: [] },
-          tasks: [],
-        };
+      async createRun(input) {
+        storedRoute = input.routeDecision as RouteDecision;
+        return { runId: 'run-1', taskId: 'task-1', stepId: 'step-1', eventId: 'event-1', status: 'ready' };
       },
-      async listRunEvents() {
-        return [
-          { eventId: 'e1', type: 'pipeline_blocked', actor: 'engine', createdAt: '', taskId: '', stepId: '', payload: { reason: 'plan gate rejected', nodeId: 'reviewer' } },
-        ];
-      },
-    },
-    inboxService: {
-      async listInbox() { return []; },
-    },
-    dbosService: {
-      async getWorkflowStatus() { return null; },
-    },
-  });
-
-  const state = await api.resolveRunState('run-1');
-
-  assert.equal(state.state, 'blocked');
-  assert.equal(state.blockedReason, 'plan gate rejected');
-});
-
-test('resolveRunState: blockedReason is undefined when no pipeline_blocked event', async () => {
-  const api = makeApi({
-    runService: {
-      async showRun() {
-        return {
-          run: { runId: 'run-1', title: 'R', status: 'running', priority: 0, createdAt: '', description: '', scope: '', repos: [] },
-          tasks: [],
-        };
-      },
-      async listRunEvents() { return []; },
-    },
-    inboxService: {
-      async listInbox() { return []; },
-    },
-    dbosService: {
-      async getWorkflowStatus() { return null; },
-    },
-  });
-
-  const state = await api.resolveRunState('run-1');
-
-  assert.equal(state.blockedReason, undefined);
-});
-
-test('resolveRunState: paused run surfaces blockedReason when pipeline_blocked event exists', async () => {
-  const api = makeApi({
-    runService: {
-      async showRun() {
-        return {
-          run: { runId: 'run-1', title: 'R', status: 'paused', priority: 0, createdAt: '', description: '', scope: '', repos: [] },
-          tasks: [],
-        };
-      },
-      async listRunEvents() {
-        return [
-          { eventId: 'e1', type: 'pipeline_blocked', actor: 'engine', createdAt: '', taskId: '', stepId: '', payload: { reason: 'reviewer blocked' } },
-        ];
-      },
-    },
-    inboxService: {
-      async listInbox() { return []; },
-    },
-    dbosService: {
-      async getWorkflowStatus() { return null; },
-    },
-  });
-
-  const state = await api.resolveRunState('run-1');
-
-  assert.equal(state.state, 'blocked');
-  assert.equal(state.blockedReason, 'reviewer blocked');
-});
-
-test('getRunDigest: includes blockedReason when pipeline_blocked event exists', async () => {
-  const api = makeApi({
-    runService: {
-      async showRun() {
-        return {
-          run: { runId: 'run-1', title: 'R', status: 'paused', priority: 0, createdAt: '', description: '', scope: '', repos: [] },
-          tasks: [],
-        };
-      },
-      async listRunEvents() {
-        return [
-          { eventId: 'e1', type: 'pipeline_blocked', actor: 'engine', createdAt: '', taskId: '', stepId: '', payload: { reason: 'no budget' } },
-        ];
-      },
-      async listRunAttempts() { return []; },
-    },
-    inboxService: {
-      async listInbox() { return []; },
-    },
-  });
-
-  const digest = await api.getRunDigest('run-1');
-
-  assert.equal(digest.blockedReason, 'no budget');
-});
-
-test('getRunDigest: blockedReason absent when no pipeline_blocked event', async () => {
-  const api = makeApi({
-    runService: {
-      async showRun() {
-        return {
-          run: { runId: 'run-1', title: 'R', status: 'running', priority: 0, createdAt: '', description: '', scope: '', repos: [] },
-          tasks: [],
-        };
-      },
-      async listRunEvents() { return []; },
-      async listRunAttempts() { return []; },
-    },
-    inboxService: {
-      async listInbox() { return []; },
-    },
-  });
-
-  const digest = await api.getRunDigest('run-1');
-
-  assert.equal(digest.blockedReason, undefined);
-});
-
-test('getRunDigest: normalizes stale ready row status when workflow is running', async () => {
-  const api = makeApi({
-    runService: {
-      async showRun() {
-        return {
-          run: { runId: 'run-1', title: 'R', status: 'ready', priority: 0, createdAt: '', description: '', scope: '', repos: [] },
-          tasks: [{ taskId: 'task-1', title: 'T', status: 'ready', roleHint: 'developer' }],
-        };
-      },
-      async listRunEvents() {
-        return [
-          { eventId: 'e1', type: 'step_succeeded', actor: 'engine', createdAt: '', taskId: 'task-1', stepId: 'step-1', payload: { stepKey: 'developer' } },
-        ];
-      },
-      async listRunAttempts() { return []; },
-    },
-    inboxService: {
-      async listInbox() { return []; },
-    },
-    dbosService: {
-      async getWorkflowStatus() {
-        return {
-          workflowID: 'run-1',
-          status: 'PENDING',
-          workflowName: 'dataDrivenTask',
-          workflowClassName: 'PipelineService',
-          createdAt: Date.parse('2026-06-28T09:34:06.403Z'),
-          updatedAt: Date.parse('2026-06-28T09:36:16.078Z'),
-          priority: 0,
-          applicationID: 'test',
-        } as Awaited<ReturnType<DbosService['getWorkflowStatus']>>;
-      },
-    },
-  });
-
-  const digest = await api.getRunDigest('run-1');
-
-  assert.equal(digest.run.status, 'running');
-  assert.equal(digest.tasks[0]?.status, 'running');
-});
-
-// ─── PROFILE_SCHEMA_CLOSED validation tests ──────────────────────────────────
-
-function makeApiForProfileTests(loadModelProfileResult?: 'ok' | 'notfound') {
-  return makeApi({
-    rolesService: {
-      async listRoles() {
-        return [
-          {
-            id: 'pb-developer',
-            name: 'developer',
-            modelLevel: 'standard',
-            runner: 'claude-code',
-            surface: 'any',
-            rights: 'write-working-tree',
-            playbookId: 'pb',
-            playbookRoleId: 'developer',
-          },
-          {
-            id: 'pb-reviewer',
-            name: 'reviewer',
-            modelLevel: 'standard',
-            runner: 'codex',
-            surface: 'any',
-            rights: 'read-only',
-            playbookId: 'pb',
-            playbookRoleId: 'reviewer',
-          },
-        ];
-      },
-      async loadModelProfile(level: string) {
-        if (loadModelProfileResult === 'notfound') {
-          throw new ControlPlaneError('ROW_NOT_FOUND', `model profile not found: ${level}`);
-        }
-        return {
-          level: level as 'standard',
-          provider: 'anthropic',
-          modelId: 'claude-sonnet',
-          params: {},
-          costPerInput: 3,
-          costPerOutput: 15,
-        };
-      },
-    },
-  });
-}
-
-function inlineLocalProfile(slot: Record<string, unknown>): Record<string, unknown> {
-  return {
-    schemaVersion: 'run-profile/v1',
-    topology: { stages: { developer: { mode: 'single' } } },
-    bindings: { slots: { developer: slot } },
-  };
-}
-
-test(focusedCaseTitle('I9', focusedOwner, 'profile rejects an unknown role runner before start'), async () => {
-  const api = makeApiForProfileTests();
-  await assert.rejects(
-    () => api.simulateRoute({
-      title: 'test',
-      pipeline: 'local-change',
-      profile: inlineLocalProfile({ runnerId: 'unknown-runner-xyz', modelLevel: 'standard' }),
-    }),
-    (err: ControlPlaneError) => {
-      assert.ok(err.message.includes('PROFILE_SCHEMA_CLOSED'), `expected PROFILE_SCHEMA_CLOSED in: ${err.message}`);
-      assert.ok(err.message.includes('unknown-runner-xyz'), `expected runnerId in: ${err.message}`);
-      return true;
-    },
-  );
-});
-
-test(focusedCaseTitle('I9b', focusedOwner, 'profile rejects an unknown node runner before start'), async () => {
-  const api = makeApiForProfileTests();
-  await assert.rejects(
-    () => api.simulateRoute({
-      title: 'test',
-      pipeline: 'local-change',
-      profile: {
-        ...inlineLocalProfile({ runnerId: 'claude-code', modelLevel: 'standard' }),
-        bindings: { slots: { 'node:developer': { runnerId: 'ghost-runner', modelLevel: 'standard' } } },
-      },
-    }),
-    (err: ControlPlaneError) => {
-      assert.ok(err.message.includes('PROFILE_SCHEMA_CLOSED'), `expected PROFILE_SCHEMA_CLOSED in: ${err.message}`);
-      assert.ok(err.message.includes('ghost-runner'), `expected runnerId in: ${err.message}`);
-      return true;
-    },
-  );
-});
-
-test('PROFILE_SCHEMA_CLOSED: rejects unknown role slot instead of silently ignoring it', async () => {
-  const api = makeApiForProfileTests();
-  await assert.rejects(
-    () => api.simulateRoute({
-      title: 'test',
-      pipeline: 'local-change',
-      profile: {
-        ...inlineLocalProfile({ runnerId: 'claude-code', modelLevel: 'standard' }),
-        bindings: { slots: { 'role:developr': { runnerId: 'claude-code', modelLevel: 'standard' } } },
-      },
-    }),
-    (err: ControlPlaneError) => {
-      assert.ok(err.message.includes('PROFILE_SCHEMA_CLOSED'), `expected PROFILE_SCHEMA_CLOSED in: ${err.message}`);
-      assert.ok(err.message.includes('roleId "developr"'), `expected roleId in: ${err.message}`);
-      return true;
-    },
-  );
-});
-
-test('PROFILE_SCHEMA_CLOSED: rejects unknown node slot instead of silently ignoring it', async () => {
-  const api = makeApiForProfileTests();
-  await assert.rejects(
-    () => api.simulateRoute({
-      title: 'test',
-      pipeline: 'local-change',
-      profile: {
-        ...inlineLocalProfile({ runnerId: 'claude-code', modelLevel: 'standard' }),
-        bindings: { slots: { developr: { runnerId: 'claude-code', modelLevel: 'standard' } } },
-      },
-    }),
-    (err: ControlPlaneError) => {
-      assert.ok(err.message.includes('PROFILE_SCHEMA_CLOSED'), `expected PROFILE_SCHEMA_CLOSED in: ${err.message}`);
-      assert.ok(err.message.includes('nodeId "developr"'), `expected nodeId in: ${err.message}`);
-      return true;
-    },
-  );
-});
-
-test('PROFILE_SCHEMA_CLOSED: rejects unknown topology stage instead of silently ignoring it', async () => {
-  const api = makeApiForProfileTests();
-  await assert.rejects(
-    () => api.simulateRoute({
-      title: 'test',
-      pipeline: 'local-change',
-      profile: {
-        ...inlineLocalProfile({ runnerId: 'claude-code', modelLevel: 'standard' }),
-        topology: { stages: { developr: { mode: 'single' } } },
-      },
-    }),
-    (err: ControlPlaneError) => {
-      assert.ok(err.message.includes('PROFILE_SCHEMA_CLOSED'), `expected PROFILE_SCHEMA_CLOSED in: ${err.message}`);
-      assert.ok(err.message.includes('topology stage "developr"'), `expected topology stage in: ${err.message}`);
-      return true;
-    },
-  );
-});
-
-test('PROFILE_SCHEMA_CLOSED: rejects a typo in match.runnerId instead of silently matching nothing', async () => {
-  const api = makeApiForProfileTests();
-  await assert.rejects(
-    () => api.simulateRoute({
-      title: 'test',
-      pipeline: 'local-change',
-      profile: inlineLocalProfile({ runnerId: 'cladue-code', modelLevel: 'deep' }),
-    }),
-    (err: ControlPlaneError) => {
-      assert.ok(err.message.includes('PROFILE_SCHEMA_CLOSED'), `expected PROFILE_SCHEMA_CLOSED in: ${err.message}`);
-      assert.ok(err.message.includes('cladue-code'), `expected the typo'd match.runnerId in: ${err.message}`);
-      return true;
-    },
-  );
-});
-
-test('PROFILE_SCHEMA_CLOSED: rejects an invalid bindingOverride timeoutMs instead of silently ignoring it', async () => {
-  const api = makeApiForProfileTests();
-  await assert.rejects(
-    () => api.simulateRoute({
-      title: 'test',
-      pipeline: 'local-change',
-      profile: inlineLocalProfile({ runnerId: 'claude-code', modelLevel: 'standard', timeoutMs: -5 }),
-    }),
-    (err: ControlPlaneError) => {
-      assert.ok(err.message.includes('run-profile/v1'), `expected run-profile/v1 in: ${err.message}`);
-      assert.ok(err.message.includes('timeoutMs'), `expected timeoutMs named in: ${err.message}`);
-      return true;
-    },
-  );
-});
-
-test('PROFILE_SCHEMA_CLOSED: accepts no-op inline profile overlays', async () => {
-  const api = makeApiForProfileTests();
-  const route = await api.simulateRoute({
-    title: 'test',
-    pipeline: 'local-change',
-    profile: {
-      schemaVersion: 'run-profile/v1',
-      topology: { stages: {} },
-      bindings: { slots: {} },
-    },
-  });
-
-  assert.deepEqual(route.launchBindings, []);
-  assert.equal(route.roleBindings[0]?.runnerSource, 'playbook');
-});
-
-test('PROFILE_SCHEMA_CLOSED: rejects catalog-only lifecycle fields in inline profile overlays', async () => {
-  const api = makeApiForProfileTests();
-  await assert.rejects(
-    () => api.simulateRoute({
-      title: 'test',
-      pipeline: 'local-change',
-      profile: {
-        schemaVersion: 'run-profile/v1',
-        topology: { stages: {} },
-        bindings: { slots: {} },
-        status: 'deprecated',
-      },
-    }),
-    (err: ControlPlaneError) => {
-      assert.ok(err.message.includes('run-profile/v1'), `expected run-profile/v1 in: ${err.message}`);
-      assert.ok(err.message.includes('additional properties'), `expected additional properties in: ${err.message}`);
-      return true;
-    },
-  );
-});
-
-test('PROFILE_SCHEMA_CLOSED: rejects empty slot binding object', async () => {
-  const api = makeApiForProfileTests();
-  await assert.rejects(
-    () => api.simulateRoute({
-      title: 'test',
-      pipeline: 'local-change',
-      profile: { ...inlineLocalProfile({ runnerId: 'claude-code', modelLevel: 'deep' }), bindings: { slots: { developer: {} } } },
-    }),
-    (err: ControlPlaneError) => {
-      assert.ok(err.message.includes('run-profile/v1'), `expected run-profile/v1 in: ${err.message}`);
-      return true;
-    },
-  );
-});
-
-test('PROFILE_SCHEMA_CLOSED: rejects modelLevel unavailable (ROW_NOT_FOUND from loadModelProfile)', async () => {
-  const api = makeApiForProfileTests('notfound');
-  await assert.rejects(
-    () => api.simulateRoute({
-      title: 'test',
-      pipeline: 'local-change',
-      profile: inlineLocalProfile({ runnerId: 'claude-code', modelLevel: 'deep' }),
-    }),
-    (err: ControlPlaneError) => {
-      assert.ok(err.message.includes('PROFILE_SCHEMA_CLOSED'), `expected PROFILE_SCHEMA_CLOSED in: ${err.message}`);
-      assert.ok(err.message.includes('unavailable'), `expected 'unavailable' in: ${err.message}`);
-      return true;
-    },
-  );
-});
-
-test('PROFILE_SCHEMA_CLOSED: rejects timeoutMs: 0 instead of silently stripping it', async () => {
-  const api = makeApiForProfileTests();
-  await assert.rejects(
-    () => api.simulateRoute({
-      title: 'test',
-      pipeline: 'local-change',
-      profile: inlineLocalProfile({ runnerId: 'claude-code', modelLevel: 'standard', timeoutMs: 0 }),
-    }),
-    (err: ControlPlaneError) => {
-      assert.ok(err.message.includes('run-profile/v1'), `expected run-profile/v1 in: ${err.message}`);
-      assert.ok(err.message.includes('timeoutMs'), `expected timeoutMs named in: ${err.message}`);
-      return true;
-    },
-  );
-});
-
-test('PROFILE_SCHEMA_CLOSED: rejects timeoutMs > 86400000', async () => {
-  const api = makeApiForProfileTests();
-  await assert.rejects(
-    () => api.simulateRoute({
-      title: 'test',
-      pipeline: 'local-change',
-      profile: inlineLocalProfile({ runnerId: 'claude-code', modelLevel: 'standard', timeoutMs: 86_400_001 }),
-    }),
-    (err: ControlPlaneError) => {
-      assert.ok(err.message.includes('PROFILE_SCHEMA_CLOSED'), `expected PROFILE_SCHEMA_CLOSED in: ${err.message}`);
-      return true;
-    },
-  );
-});
-
-test('PROFILE_SCHEMA_CLOSED: rejects bypassPermissions on codex runner', async () => {
-  const api = makeApiForProfileTests();
-  await assert.rejects(
-    () => api.simulateRoute({
-      title: 'test',
-      pipeline: 'local-change',
-      profile: {
-        ...inlineLocalProfile({ runnerId: 'claude-code', modelLevel: 'standard' }),
-        bindings: { slots: { reviewer: { runnerId: 'codex', modelLevel: 'codex-standard', permissionMode: 'bypassPermissions' } } },
-      },
-    }),
-    (err: ControlPlaneError) => {
-      assert.ok(err.message.includes('PROFILE_SCHEMA_CLOSED'), `expected PROFILE_SCHEMA_CLOSED in: ${err.message}`);
-      assert.ok(err.message.includes('bypassPermissions'), `expected permissionMode in: ${err.message}`);
-      return true;
-    },
-  );
-});
-
-test('PROFILE_SCHEMA_CLOSED: rejects workspace-write on claude-code runner', async () => {
-  const api = makeApiForProfileTests();
-  await assert.rejects(
-    () => api.simulateRoute({
-      title: 'test',
-      pipeline: 'local-change',
-      profile: inlineLocalProfile({ runnerId: 'claude-code', modelLevel: 'standard', permissionMode: 'workspace-write' }),
-    }),
-    (err: ControlPlaneError) => {
-      assert.ok(err.message.includes('PROFILE_SCHEMA_CLOSED'), `expected PROFILE_SCHEMA_CLOSED in: ${err.message}`);
-      assert.ok(err.message.includes('workspace-write'), `expected permissionMode in: ${err.message}`);
-      return true;
-    },
-  );
-});
-
-test('PROFILE_SCHEMA_CLOSED: accepts workspace-write on codex runner', async () => {
-  const api = makeApiForProfileTests();
-  const result = await api.simulateRoute({
-    title: 'test',
-    pipeline: 'local-change',
-    profile: inlineLocalProfile({ runnerId: 'codex', modelLevel: 'codex-standard', permissionMode: 'workspace-write' }),
-  });
-  assert.ok(result);
-});
-
-test('PROFILE_SCHEMA_CLOSED: rejects permissionMode when runner undeterminable (nodeId-only, no runnerId)', async () => {
-  const api = makeApiForProfileTests();
-  await assert.rejects(
-    () => api.simulateRoute({
-      title: 'test',
-      pipeline: 'local-change',
-      profile: {
-        ...inlineLocalProfile({ runnerId: 'claude-code', modelLevel: 'standard' }),
-        bindings: { slots: { 'node:developer': { permissionMode: 'default' } } },
-      },
-    }),
-    (err: ControlPlaneError) => {
-      assert.ok(err.message.includes('PROFILE_SCHEMA_CLOSED'), `expected PROFILE_SCHEMA_CLOSED in: ${err.message}`);
-      assert.ok(err.message.includes('pin runnerId'), `expected 'pin runnerId' in: ${err.message}`);
-      return true;
-    },
-  );
-});
-
-test('PROFILE_SCHEMA_CLOSED: rejects permissionMode on script runner (not supported)', async () => {
-  const api = makeApi({
-    rolesService: {
-      async listRoles() {
-        return [{
-          id: 'pb-script-role',
-          name: 'script-role',
-          modelLevel: 'standard',
-          runner: 'script',
-          surface: 'any',
-          rights: '',
-          playbookId: 'pb',
-          playbookRoleId: 'script-role',
-        }];
-      },
-      async loadModelProfile(level: string) {
-        return { level: level as 'standard', provider: 'anthropic', modelId: 'x', params: {}, costPerInput: 0, costPerOutput: 0 };
-      },
-    },
-    playbooksService: {
-      async resolvePlaybook() {
-        return { id: 'pb', name: 'PB', packageName: '@x/pb', version: '1.0.0', source: 'local:/pb', schemaVersion: 2 };
-      },
-      async resolvePipeline() {
-        return {
-          id: 'pb-local-change', playbookId: 'pb', pipelineId: 'local-change',
-          path: 'pipelines/local-change/PIPELINE.md', triggers: ['small local edit'],
-          requiredRoles: ['script-role'], alternativeRoles: [], optionalRoles: [],
-          routeGates: [], executionPolicy: LOCAL_CHANGE_POLICY,
-        };
-      },
-      async listPipelines() { return []; },
-      async getPipeline() { return null; },
-    },
-  });
-  await assert.rejects(
-    () => api.simulateRoute({
-      title: 'test',
-      pipeline: 'local-change',
-      profile: {
-        schemaVersion: 'run-profile/v1',
-        topology: { stages: { developer: { mode: 'single' } } },
-        bindings: { slots: { 'role:script-role': { runnerId: 'script', modelLevel: 'standard', permissionMode: 'default' } } },
-      },
-    }),
-    (err: ControlPlaneError) => {
-      assert.ok(err.message.includes('PROFILE_SCHEMA_CLOSED'), `expected PROFILE_SCHEMA_CLOSED in: ${err.message}`);
-      assert.ok(err.message.includes('not supported'), `expected 'not supported' in: ${err.message}`);
-      return true;
-    },
-  );
-});
-
-test('PROFILE_SCHEMA_CLOSED: rejects timeoutMs on script node bindings', async () => {
-  const api = makeApiForStoredProfileTests();
-  await assert.rejects(
-    () => api.simulateRoute({
-      title: 'test',
-      pipeline: 'feature-development',
-      profile: {
-        schemaVersion: 'run-profile/v1',
-        topology: { stages: {} },
-        bindings: { slots: { integrator: { timeoutMs: 60000 } } },
-      },
-    }),
-    (err: ControlPlaneError) => {
-      assert.ok(err.message.includes('PROFILE_SCHEMA_CLOSED'), `expected PROFILE_SCHEMA_CLOSED in: ${err.message}`);
-      assert.ok(err.message.includes('script node'), `expected script node in: ${err.message}`);
-      assert.ok(err.message.includes('timeoutMs'), `expected timeoutMs in: ${err.message}`);
-      return true;
-    },
-  );
-});
-
-test(focusedCaseTitle('I10', focusedOwner, 'permission mode is validated against the selected runner'), async () => {
-  const api = makeApi({
-    rolesService: {
-      async listRoles() {
-        return [{
-          id: 'pb-developer',
-          name: 'developer',
-          modelLevel: 'standard',
-          runner: 'claude-code',
-          surface: 'any',
-          rights: 'write-working-tree',
-          playbookId: 'pb',
-          playbookRoleId: 'developer',
-        }];
-      },
-      async loadModelProfile(level: string) {
-        return { level: level as 'standard', provider: 'anthropic', modelId: 'x', params: {}, costPerInput: 0, costPerOutput: 0 };
-      },
-    },
-  });
-  await assert.rejects(
-    () => api.simulateRoute({
-      title: 'test',
-      pipeline: 'local-change',
-      profile: inlineLocalProfile({ runnerId: 'codex', modelLevel: 'codex-standard', permissionMode: 'bypassPermissions' }),
-    }),
-    (err: ControlPlaneError) => {
-      assert.ok(err.message.includes('PROFILE_SCHEMA_CLOSED'), `expected PROFILE_SCHEMA_CLOSED in: ${err.message}`);
-      assert.ok(err.message.includes('bypassPermissions'), `expected permissionMode in: ${err.message}`);
-      return true;
-    },
-  );
-});
-
-test(focusedCaseTitle('I8', focusedOwner, 'profile binding provenance is retained per axis'), async () => {
-  const api = makeApiForProfileTests();
-  const result = await api.simulateRoute({
-    title: 'test',
-    pipeline: 'local-change',
-    profile: inlineLocalProfile({ runnerId: 'claude-code', modelLevel: 'deep' }),
-  });
-  const binding = result.roleBindings[0];
-  assert.equal(binding?.resolvedModelLevel, 'deep');
-  assert.equal(binding?.modelSource, 'profile');
-  assert.equal(binding?.modelLevel, 'standard');
-});
-
-test('simulateRoute requires exactly one profile source', async () => {
-  const api = makeApiForProfileTests();
-  await assert.rejects(
-    () => api.simulateRoute({ title: 'test', pipeline: 'local-change' }),
-    /exactly one of profileId or profile is required/,
-  );
-});
-
-test('simulateRoute rejects blank profileId', async () => {
-  const api = makeApiForProfileTests();
-  await assert.rejects(
-    () => api.simulateRoute({ title: 'test', pipeline: 'local-change', profileId: '  ' }),
-    /profileId must be a non-empty string/,
-  );
-});
-
-test('PROFILE_BINDING_ONLY_NO_GRAPH_CHANGE: inline profile bindings do not change graph-shaping fields', async () => {
-  const api = makeApiForProfileTests();
-  const withProfile = await api.simulateRoute({
-    title: 'test',
-    pipeline: 'local-change',
-    profile: inlineLocalProfile({ runnerId: 'claude-code', modelLevel: 'deep', timeoutMs: 120000 }),
-  });
-  const withoutProfile = await api.simulateRoute({
-    title: 'test',
-    pipeline: 'local-change',
-    profile: inlineLocalProfile({ runnerId: 'claude-code', modelLevel: 'standard' }),
-  });
-  assert.deepEqual(withProfile.roles, withoutProfile.roles);
-  assert.deepEqual(withProfile.requiredRoles, withoutProfile.requiredRoles);
-  assert.deepEqual(withProfile.optionalRoles, withoutProfile.optionalRoles);
-  assert.deepEqual(withProfile.routeGates, withoutProfile.routeGates);
-  assert.equal(withProfile.pipelineId, withoutProfile.pipelineId);
-});
-
-test('simulateRoute pins inline profile snapshot and hash', async () => {
-  const api = makeApiForProfileTests();
-  const profile = inlineLocalProfile({ runnerId: 'claude-code', modelLevel: 'standard', timeoutMs: 60000 });
-  const result = await api.simulateRoute({
-    title: 'test',
-    pipeline: 'local-change',
-    profile,
-  });
-  assert.equal(result.profileSource, 'inline');
-  assert.equal(result.profileSnapshot, profile);
-  assert.ok(typeof result.profileHash === 'string' && result.profileHash.length === 64);
-  assert.equal(result.launchBindings.length, 1);
-});
-
-// Stored run profile resolution + provenance.
-
-const FEATURE_DEV_TEMPLATE = {
-  specVersion: '1.0',
-  pipelineId: 'feature-development',
-  entry: 'analyst',
-  verdicts: { domain: ['approved'] },
-  nodes: {
-    analyst: { id: 'analyst', kind: 'agent', roleRef: 'role:analyst', next: 'planReviewer', resultSchema: 'schema:plan', produces: { name: 'plan' } },
-    planReviewer: { id: 'planReviewer', kind: 'agent', roleRef: 'role:reviewer', next: 'developer', resultSchema: 'schema:review', produces: { name: 'planReview' } },
-    developer: { id: 'developer', kind: 'agent', roleRef: 'role:developer', next: 'codeReview', resultSchema: 'schema:change', produces: { name: 'change' }, consumes: [] },
-    codeReview: { id: 'codeReview', kind: 'agent', roleRef: 'role:reviewer', next: 'integrator', resultSchema: 'schema:review', produces: { name: 'review' }, consumes: [{ node: 'developer', as: 'developerChange', staleOk: true }] },
-    integrator: { id: 'integrator', kind: 'script', scriptRef: 'script:integrator', next: 'doneEnd', consumes: [{ node: 'developer', as: 'change' }] },
-    doneEnd: { id: 'doneEnd', kind: 'terminal', status: 'succeeded' },
-  },
-};
-const FEATURE_DEV_POLICY = { template_json: FEATURE_DEV_TEMPLATE };
-const STORED_PROFILE_ID = 'codex-primary-claude-review-consensus';
-const STORED_PROFILE = {
-  schemaVersion: 'run-profile/v1',
-  topology: {
-    stages: {
-      planReviewer: { mode: 'consensus', branches: 2 },
-      codeReview: { mode: 'consensus', branches: 2 },
-    },
-  },
-  bindings: {
-    slots: {
-      orchestrator: { runnerId: 'codex', modelLevel: 'codex-deep' },
-      analyst: { runnerId: 'codex', modelLevel: 'codex-deep', permissionMode: 'workspace-write' },
-      developer: { runnerId: 'codex', modelLevel: 'codex-standard', permissionMode: 'workspace-write' },
-      integrator: { accounts: { github: 'profile-bot' } },
-      triager: { runnerId: 'codex', modelLevel: 'codex-deep' },
-      watcher: { runnerId: 'codex', modelLevel: 'codex-standard' },
-      planReviewPrimary: { runnerId: 'codex', modelLevel: 'codex-deep' },
-      planReviewSecondary: { runnerId: 'claude-code', modelLevel: 'deep' },
-      codeReviewPrimary: { runnerId: 'codex', modelLevel: 'codex-deep' },
-      codeReviewSecondary: { runnerId: 'claude-code', modelLevel: 'deep' },
-    },
-  },
-};
-const STORED_PROFILE_HASH = runProfileHash(STORED_PROFILE, {
-  pipelineId: 'feature-development',
-  schemaVersion: 'run-profile/v1',
-});
-const STORED_PROFILE_REVISION_HASH = runProfileRevisionHash(STORED_PROFILE, {
-  playbookId: 'pb',
-  pipelineId: 'feature-development',
-  profileId: STORED_PROFILE_ID,
-  schemaVersion: 'run-profile/v1',
-  version: '1',
-  displayName: 'Codex primary, Claude review consensus',
-  summary: 'Codex development with parallel Codex plus Claude consensus for plan and code review.',
-  status: 'active',
-});
-const STORED_PROFILE_SUMMARY = {
-  id: `pb-${STORED_PROFILE_ID}`,
-  playbookId: 'pb',
-  pipelineId: 'feature-development',
-  profileId: STORED_PROFILE_ID,
-  schemaVersion: 'run-profile/v1',
-  version: '1',
-  displayName: 'Codex primary, Claude review consensus',
-  summary: 'Codex development with parallel Codex plus Claude consensus for plan and code review.',
-  profile: STORED_PROFILE,
-  profileHash: STORED_PROFILE_HASH,
-  profileRevisionHash: STORED_PROFILE_REVISION_HASH,
-  status: 'active' as const,
-} as const;
-
-const CANONICAL_ROLES = [
-  { id: 'pb-orchestrator', name: 'orchestrator', modelLevel: 'deep', runner: 'claude-code', surface: 'any', rights: 'write-working-tree', playbookId: 'pb', playbookRoleId: 'orchestrator' },
-  { id: 'pb-analyst', name: 'analyst', modelLevel: 'deep', runner: 'claude-code', surface: 'any', rights: 'write-working-tree', playbookId: 'pb', playbookRoleId: 'analyst' },
-  { id: 'pb-reviewer', name: 'reviewer', modelLevel: 'deep', runner: 'claude-code', surface: 'any', rights: 'read-only', playbookId: 'pb', playbookRoleId: 'reviewer' },
-  { id: 'pb-triager', name: 'triager', modelLevel: 'deep', runner: 'claude-code', surface: 'any', rights: 'write-working-tree', playbookId: 'pb', playbookRoleId: 'triager' },
-  { id: 'pb-developer', name: 'developer', modelLevel: 'standard', runner: 'claude-code', surface: 'any', rights: 'write-working-tree', playbookId: 'pb', playbookRoleId: 'developer' },
-  { id: 'pb-integrator', name: 'integrator', modelLevel: 'standard', runner: 'script', surface: 'any', rights: 'write-working-tree', playbookId: 'pb', playbookRoleId: 'integrator' },
-  { id: 'pb-watcher', name: 'watcher', modelLevel: 'cheap', runner: 'claude-code', surface: 'any', rights: 'read-only', playbookId: 'pb', playbookRoleId: 'watcher' },
-];
-
-function makeApiForStoredProfileTests(profileSummary: RunProfileSummary = STORED_PROFILE_SUMMARY) {
-  return makeApi({
-    rolesService: {
-      async listRoles() { return CANONICAL_ROLES as never; },
-      async loadModelProfile(level: string) {
-        return { level: level as never, provider: level.startsWith('codex-') ? 'openai' : 'anthropic', modelId: 'x', params: {}, costPerInput: 0, costPerOutput: 0 };
-      },
-    },
-    playbooksService: {
-      async resolvePlaybook() {
-        return { id: 'pb', name: 'PB', packageName: '@x/pb', version: '1.0.0', source: 'local:/pb', schemaVersion: 2 };
-      },
-      async listPipelines() {
-        return [{
-          id: 'pb-feature-development',
-          playbookId: 'pb',
-          pipelineId: 'feature-development',
-          path: 'pipelines/feature-development/PIPELINE.md',
-          triggers: ['feature development task'],
-          requiredRoles: ['orchestrator', 'analyst', 'reviewer', 'triager', 'developer', 'integrator', 'watcher'],
-          alternativeRoles: [],
-          optionalRoles: [],
-          routeGates: ['task spec approval', 'merge approval'],
-          executionPolicy: FEATURE_DEV_POLICY,
-        }] as never;
-      },
-      async resolvePipeline({ pipelineId }: { playbookId: string; pipelineId: string }) {
-        if (pipelineId !== 'feature-development') throw new Error(`unexpected pipelineId: ${pipelineId}`);
-        return {
-          id: 'pb-feature-development',
-          playbookId: 'pb',
-          pipelineId: 'feature-development',
-          path: 'pipelines/feature-development/PIPELINE.md',
-          triggers: ['feature development task'],
-          requiredRoles: ['orchestrator', 'analyst', 'reviewer', 'triager', 'developer', 'integrator', 'watcher'],
-          alternativeRoles: [],
-          optionalRoles: [],
-          routeGates: ['task spec approval', 'merge approval'],
-          executionPolicy: FEATURE_DEV_POLICY,
-        } as never;
-      },
-      async resolveRunProfile({ pipelineId, profileId, includeDeprecated }: { playbookId: string; pipelineId: string; profileId: string; includeDeprecated?: boolean }) {
-        if (pipelineId !== 'feature-development' || profileId !== STORED_PROFILE_ID) {
-          throw new ControlPlaneError('ROW_NOT_FOUND', `run profile not found: ${profileId}`);
-        }
-        if (profileSummary.status === 'deprecated' && !includeDeprecated) {
-          throw new ControlPlaneError('ROW_NOT_FOUND', `run profile not found: ${profileId}`);
-        }
-        return profileSummary as never;
-      },
-      async listRunProfiles() {
-        return [profileSummary] as never;
-      },
-      async getPipeline() { return null; },
-    },
-  });
-}
-
-function assertStoredProfileProvenance(route: RouteDecision): void {
-  assert.equal(route.requestedPipelineId, 'feature-development');
-  assert.equal(route.basePipelineId, 'feature-development');
-  assert.equal(route.profileId, STORED_PROFILE_ID);
-  assert.equal(route.profileVersion, '1');
-  assert.equal(route.profileHash, STORED_PROFILE_HASH);
-  assert.equal(route.profileSnapshot, STORED_PROFILE);
-  assert.equal(route.materializerVersion, MATERIALIZER_VERSION);
-  assert.equal(route.policyVersion, POLICY_VERSION);
-  assert.ok(typeof route.materializedTemplateHash === 'string' && route.materializedTemplateHash.length === 64);
-  assert.equal(route.pipelineId, 'feature-development');
-  assert.equal(route.pipelineRowId, 'pb-feature-development');
-}
-
-test(focusedCaseTitle(
-  ['I11', 'H9c'],
-  focusedOwner,
-  'stored profile simulation materializes and stamps pinned provenance',
-), async () => {
-  const api = makeApiForStoredProfileTests();
-  const route = await api.simulateRoute({
-    title: 'test',
-    pipeline: 'feature-development',
-    profileId: STORED_PROFILE_ID,
-  });
-  assertStoredProfileProvenance(route);
-
-  const template = (route.executionPolicy as { template_json?: { pipelineId?: string; nodes?: Record<string, unknown> } }).template_json;
-  assert.equal(template?.pipelineId, 'feature-development');
-  assert.ok('planReviewFanout' in (template?.nodes ?? {}), 'materialized template has planReviewFanout');
-  assert.ok('codeReviewFanout' in (template?.nodes ?? {}), 'materialized template has codeReviewFanout');
-});
-
-test('resolveRouteDecision: stored run profile hash must match profile payload', async () => {
-  const api = makeApiForStoredProfileTests({
-    ...STORED_PROFILE_SUMMARY,
-    profileHash: '0'.repeat(64),
-  });
-  await assert.rejects(
-    () => api.simulateRoute({
-      title: 'test',
-      pipeline: 'feature-development',
-      profileId: STORED_PROFILE_ID,
-    }),
-    /stored run profile codex-primary-claude-review-consensus hash mismatch/,
-  );
-});
-
-test('resolveRouteDecision: stored run profile payload is schema-validated at launch', async () => {
-  const malformedProfile = {
-    ...STORED_PROFILE,
-    bindings: { slots: { developer: {} } },
-  };
-  const api = makeApiForStoredProfileTests({
-    ...STORED_PROFILE_SUMMARY,
-    profile: malformedProfile,
-    profileHash: runProfileHash(malformedProfile, {
-      pipelineId: 'feature-development',
-      schemaVersion: 'run-profile/v1',
-    }),
-  });
-  await assert.rejects(
-    () => api.simulateRoute({
-      title: 'test',
-      pipeline: 'feature-development',
-      profileId: STORED_PROFILE_ID,
-    }),
-    /run-profile\/v1/,
-  );
-});
-
-test(focusedCaseTitle(
-  ['I10b', 'H9d'],
-  focusedOwner,
-  'stored profile node binding carries the GitHub account into launch configuration',
-), async () => {
-  const api = makeApiForStoredProfileTests();
-  const route = await api.simulateRoute({
-    title: 'test',
-    pipeline: 'feature-development',
-    profileId: STORED_PROFILE_ID,
-  });
-
-  const byRole = new Map(route.roleBindings.map((binding) => [binding.roleId, binding]));
-  for (const roleId of ['analyst', 'triager', 'developer', 'watcher']) {
-    const binding = byRole.get(roleId);
-    assert.ok(binding, `${roleId} must have a binding`);
-    assert.equal(binding.resolvedRunnerId, 'codex', `${roleId} resolves to codex runner`);
-    assert.equal(binding.runnerSource, 'profile', `${roleId} runnerSource is profile`);
-  }
-  assert.equal(byRole.get('developer')?.resolvedModelLevel, 'codex-standard');
-  assert.equal(byRole.get('developer')?.modelSource, 'profile');
-  assert.equal(byRole.get('reviewer')?.resolvedRunnerId, 'claude-code', 'reviewer role stays generic; branch nodes carry runner overrides');
-  assert.equal(byRole.get('integrator')?.resolvedRunnerId, 'script', 'integrator role stays catalog-backed as a script binding');
-
-  const byNodeOverride = new Map(
-    route.launchBindings
-      .filter((override) => override.match.nodeId)
-      .map((override) => [override.match.nodeId, override]),
-  );
-  assert.equal(byNodeOverride.get('planReviewPrimary')?.runnerId, 'codex');
-  assert.equal(byNodeOverride.get('planReviewSecondary')?.runnerId, 'claude-code');
-  assert.equal(byNodeOverride.get('codeReviewPrimary')?.modelLevel, 'codex-deep');
-  assert.deepEqual(byNodeOverride.get('integrator')?.accounts, { github: 'profile-bot' });
-});
-
-test('resolveRouteDecision: profileId and inline profile are mutually exclusive', async () => {
-  const api = makeApiForStoredProfileTests();
-  await assert.rejects(
-    () => api.simulateRoute({
-      title: 'test',
-      pipeline: 'feature-development',
-      profileId: STORED_PROFILE_ID,
-      profile: STORED_PROFILE,
-    }),
-    /exactly one of profileId or profile is required/,
-  );
-});
-
-test('resolveRouteDecision: deprecated stored profiles are rejected for new launches', async () => {
-  const api = makeApiForStoredProfileTests({
-    ...STORED_PROFILE_SUMMARY,
-    status: 'deprecated',
-  });
-  await assert.rejects(
-    () => api.simulateRoute({
-      title: 'test',
-      pipeline: 'feature-development',
-      profileId: STORED_PROFILE_ID,
-    }),
-    /run profile not found/,
-  );
-});
-
-test('listProfiles delegates to storage-backed playbook profiles', async () => {
-  const api = makeApiForStoredProfileTests();
-  const profiles = await api.listProfiles({ pipelineId: 'feature-development' });
-  assert.deepEqual(profiles.map((profile) => profile.profileId), [STORED_PROFILE_ID]);
-});
-
-test('listProfilesPage delegates bounded profile pagination to playbook storage', async () => {
-  const calls: unknown[] = [];
-  const api = makeApi({
-    playbooksService: {
-      async listRunProfilesPage(input: unknown) {
-        calls.push(input);
-        return { profiles: [STORED_PROFILE_SUMMARY], totalCount: 3 } as never;
-      },
-    },
-  });
-
-  const page = await api.listProfilesPage({ pipelineId: 'feature-development', first: 2 });
-
-  assert.deepEqual(calls, [{ pipelineId: 'feature-development', first: 2 }]);
-  assert.equal(page.totalCount, 3);
-  assert.deepEqual(page.profiles.map((profile) => profile.profileId), [STORED_PROFILE_ID]);
-});
-
-test('createProfile validates the profile against the selected pipeline before writing storage', async () => {
-  const calls: unknown[] = [];
-  const api = makeApi({
-    playbooksService: {
-      async createRunProfile(input: unknown) {
-        calls.push(input);
-        return { ...STORED_PROFILE_SUMMARY, profileId: 'custom-standard' } as never;
-      },
-    },
-  });
-
-  await assert.rejects(
-    () => api.createProfile({
-      pipelineId: 'local-change',
-      profileId: 'custom-standard',
-      displayName: 'Custom standard',
-      profile: {
-        schemaVersion: 'run-profile/v1',
-        topology: { stages: { missingStage: { mode: 'single' } } },
-        bindings: { slots: {} },
-      },
-    }),
-    /topology stage "missingStage" does not exist in pipeline local-change/,
-  );
-  assert.deepEqual(calls, []);
-
-  const result = await api.createProfile({
-    pipelineId: 'local-change',
-    profileId: 'custom-standard',
-    displayName: 'Custom standard',
-    profile: emptyInlineProfile(),
-  });
-  assert.equal(result.profileId, 'custom-standard');
-  assert.deepEqual(calls, [{
-    playbookId: 'pb',
-    pipelineId: 'local-change',
-    profileId: 'custom-standard',
-    displayName: 'Custom standard',
-    summary: undefined,
-    profile: emptyInlineProfile(),
-    status: undefined,
-  }]);
-});
-
-test('updateProfile validates new profile bodies and requires expectedProfileRevisionHash', async () => {
-  const calls: unknown[] = [];
-  const api = makeApi({
-    playbooksService: {
-      async updateRunProfile(input: unknown) {
-        calls.push(input);
-        return { ...STORED_PROFILE_SUMMARY, profileId: 'custom-standard' } as never;
-      },
-    },
-  });
-
-  await assert.rejects(
-    () => api.updateProfile({
-      pipelineId: 'local-change',
-      profileId: 'custom-standard',
-      expectedProfileRevisionHash: 'h1',
-      profile: {
-        schemaVersion: 'run-profile/v1',
-        topology: { stages: { missingStage: { mode: 'single' } } },
-        bindings: { slots: {} },
-      },
-    }),
-    /topology stage "missingStage" does not exist in pipeline local-change/,
-  );
-  assert.deepEqual(calls, []);
-
-  await api.updateProfile({
-    pipelineId: 'local-change',
-    profileId: 'custom-standard',
-    expectedProfileRevisionHash: 'h1',
-    displayName: 'Renamed profile',
-  });
-  assert.deepEqual(calls, [{
-    playbookId: 'pb',
-    pipelineId: 'local-change',
-    profileId: 'custom-standard',
-    expectedProfileRevisionHash: 'h1',
-    displayName: 'Renamed profile',
-    summary: undefined,
-    profile: undefined,
-    status: undefined,
-  }]);
-});
-
-test('getProfile and deprecateProfile use storage with pipeline scope', async () => {
-  const calls: unknown[] = [];
-  const api = makeApi({
-    playbooksService: {
-      async resolvePipeline() {
-        return {
-          id: 'pb-feature-development',
-          playbookId: 'pb',
-          pipelineId: 'feature-development',
-          path: 'pipelines/feature-development/PIPELINE.md',
-          triggers: ['feature development task'],
-          requiredRoles: ['developer'],
-          alternativeRoles: [],
-          optionalRoles: [],
-          routeGates: [],
-          executionPolicy: FEATURE_DEV_POLICY,
-        } as never;
-      },
-      async resolveRunProfile(input: unknown) {
-        calls.push(['get', input]);
-        return STORED_PROFILE_SUMMARY as never;
-      },
-      async deprecateRunProfile(input: unknown) {
-        calls.push(['deprecate', input]);
-        return { ...STORED_PROFILE_SUMMARY, status: 'deprecated' } as never;
-      },
-    },
-  });
-
-  await api.getProfile({ pipelineId: 'feature-development', profileId: STORED_PROFILE_ID });
-  await api.deprecateProfile({ pipelineId: 'feature-development', profileId: STORED_PROFILE_ID, expectedProfileRevisionHash: STORED_PROFILE_REVISION_HASH });
-
-  assert.deepEqual(calls, [
-    ['get', { playbookId: 'pb', pipelineId: 'feature-development', profileId: STORED_PROFILE_ID, includeDeprecated: true }],
-    ['deprecate', { playbookId: 'pb', pipelineId: 'feature-development', profileId: STORED_PROFILE_ID, expectedProfileRevisionHash: STORED_PROFILE_REVISION_HASH }],
-  ]);
-});
-
-type PipelineCatalogEntry = { id: string; execution_policy: unknown };
-
-const bundledPipelines = JSON.parse(
-  readFileSync(new URL('../../control-plane/default-playbook/catalog/pipelines.json', import.meta.url), 'utf8'),
-) as PipelineCatalogEntry[];
-
-function makePinnedMaterializedProfileRoute(): RouteDecision {
-  const pipeline = bundledPipelines.find((p) => p.id === 'feature-development');
-  assert.ok(pipeline, 'bundled feature-development pipeline must exist');
-  const base = templateFromExecutionPolicy(pipeline.execution_policy);
-  assert.ok(base, 'bundled feature-development must carry a valid template_json');
-  const topologyProfile = topologyProfileFromRunProfile(STORED_PROFILE, {
-    pipelineId: 'feature-development',
-    profileId: STORED_PROFILE_ID,
-  });
-  const { template: materializedTemplate, materializedTemplateHash } = materializeTemplate(
-    base,
-    topologyProfile,
-    { allowlist: ['planReviewer', 'codeReview'] },
-  );
-  const roles = ['orchestrator', 'analyst', 'reviewer', 'triager', 'developer', 'integrator', 'watcher'];
-  return {
-    playbookId: 'revisium-default',
-    pipelineId: 'feature-development',
-    pipelineRowId: 'revisium-default-feature-development',
-    source: 'explicit',
-    roles,
-    requiredRoles: roles,
-    optionalRoles: [],
-    routeGates: ['plan', 'merge'],
-    executionPolicy: { template_json: materializedTemplate },
-    launchBindings: [],
-    roleBindings: roles.map((roleId) =>
-      roleId === 'integrator'
-        ? { roleId, rowId: roleId, modelLevel: 'standard', runnerId: 'script', resolvedRunnerId: 'script', runnerSource: 'playbook' as const }
-        : { roleId, rowId: roleId, modelLevel: 'standard', runnerId: 'claude-code', resolvedRunnerId: 'claude-code', runnerSource: 'playbook' as const },
-    ),
-    params: {},
-    requestedPipelineId: 'feature-development',
-    basePipelineId: 'feature-development',
-    profileSource: 'stored',
-    profileId: STORED_PROFILE_ID,
-    profileVersion: '1',
-    profileHash: STORED_PROFILE_HASH,
-    profileSnapshot: STORED_PROFILE,
-    materializedTemplateHash,
-    materializedTemplate,
-    materializerVersion: MATERIALIZER_VERSION,
-    policyVersion: POLICY_VERSION,
-  };
-}
-
-test('startRun/getRunWorkflow/resumeRun: pinned materialized profile route never re-resolves', async () => {
-  const pinnedRoute = makePinnedMaterializedProfileRoute();
-
-  let resolvePipelineCalled = false;
-  let capturedOpts: { route: RouteDecision; template: unknown } | undefined;
-
-  const api = makeApi({
-    runService: {
       async getRun() {
-        return { rowId: 'profile-pin-run', data: { id: 'profile-pin-run', title: 'profile pin test', status: 'ready', route_decision: pinnedRoute } };
-      },
-    },
-    playbooksService: {
-      async resolvePipeline() {
-        resolvePipelineCalled = true;
-        throw new Error('resolvePipeline must not be called when route_decision is cached');
+        return { rowId: 'run-1', data: { id: 'run-1', status: 'ready', route_decision: storedRoute } };
       },
     },
     pipelineService: {
-      async startDataDrivenTask(_runId, opts) {
-        capturedOpts = opts as { route: RouteDecision; template: unknown };
-        return { workflowID: 'profile-pin-run' } as Awaited<ReturnType<PipelineService['startDataDrivenTask']>>;
+      async startDataDrivenTask(_runId, options) {
+        startedRoute = options.route;
+        return { workflowID: 'run-1' } as Awaited<ReturnType<PipelineService['startDataDrivenTask']>>;
       },
     },
   });
+  const profile = structuredClone(LOCAL_CHANGE_PROFILE) as Record<string, unknown>;
+  await api.createRun({ title: 'Task', repo: '.', pipelineId: 'local-change', profile });
+  (((profile.bindings as Record<string, unknown>).slots as Record<string, Record<string, unknown>>)['node:developer']).modelId = 'tampered-after-launch';
 
-  await api.startRun({ runId: 'profile-pin-run' });
-  assert.equal(resolvePipelineCalled, false, 'startRun must not call resolvePipeline for cached route_decision');
-  assert.ok(capturedOpts, 'startDataDrivenTask must be called');
-  assert.equal(
-    (capturedOpts.route as RouteDecision).materializedTemplateHash,
-    pinnedRoute.materializedTemplateHash,
-    'startRun uses the pinned materializedTemplateHash',
-  );
+  await api.startRun({ runId: 'run-1' });
 
-  const pinnedTemplate = templateFromExecutionPolicy((capturedOpts.route as RouteDecision).executionPolicy);
-  assert.ok(pinnedTemplate, 'pinned executionPolicy must carry a valid template_json');
-  const nodeKinds = new Set(Object.values(pinnedTemplate.nodes).map((node) => (node as { kind: string }).kind));
-  assert.ok(nodeKinds.has('parallel'), 'materialized profile template must have parallel nodes');
-  assert.ok(nodeKinds.has('join'), 'materialized profile template must have join nodes');
-
-  const workflow = await api.getRunWorkflow('profile-pin-run');
-  assert.equal(resolvePipelineCalled, false, 'getRunWorkflow must not call resolvePipeline');
-  assert.equal(
-    workflow.pipeline.provenance?.materializedTemplateHash,
-    pinnedRoute.materializedTemplateHash,
-    'getRunWorkflow provenance carries the pinned materializedTemplateHash',
-  );
-
-  await api.resumeRun({ runId: 'profile-pin-run' });
-  assert.equal(resolvePipelineCalled, false, 'resumeRun must not call resolvePipeline');
+  assert.ok(storedRoute);
+  assert.ok(startedRoute);
+  assert.equal(startedRoute.executionPlanBytes, storedRoute.executionPlanBytes);
+  assert.equal(executionPlanFromRouteDecision(startedRoute).agentBindings[0]?.modelId, 'gpt-5.6-luna');
 });
 
-test('getRunWorkflow.pipeline.provenance.materializedTemplateHash ties route hash to the pinned run', async () => {
-  const pinnedRoute = makePinnedMaterializedProfileRoute();
-
-  const api = makeApi({
-    runService: {
-      async getRun() {
-        return { rowId: 'profile-prov-run', data: { id: 'profile-prov-run', title: 'provenance test', status: 'ready', route_decision: pinnedRoute } };
+test('stored profile errors remain stable and deprecated profiles cannot launch', async () => {
+  const missing = makeApi({
+    playbooksService: {
+      async resolveRunProfile() {
+        throw new ControlPlaneError('ROW_NOT_FOUND', 'missing profile');
       },
     },
+  });
+  await assert.rejects(
+    () => missing.simulateRoute({ title: 'Task', pipelineId: 'local-change', profileId: 'missing' }),
+    (error: unknown) => error instanceof ControlPlaneError && (error.details as { code?: string })?.code === 'profile_not_found',
+  );
+
+  const deprecated = makeApi({
     playbooksService: {
-      async resolvePipeline() { throw new Error('must not be called'); },
+      async resolveRunProfile() {
+        return {
+          id: 'pb-deprecated', playbookId: 'pb', pipelineId: 'local-change', profileId: 'deprecated',
+          schemaVersion: 'run-profile/v1', version: '1', displayName: 'Deprecated', summary: '',
+          profile: LOCAL_CHANGE_PROFILE, profileHash: 'ignored', profileRevisionHash: 'revision', status: 'deprecated' as const,
+        };
+      },
     },
   });
-
-  const workflow = await api.getRunWorkflow('profile-prov-run');
-
-  assert.equal(
-    workflow.pipeline.provenance?.materializedTemplateHash,
-    pinnedRoute.materializedTemplateHash,
-    'getRunWorkflow provenance.materializedTemplateHash equals the pinned route hash',
+  await assert.rejects(
+    () => deprecated.simulateRoute({ title: 'Task', pipelineId: 'local-change', profileId: 'deprecated' }),
+    (error: unknown) => error instanceof ControlPlaneError && error.message.includes('is deprecated') &&
+      (error.details as { code?: string })?.code === 'profile_not_launchable',
   );
-  assert.equal(workflow.pipeline.provenance?.basePipelineId, 'feature-development');
-  assert.equal(workflow.pipeline.provenance?.profileId, STORED_PROFILE_ID);
-  assert.equal(workflow.pipeline.provenance?.profileHash, STORED_PROFILE_HASH);
-  assert.equal(workflow.pipeline.provenance?.requestedPipelineId, 'feature-development');
+});
+
+test('profile CRUD APIs keep pipeline scope and exact profile bodies', async () => {
+  const calls: unknown[] = [];
+  const api = makeApi({
+    playbooksService: {
+      async createRunProfile(input) { calls.push(['create', input]); return { profileId: input.profileId } as never; },
+      async updateRunProfile(input) { calls.push(['update', input]); return { profileId: input.profileId } as never; },
+      async resolveRunProfile(input) { calls.push(['get', input]); return { profileId: input.profileId } as never; },
+      async deprecateRunProfile(input) { calls.push(['deprecate', input]); return { profileId: input.profileId, status: 'deprecated' } as never; },
+    },
+  });
+  await api.createProfile({ pipelineId: 'local-change', profileId: 'exact', displayName: 'Exact', profile: LOCAL_CHANGE_PROFILE });
+  await api.updateProfile({ pipelineId: 'local-change', profileId: 'exact', expectedProfileRevisionHash: 'revision', profile: LOCAL_CHANGE_PROFILE });
+  await api.getProfile({ pipelineId: 'local-change', profileId: 'exact' });
+  await api.deprecateProfile({ pipelineId: 'local-change', profileId: 'exact', expectedProfileRevisionHash: 'revision' });
+
+  assert.equal(calls.length, 4);
+  assert.equal((calls[0] as [string, { pipelineId: string }])[1].pipelineId, 'local-change');
+  assert.equal('modelLevel' in JSON.parse(JSON.stringify(LOCAL_CHANGE_PROFILE)), false);
+  assert.equal((calls[2] as [string, { includeDeprecated?: boolean }])[1].includeDeprecated, true);
 });

@@ -74,7 +74,7 @@ test('RunService.getRun returns null when run not found', async () => {
   assert.equal(result, null);
 });
 
-test('C4: loadPipelineContext synthesizes Step with modelProfile from caller (B7 guard)', async () => {
+test('loadPipelineContext synthesizes a step from the selected role without model aliases', async () => {
   const runId = 'run-lpc-1';
   const taskId = 'task-lpc-1';
   const { access } = createInMemoryRuntimeDataAccess({
@@ -87,9 +87,8 @@ test('C4: loadPipelineContext synthesizes Step with modelProfile from caller (B7
   });
 
   const svc = new RunService(access);
-  const { step, da } = await svc.loadPipelineContext(runId, 'architect', 'architect', { phase: 'plan' }, 'deep');
+  const { step, da } = await svc.loadPipelineContext(runId, 'architect', 'architect', { phase: 'plan' });
 
-  assert.equal(step.modelProfile, 'deep', 'step.modelProfile must equal the caller-supplied modelProfile arg');
   assert.equal(step.role, 'architect');
   assert.equal(step.runId, runId);
   assert.equal(step.taskId, taskId);
@@ -102,7 +101,7 @@ test('C4: loadPipelineContext throws ROW_NOT_FOUND when run does not exist (B6 g
   const { access } = createInMemoryRuntimeDataAccess();
   const svc = new RunService(access);
   await assert.rejects(
-    () => svc.loadPipelineContext('run-missing', 'architect', 'architect', {}, 'deep'),
+    () => svc.loadPipelineContext('run-missing', 'architect', 'architect', {}),
     (err: unknown) => {
       assert.ok(err instanceof ControlPlaneError);
       assert.equal(err.code, 'ROW_NOT_FOUND');

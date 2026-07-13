@@ -15,6 +15,15 @@ import {
 } from "./pipeline-case.js";
 import { hashTemplate } from "../../pipeline-core/materialize.js";
 import { deepFreezeCase } from "./pipeline-case-evidence.js";
+import {
+  compileExecutionPlan,
+  resolveGraphBindings,
+  runnerManifestDigest,
+  validateRunProfile,
+} from "../../control-plane/run-profile-contract.js";
+import { routeDecisionFromCompiledPlan } from "../../pipeline/route-contract.js";
+import type { GraphExecutableNode, RunnerManifest } from "../../control-plane/run-profile-contract.js";
+import type { Template } from "../../pipeline-core/types.js";
 
 const TEST_TEMPLATE = {
   specVersion: "1.0",
@@ -47,14 +56,87 @@ const TEST_TEMPLATE = {
     },
   },
 } as const;
-const testRoute = () => ({
-  playbookId: "revisium-agent-playbook",
-  pipelineId: "feature-development",
-  executionPolicy: { template_json: TEST_TEMPLATE },
-  materializedTemplate: TEST_TEMPLATE,
-  materializedTemplateHash: hashTemplate(TEST_TEMPLATE as never),
-  profileSource: "inline" as const,
-});
+const TEST_MANIFEST: RunnerManifest = (() => {
+  const manifest: RunnerManifest = {
+    runnerId: "test-runner",
+    manifestVersion: "test-v1",
+    manifestDigest: "",
+    stdoutParserId: "test-parser",
+    permissionStyleId: "test-permissions",
+    declaredDefaultPermissionMode: "readOnly",
+    capabilities: {},
+    constraints: {
+      allowedProviders: ["openai"],
+      permissionModes: ["readOnly"],
+      modelParamKeys: ["temperature"],
+    },
+    executionFields: {},
+  };
+  return { ...manifest, manifestDigest: runnerManifestDigest(manifest) };
+})();
+
+function testRoute(template: Template = TEST_TEMPLATE as unknown as Template) {
+  const nodes = Object.values(template.nodes)
+    .filter((node) => node.kind === "agent" || node.kind === "script")
+    .map((node) => node.kind === "agent"
+      ? { id: node.id, kind: "agent" as const, roleRef: node.roleRef }
+      : { id: node.id, kind: "script" as const, scriptRef: node.scriptRef }) as GraphExecutableNode[];
+  const roles = [...new Set(nodes.filter((node) => node.kind === "agent").map((node) => node.roleRef))];
+  const profile = validateRunProfile({
+    schemaVersion: "run-profile/v1",
+    topology: { stages: { feature: { mode: "single" } } },
+    bindings: {
+      slots: Object.fromEntries(
+        roles.map((roleRef) => [
+          roleRef,
+          {
+            runnerId: "test-runner",
+            provider: "openai",
+            modelId: "gpt-5.6-luna",
+            modelParams: { temperature: 0 },
+            permissionMode: "readOnly",
+          },
+        ]),
+      ),
+    },
+  });
+  const bindings = resolveGraphBindings(profile, {
+    nodes,
+    roleDocuments: Object.fromEntries(
+      roles.map((roleRef) => [
+        roleRef.replace(/^role:/, ""),
+        {
+          roleDocumentId: `role-${roleRef.replace(/^role:/, "")}`,
+        },
+      ]),
+    ),
+    runnerManifests: { "test-runner": TEST_MANIFEST },
+  });
+  return routeDecisionFromCompiledPlan(
+    compileExecutionPlan({
+      selection: {
+        playbookId: "revisium-agent-playbook",
+        pipelineId: "feature-development",
+        pipelineRowId: "pipeline-row",
+        source: "explicit",
+      },
+      businessParams: {},
+      profile: {
+        source: "inline",
+        profileHash: "sha256:" + "0".repeat(64),
+      },
+      pipeline: {
+        executableGraph: template,
+        graphDigest: hashTemplate(template as never),
+        materializerVersion: "test-materializer-v1",
+        policyVersion: "test-policy-v1",
+        routeGates: ["plan"],
+        executionPolicy: { template_json: template },
+      },
+      ...bindings,
+    }),
+  );
+}
 const routeWithAnalystRole = (roleRef: string) => {
   const template = {
     ...TEST_TEMPLATE,
@@ -63,12 +145,7 @@ const routeWithAnalystRole = (roleRef: string) => {
       analyst: { ...TEST_TEMPLATE.nodes.analyst, roleRef },
     },
   } as const;
-  return {
-    ...testRoute(),
-    executionPolicy: { template_json: template },
-    materializedTemplate: template,
-    materializedTemplateHash: hashTemplate(template as never),
-  };
+  return testRoute(template as unknown as Template);
 };
 const routeWithDeveloperRole = (roleRef: string) => {
   const template = {
@@ -78,12 +155,7 @@ const routeWithDeveloperRole = (roleRef: string) => {
       developer: { ...TEST_TEMPLATE.nodes.developer, roleRef },
     },
   } as const;
-  return {
-    ...testRoute(),
-    executionPolicy: { template_json: template },
-    materializedTemplate: template,
-    materializedTemplateHash: hashTemplate(template as never),
-  };
+  return testRoute(template as unknown as Template);
 };
 
 function pendingGateHost(
@@ -271,7 +343,7 @@ test("pipeline context rejects a registered attachment bound to another profile 
         given: {
           repo: "workspace",
           playbook: "default",
-          profileId: "claude-standard",
+          profileId: "claude-opus-sonnet",
           developerWrite: false,
         },
         when: [],
@@ -440,11 +512,17 @@ test("pipeline context rejects every graph presentation drift before mutation", 
 
 test("pipeline context rejects Stage B route template and provenance drift before lifecycle mutation", async () => {
   const routes = [
-    { ...testRoute(), materializedTemplateHash: "wrong-hash" },
     {
       ...testRoute(),
-      profileSource: "stored" as const,
-      profileId: "wrong-profile",
+      projection: { ...testRoute().projection, materializedTemplateHash: "wrong-hash" },
+    },
+    {
+      ...testRoute(),
+      projection: {
+        ...testRoute().projection,
+        profileSource: "stored" as const,
+        profileId: "wrong-profile",
+      },
     },
   ];
   for (const route of routes) {

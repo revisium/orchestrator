@@ -1,88 +1,76 @@
 import { normalizeIssueRefIntoParams } from '../run/issue-ref.js';
+import {
+  parseExecutionPlan,
+  type CompiledExecutionPlan,
+  type ExecutionPlan,
+  type ResolvedAgentBinding,
+  type ResolvedScriptBinding,
+} from '../control-plane/run-profile-contract.js';
 
-export type BindingOverrideMatch = { roleId?: string; nodeId?: string; runnerId?: string };
-
-export type BindingOverride = {
-  match: BindingOverrideMatch;
-  runnerId?: string;
-  modelLevel?: string;
-  timeoutMs?: number;
-  permissionMode?: string;
-  accounts?: {
-    github?: string;
-  };
-};
-
-export type LaunchOverrides = {
-  runnerId?: string;
-  modelLevel?: string;
-  timeoutMs?: number;
-  permissionMode?: string;
-};
-
-export type RouteRoleBinding = {
-  roleId: string;
-  rowId: string;
-  modelLevel: string;
-  runnerId: string;
-  resolvedRunnerId: string;
-  runnerSource: 'playbook' | 'profile';
-  resolvedModelLevel?: string;
-  modelSource?: 'playbook' | 'profile';
-  timeoutMs?: number;
-  resolvedTimeoutMs?: number;
-  timeoutSource?: 'playbook' | 'profile';
-  permissionMode?: string;
-  resolvedPermissionMode?: string;
-  permissionSource?: 'playbook' | 'profile';
-};
-
-export type RouteDecision = {
+export type RouteProjection = {
   playbookId: string;
   pipelineId: string;
   pipelineRowId: string;
   source: 'explicit';
-  roles: string[];
-  requiredRoles: string[];
-  optionalRoles: string[];
-  routeGates: string[];
-  executionPolicy: unknown;
-  launchBindings: BindingOverride[];
-  roleBindings: RouteRoleBinding[];
-  params: Record<string, unknown>;
-  requestedPipelineId?: string;
-  basePipelineId?: string;
-  profileSource?: 'stored' | 'inline';
+  profileSource: 'stored' | 'inline';
   profileId?: string;
   profileVersion?: string;
-  profileHash?: string;
-  profileSnapshot?: unknown;
-  materializedTemplateHash?: string;
-  materializedTemplate?: unknown;
-  materializerVersion?: string;
-  policyVersion?: string;
+  profileHash: string;
+  roles: string[];
+  routeGates: string[];
+  executionPolicy: unknown;
+  materializedTemplateHash: string;
 };
 
-function findLastBindingOverride(
-  overrides: BindingOverride[],
-  predicate: (override: BindingOverride) => boolean,
-): BindingOverride | undefined {
-  for (let index = overrides.length - 1; index >= 0; index -= 1) {
-    const override = overrides[index]!;
-    if (predicate(override)) return override;
-  }
-  return undefined;
+export type RouteDecision = {
+  schemaVersion: 'route-decision/v1';
+  executionPlanBytes: string;
+  executionPlanDigest: string;
+  projection: Readonly<RouteProjection>;
+};
+
+export function routeDecisionFromCompiledPlan(compiled: CompiledExecutionPlan): RouteDecision {
+  const { plan } = compiled;
+  const projection: RouteProjection = {
+    playbookId: plan.selection.playbookId,
+    pipelineId: plan.selection.pipelineId,
+    pipelineRowId: plan.selection.pipelineRowId,
+    source: plan.selection.source,
+    profileSource: plan.profile.source,
+    ...(plan.profile.profileId ? { profileId: plan.profile.profileId } : {}),
+    ...(plan.profile.profileVersion ? { profileVersion: plan.profile.profileVersion } : {}),
+    profileHash: plan.profile.profileHash,
+    roles: [...new Set(plan.agentBindings.map((binding) => binding.roleId))],
+    routeGates: [...plan.pipeline.routeGates],
+    executionPolicy: plan.pipeline.executionPolicy,
+    materializedTemplateHash: plan.pipeline.graphDigest,
+  };
+  return {
+    schemaVersion: 'route-decision/v1',
+    executionPlanBytes: compiled.bytes,
+    executionPlanDigest: compiled.digest,
+    projection,
+  };
 }
 
-export const RUNNER_PERMISSION_MODES: Record<string, string[]> = {
-  'claude-code': ['default', 'acceptEdits', 'plan', 'bypassPermissions'],
-  'codex': ['read-only', 'workspace-write'],
-};
+export function executionPlanFromRouteDecision(route: RouteDecision): ExecutionPlan {
+  if (route.schemaVersion !== 'route-decision/v1') {
+    throw new Error('execution_plan_invalid: route decision schema mismatch');
+  }
+  return parseExecutionPlan(route.executionPlanBytes, route.executionPlanDigest);
+}
 
-const GATE_ID_BY_CANONICAL_LABEL: Record<string, string> = {
-  'task spec approval': 'plan',
-  'merge approval': 'merge',
-};
+export function agentBindingForNode(plan: ExecutionPlan, nodeId: string): ResolvedAgentBinding {
+  const binding = plan.agentBindings.find((candidate) => candidate.nodeId === nodeId);
+  if (!binding) throw new Error(`execution_plan_binding_unresolved: agent node ${nodeId} has no pinned binding`);
+  return binding;
+}
+
+export function scriptBindingForNode(plan: ExecutionPlan, nodeId: string): ResolvedScriptBinding {
+  const binding = plan.scriptBindings.find((candidate) => candidate.nodeId === nodeId);
+  if (!binding) throw new Error(`execution_plan_binding_unresolved: script node ${nodeId} has no pinned binding`);
+  return binding;
+}
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return null;
@@ -94,6 +82,11 @@ export function normalizeParams(value: unknown, issueRef?: unknown, issueAction?
   if (!record) return normalizeIssueRefIntoParams({}, issueRef, issueAction);
   return normalizeIssueRefIntoParams(record, issueRef, issueAction);
 }
+
+const GATE_ID_BY_CANONICAL_LABEL: Record<string, string> = {
+  'task spec approval': 'plan',
+  'merge approval': 'merge',
+};
 
 export function normalizeRouteGates(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -109,123 +102,4 @@ export function normalizeRouteGates(value: unknown): string[] {
     out.push(normalized);
   }
   return out;
-}
-
-export function resolveRunnerForRole(
-  runnerId: string,
-  roleId: string,
-  bindingOverrides: BindingOverride[],
-): { runnerId: string; source: RouteRoleBinding['runnerSource'] } {
-  const roleLevel = findLastBindingOverride(bindingOverrides, (override) =>
-    override.match.roleId === roleId && !override.match.nodeId && override.runnerId !== undefined,
-  );
-  if (roleLevel?.runnerId) {
-    return {
-      runnerId: roleLevel.runnerId,
-      source: 'profile',
-    };
-  }
-  return { runnerId, source: 'playbook' };
-}
-
-type RoleForBinding = {
-  modelLevel: string;
-  timeoutMs?: number;
-  permissionMode?: string;
-};
-
-type BindingResolution = {
-  resolvedModelLevel: string;
-  modelSource: 'playbook' | 'profile';
-  resolvedTimeoutMs?: number;
-  timeoutSource?: 'playbook' | 'profile';
-  resolvedPermissionMode?: string;
-  permissionSource?: 'playbook' | 'profile';
-};
-
-function overridesForRole(roleId: string, resolvedRunnerId: string, overrides: BindingOverride[]): {
-  roleLevel: BindingOverride | undefined;
-  runnerLevel: BindingOverride | undefined;
-} {
-  const roleLevel = findLastBindingOverride(overrides, (o) => o.match.roleId === roleId && !o.match.nodeId);
-  const runnerLevel = findLastBindingOverride(overrides, (o) => o.match.runnerId === resolvedRunnerId && !o.match.nodeId && !o.match.roleId);
-  return { roleLevel, runnerLevel };
-}
-
-export function resolveBindingForRole(
-  role: RoleForBinding,
-  roleId: string,
-  resolvedRunnerId: string,
-  bindingOverrides: BindingOverride[],
-): BindingResolution {
-  const { roleLevel, runnerLevel } = overridesForRole(roleId, resolvedRunnerId, bindingOverrides);
-
-  const modelOverride = roleLevel?.modelLevel ?? runnerLevel?.modelLevel;
-  const timeoutOverride = roleLevel?.timeoutMs ?? runnerLevel?.timeoutMs;
-  const permOverride = roleLevel?.permissionMode ?? runnerLevel?.permissionMode;
-
-  const result: BindingResolution = {
-    resolvedModelLevel: modelOverride ?? role.modelLevel,
-    modelSource: modelOverride ? 'profile' : 'playbook',
-  };
-
-  if (role.timeoutMs !== undefined || timeoutOverride !== undefined) {
-    result.resolvedTimeoutMs = timeoutOverride ?? role.timeoutMs;
-    result.timeoutSource = timeoutOverride !== undefined ? 'profile' : 'playbook';
-  }
-
-  if (role.permissionMode !== undefined || permOverride !== undefined) {
-    result.resolvedPermissionMode = permOverride ?? role.permissionMode;
-    result.permissionSource = permOverride !== undefined ? 'profile' : 'playbook';
-  }
-
-  return result;
-}
-
-export function resolveLaunchOverrides(
-  binding: RouteRoleBinding,
-  nodeId: string,
-  bindingOverrides: BindingOverride[],
-): LaunchOverrides | undefined {
-  const nodeOverride = findLastBindingOverride(bindingOverrides, (o) => o.match.nodeId === nodeId);
-
-  if (!nodeOverride) {
-    const hasAny =
-      binding.resolvedModelLevel !== undefined ||
-      binding.resolvedTimeoutMs !== undefined ||
-      binding.resolvedPermissionMode !== undefined;
-    if (!hasAny) return undefined;
-    const lo: LaunchOverrides = {};
-    if (binding.resolvedModelLevel && binding.modelSource === 'profile') lo.modelLevel = binding.resolvedModelLevel;
-    if (binding.resolvedTimeoutMs !== undefined && binding.timeoutSource === 'profile') lo.timeoutMs = binding.resolvedTimeoutMs;
-    if (binding.resolvedPermissionMode && binding.permissionSource === 'profile') lo.permissionMode = binding.resolvedPermissionMode;
-    return Object.keys(lo).length > 0 ? lo : undefined;
-  }
-
-  const lo: LaunchOverrides = {};
-
-  if (nodeOverride.runnerId) {
-    lo.runnerId = nodeOverride.runnerId;
-  }
-
-  const modelLevel = nodeOverride.modelLevel ?? (binding.modelSource === 'profile' ? binding.resolvedModelLevel : undefined);
-  if (modelLevel) lo.modelLevel = modelLevel;
-
-  const timeoutMs = nodeOverride.timeoutMs ?? (binding.timeoutSource === 'profile' ? binding.resolvedTimeoutMs : undefined);
-  if (timeoutMs !== undefined) lo.timeoutMs = timeoutMs;
-
-  const permissionMode = nodeOverride.permissionMode ?? (binding.permissionSource === 'profile' ? binding.resolvedPermissionMode : undefined);
-  if (permissionMode) lo.permissionMode = permissionMode;
-
-  return Object.keys(lo).length > 0 ? lo : undefined;
-}
-
-export function dispatchRunnerId(runnerId: string): string {
-  if (runnerId === 'stub-agent') return 'script';
-  if (runnerId === 'claude-code' || runnerId === 'codex' || runnerId === 'script') return runnerId;
-  return runnerId;
-}
-
-export function runnerNeedsLivePreflight(runnerId: string): boolean {
-  return runnerId === 'claude-code' || runnerId === 'codex';
 }

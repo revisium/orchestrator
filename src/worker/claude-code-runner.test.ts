@@ -13,7 +13,7 @@ import {
 import { createArtifactStore } from './artifact-store.js';
 import { RunAgentError } from './runner.js';
 import { makeRole, BASE_STEP } from './test-fixtures.js';
-import type { ModelProfile } from '../control-plane/definitions.js';
+import type { ResolvedAgentBinding } from '../control-plane/run-profile-contract.js';
 import type { AgentActivityReporter } from '../observability/agent-activity-reporter.js';
 import type { RunnerActivityKind, RunnerActivityTracker } from '../observability/activity-signal.js';
 
@@ -25,13 +25,22 @@ function fakeExecutor(result: ExecResult, captured: ExecRequest[]): ProcessExecu
   };
 }
 
-const PROFILE: ModelProfile = {
-  level: 'standard',
+const BINDING: ResolvedAgentBinding = {
+  runnerId: 'claude-code',
   provider: 'anthropic',
   modelId: 'claude-sonnet-4-6',
-  params: {},
-  costPerInput: 3,
-  costPerOutput: 15,
+  modelParams: {},
+  slotKey: 'node:architect',
+  nodeId: 'architect',
+  roleId: 'architect',
+  roleDocumentId: 'role-doc-architect',
+  permissionMode: 'default',
+  permissionSource: 'profile',
+  runner: {
+    runnerId: 'claude-code', manifestVersion: '1', manifestDigest: `sha256:${'a'.repeat(64)}`,
+    stdoutParserId: 'claude-json', permissionStyleId: 'claude-permission-mode',
+    declaredDefaultPermissionMode: 'default', capabilities: {}, constraints: {}, executionFields: {},
+  },
 };
 
 function ok(stdout: string, extra: Partial<ExecResult> = {}): ExecResult {
@@ -191,7 +200,7 @@ function trackingActivity(calls: string[]): RunnerActivityTracker {
   };
 }
 
-function run(executor: ProcessExecutor, roleOverrides = {}) {
+function run(executor: ProcessExecutor, roleOverrides = {}, binding: ResolvedAgentBinding = BINDING) {
   const runner = createClaudeCodeRunner({
     executor,
     resolveCwd: async () => '/workspace/repo',
@@ -199,7 +208,7 @@ function run(executor: ProcessExecutor, roleOverrides = {}) {
   });
   return runner({
     role: makeRole('architect', roleOverrides),
-    profile: PROFILE,
+    binding,
     context: '## Role: architect\nDo the thing.',
     attemptId: ATTEMPT_ID,
     step: BASE_STEP,
@@ -255,7 +264,7 @@ test('claude-code runner: stream-json — reports a per-turn transcript and extr
   const runner = createClaudeCodeRunner({ executor: streamingExecutor, resolveCwd: async () => '/workspace/repo', timeoutMs: 5_000 });
   const result = await runner({
     role: makeRole('architect'),
-    profile: PROFILE,
+    binding: BINDING,
     context: 'ctx',
     attemptId: ATTEMPT_ID,
     step: BASE_STEP,
@@ -325,7 +334,7 @@ test('claude-code runner: stream-json maps stable tool_use/tool_result IDs to ge
 
   await runner({
     role: makeRole('architect'),
-    profile: PROFILE,
+    binding: BINDING,
     context: 'ctx',
     attemptId: ATTEMPT_ID,
     step: BASE_STEP,
@@ -389,23 +398,23 @@ test('claude-code runner: integrator role does not receive developer publication
 
 // ─── 0008 #5: per-role timeout / permission_mode + model params ───────────────
 
-test('claude-code runner (0008 #5): uses role.permissionMode (not the hardcoded default)', async () => {
+test('claude-code runner: uses the pinned effective permission mode', async () => {
   const captured: ExecRequest[] = [];
   const stdout = structuredTransport();
   const runner = createClaudeCodeRunner({ executor: fakeExecutor(ok(stdout), captured), resolveCwd: async () => '/w', timeoutMs: 5_000 });
   await runner({
-    role: makeRole('developer', { permissionMode: 'acceptEdits' }),
-    profile: PROFILE,
+    role: makeRole('developer'),
+    binding: { ...BINDING, permissionMode: 'acceptEdits' },
     context: 'ctx',
     attemptId: ATTEMPT_ID,
     step: BASE_STEP,
   });
   const req = captured[0];
   const idx = req?.args.indexOf('--permission-mode') ?? -1;
-  assert.equal(req?.args[idx + 1], 'acceptEdits', 'permission mode must come from the role');
+  assert.equal(req?.args[idx + 1], 'acceptEdits', 'permission mode must come from the pinned binding');
 });
 
-test('claude-code runner (0008 #5): defaults permission mode to "default" when role omits it', async () => {
+test('claude-code runner: uses the pinned default permission mode', async () => {
   const captured: ExecRequest[] = [];
   const stdout = structuredTransport();
   await run(fakeExecutor(ok(stdout), captured));
@@ -414,28 +423,28 @@ test('claude-code runner (0008 #5): defaults permission mode to "default" when r
   assert.equal(req?.args[idx + 1], 'default');
 });
 
-test('claude-code runner (0008 #5): role.timeoutMs maps to wall-clock cap only', async () => {
+test('claude-code runner: pinned timeoutMs maps to wall-clock cap only', async () => {
   const captured: ExecRequest[] = [];
   const stdout = structuredTransport();
   const runner = createClaudeCodeRunner({ executor: fakeExecutor(ok(stdout), captured), resolveCwd: async () => '/w', timeoutMs: 5_000 });
   await runner({
-    role: makeRole('architect', { timeoutMs: 1_234_567 }),
-    profile: PROFILE,
+    role: makeRole('architect'),
+    binding: { ...BINDING, timeoutMs: 1_234_567 },
     context: 'ctx',
     attemptId: ATTEMPT_ID,
     step: BASE_STEP,
   });
-  assert.equal(captured[0]?.timeoutMs, 1_234_567, 'per-role timeout must set the wall-clock cap');
-  assert.equal(captured[0]?.idleTimeoutMs, 600_000, 'idle timeout remains separate from role.timeoutMs');
+  assert.equal(captured[0]?.timeoutMs, 1_234_567, 'pinned timeout must set the wall-clock cap');
+  assert.equal(captured[0]?.idleTimeoutMs, 600_000, 'idle timeout remains separate from the wall-clock cap');
 });
 
-test('claude-code runner (0008 #5): absent or zero role.timeoutMs uses the runner wall-clock default', async () => {
+test('claude-code runner: absent timeout uses the runner wall-clock default', async () => {
   const captured: ExecRequest[] = [];
   const stdout = structuredTransport();
   const runner = createClaudeCodeRunner({ executor: fakeExecutor(ok(stdout), captured), resolveCwd: async () => '/w', timeoutMs: 5_000 });
   await runner({
-    role: makeRole('architect', { timeoutMs: 0 }),
-    profile: PROFILE,
+    role: makeRole('architect'),
+    binding: BINDING,
     context: 'ctx',
     attemptId: ATTEMPT_ID,
     step: BASE_STEP,
@@ -444,7 +453,7 @@ test('claude-code runner (0008 #5): absent or zero role.timeoutMs uses the runne
   assert.equal(captured[0]?.idleTimeoutMs, 600_000);
 });
 
-test('claude-code runner: env wall-clock override wins over role.timeoutMs in request and artifact metadata', async () => {
+test('claude-code runner: env wall-clock override wins over pinned timeout in request and artifact metadata', async () => {
   await withTimeoutEnv({ REVO_RUNNER_WALL_CLOCK_LIMIT_MS: '7000' }, async () => {
     const root = mkdtempSync(join(tmpdir(), 'revo-runner-env-timeout-'));
     try {
@@ -458,8 +467,8 @@ test('claude-code runner: env wall-clock override wins over role.timeoutMs in re
       });
 
       await runner({
-        role: makeRole('architect', { timeoutMs: 1_234 }),
-        profile: PROFILE,
+        role: makeRole('architect'),
+        binding: BINDING,
         context: 'ctx',
         attemptId: ATTEMPT_ID,
         step: BASE_STEP,
@@ -479,13 +488,13 @@ test('claude-code runner: env wall-clock override wins over role.timeoutMs in re
   });
 });
 
-test('claude-code runner (0008 #5): model_profiles.params.maxTurns maps to --max-turns', async () => {
+test('claude-code runner: pinned modelParams.maxTurns maps to --max-turns', async () => {
   const captured: ExecRequest[] = [];
   const stdout = structuredTransport();
   const runner = createClaudeCodeRunner({ executor: fakeExecutor(ok(stdout), captured), resolveCwd: async () => '/w', timeoutMs: 5_000 });
   await runner({
     role: makeRole('developer'),
-    profile: { ...PROFILE, params: { maxTurns: 12 } },
+    binding: { ...BINDING, modelParams: { maxTurns: 12 } },
     context: 'ctx',
     attemptId: ATTEMPT_ID,
     step: BASE_STEP,
@@ -531,7 +540,7 @@ test('claude-code runner: advertises ONLY the template accepted verdicts, never 
   const runner = createClaudeCodeRunner({ executor: fakeExecutor(ok(structuredTransport()), captured), resolveCwd: async () => '/w', timeoutMs: 5_000 });
   await runner({
     role: makeRole('developer'),
-    profile: PROFILE,
+    binding: BINDING,
     context: 'ctx',
     attemptId: ATTEMPT_ID,
     step: BASE_STEP,
@@ -558,7 +567,7 @@ test('claude-code runner: advertises every accepted verdict for a multi-token do
   const runner = createClaudeCodeRunner({ executor: fakeExecutor(ok(structuredTransport()), captured), resolveCwd: async () => '/w', timeoutMs: 5_000 });
   await runner({
     role: makeRole('reviewer'),
-    profile: PROFILE,
+    binding: BINDING,
     context: 'ctx',
     attemptId: ATTEMPT_ID,
     step: BASE_STEP,
@@ -622,7 +631,9 @@ test('claude-code runner: parses the envelope into output/artifacts/nextSteps/co
   assert.equal(result.costs.length, 1);
   assert.equal(result.costs[0]?.costAmount, 0.01, 'prefers CLI-reported USD');
   assert.equal(result.costs[0]?.inputTokens, 100);
-  assert.equal(result.costs[0]?.modelProfile, BASE_STEP.modelProfile);
+  assert.equal(result.costs[0]?.runnerId, BINDING.runnerId);
+  assert.equal(result.costs[0]?.provider, BINDING.provider);
+  assert.equal(result.costs[0]?.modelId, BINDING.modelId);
 });
 
 test('claude-code runner: writes process artifacts and returns a stable process ref/tails', async () => {
@@ -648,7 +659,7 @@ test('claude-code runner: writes process artifacts and returns a stable process 
 
     const result = await runner({
       role: makeRole('architect'),
-      profile: PROFILE,
+      binding: BINDING,
       context: 'ctx',
       attemptId: ATTEMPT_ID,
       step: BASE_STEP,
@@ -684,7 +695,7 @@ test('claude-code runner: reports spawn, stdout, stderr, parsed, and finished li
 
   await runner({
     role: makeRole('architect'),
-    profile: PROFILE,
+    binding: BINDING,
     context: 'ctx',
     attemptId: ATTEMPT_ID,
     step: BASE_STEP,
@@ -721,7 +732,7 @@ test('claude-code runner: reports Claude final JSON metadata as parsed events', 
 
   const result = await runner({
     role: makeRole('architect'),
-    profile: PROFILE,
+    binding: BINDING,
     context: 'ctx',
     attemptId: ATTEMPT_ID,
     step: BASE_STEP,
@@ -764,7 +775,7 @@ test('claude-code runner: does not report finished when AttemptResult constructi
     () =>
       runner({
         role: makeRole('architect'),
-        profile: PROFILE,
+        binding: BINDING,
         context: 'ctx',
         attemptId: ATTEMPT_ID,
         step: BASE_STEP,
@@ -794,7 +805,7 @@ test('claude-code runner: reports is_error metadata before failing the attempt',
   await assert.rejects(() =>
     runner({
       role: makeRole('architect'),
-      profile: PROFILE,
+      binding: BINDING,
       context: 'ctx',
       attemptId: ATTEMPT_ID,
       step: BASE_STEP,
@@ -822,7 +833,7 @@ test('claude-code runner: clean exit with permission_denials keeps successful te
 
   const result = await runner({
     role: makeRole('architect'),
-    profile: PROFILE,
+    binding: BINDING,
     context: 'ctx',
     attemptId: ATTEMPT_ID,
     step: BASE_STEP,
@@ -868,7 +879,7 @@ test('claude-code runner: permission_denials parsed preview is bounded', async (
 
   await runner({
     role: makeRole('architect'),
-    profile: PROFILE,
+    binding: BINDING,
     context: 'ctx',
     attemptId: ATTEMPT_ID,
     step: BASE_STEP,
@@ -894,25 +905,27 @@ test('claude-code runner: reported total_cost_usd of 0 with non-zero tokens yiel
   assert.equal(result.costs[0]?.costAmount, 0, 'reported $0 is honored, not overridden by token-computed amount');
 });
 
-test('claude-code runner: computes cost from tokens when no USD is reported', async () => {
+test('claude-code runner: keeps cost null when no USD is reported', async () => {
   const stdout = structuredTransport(undefined, {
     total_cost_usd: undefined,
     usage: { input_tokens: 1_000_000, output_tokens: 1_000_000 },
   });
 
   const result = await run(fakeExecutor(ok(stdout), []));
-  // 1e6/1e6*3 + 1e6/1e6*15 = 18
-  assert.equal(result.costs[0]?.costAmount, 18);
+  assert.equal(result.costs[0]?.costAmount, null);
 });
 
-test('claude-code runner: zero tokens and no USD → empty costs', async () => {
+test('claude-code runner: preserves explicitly reported zero tokens without inventing cost', async () => {
   const stdout = structuredTransport(undefined, {
     total_cost_usd: undefined,
     usage: { input_tokens: 0, output_tokens: 0 },
   });
 
   const result = await run(fakeExecutor(ok(stdout), []));
-  assert.equal(result.costs.length, 0);
+  assert.equal(result.costs.length, 1);
+  assert.equal(result.costs[0]?.inputTokens, 0);
+  assert.equal(result.costs[0]?.outputTokens, 0);
+  assert.equal(result.costs[0]?.costAmount, null);
 });
 
 // ─── timeout ──────────────────────────────────────────────────────────────────
@@ -935,7 +948,7 @@ test('claude-code runner: reports timed_out lifecycle on timeout', async () => {
   await assert.rejects(() =>
     runner({
       role: makeRole('architect'),
-      profile: PROFILE,
+      binding: BINDING,
       context: 'ctx',
       attemptId: ATTEMPT_ID,
       step: BASE_STEP,
@@ -974,7 +987,7 @@ test('claude-code runner: reports failed lifecycle on non-zero exit', async () =
   await assert.rejects(() =>
     runner({
       role: makeRole('architect'),
-      profile: PROFILE,
+      binding: BINDING,
       context: 'ctx',
       attemptId: ATTEMPT_ID,
       step: BASE_STEP,
@@ -1002,7 +1015,7 @@ test('claude-code runner: non-zero exit error carries process artifact refs/tail
       () =>
         runner({
           role: makeRole('architect'),
-          profile: PROFILE,
+          binding: BINDING,
           context: 'ctx',
           attemptId: ATTEMPT_ID,
           step: BASE_STEP,
@@ -1051,7 +1064,7 @@ test('claude-code runner: reports failed lifecycle on malformed final JSON', asy
   await assert.rejects(() =>
     runner({
       role: makeRole('architect'),
-      profile: PROFILE,
+      binding: BINDING,
       context: 'ctx',
       attemptId: ATTEMPT_ID,
       step: BASE_STEP,
@@ -1097,7 +1110,7 @@ test('claude-code runner: invalid structured_output carries process artifact ref
       () =>
         runner({
           role: makeRole('architect'),
-          profile: PROFILE,
+          binding: BINDING,
           context: 'ctx',
           attemptId: ATTEMPT_ID,
           step: BASE_STEP,
@@ -1163,7 +1176,7 @@ test('claude-code runner: threads attemptId into the prompt and calls only the e
 
   await runner({
     role: makeRole('architect'),
-    profile: PROFILE,
+    binding: BINDING,
     context: 'ctx',
     attemptId: ATTEMPT_ID,
     step: BASE_STEP,
@@ -1192,7 +1205,7 @@ test('claude-code runner: reports failed lifecycle when resolveCwd rejects befor
     () =>
       runner({
         role: makeRole('architect'),
-        profile: PROFILE,
+        binding: BINDING,
         context: 'ctx',
         attemptId: ATTEMPT_ID,
         step: BASE_STEP,
@@ -1236,7 +1249,7 @@ test('claude-code runner (slice-143): REVO_WORKTREE_PATH set and prompt includes
       resolveCwd: async () => root,
       timeoutMs: 5_000,
     });
-    await runner({ role: makeRole('developer'), profile: PROFILE, context: 'ctx', attemptId: ATTEMPT_ID, step: BASE_STEP });
+    await runner({ role: makeRole('developer'), binding: BINDING, context: 'ctx', attemptId: ATTEMPT_ID, step: BASE_STEP });
     const req = captured[0];
     assert.equal(req?.env?.REVO_WORKTREE_PATH, root, 'REVO_WORKTREE_PATH must equal the worktree cwd');
     assert.ok(req?.input?.includes('REVO_WORKTREE_PATH'), 'prompt must mention $REVO_WORKTREE_PATH');

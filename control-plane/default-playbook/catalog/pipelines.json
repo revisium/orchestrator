@@ -7,17 +7,6 @@
       "multi-repo change",
       "task-to-PR work"
     ],
-    "required_roles": [
-      "orchestrator",
-      "analyst",
-      "reviewer",
-      "triager",
-      "developer",
-      "integrator",
-      "watcher"
-    ],
-    "alternative_roles": [],
-    "optional_roles": [],
     "route_gates": [
       "task spec approval",
       "merge approval"
@@ -1453,12 +1442,6 @@
       "obvious fix",
       "repo-local maintenance"
     ],
-    "required_roles": [
-      "orchestrator",
-      "developer"
-    ],
-    "alternative_roles": [],
-    "optional_roles": [],
     "route_gates": [],
     "platform_invocation": "canonical-only",
     "execution_policy": {
@@ -1502,12 +1485,6 @@
       "research",
       "investigation"
     ],
-    "required_roles": [
-      "orchestrator",
-      "analyst"
-    ],
-    "alternative_roles": [],
-    "optional_roles": [],
     "route_gates": [],
     "platform_invocation": "canonical-only",
     "execution_policy": {

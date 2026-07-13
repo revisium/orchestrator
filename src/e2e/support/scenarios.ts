@@ -54,7 +54,7 @@ export async function startLocalChangeRun(h: HostFixture, repo: string = process
     scope: 'No source changes.',
     playbookId: PLAYBOOK_ID,
     pipelineId: 'local-change',
-    profile: stubFixtureAgentProfile(),
+    profile: stubFixtureAgentProfile('local-change'),
     start: false,
   });
   h.casePlans.register(created.taskId, { title: 'fixture local-change' });
@@ -71,7 +71,7 @@ export async function startFeatureRun(h: HostFixture, target: TargetRepo) {
     scope: 'Only mutate the temporary e2e target repository.',
     playbookId: PLAYBOOK_ID,
     pipelineId: 'feature-development',
-    profile: stubFixtureAgentProfile(),
+    profile: stubFixtureAgentProfile('feature-development'),
     start: false,
   });
   h.casePlans.register(created.taskId, { title: 'fixture feature-development', developerWrite: target.worktree });
@@ -92,7 +92,7 @@ export async function startStubbedFeatureRun(h: HostFixture, target: TargetRepo)
     scope: 'recovery e2e',
     playbookId: PLAYBOOK_ID,
     pipelineId: 'feature-development',
-    profile: stubFixtureFullProfile(),
+    profile: stubFixtureFullProfile('feature-development'),
     start: false,
   });
   h.casePlans.register(created.taskId, { title: 'runtime recovery feature run', developerWrite: target.worktree });
@@ -122,7 +122,7 @@ export async function startDataDrivenRun(
     scope: 'data-driven e2e',
     playbookId: PLAYBOOK_ID,
     pipelineId: DATA_DRIVEN_PIPELINE,
-    profile: stubFixtureFullProfile(),
+    profile: stubFixtureFullProfile('feature-development-dd'),
     start: false,
   });
   h.casePlans.register(created.taskId, {

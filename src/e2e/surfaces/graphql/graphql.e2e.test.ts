@@ -86,7 +86,7 @@ test('GraphQL HTTP and WebSocket preserve a filtered run lifecycle payload', { s
   assert.ok(detail.data?.runWorkflow.nodes.some((node) => node.id === 'developer' && node.kind === 'agent'));
   assert.ok(detail.data?.runWorkflow.edges.some((edge) => edge.from === 'developer' && edge.to === 'doneEnd'));
   assert.deepEqual(detail.data?.runWorkflow.currentNodeIds, []);
-  assert.equal(detail.data?.runWorkflow.usage.costAmount, 0);
+  assert.equal(detail.data?.runWorkflow.usage.costAmount, null);
   assert.equal(detail.data?.runWorkflow.pendingInbox.length, 0);
   assert.equal(detail.data?.runWorkflow.activity[0]?.type, 'run_created');
   assert.equal(detail.data?.runAttempts.totalCount, 0);

@@ -1,10 +1,10 @@
 [
   {
-    "id": "claude-standard",
+    "id": "claude-opus-sonnet",
     "pipelineId": "feature-development",
     "schemaVersion": "run-profile/v1",
     "version": "1",
-    "displayName": "Claude standard",
+    "displayName": "Claude exact bindings",
     "summary": "Claude Code for feature-development agent slots with the default single-review topology.",
     "topology": {
       "stages": {
@@ -18,41 +18,49 @@
     },
     "bindings": {
       "slots": {
-        "orchestrator": {
+        "role:analyst": {
           "runnerId": "claude-code",
-          "modelLevel": "deep"
+          "provider": "anthropic",
+          "modelId": "claude-opus-4-8",
+          "modelParams": {},
+          "permissionMode": "plan"
         },
-        "analyst": {
+        "role:reviewer": {
           "runnerId": "claude-code",
-          "modelLevel": "deep"
+          "provider": "anthropic",
+          "modelId": "claude-opus-4-8",
+          "modelParams": {},
+          "permissionMode": "plan"
         },
-        "reviewer": {
+        "role:developer": {
           "runnerId": "claude-code",
-          "modelLevel": "deep"
-        },
-        "developer": {
-          "runnerId": "claude-code",
-          "modelLevel": "standard",
+          "provider": "anthropic",
+          "modelId": "claude-sonnet-4-6",
+          "modelParams": {},
           "permissionMode": "acceptEdits"
         },
-        "triager": {
+        "role:triager": {
           "runnerId": "claude-code",
-          "modelLevel": "deep"
+          "provider": "anthropic",
+          "modelId": "claude-opus-4-8",
+          "modelParams": {},
+          "permissionMode": "plan"
         },
-        "watcher": {
-          "runnerId": "claude-code",
-          "modelLevel": "cheap"
+        "node:integrator": {
+          "accounts": {
+            "github": "profile-bot"
+          }
         }
       }
     },
     "status": "active"
   },
   {
-    "id": "codex-standard",
+    "id": "codex-gpt-5-6-luna",
     "pipelineId": "feature-development",
     "schemaVersion": "run-profile/v1",
     "version": "1",
-    "displayName": "Codex standard",
+    "displayName": "Codex exact gpt-5.6-luna",
     "summary": "Codex for feature-development agent slots with the default single-review topology.",
     "topology": {
       "stages": {
@@ -66,38 +74,45 @@
     },
     "bindings": {
       "slots": {
-        "orchestrator": {
+        "role:analyst": {
           "runnerId": "codex",
-          "modelLevel": "codex-deep"
+          "provider": "openai",
+          "modelId": "gpt-5.6-luna",
+          "modelParams": {},
+          "permissionMode": "read-only"
         },
-        "analyst": {
+        "role:reviewer": {
           "runnerId": "codex",
-          "modelLevel": "codex-deep",
+          "provider": "openai",
+          "modelId": "gpt-5.6-luna",
+          "modelParams": {},
+          "permissionMode": "read-only"
+        },
+        "role:developer": {
+          "runnerId": "codex",
+          "provider": "openai",
+          "modelId": "gpt-5.6-luna",
+          "modelParams": {},
           "permissionMode": "workspace-write"
         },
-        "reviewer": {
+        "role:triager": {
           "runnerId": "codex",
-          "modelLevel": "codex-deep"
+          "provider": "openai",
+          "modelId": "gpt-5.6-luna",
+          "modelParams": {},
+          "permissionMode": "read-only"
         },
-        "developer": {
-          "runnerId": "codex",
-          "modelLevel": "codex-standard",
-          "permissionMode": "workspace-write"
-        },
-        "triager": {
-          "runnerId": "codex",
-          "modelLevel": "codex-deep"
-        },
-        "watcher": {
-          "runnerId": "codex",
-          "modelLevel": "codex-standard"
+        "node:integrator": {
+          "accounts": {
+            "github": "profile-bot"
+          }
         }
       }
     },
     "status": "active"
   },
   {
-    "id": "codex-primary-claude-review-consensus",
+    "id": "codex-gpt-5-6-luna-claude-opus-4-8-consensus",
     "pipelineId": "feature-development",
     "schemaVersion": "run-profile/v1",
     "version": "1",
@@ -117,50 +132,66 @@
     },
     "bindings": {
       "slots": {
-        "orchestrator": {
+        "role:analyst": {
           "runnerId": "codex",
-          "modelLevel": "codex-deep"
+          "provider": "openai",
+          "modelId": "gpt-5.6-luna",
+          "modelParams": {},
+          "permissionMode": "read-only"
         },
-        "analyst": {
+        "role:developer": {
           "runnerId": "codex",
-          "modelLevel": "codex-deep",
+          "provider": "openai",
+          "modelId": "gpt-5.6-luna",
+          "modelParams": {},
           "permissionMode": "workspace-write"
         },
-        "developer": {
+        "role:triager": {
           "runnerId": "codex",
-          "modelLevel": "codex-standard",
-          "permissionMode": "workspace-write"
+          "provider": "openai",
+          "modelId": "gpt-5.6-luna",
+          "modelParams": {},
+          "permissionMode": "read-only"
         },
-        "triager": {
+        "node:planReviewPrimary": {
           "runnerId": "codex",
-          "modelLevel": "codex-deep"
+          "provider": "openai",
+          "modelId": "gpt-5.6-luna",
+          "modelParams": {},
+          "permissionMode": "read-only"
         },
-        "watcher": {
-          "runnerId": "codex",
-          "modelLevel": "codex-standard"
-        },
-        "planReviewPrimary": {
-          "runnerId": "codex",
-          "modelLevel": "codex-deep"
-        },
-        "planReviewSecondary": {
+        "node:planReviewSecondary": {
           "runnerId": "claude-code",
-          "modelLevel": "deep"
+          "provider": "anthropic",
+          "modelId": "claude-opus-4-8",
+          "modelParams": {},
+          "permissionMode": "plan"
         },
-        "codeReviewPrimary": {
+        "node:codeReviewPrimary": {
           "runnerId": "codex",
-          "modelLevel": "codex-deep"
+          "provider": "openai",
+          "modelId": "gpt-5.6-luna",
+          "modelParams": {},
+          "permissionMode": "read-only"
         },
-        "codeReviewSecondary": {
+        "node:codeReviewSecondary": {
           "runnerId": "claude-code",
-          "modelLevel": "deep"
+          "provider": "anthropic",
+          "modelId": "claude-opus-4-8",
+          "modelParams": {},
+          "permissionMode": "plan"
+        },
+        "node:integrator": {
+          "accounts": {
+            "github": "profile-bot"
+          }
         }
       }
     },
     "status": "active"
   },
   {
-    "id": "claude-primary-codex-review-consensus",
+    "id": "claude-opus-4-8-codex-gpt-5-6-luna-consensus",
     "pipelineId": "feature-development",
     "schemaVersion": "run-profile/v1",
     "version": "1",
@@ -180,53 +211,70 @@
     },
     "bindings": {
       "slots": {
-        "orchestrator": {
+        "role:analyst": {
           "runnerId": "claude-code",
-          "modelLevel": "deep"
+          "provider": "anthropic",
+          "modelId": "claude-opus-4-8",
+          "modelParams": {},
+          "permissionMode": "plan"
         },
-        "analyst": {
+        "role:developer": {
           "runnerId": "claude-code",
-          "modelLevel": "deep"
-        },
-        "developer": {
-          "runnerId": "claude-code",
-          "modelLevel": "standard",
+          "provider": "anthropic",
+          "modelId": "claude-sonnet-4-6",
+          "modelParams": {},
           "permissionMode": "acceptEdits"
         },
-        "triager": {
+        "role:triager": {
           "runnerId": "claude-code",
-          "modelLevel": "deep"
+          "provider": "anthropic",
+          "modelId": "claude-opus-4-8",
+          "modelParams": {},
+          "permissionMode": "plan"
         },
-        "watcher": {
+        "node:planReviewPrimary": {
           "runnerId": "claude-code",
-          "modelLevel": "cheap"
+          "provider": "anthropic",
+          "modelId": "claude-opus-4-8",
+          "modelParams": {},
+          "permissionMode": "plan"
         },
-        "planReviewPrimary": {
-          "runnerId": "claude-code",
-          "modelLevel": "deep"
-        },
-        "planReviewSecondary": {
+        "node:planReviewSecondary": {
           "runnerId": "codex",
-          "modelLevel": "codex-deep"
+          "provider": "openai",
+          "modelId": "gpt-5.6-luna",
+          "modelParams": {},
+          "permissionMode": "read-only"
         },
-        "codeReviewPrimary": {
+        "node:codeReviewPrimary": {
           "runnerId": "claude-code",
-          "modelLevel": "deep"
+          "provider": "anthropic",
+          "modelId": "claude-opus-4-8",
+          "modelParams": {},
+          "permissionMode": "plan"
         },
-        "codeReviewSecondary": {
+        "node:codeReviewSecondary": {
           "runnerId": "codex",
-          "modelLevel": "codex-deep"
+          "provider": "openai",
+          "modelId": "gpt-5.6-luna",
+          "modelParams": {},
+          "permissionMode": "read-only"
+        },
+        "node:integrator": {
+          "accounts": {
+            "github": "profile-bot"
+          }
         }
       }
     },
     "status": "active"
   },
   {
-    "id": "local-change-claude-standard",
+    "id": "local-change-claude-sonnet-4-6",
     "pipelineId": "local-change",
     "schemaVersion": "run-profile/v1",
     "version": "1",
-    "displayName": "Local change Claude standard",
+    "displayName": "Local change Claude exact bindings",
     "summary": "Claude Code runs the local-change developer slot.",
     "topology": {
       "stages": {
@@ -237,13 +285,11 @@
     },
     "bindings": {
       "slots": {
-        "orchestrator": {
+        "role:developer": {
           "runnerId": "claude-code",
-          "modelLevel": "deep"
-        },
-        "developer": {
-          "runnerId": "claude-code",
-          "modelLevel": "standard",
+          "provider": "anthropic",
+          "modelId": "claude-sonnet-4-6",
+          "modelParams": {},
           "permissionMode": "acceptEdits"
         }
       }
@@ -251,11 +297,11 @@
     "status": "active"
   },
   {
-    "id": "local-change-codex-standard",
+    "id": "local-change-codex-gpt-5-6-luna",
     "pipelineId": "local-change",
     "schemaVersion": "run-profile/v1",
     "version": "1",
-    "displayName": "Local change Codex standard",
+    "displayName": "Local change Codex exact gpt-5.6-luna",
     "summary": "Codex runs the local-change developer slot.",
     "topology": {
       "stages": {
@@ -266,13 +312,11 @@
     },
     "bindings": {
       "slots": {
-        "orchestrator": {
+        "role:developer": {
           "runnerId": "codex",
-          "modelLevel": "codex-deep"
-        },
-        "developer": {
-          "runnerId": "codex",
-          "modelLevel": "codex-standard",
+          "provider": "openai",
+          "modelId": "gpt-5.6-luna",
+          "modelParams": {},
           "permissionMode": "workspace-write"
         }
       }
@@ -280,11 +324,11 @@
     "status": "active"
   },
   {
-    "id": "analysis-only-claude-standard",
+    "id": "analysis-only-claude-opus-4-8",
     "pipelineId": "analysis-only",
     "schemaVersion": "run-profile/v1",
     "version": "1",
-    "displayName": "Analysis only Claude standard",
+    "displayName": "Analysis only Claude exact bindings",
     "summary": "Claude Code runs the analysis-only analyst slot.",
     "topology": {
       "stages": {
@@ -295,24 +339,23 @@
     },
     "bindings": {
       "slots": {
-        "orchestrator": {
+        "role:analyst": {
           "runnerId": "claude-code",
-          "modelLevel": "deep"
-        },
-        "analyst": {
-          "runnerId": "claude-code",
-          "modelLevel": "deep"
+          "provider": "anthropic",
+          "modelId": "claude-opus-4-8",
+          "modelParams": {},
+          "permissionMode": "plan"
         }
       }
     },
     "status": "active"
   },
   {
-    "id": "analysis-only-codex-standard",
+    "id": "analysis-only-codex-gpt-5-6-luna",
     "pipelineId": "analysis-only",
     "schemaVersion": "run-profile/v1",
     "version": "1",
-    "displayName": "Analysis only Codex standard",
+    "displayName": "Analysis only Codex exact gpt-5.6-luna",
     "summary": "Codex runs the analysis-only analyst slot.",
     "topology": {
       "stages": {
@@ -323,13 +366,12 @@
     },
     "bindings": {
       "slots": {
-        "orchestrator": {
+        "role:analyst": {
           "runnerId": "codex",
-          "modelLevel": "codex-deep"
-        },
-        "analyst": {
-          "runnerId": "codex",
-          "modelLevel": "codex-deep"
+          "provider": "openai",
+          "modelId": "gpt-5.6-luna",
+          "modelParams": {},
+          "permissionMode": "read-only"
         }
       }
     },

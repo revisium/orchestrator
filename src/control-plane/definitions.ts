@@ -4,9 +4,6 @@ import type { ControlPlaneTransport } from './transport.js';
 export type Role = {
   name: string;
   systemPrompt: string;
-  modelLevel: ModelLevel;
-  effort: string;
-  runner: string;
   allowedTools: string[];
   scopeRules: unknown;
   playbookId?: string;
@@ -16,9 +13,6 @@ export type Role = {
   surface?: string;
   rights?: string;
 
-  timeoutMs?: number;
-
-  permissionMode?: string;
 };
 
 
@@ -38,37 +32,6 @@ export const DEFAULT_PIPELINE_POLICY: PipelinePolicy = {
   budgetUsd: 0,
   budgetTokens: 0,
 };
-
-export type ModelProfile = {
-  level: ModelLevel;
-  provider: string;
-  modelId: string;
-  params: unknown;
-  costPerInput: number;
-  costPerOutput: number;
-};
-
-export const VALID_MODEL_LEVELS = [
-  'cheap',
-  'standard',
-  'deep',
-  'codex-cheap',
-  'codex-standard',
-  'codex-deep',
-] as const;
-
-export type ModelLevel = (typeof VALID_MODEL_LEVELS)[number];
-
-function toModelLevel(raw: unknown): Role['modelLevel'] {
-  const s = toStr(raw) || 'standard';
-  if (!(VALID_MODEL_LEVELS as readonly string[]).includes(s)) {
-    throw new ControlPlaneError(
-      'VALIDATION_FAILURE',
-      `Invalid model_level "${s}": expected one of ${VALID_MODEL_LEVELS.join(', ')}`,
-    );
-  }
-  return s as Role['modelLevel'];
-}
 
 function toStr(v: unknown): string {
   if (typeof v === 'string') return v;
@@ -114,9 +77,6 @@ export async function loadRole(name: string, transport: ControlPlaneTransport): 
   return {
     name: toStr(d.name) || name,
     systemPrompt: toStr(d.system_prompt),
-    modelLevel: toModelLevel(d.model_level),
-    effort: toStr(d.effort),
-    runner: toStr(d.runner_id) || toStr(d.runner) || 'claude-code',
     allowedTools: Array.isArray(d.allowed_tools) ? (d.allowed_tools as unknown[]).map(toStr) : [],
     scopeRules: parseJsonField(d.scope_rules),
     playbookId: toStr(d.playbook_id) || undefined,
@@ -125,8 +85,6 @@ export async function loadRole(name: string, transport: ControlPlaneTransport): 
     sourceHash: toStr(d.source_hash) || undefined,
     surface: toStr(d.surface) || undefined,
     rights: toStr(d.rights) || undefined,
-    timeoutMs: toOptPosInt(d.timeout_ms),
-    permissionMode: toStr(d.permission_mode) || undefined,
   };
 }
 
@@ -157,19 +115,5 @@ export async function loadPipelinePolicy(
     maxAttempts: toPosInt(rule.max_attempts, DEFAULT_PIPELINE_POLICY.maxAttempts),
     budgetUsd: toNonNegNum(rule.budget_usd, DEFAULT_PIPELINE_POLICY.budgetUsd),
     budgetTokens: toNonNegNum(rule.budget_tokens, DEFAULT_PIPELINE_POLICY.budgetTokens),
-  };
-}
-
-export async function loadModelProfile(level: string, transport: ControlPlaneTransport): Promise<ModelProfile> {
-  const t = transport;
-  const row = await t.getRow('model_profiles', level);
-  const d = row.data ?? {};
-  return {
-    level: (toStr(d.level) || level) as ModelProfile['level'],
-    provider: toStr(d.provider),
-    modelId: toStr(d.model_id),
-    params: parseJsonField(d.params),
-    costPerInput: Number(d.cost_per_input ?? 0),
-    costPerOutput: Number(d.cost_per_output ?? 0),
   };
 }

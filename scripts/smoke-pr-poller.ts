@@ -42,7 +42,6 @@ const fakeStep: Step = {
   status: 'claimed',
   input: null,
   output: null,
-  modelProfile: 'cheap',
   runAfter: '',
   attemptCount: 0,
   maxAttempts: 3,

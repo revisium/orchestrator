@@ -44,7 +44,9 @@ export type CostLedgerEntryMinAggregateOutputType = {
   runId: string | null
   stepId: string | null
   attemptId: string | null
-  modelProfile: string | null
+  runnerId: string | null
+  provider: string | null
+  modelId: string | null
   inputTokens: number | null
   outputTokens: number | null
   costAmount: runtime.Decimal | null
@@ -58,7 +60,9 @@ export type CostLedgerEntryMaxAggregateOutputType = {
   runId: string | null
   stepId: string | null
   attemptId: string | null
-  modelProfile: string | null
+  runnerId: string | null
+  provider: string | null
+  modelId: string | null
   inputTokens: number | null
   outputTokens: number | null
   costAmount: runtime.Decimal | null
@@ -72,7 +76,9 @@ export type CostLedgerEntryCountAggregateOutputType = {
   runId: number
   stepId: number
   attemptId: number
-  modelProfile: number
+  runnerId: number
+  provider: number
+  modelId: number
   inputTokens: number
   outputTokens: number
   costAmount: number
@@ -100,7 +106,9 @@ export type CostLedgerEntryMinAggregateInputType = {
   runId?: true
   stepId?: true
   attemptId?: true
-  modelProfile?: true
+  runnerId?: true
+  provider?: true
+  modelId?: true
   inputTokens?: true
   outputTokens?: true
   costAmount?: true
@@ -114,7 +122,9 @@ export type CostLedgerEntryMaxAggregateInputType = {
   runId?: true
   stepId?: true
   attemptId?: true
-  modelProfile?: true
+  runnerId?: true
+  provider?: true
+  modelId?: true
   inputTokens?: true
   outputTokens?: true
   costAmount?: true
@@ -128,7 +138,9 @@ export type CostLedgerEntryCountAggregateInputType = {
   runId?: true
   stepId?: true
   attemptId?: true
-  modelProfile?: true
+  runnerId?: true
+  provider?: true
+  modelId?: true
   inputTokens?: true
   outputTokens?: true
   costAmount?: true
@@ -229,11 +241,13 @@ export type CostLedgerEntryGroupByOutputType = {
   runId: string
   stepId: string
   attemptId: string
-  modelProfile: string
-  inputTokens: number
-  outputTokens: number
-  costAmount: runtime.Decimal
-  currency: string
+  runnerId: string
+  provider: string
+  modelId: string
+  inputTokens: number | null
+  outputTokens: number | null
+  costAmount: runtime.Decimal | null
+  currency: string | null
   recordedAt: Date
   _count: CostLedgerEntryCountAggregateOutputType | null
   _avg: CostLedgerEntryAvgAggregateOutputType | null
@@ -266,11 +280,13 @@ export type CostLedgerEntryWhereInput = {
   runId?: Prisma.StringFilter<"CostLedgerEntry"> | string
   stepId?: Prisma.StringFilter<"CostLedgerEntry"> | string
   attemptId?: Prisma.StringFilter<"CostLedgerEntry"> | string
-  modelProfile?: Prisma.StringFilter<"CostLedgerEntry"> | string
-  inputTokens?: Prisma.IntFilter<"CostLedgerEntry"> | number
-  outputTokens?: Prisma.IntFilter<"CostLedgerEntry"> | number
-  costAmount?: Prisma.DecimalFilter<"CostLedgerEntry"> | runtime.Decimal | runtime.DecimalJsLike | number | string
-  currency?: Prisma.StringFilter<"CostLedgerEntry"> | string
+  runnerId?: Prisma.StringFilter<"CostLedgerEntry"> | string
+  provider?: Prisma.StringFilter<"CostLedgerEntry"> | string
+  modelId?: Prisma.StringFilter<"CostLedgerEntry"> | string
+  inputTokens?: Prisma.IntNullableFilter<"CostLedgerEntry"> | number | null
+  outputTokens?: Prisma.IntNullableFilter<"CostLedgerEntry"> | number | null
+  costAmount?: Prisma.DecimalNullableFilter<"CostLedgerEntry"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  currency?: Prisma.StringNullableFilter<"CostLedgerEntry"> | string | null
   recordedAt?: Prisma.DateTimeFilter<"CostLedgerEntry"> | Date | string
   run?: Prisma.XOR<Prisma.TaskRunScalarRelationFilter, Prisma.TaskRunWhereInput>
 }
@@ -281,11 +297,13 @@ export type CostLedgerEntryOrderByWithRelationInput = {
   runId?: Prisma.SortOrder
   stepId?: Prisma.SortOrder
   attemptId?: Prisma.SortOrder
-  modelProfile?: Prisma.SortOrder
-  inputTokens?: Prisma.SortOrder
-  outputTokens?: Prisma.SortOrder
-  costAmount?: Prisma.SortOrder
-  currency?: Prisma.SortOrder
+  runnerId?: Prisma.SortOrder
+  provider?: Prisma.SortOrder
+  modelId?: Prisma.SortOrder
+  inputTokens?: Prisma.SortOrderInput | Prisma.SortOrder
+  outputTokens?: Prisma.SortOrderInput | Prisma.SortOrder
+  costAmount?: Prisma.SortOrderInput | Prisma.SortOrder
+  currency?: Prisma.SortOrderInput | Prisma.SortOrder
   recordedAt?: Prisma.SortOrder
   run?: Prisma.TaskRunOrderByWithRelationInput
   _relevance?: Prisma.CostLedgerEntryOrderByRelevanceInput
@@ -300,11 +318,13 @@ export type CostLedgerEntryWhereUniqueInput = Prisma.AtLeast<{
   runId?: Prisma.StringFilter<"CostLedgerEntry"> | string
   stepId?: Prisma.StringFilter<"CostLedgerEntry"> | string
   attemptId?: Prisma.StringFilter<"CostLedgerEntry"> | string
-  modelProfile?: Prisma.StringFilter<"CostLedgerEntry"> | string
-  inputTokens?: Prisma.IntFilter<"CostLedgerEntry"> | number
-  outputTokens?: Prisma.IntFilter<"CostLedgerEntry"> | number
-  costAmount?: Prisma.DecimalFilter<"CostLedgerEntry"> | runtime.Decimal | runtime.DecimalJsLike | number | string
-  currency?: Prisma.StringFilter<"CostLedgerEntry"> | string
+  runnerId?: Prisma.StringFilter<"CostLedgerEntry"> | string
+  provider?: Prisma.StringFilter<"CostLedgerEntry"> | string
+  modelId?: Prisma.StringFilter<"CostLedgerEntry"> | string
+  inputTokens?: Prisma.IntNullableFilter<"CostLedgerEntry"> | number | null
+  outputTokens?: Prisma.IntNullableFilter<"CostLedgerEntry"> | number | null
+  costAmount?: Prisma.DecimalNullableFilter<"CostLedgerEntry"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  currency?: Prisma.StringNullableFilter<"CostLedgerEntry"> | string | null
   recordedAt?: Prisma.DateTimeFilter<"CostLedgerEntry"> | Date | string
   run?: Prisma.XOR<Prisma.TaskRunScalarRelationFilter, Prisma.TaskRunWhereInput>
 }, "id">
@@ -315,11 +335,13 @@ export type CostLedgerEntryOrderByWithAggregationInput = {
   runId?: Prisma.SortOrder
   stepId?: Prisma.SortOrder
   attemptId?: Prisma.SortOrder
-  modelProfile?: Prisma.SortOrder
-  inputTokens?: Prisma.SortOrder
-  outputTokens?: Prisma.SortOrder
-  costAmount?: Prisma.SortOrder
-  currency?: Prisma.SortOrder
+  runnerId?: Prisma.SortOrder
+  provider?: Prisma.SortOrder
+  modelId?: Prisma.SortOrder
+  inputTokens?: Prisma.SortOrderInput | Prisma.SortOrder
+  outputTokens?: Prisma.SortOrderInput | Prisma.SortOrder
+  costAmount?: Prisma.SortOrderInput | Prisma.SortOrder
+  currency?: Prisma.SortOrderInput | Prisma.SortOrder
   recordedAt?: Prisma.SortOrder
   _count?: Prisma.CostLedgerEntryCountOrderByAggregateInput
   _avg?: Prisma.CostLedgerEntryAvgOrderByAggregateInput
@@ -337,11 +359,13 @@ export type CostLedgerEntryScalarWhereWithAggregatesInput = {
   runId?: Prisma.StringWithAggregatesFilter<"CostLedgerEntry"> | string
   stepId?: Prisma.StringWithAggregatesFilter<"CostLedgerEntry"> | string
   attemptId?: Prisma.StringWithAggregatesFilter<"CostLedgerEntry"> | string
-  modelProfile?: Prisma.StringWithAggregatesFilter<"CostLedgerEntry"> | string
-  inputTokens?: Prisma.IntWithAggregatesFilter<"CostLedgerEntry"> | number
-  outputTokens?: Prisma.IntWithAggregatesFilter<"CostLedgerEntry"> | number
-  costAmount?: Prisma.DecimalWithAggregatesFilter<"CostLedgerEntry"> | runtime.Decimal | runtime.DecimalJsLike | number | string
-  currency?: Prisma.StringWithAggregatesFilter<"CostLedgerEntry"> | string
+  runnerId?: Prisma.StringWithAggregatesFilter<"CostLedgerEntry"> | string
+  provider?: Prisma.StringWithAggregatesFilter<"CostLedgerEntry"> | string
+  modelId?: Prisma.StringWithAggregatesFilter<"CostLedgerEntry"> | string
+  inputTokens?: Prisma.IntNullableWithAggregatesFilter<"CostLedgerEntry"> | number | null
+  outputTokens?: Prisma.IntNullableWithAggregatesFilter<"CostLedgerEntry"> | number | null
+  costAmount?: Prisma.DecimalNullableWithAggregatesFilter<"CostLedgerEntry"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  currency?: Prisma.StringNullableWithAggregatesFilter<"CostLedgerEntry"> | string | null
   recordedAt?: Prisma.DateTimeWithAggregatesFilter<"CostLedgerEntry"> | Date | string
 }
 
@@ -350,11 +374,13 @@ export type CostLedgerEntryCreateInput = {
   createdAt?: Date | string
   stepId?: string
   attemptId?: string
-  modelProfile?: string
-  inputTokens?: number
-  outputTokens?: number
-  costAmount?: runtime.Decimal | runtime.DecimalJsLike | number | string
-  currency?: string
+  runnerId: string
+  provider: string
+  modelId: string
+  inputTokens?: number | null
+  outputTokens?: number | null
+  costAmount?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  currency?: string | null
   recordedAt?: Date | string
   run: Prisma.TaskRunCreateNestedOneWithoutCostItemsInput
 }
@@ -365,11 +391,13 @@ export type CostLedgerEntryUncheckedCreateInput = {
   runId: string
   stepId?: string
   attemptId?: string
-  modelProfile?: string
-  inputTokens?: number
-  outputTokens?: number
-  costAmount?: runtime.Decimal | runtime.DecimalJsLike | number | string
-  currency?: string
+  runnerId: string
+  provider: string
+  modelId: string
+  inputTokens?: number | null
+  outputTokens?: number | null
+  costAmount?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  currency?: string | null
   recordedAt?: Date | string
 }
 
@@ -378,11 +406,13 @@ export type CostLedgerEntryUpdateInput = {
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   stepId?: Prisma.StringFieldUpdateOperationsInput | string
   attemptId?: Prisma.StringFieldUpdateOperationsInput | string
-  modelProfile?: Prisma.StringFieldUpdateOperationsInput | string
-  inputTokens?: Prisma.IntFieldUpdateOperationsInput | number
-  outputTokens?: Prisma.IntFieldUpdateOperationsInput | number
-  costAmount?: Prisma.DecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string
-  currency?: Prisma.StringFieldUpdateOperationsInput | string
+  runnerId?: Prisma.StringFieldUpdateOperationsInput | string
+  provider?: Prisma.StringFieldUpdateOperationsInput | string
+  modelId?: Prisma.StringFieldUpdateOperationsInput | string
+  inputTokens?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  outputTokens?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  costAmount?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  currency?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   recordedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   run?: Prisma.TaskRunUpdateOneRequiredWithoutCostItemsNestedInput
 }
@@ -393,11 +423,13 @@ export type CostLedgerEntryUncheckedUpdateInput = {
   runId?: Prisma.StringFieldUpdateOperationsInput | string
   stepId?: Prisma.StringFieldUpdateOperationsInput | string
   attemptId?: Prisma.StringFieldUpdateOperationsInput | string
-  modelProfile?: Prisma.StringFieldUpdateOperationsInput | string
-  inputTokens?: Prisma.IntFieldUpdateOperationsInput | number
-  outputTokens?: Prisma.IntFieldUpdateOperationsInput | number
-  costAmount?: Prisma.DecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string
-  currency?: Prisma.StringFieldUpdateOperationsInput | string
+  runnerId?: Prisma.StringFieldUpdateOperationsInput | string
+  provider?: Prisma.StringFieldUpdateOperationsInput | string
+  modelId?: Prisma.StringFieldUpdateOperationsInput | string
+  inputTokens?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  outputTokens?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  costAmount?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  currency?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   recordedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
 
@@ -407,11 +439,13 @@ export type CostLedgerEntryCreateManyInput = {
   runId: string
   stepId?: string
   attemptId?: string
-  modelProfile?: string
-  inputTokens?: number
-  outputTokens?: number
-  costAmount?: runtime.Decimal | runtime.DecimalJsLike | number | string
-  currency?: string
+  runnerId: string
+  provider: string
+  modelId: string
+  inputTokens?: number | null
+  outputTokens?: number | null
+  costAmount?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  currency?: string | null
   recordedAt?: Date | string
 }
 
@@ -420,11 +454,13 @@ export type CostLedgerEntryUpdateManyMutationInput = {
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   stepId?: Prisma.StringFieldUpdateOperationsInput | string
   attemptId?: Prisma.StringFieldUpdateOperationsInput | string
-  modelProfile?: Prisma.StringFieldUpdateOperationsInput | string
-  inputTokens?: Prisma.IntFieldUpdateOperationsInput | number
-  outputTokens?: Prisma.IntFieldUpdateOperationsInput | number
-  costAmount?: Prisma.DecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string
-  currency?: Prisma.StringFieldUpdateOperationsInput | string
+  runnerId?: Prisma.StringFieldUpdateOperationsInput | string
+  provider?: Prisma.StringFieldUpdateOperationsInput | string
+  modelId?: Prisma.StringFieldUpdateOperationsInput | string
+  inputTokens?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  outputTokens?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  costAmount?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  currency?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   recordedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
 
@@ -434,11 +470,13 @@ export type CostLedgerEntryUncheckedUpdateManyInput = {
   runId?: Prisma.StringFieldUpdateOperationsInput | string
   stepId?: Prisma.StringFieldUpdateOperationsInput | string
   attemptId?: Prisma.StringFieldUpdateOperationsInput | string
-  modelProfile?: Prisma.StringFieldUpdateOperationsInput | string
-  inputTokens?: Prisma.IntFieldUpdateOperationsInput | number
-  outputTokens?: Prisma.IntFieldUpdateOperationsInput | number
-  costAmount?: Prisma.DecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string
-  currency?: Prisma.StringFieldUpdateOperationsInput | string
+  runnerId?: Prisma.StringFieldUpdateOperationsInput | string
+  provider?: Prisma.StringFieldUpdateOperationsInput | string
+  modelId?: Prisma.StringFieldUpdateOperationsInput | string
+  inputTokens?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  outputTokens?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  costAmount?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  currency?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   recordedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
 
@@ -464,7 +502,9 @@ export type CostLedgerEntryCountOrderByAggregateInput = {
   runId?: Prisma.SortOrder
   stepId?: Prisma.SortOrder
   attemptId?: Prisma.SortOrder
-  modelProfile?: Prisma.SortOrder
+  runnerId?: Prisma.SortOrder
+  provider?: Prisma.SortOrder
+  modelId?: Prisma.SortOrder
   inputTokens?: Prisma.SortOrder
   outputTokens?: Prisma.SortOrder
   costAmount?: Prisma.SortOrder
@@ -484,7 +524,9 @@ export type CostLedgerEntryMaxOrderByAggregateInput = {
   runId?: Prisma.SortOrder
   stepId?: Prisma.SortOrder
   attemptId?: Prisma.SortOrder
-  modelProfile?: Prisma.SortOrder
+  runnerId?: Prisma.SortOrder
+  provider?: Prisma.SortOrder
+  modelId?: Prisma.SortOrder
   inputTokens?: Prisma.SortOrder
   outputTokens?: Prisma.SortOrder
   costAmount?: Prisma.SortOrder
@@ -498,7 +540,9 @@ export type CostLedgerEntryMinOrderByAggregateInput = {
   runId?: Prisma.SortOrder
   stepId?: Prisma.SortOrder
   attemptId?: Prisma.SortOrder
-  modelProfile?: Prisma.SortOrder
+  runnerId?: Prisma.SortOrder
+  provider?: Prisma.SortOrder
+  modelId?: Prisma.SortOrder
   inputTokens?: Prisma.SortOrder
   outputTokens?: Prisma.SortOrder
   costAmount?: Prisma.SortOrder
@@ -559,11 +603,13 @@ export type CostLedgerEntryCreateWithoutRunInput = {
   createdAt?: Date | string
   stepId?: string
   attemptId?: string
-  modelProfile?: string
-  inputTokens?: number
-  outputTokens?: number
-  costAmount?: runtime.Decimal | runtime.DecimalJsLike | number | string
-  currency?: string
+  runnerId: string
+  provider: string
+  modelId: string
+  inputTokens?: number | null
+  outputTokens?: number | null
+  costAmount?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  currency?: string | null
   recordedAt?: Date | string
 }
 
@@ -572,11 +618,13 @@ export type CostLedgerEntryUncheckedCreateWithoutRunInput = {
   createdAt?: Date | string
   stepId?: string
   attemptId?: string
-  modelProfile?: string
-  inputTokens?: number
-  outputTokens?: number
-  costAmount?: runtime.Decimal | runtime.DecimalJsLike | number | string
-  currency?: string
+  runnerId: string
+  provider: string
+  modelId: string
+  inputTokens?: number | null
+  outputTokens?: number | null
+  costAmount?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  currency?: string | null
   recordedAt?: Date | string
 }
 
@@ -615,11 +663,13 @@ export type CostLedgerEntryScalarWhereInput = {
   runId?: Prisma.StringFilter<"CostLedgerEntry"> | string
   stepId?: Prisma.StringFilter<"CostLedgerEntry"> | string
   attemptId?: Prisma.StringFilter<"CostLedgerEntry"> | string
-  modelProfile?: Prisma.StringFilter<"CostLedgerEntry"> | string
-  inputTokens?: Prisma.IntFilter<"CostLedgerEntry"> | number
-  outputTokens?: Prisma.IntFilter<"CostLedgerEntry"> | number
-  costAmount?: Prisma.DecimalFilter<"CostLedgerEntry"> | runtime.Decimal | runtime.DecimalJsLike | number | string
-  currency?: Prisma.StringFilter<"CostLedgerEntry"> | string
+  runnerId?: Prisma.StringFilter<"CostLedgerEntry"> | string
+  provider?: Prisma.StringFilter<"CostLedgerEntry"> | string
+  modelId?: Prisma.StringFilter<"CostLedgerEntry"> | string
+  inputTokens?: Prisma.IntNullableFilter<"CostLedgerEntry"> | number | null
+  outputTokens?: Prisma.IntNullableFilter<"CostLedgerEntry"> | number | null
+  costAmount?: Prisma.DecimalNullableFilter<"CostLedgerEntry"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  currency?: Prisma.StringNullableFilter<"CostLedgerEntry"> | string | null
   recordedAt?: Prisma.DateTimeFilter<"CostLedgerEntry"> | Date | string
 }
 
@@ -628,11 +678,13 @@ export type CostLedgerEntryCreateManyRunInput = {
   createdAt?: Date | string
   stepId?: string
   attemptId?: string
-  modelProfile?: string
-  inputTokens?: number
-  outputTokens?: number
-  costAmount?: runtime.Decimal | runtime.DecimalJsLike | number | string
-  currency?: string
+  runnerId: string
+  provider: string
+  modelId: string
+  inputTokens?: number | null
+  outputTokens?: number | null
+  costAmount?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  currency?: string | null
   recordedAt?: Date | string
 }
 
@@ -641,11 +693,13 @@ export type CostLedgerEntryUpdateWithoutRunInput = {
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   stepId?: Prisma.StringFieldUpdateOperationsInput | string
   attemptId?: Prisma.StringFieldUpdateOperationsInput | string
-  modelProfile?: Prisma.StringFieldUpdateOperationsInput | string
-  inputTokens?: Prisma.IntFieldUpdateOperationsInput | number
-  outputTokens?: Prisma.IntFieldUpdateOperationsInput | number
-  costAmount?: Prisma.DecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string
-  currency?: Prisma.StringFieldUpdateOperationsInput | string
+  runnerId?: Prisma.StringFieldUpdateOperationsInput | string
+  provider?: Prisma.StringFieldUpdateOperationsInput | string
+  modelId?: Prisma.StringFieldUpdateOperationsInput | string
+  inputTokens?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  outputTokens?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  costAmount?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  currency?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   recordedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
 
@@ -654,11 +708,13 @@ export type CostLedgerEntryUncheckedUpdateWithoutRunInput = {
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   stepId?: Prisma.StringFieldUpdateOperationsInput | string
   attemptId?: Prisma.StringFieldUpdateOperationsInput | string
-  modelProfile?: Prisma.StringFieldUpdateOperationsInput | string
-  inputTokens?: Prisma.IntFieldUpdateOperationsInput | number
-  outputTokens?: Prisma.IntFieldUpdateOperationsInput | number
-  costAmount?: Prisma.DecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string
-  currency?: Prisma.StringFieldUpdateOperationsInput | string
+  runnerId?: Prisma.StringFieldUpdateOperationsInput | string
+  provider?: Prisma.StringFieldUpdateOperationsInput | string
+  modelId?: Prisma.StringFieldUpdateOperationsInput | string
+  inputTokens?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  outputTokens?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  costAmount?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  currency?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   recordedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
 
@@ -667,11 +723,13 @@ export type CostLedgerEntryUncheckedUpdateManyWithoutRunInput = {
   createdAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
   stepId?: Prisma.StringFieldUpdateOperationsInput | string
   attemptId?: Prisma.StringFieldUpdateOperationsInput | string
-  modelProfile?: Prisma.StringFieldUpdateOperationsInput | string
-  inputTokens?: Prisma.IntFieldUpdateOperationsInput | number
-  outputTokens?: Prisma.IntFieldUpdateOperationsInput | number
-  costAmount?: Prisma.DecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string
-  currency?: Prisma.StringFieldUpdateOperationsInput | string
+  runnerId?: Prisma.StringFieldUpdateOperationsInput | string
+  provider?: Prisma.StringFieldUpdateOperationsInput | string
+  modelId?: Prisma.StringFieldUpdateOperationsInput | string
+  inputTokens?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  outputTokens?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  costAmount?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  currency?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   recordedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
 }
 
@@ -683,7 +741,9 @@ export type CostLedgerEntrySelect<ExtArgs extends runtime.Types.Extensions.Inter
   runId?: boolean
   stepId?: boolean
   attemptId?: boolean
-  modelProfile?: boolean
+  runnerId?: boolean
+  provider?: boolean
+  modelId?: boolean
   inputTokens?: boolean
   outputTokens?: boolean
   costAmount?: boolean
@@ -698,7 +758,9 @@ export type CostLedgerEntrySelectCreateManyAndReturn<ExtArgs extends runtime.Typ
   runId?: boolean
   stepId?: boolean
   attemptId?: boolean
-  modelProfile?: boolean
+  runnerId?: boolean
+  provider?: boolean
+  modelId?: boolean
   inputTokens?: boolean
   outputTokens?: boolean
   costAmount?: boolean
@@ -713,7 +775,9 @@ export type CostLedgerEntrySelectUpdateManyAndReturn<ExtArgs extends runtime.Typ
   runId?: boolean
   stepId?: boolean
   attemptId?: boolean
-  modelProfile?: boolean
+  runnerId?: boolean
+  provider?: boolean
+  modelId?: boolean
   inputTokens?: boolean
   outputTokens?: boolean
   costAmount?: boolean
@@ -728,7 +792,9 @@ export type CostLedgerEntrySelectScalar = {
   runId?: boolean
   stepId?: boolean
   attemptId?: boolean
-  modelProfile?: boolean
+  runnerId?: boolean
+  provider?: boolean
+  modelId?: boolean
   inputTokens?: boolean
   outputTokens?: boolean
   costAmount?: boolean
@@ -736,7 +802,7 @@ export type CostLedgerEntrySelectScalar = {
   recordedAt?: boolean
 }
 
-export type CostLedgerEntryOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "createdAt" | "runId" | "stepId" | "attemptId" | "modelProfile" | "inputTokens" | "outputTokens" | "costAmount" | "currency" | "recordedAt", ExtArgs["result"]["costLedgerEntry"]>
+export type CostLedgerEntryOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "createdAt" | "runId" | "stepId" | "attemptId" | "runnerId" | "provider" | "modelId" | "inputTokens" | "outputTokens" | "costAmount" | "currency" | "recordedAt", ExtArgs["result"]["costLedgerEntry"]>
 export type CostLedgerEntryInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   run?: boolean | Prisma.TaskRunDefaultArgs<ExtArgs>
 }
@@ -758,11 +824,13 @@ export type $CostLedgerEntryPayload<ExtArgs extends runtime.Types.Extensions.Int
     runId: string
     stepId: string
     attemptId: string
-    modelProfile: string
-    inputTokens: number
-    outputTokens: number
-    costAmount: runtime.Decimal
-    currency: string
+    runnerId: string
+    provider: string
+    modelId: string
+    inputTokens: number | null
+    outputTokens: number | null
+    costAmount: runtime.Decimal | null
+    currency: string | null
     recordedAt: Date
   }, ExtArgs["result"]["costLedgerEntry"]>
   composites: {}
@@ -1193,7 +1261,9 @@ export interface CostLedgerEntryFieldRefs {
   readonly runId: Prisma.FieldRef<"CostLedgerEntry", 'String'>
   readonly stepId: Prisma.FieldRef<"CostLedgerEntry", 'String'>
   readonly attemptId: Prisma.FieldRef<"CostLedgerEntry", 'String'>
-  readonly modelProfile: Prisma.FieldRef<"CostLedgerEntry", 'String'>
+  readonly runnerId: Prisma.FieldRef<"CostLedgerEntry", 'String'>
+  readonly provider: Prisma.FieldRef<"CostLedgerEntry", 'String'>
+  readonly modelId: Prisma.FieldRef<"CostLedgerEntry", 'String'>
   readonly inputTokens: Prisma.FieldRef<"CostLedgerEntry", 'Int'>
   readonly outputTokens: Prisma.FieldRef<"CostLedgerEntry", 'Int'>
   readonly costAmount: Prisma.FieldRef<"CostLedgerEntry", 'Decimal'>

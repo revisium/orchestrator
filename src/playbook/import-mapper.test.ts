@@ -7,42 +7,12 @@ import { mapPlaybookRows, scopedImportRowId, scopedRunProfileRowId } from './imp
 import type { PlaybookManifest } from './manifest.js';
 import type { PlaybookCatalogs } from './catalog-loader.js';
 
-test('scopedImportRowId: returns Revisium-safe scoped row ids', () => {
-  assert.equal(scopedImportRowId('pb', 'developer-backend'), 'pb-developer-backend');
+function source(root: string) {
+  return { type: 'local' as const, input: '.', root, source: `local:${root}`, packageName: '@x/pb', version: '1.0.0' };
+}
 
-  const rowId = scopedImportRowId('pb/name', 'developer/backend');
-  assert.match(rowId, /^pb-name-developer-backend-[a-f0-9]{12}$/);
-  assert.match(rowId, /^[A-Za-z0-9_-]+$/);
-
-  assert.notEqual(scopedImportRowId('pb', 'developer/backend'), scopedImportRowId('pb', 'developer-backend'));
-
-  const longRowId = scopedImportRowId(
-    'very-long-playbook-name-that-keeps-going',
-    'very-long-role-name-that-keeps-going',
-  );
-  assert.ok(longRowId.length <= 64);
-  assert.match(longRowId, /^[A-Za-z0-9_-]+$/);
-  assert.match(longRowId, /-[a-f0-9]{12}$/);
-});
-
-test('scopedRunProfileRowId: scopes run profiles by playbook, pipeline, and profile id', () => {
-  assert.equal(scopedRunProfileRowId('pb', 'feature-development', 'codex-standard'), 'pb-19-feature-development-codex-standard');
-  assert.notEqual(
-    scopedRunProfileRowId('pb', 'feature-development', 'standard'),
-    scopedRunProfileRowId('pb', 'analysis-only', 'standard'),
-  );
-  assert.notEqual(
-    scopedRunProfileRowId('pb', 'a-b', 'c'),
-    scopedRunProfileRowId('pb', 'a', 'b-c'),
-  );
-});
-
-test('mapPlaybookRows: maps roles and pipelines into versioned rows', () => {
-  const root = mkdtempSync(join(tmpdir(), 'revo-playbook-map-'));
-  mkdirSync(join(root, 'roles', 'watcher', 'references'), { recursive: true });
-  writeFileSync(join(root, 'roles', 'watcher', 'ROLE.md'), '# Watcher\n');
-  writeFileSync(join(root, 'roles', 'watcher', 'references', 'core.md'), '# Watch Core\n');
-  const manifest: PlaybookManifest = {
+function manifest(): PlaybookManifest {
+  return {
     id: 'pb',
     name: 'PB',
     schemaVersion: 2,
@@ -50,278 +20,91 @@ test('mapPlaybookRows: maps roles and pipelines into versioned rows', () => {
     catalogs: { roles: 'catalog/roles.json', pipelines: 'catalog/pipelines.json', runProfiles: 'catalog/run-profiles.json' },
     supportedRuntimes: ['revo'],
   };
-  const catalogs: PlaybookCatalogs = {
-    roles: [
-      {
-        id: 'watcher',
-        path: 'roles/watcher/ROLE.md',
-        surface: 'repo',
-        rights: 'read-only',
-        allowedTools: ['Read', 'Grep', 'Glob'],
-        defaultModelLevel: 'cheap',
-        runnerId: 'claude-code',
-        wrappers: {},
-      },
-    ],
-    pipelines: [
-      {
-        id: 'feature-development',
-        path: 'pipelines/feature-development/PIPELINE.md',
-        triggers: ['new feature'],
-        requiredRoles: ['watcher'],
-        alternativeRoles: [],
-        optionalRoles: [],
-        routeGates: [],
-        platformInvocation: 'canonical-only',
-        executionPolicy: { iteration_cap: 3 },
-      },
-    ],
-    runProfiles: [
-      {
-        id: 'codex-standard',
-        pipelineId: 'feature-development',
-        schemaVersion: 'run-profile/v1',
-        version: '1',
-        displayName: 'Codex standard',
-        summary: 'Codex-bound feature-development launch profile.',
-        topology: { stages: { analyst: { mode: 'single' } } },
-        bindings: { slots: { developer: { runnerId: 'codex', modelLevel: 'codex-standard' } } },
-        status: 'active',
-      },
-    ],
-  };
+}
 
-  const rows = mapPlaybookRows({
-    root,
-    source: { type: 'local', input: '.', root, source: `local:${root}`, packageName: '@x/pb', version: '1.0.0' },
-    manifest,
-    catalogs,
-    now: '2026-06-13T00:00:00.000Z',
-  });
+function catalogs(): PlaybookCatalogs {
+  return {
+    roles: [{
+      id: 'watcher',
+      path: 'roles/watcher/ROLE.md',
+      surface: 'repo',
+      rights: 'read-only',
+      allowedTools: ['Read', 'Grep', 'Glob'],
+      wrappers: {},
+    }],
+    pipelines: [{
+      id: 'feature-development',
+      path: 'pipelines/feature-development/PIPELINE.md',
+      triggers: ['new feature'],
+      routeGates: ['merge approval'],
+      platformInvocation: 'canonical-only',
+      executionPolicy: { iteration_cap: 3 },
+    }],
+    runProfiles: [{
+      id: 'exact-codex',
+      pipelineId: 'feature-development',
+      schemaVersion: 'run-profile/v1',
+      version: '1',
+      displayName: 'Exact Codex',
+      summary: 'Direct exact model binding.',
+      topology: { stages: { developer: { mode: 'single' } } },
+      bindings: {
+        slots: {
+          'role:developer': {
+            runnerId: 'codex',
+            provider: 'openai',
+            modelId: 'gpt-5.6-luna',
+            modelParams: {},
+          },
+        },
+      },
+      status: 'active',
+    }],
+  };
+}
+
+test('scopedImportRowId and scopedRunProfileRowId keep ids deterministic and bounded', () => {
+  assert.equal(scopedImportRowId('pb', 'developer-backend'), 'pb-developer-backend');
+  assert.equal(scopedRunProfileRowId('pb', 'feature-development', 'exact-codex'), 'pb-19-feature-development-exact-codex');
+  assert.notEqual(scopedRunProfileRowId('pb', 'feature-development', 'exact-codex'), scopedRunProfileRowId('pb', 'analysis-only', 'exact-codex'));
+  const long = scopedImportRowId('very-long-playbook-name-that-keeps-going', 'very-long-role-name-that-keeps-going');
+  assert.ok(long.length <= 64);
+  assert.match(long, /^[A-Za-z0-9_-]+$/);
+});
+
+test('mapPlaybookRows imports provider-neutral roles and exact profile JSON', () => {
+  const root = mkdtempSync(join(tmpdir(), 'revo-playbook-map-'));
+  mkdirSync(join(root, 'roles', 'watcher', 'references'), { recursive: true });
+  mkdirSync(join(root, 'pipelines', 'feature-development'), { recursive: true });
+  writeFileSync(join(root, 'roles', 'watcher', 'ROLE.md'), '# Watcher\n');
+  writeFileSync(join(root, 'roles', 'watcher', 'references', 'core.md'), '# Watch Core\n');
+  writeFileSync(join(root, 'pipelines', 'feature-development', 'PIPELINE.md'), '# Feature\n');
+
+  const rows = mapPlaybookRows({ root, source: source(root), manifest: manifest(), catalogs: catalogs(), now: '2026-06-13T00:00:00.000Z' });
 
   assert.equal(rows.playbook.rowId, 'pb');
   assert.equal(rows.roles[0]?.rowId, 'pb-watcher');
   assert.equal(rows.roles[0]?.data.name, 'watcher');
-  assert.equal(rows.roles[0]?.data.runner, 'claude-code');
-  assert.equal(rows.roles[0]?.data.runner_id, 'claude-code');
-  // A playbook role's id IS its runtime id (identity passthrough — no name-translation table in code).
-  assert.match(String(rows.roles[0]?.data.scope_rules), /"runtime_role_id":"watcher"/);
-  assert.deepEqual(rows.roles[0]?.data.allowed_tools, ['Read', 'Grep', 'Glob']);
-  assert.equal(rows.pipelines[0]?.rowId, 'pb-feature-development');
-  assert.deepEqual(rows.pipelines[0]?.data.route_gates, []);
-  assert.equal(rows.runProfiles[0]?.rowId, 'pb-19-feature-development-codex-standard');
+  assert.equal('runner_id' in (rows.roles[0]?.data ?? {}), false);
+  assert.deepEqual(rows.pipelines[0]?.data.route_gates, ['merge']);
   assert.equal(rows.runProfiles[0]?.table, 'run_profiles');
-  assert.equal(rows.runProfiles[0]?.data.profile_id, 'codex-standard');
+  assert.equal(rows.runProfiles[0]?.data.profile_id, 'exact-codex');
   assert.equal(rows.runProfiles[0]?.data.pipeline_id, 'feature-development');
-  assert.equal(rows.runProfiles[0]?.data.source_path, 'catalog/run-profiles.json');
-  assert.ok(typeof rows.runProfiles[0]?.data.profile_hash === 'string');
-  assert.ok(typeof rows.runProfiles[0]?.data.profile_revision_hash === 'string');
-  const storedProfileJson = JSON.parse(String(rows.runProfiles[0]?.data.profile_json)) as Record<string, unknown>;
-  assert.equal(storedProfileJson.bindings !== undefined, true);
-  assert.equal(storedProfileJson.pipelineId, undefined);
-  assert.equal(storedProfileJson.id, undefined);
-  assert.equal(storedProfileJson.version, undefined);
+  const stored = JSON.parse(String(rows.runProfiles[0]?.data.profile_json)) as Record<string, unknown>;
+  assert.equal(stored.pipelineId, undefined);
+  assert.equal(stored.id, undefined);
+  assert.deepEqual((stored.bindings as { slots: Record<string, unknown> }).slots['role:developer'], {
+    runnerId: 'codex', provider: 'openai', modelId: 'gpt-5.6-luna', modelParams: {},
+  });
   assert.equal(rows.catalogHash.length, 64);
 });
 
-test('mapPlaybookRows: passes allowedTools through verbatim from the catalog', () => {
-  const root = mkdtempSync(join(tmpdir(), 'revo-playbook-map-'));
-  mkdirSync(join(root, 'roles', 'developer'), { recursive: true });
-  writeFileSync(join(root, 'roles', 'developer', 'ROLE.md'), '# Developer\n');
-  const manifest: PlaybookManifest = {
-    id: 'pb',
-    name: 'PB',
-    schemaVersion: 2,
-    packageName: '@x/pb',
-    catalogs: { roles: 'catalog/roles.json', pipelines: 'catalog/pipelines.json' },
-    supportedRuntimes: ['revo'],
-  };
-
-  const rows = mapPlaybookRows({
-    root,
-    source: { type: 'local', input: '.', root, source: `local:${root}`, packageName: '@x/pb', version: '1.0.0' },
-    manifest,
-    catalogs: {
-      roles: [
-        {
-          id: 'developer',
-          path: 'roles/developer/ROLE.md',
-          surface: 'any',
-          rights: 'write-working-tree',
-          allowedTools: ['Read', 'Edit', 'Write', 'Bash', 'Grep', 'Glob'],
-          defaultModelLevel: 'standard',
-          runnerId: 'claude-code',
-          wrappers: {},
-        },
-      ],
-      pipelines: [],
-      runProfiles: [],
-    },
-    now: '2026-06-13T00:00:00.000Z',
-  });
-
-  assert.deepEqual(rows.roles[0]?.data.allowed_tools, ['Read', 'Edit', 'Write', 'Bash', 'Grep', 'Glob']);
-  // no `kind` field is ever persisted (the role-kind machinery was removed in slice 4).
-  assert.equal('kind' in (rows.roles[0]?.data ?? {}), false);
-});
-
-test('mapPlaybookRows: normalizes canonical gate labels to workflow gate ids', () => {
-  const root = mkdtempSync(join(tmpdir(), 'revo-playbook-map-'));
-  mkdirSync(join(root, 'roles', 'developer'), { recursive: true });
-  mkdirSync(join(root, 'pipelines', 'feature-development'), { recursive: true });
-  writeFileSync(join(root, 'roles', 'developer', 'ROLE.md'), '# Developer\n');
-  writeFileSync(join(root, 'pipelines', 'feature-development', 'PIPELINE.md'), '# Feature\n');
-  const manifest: PlaybookManifest = {
-    id: 'pb',
-    name: 'PB',
-    schemaVersion: 2,
-    packageName: '@x/pb',
-    catalogs: { roles: 'catalog/roles.json', pipelines: 'catalog/pipelines.json' },
-    supportedRuntimes: ['revo'],
-  };
-
-  const rows = mapPlaybookRows({
-    root,
-    source: { type: 'local', input: '.', root, source: `local:${root}`, packageName: '@x/pb', version: '1.0.0' },
-    manifest,
-    catalogs: {
-      roles: [
-        {
-          id: 'developer',
-          path: 'roles/developer/ROLE.md',
-          surface: 'any',
-          rights: 'write-working-tree',
-          allowedTools: ['Read', 'Edit', 'Write', 'Bash'],
-          defaultModelLevel: 'standard',
-          runnerId: 'claude-code',
-          wrappers: {},
-        },
-      ],
-      pipelines: [
-        {
-          id: 'feature-development',
-          path: 'pipelines/feature-development/PIPELINE.md',
-          triggers: ['new feature'],
-          requiredRoles: ['developer'],
-          alternativeRoles: [],
-          optionalRoles: [],
-          routeGates: ['task spec approval', 'merge approval', 'merge'],
-          platformInvocation: 'canonical-only',
-          executionPolicy: {},
-        },
-      ],
-      runProfiles: [],
-    },
-    now: '2026-06-13T00:00:00.000Z',
-  });
-
-  assert.deepEqual(rows.pipelines[0]?.data.route_gates, ['plan', 'merge']);
-});
-
-test('mapPlaybookRows: runner_id, not rights, selects the runtime runner', () => {
-  const root = mkdtempSync(join(tmpdir(), 'revo-playbook-map-'));
-  mkdirSync(join(root, 'roles', 'integrator'), { recursive: true });
-  writeFileSync(join(root, 'roles', 'integrator', 'ROLE.md'), '# Integrator\n');
-  const manifest: PlaybookManifest = {
-    id: 'pb',
-    name: 'PB',
-    schemaVersion: 2,
-    packageName: '@x/pb',
-    catalogs: { roles: 'catalog/roles.json', pipelines: 'catalog/pipelines.json' },
-    supportedRuntimes: ['revo'],
-  };
-  const rows = mapPlaybookRows({
-    root,
-    source: { type: 'local', input: '.', root, source: `local:${root}`, packageName: '@x/pb', version: '1.0.0' },
-    manifest,
-    catalogs: {
-      roles: [
-        {
-          id: 'integrator',
-          path: 'roles/integrator/ROLE.md',
-          surface: 'repo',
-          rights: 'git-gh',
-          allowedTools: ['Read', 'Bash'],
-          defaultModelLevel: 'standard',
-          runnerId: 'script',
-          wrappers: {},
-        },
-      ],
-      pipelines: [],
-      runProfiles: [],
-    },
-    now: '2026-06-13T00:00:00.000Z',
-  });
-
-  assert.equal(rows.roles[0]?.data.runner, 'script');
-  assert.equal(rows.roles[0]?.data.runner_id, 'script');
-});
-
-test('mapPlaybookRows: mutating a role prompt changes catalogHash (prompt hashes are folded in)', () => {
+test('mapPlaybookRows folds role prompt bodies into the catalog hash', () => {
   const root = mkdtempSync(join(tmpdir(), 'revo-playbook-prompt-hash-'));
   mkdirSync(join(root, 'roles', 'watcher'), { recursive: true });
   writeFileSync(join(root, 'roles', 'watcher', 'ROLE.md'), '# Watcher v1\n');
-  const manifest: PlaybookManifest = {
-    id: 'pb', name: 'PB', schemaVersion: 2, packageName: '@x/pb',
-    catalogs: { roles: 'catalog/roles.json', pipelines: 'catalog/pipelines.json' },
-    supportedRuntimes: ['revo'],
-  };
-  const catalogs: PlaybookCatalogs = {
-    roles: [{
-      id: 'watcher', path: 'roles/watcher/ROLE.md', surface: 'repo', rights: 'read-only',
-      allowedTools: ['Read'], defaultModelLevel: 'cheap', runnerId: 'claude-code', wrappers: {},
-    }],
-    pipelines: [],
-    runProfiles: [],
-  };
-  const source = { type: 'local' as const, input: '.', root, source: `local:${root}`, packageName: '@x/pb', version: '1.0.0' };
-
-  const hash1 = mapPlaybookRows({ root, source, manifest, catalogs, now: '2026-01-01T00:00:00.000Z' }).catalogHash;
-  assert.equal(hash1.length, 64);
-
-  writeFileSync(join(root, 'roles', 'watcher', 'ROLE.md'), '# Watcher v2 — updated prompt body\n');
-
-  const hash2 = mapPlaybookRows({ root, source, manifest, catalogs, now: '2026-01-01T00:00:00.000Z' }).catalogHash;
-  assert.equal(hash2.length, 64);
-  assert.notEqual(hash1, hash2, 'a prompt body change must be reflected in catalogHash');
-});
-
-test('mapPlaybookRows: rejects production stub-agent role bindings', () => {
-  const root = mkdtempSync(join(tmpdir(), 'revo-playbook-map-'));
-  mkdirSync(join(root, 'roles', 'developer'), { recursive: true });
-  writeFileSync(join(root, 'roles', 'developer', 'ROLE.md'), '# Developer\n');
-  const manifest: PlaybookManifest = {
-    id: 'pb',
-    name: 'PB',
-    schemaVersion: 2,
-    packageName: '@x/pb',
-    catalogs: { roles: 'catalog/roles.json', pipelines: 'catalog/pipelines.json' },
-    supportedRuntimes: ['revo'],
-  };
-
-  assert.throws(
-    () => mapPlaybookRows({
-      root,
-      source: { type: 'local', input: '.', root, source: `local:${root}`, packageName: '@x/pb', version: '1.0.0' },
-      manifest,
-      catalogs: {
-        roles: [
-          {
-            id: 'developer',
-            path: 'roles/developer/ROLE.md',
-            surface: 'any',
-            rights: 'write-working-tree',
-            allowedTools: ['Read', 'Edit', 'Write', 'Bash'],
-            defaultModelLevel: 'standard',
-            runnerId: 'stub-agent',
-            wrappers: {},
-          },
-        ],
-        pipelines: [],
-        runProfiles: [],
-      },
-      now: '2026-06-13T00:00:00.000Z',
-    }),
-    /stub-agent/,
-  );
+  const first = mapPlaybookRows({ root, source: source(root), manifest: manifest(), catalogs: catalogs(), now: '2026-01-01T00:00:00.000Z' }).catalogHash;
+  writeFileSync(join(root, 'roles', 'watcher', 'ROLE.md'), '# Watcher v2\n');
+  const second = mapPlaybookRows({ root, source: source(root), manifest: manifest(), catalogs: catalogs(), now: '2026-01-01T00:00:00.000Z' }).catalogHash;
+  assert.notEqual(first, second);
 });

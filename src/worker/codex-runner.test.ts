@@ -13,19 +13,28 @@ import {
 } from './process-executor.js';
 import { RunAgentError } from './runner.js';
 import { BASE_STEP, makeRole } from './test-fixtures.js';
-import type { ModelProfile } from '../control-plane/definitions.js';
+import type { ResolvedAgentBinding } from '../control-plane/run-profile-contract.js';
 import type { AgentActivityReporter } from '../observability/agent-activity-reporter.js';
 import type { RunnerActivityKind, RunnerActivityTracker } from '../observability/activity-signal.js';
 
 const ATTEMPT_ID = 'attempt_20260101T000000000Z_abc12345';
 
-const PROFILE: ModelProfile = {
-  level: 'standard',
+const BINDING: ResolvedAgentBinding = {
+  runnerId: 'codex',
   provider: 'openai',
-  modelId: 'gpt-5.5',
-  params: {},
-  costPerInput: 2,
-  costPerOutput: 8,
+  modelId: 'gpt-5.6-luna',
+  modelParams: {},
+  slotKey: 'node:developer',
+  nodeId: 'developer',
+  roleId: 'developer',
+  roleDocumentId: 'role-doc-developer',
+  permissionMode: 'workspace-write',
+  permissionSource: 'profile',
+  runner: {
+    runnerId: 'codex', manifestVersion: '1', manifestDigest: `sha256:${'a'.repeat(64)}`,
+    stdoutParserId: 'codex-jsonl', permissionStyleId: 'codex-sandbox',
+    declaredDefaultPermissionMode: 'read-only', capabilities: {}, constraints: {}, executionFields: {},
+  },
 };
 
 type CapturedReporterEvent =
@@ -166,7 +175,7 @@ async function runWith(
   executor: ProcessExecutor,
   root: string,
   roleOverrides: Parameters<typeof makeRole>[1] = {},
-  profile: ModelProfile = PROFILE,
+  binding: ResolvedAgentBinding = BINDING,
   reporter?: AgentActivityReporter,
   acceptedVerdicts?: readonly string[],
 ) {
@@ -177,8 +186,8 @@ async function runWith(
     timeoutMs: 5_000,
   });
   return runner({
-    role: makeRole('developer', { runner: 'codex', rights: 'write', ...roleOverrides }),
-    profile,
+    role: makeRole('developer', { rights: 'write', ...roleOverrides }),
+    binding,
     context: '## Role: developer\nDo the thing.',
     attemptId: ATTEMPT_ID,
     step: BASE_STEP,
@@ -200,7 +209,7 @@ test('codex runner: builds documented codex exec invocation and writes schema fi
       req.args.slice(req.args.indexOf('-c'), req.args.indexOf('-c') + 2),
       ['-c', 'approval_policy="never"'],
     );
-    assert.deepEqual(req.args.slice(req.args.indexOf('--model'), req.args.indexOf('--model') + 2), ['--model', 'gpt-5.5']);
+    assert.deepEqual(req.args.slice(req.args.indexOf('--model'), req.args.indexOf('--model') + 2), ['--model', 'gpt-5.6-luna']);
     assert.deepEqual(req.args.slice(req.args.indexOf('--sandbox'), req.args.indexOf('--sandbox') + 2), ['--sandbox', 'workspace-write']);
     assert.equal(req.args.includes('--disallowedTools'), false, 'Codex does not use Claude deny flags');
     assert.deepEqual(req.args.slice(req.args.indexOf('--cd'), req.args.indexOf('--cd') + 2), ['--cd', '/workspace/repo']);
@@ -233,7 +242,7 @@ test('codex runner: writes accepted verdicts into the output schema enum and pro
       fakeExecutor(ok(jsonl({ type: 'turn.completed', output: finalResult() })), captured),
       root,
       {},
-      PROFILE,
+      BINDING,
       undefined,
       ['approved'],
     );
@@ -247,13 +256,14 @@ test('codex runner: writes accepted verdicts into the output schema enum and pro
   });
 });
 
-test('codex runner: maps read-only role policy to read-only sandbox', async () => {
+test('codex runner: uses the pinned read-only permission for the sandbox', async () => {
   await withTempRoot(async (root) => {
     const captured: ExecRequest[] = [];
     await runWith(
       fakeExecutor(ok(jsonl({ type: 'turn.completed', output: finalResult() })), captured),
       root,
       { rights: 'read-only', allowedTools: ['Read'] },
+      { ...BINDING, permissionMode: 'read-only' },
     );
 
     const req = captured[0];
@@ -262,13 +272,14 @@ test('codex runner: maps read-only role policy to read-only sandbox', async () =
   });
 });
 
-test('codex runner: role.timeoutMs maps to wall-clock cap only', async () => {
+test('codex runner: pinned timeoutMs maps to wall-clock cap only', async () => {
   await withTempRoot(async (root) => {
     const captured: ExecRequest[] = [];
     await runWith(
       fakeExecutor(ok(jsonl({ type: 'turn.completed', output: finalResult() })), captured),
       root,
-      { timeoutMs: 1_234_567 },
+      {},
+      { ...BINDING, timeoutMs: 1_234_567 },
     );
 
     assert.equal(captured[0]?.timeoutMs, 1_234_567);
@@ -276,14 +287,15 @@ test('codex runner: role.timeoutMs maps to wall-clock cap only', async () => {
   });
 });
 
-test('codex runner: env wall-clock override wins over role.timeoutMs in request and artifact metadata', async () => {
+test('codex runner: env wall-clock override wins over pinned timeout in request and artifact metadata', async () => {
   await withTimeoutEnv({ REVO_RUNNER_WALL_CLOCK_LIMIT_MS: '7000' }, async () => {
     await withTempRoot(async (root) => {
       const captured: ExecRequest[] = [];
       await runWith(
         fakeExecutor(ok(jsonl({ type: 'turn.completed', output: finalResult() })), captured),
         root,
-        { timeoutMs: 1_234 },
+        {},
+        { ...BINDING, timeoutMs: 1_234 },
       );
 
       const meta = JSON.parse(
@@ -298,18 +310,19 @@ test('codex runner: env wall-clock override wins over role.timeoutMs in request 
   });
 });
 
-test('codex runner: maps explicit write tools to workspace-write even when rights are read-only', async () => {
+test('codex runner: pinned read-only permission cannot be widened by role tools', async () => {
   await withTempRoot(async (root) => {
     const captured: ExecRequest[] = [];
     await runWith(
       fakeExecutor(ok(jsonl({ type: 'turn.completed', output: finalResult() })), captured),
       root,
       { rights: 'read-only', allowedTools: ['Read', 'Write'] },
+      { ...BINDING, permissionMode: 'read-only' },
     );
 
     const req = captured[0];
     const idx = req?.args.indexOf('--sandbox') ?? -1;
-    assert.equal(req?.args[idx + 1], 'workspace-write');
+    assert.equal(req?.args[idx + 1], 'read-only');
   });
 });
 
@@ -321,6 +334,7 @@ test('codex runner: keeps deploy-read and qa-live style rights read-only', async
         fakeExecutor(ok(jsonl({ type: 'turn.completed', output: finalResult() })), captured),
         root,
         { rights, allowedTools: ['Read'] },
+        { ...BINDING, permissionMode: 'read-only' },
       );
 
       const req = captured[0];
@@ -330,19 +344,18 @@ test('codex runner: keeps deploy-read and qa-live style rights read-only', async
   });
 });
 
-test('codex runner: fails fast on unknown rights labels instead of granting write access', async () => {
+test('codex runner: ignores role rights when the pinned permission is valid', async () => {
   await withTempRoot(async (root) => {
     const captured: ExecRequest[] = [];
-    await assert.rejects(
-      () =>
-        runWith(
-          fakeExecutor(ok(jsonl({ type: 'turn.completed', output: finalResult() })), captured),
-          root,
-          { rights: 'mystery-live-admin', allowedTools: ['Read'] },
-        ),
-      /does not know how to map role rights "mystery-live-admin" to a sandbox/,
+    await runWith(
+      fakeExecutor(ok(jsonl({ type: 'turn.completed', output: finalResult() })), captured),
+      root,
+      { rights: 'mystery-live-admin', allowedTools: ['Read'] },
+      { ...BINDING, permissionMode: 'read-only' },
     );
-    assert.equal(captured.length, 0, 'executor must not be called when policy mapping is unknown');
+    const req = captured[0];
+    const idx = req?.args.indexOf('--sandbox') ?? -1;
+    assert.equal(req?.args[idx + 1], 'read-only');
   });
 });
 
@@ -350,12 +363,12 @@ test('codex runner: fails fast on incompatible provider or missing model before 
   await withTempRoot(async (root) => {
     const captured: ExecRequest[] = [];
     await assert.rejects(
-      () => runWith(fakeExecutor(ok(''), captured), root, {}, { ...PROFILE, provider: 'anthropic' }),
+      () => runWith(fakeExecutor(ok(''), captured), root, {}, { ...BINDING, provider: 'anthropic' }),
       /OpenAI\/Codex-compatible provider/,
     );
     await assert.rejects(
-      () => runWith(fakeExecutor(ok(''), captured), root, {}, { ...PROFILE, modelId: '' }),
-      /non-empty model_profiles\.model_id/,
+      () => runWith(fakeExecutor(ok(''), captured), root, {}, { ...BINDING, modelId: '' }),
+      /non-empty exact modelId/,
     );
     assert.equal(captured.length, 0, 'executor must not be called');
   });
@@ -384,7 +397,7 @@ test('codex runner: parses strict structured final result from JSON text in fina
     assert.equal(result.needsHuman, false);
     assert.equal(result.costs[0]?.inputTokens, 100);
     assert.equal(result.costs[0]?.outputTokens, 25);
-    assert.equal(result.costs[0]?.costAmount, 0.0004);
+    assert.equal(result.costs[0]?.costAmount, null);
   });
 });
 
@@ -573,7 +586,7 @@ test('codex runner: stderr is diagnostic and nonfatal on successful structured o
       },
       root,
       {},
-      PROFILE,
+      BINDING,
       capturingReporter(events),
     );
 
@@ -596,7 +609,7 @@ test('codex runner: reports lifecycle, streamed parsed events, and process artif
       },
       root,
       {},
-      PROFILE,
+      BINDING,
       capturingReporter(events),
     );
 
@@ -618,7 +631,7 @@ test('codex runner: maps turn.failed permission denial to permission_blocked wit
     const stdout = jsonl({ type: 'turn.failed', error: { message: 'sandbox denied write access' } });
 
     await assert.rejects(
-      () => runWith(fakeExecutor(ok(stdout), []), root, {}, PROFILE, capturingReporter(events)),
+      () => runWith(fakeExecutor(ok(stdout), []), root, {}, BINDING, capturingReporter(events)),
       /turn\.failed/,
     );
 
@@ -637,7 +650,7 @@ test('codex runner: maps timeout to timed_out and other failures to failed', asy
           fakeExecutor(timeoutResult(), []),
           root,
           {},
-          PROFILE,
+          BINDING,
           capturingReporter(timeoutEvents),
         ),
       /runner-wall-clock-limit/,
@@ -656,7 +669,7 @@ test('codex runner: maps timeout to timed_out and other failures to failed', asy
           fakeExecutor({ code: 1, stdout: '', stderr: 'auth required', timedOut: false }, []),
           root,
           {},
-          PROFILE,
+          BINDING,
           capturingReporter(failedEvents),
         ),
       /auth required/,
@@ -674,7 +687,7 @@ test('codex runner: process failure permission text maps to permission_blocked',
           fakeExecutor({ code: 1, stdout: '', stderr: 'approval denied by policy', timedOut: false }, []),
           root,
           {},
-          PROFILE,
+          BINDING,
           capturingReporter(events),
         ),
       /approval denied by policy/,

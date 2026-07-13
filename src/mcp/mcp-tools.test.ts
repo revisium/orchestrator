@@ -5,6 +5,7 @@ import { registerRevoMcpTools } from './mcp-tools.js';
 import { OPERATOR_MONITORING_PROTOCOL, buildMonitoringDirective } from './monitoring-directive.js';
 import { MCP_INSTRUCTIONS } from './mcp-capabilities.js';
 import type { McpFacadeService } from './mcp-facade.service.js';
+import { ControlPlaneError } from '../control-plane/errors.js';
 
 type RegisteredTool = {
   name: string;
@@ -28,6 +29,76 @@ function parseToolText(result: unknown): unknown {
   const content = (result as { content: Array<{ text: string }> }).content;
   return JSON.parse(content[0]?.text ?? 'null') as unknown;
 }
+
+test('MCP tool errors preserve selector route code as an MCP execution error', async () => {
+  const { server, tools } = makeServer();
+  const facade = {
+    async simulateRoute() {
+      throw new ControlPlaneError('VALIDATION_FAILURE', 'profile selector is invalid', {
+        details: { code: 'profile_selector_invalid', path: '/profileId' },
+      });
+    },
+  } as unknown as McpFacadeService;
+  registerRevoMcpTools(server as never, facade);
+  const tool = tools.find((registered) => registered.name === 'simulate_route');
+  assert.ok(tool);
+
+  const result = await tool.handler({ title: 'Task', pipelineId: 'local-change' } as never) as {
+    isError?: boolean;
+    content: Array<{ text: string }>;
+  };
+  assert.equal(result.isError, true);
+  assert.deepEqual(JSON.parse(result.content[0]?.text ?? '{}'), {
+    code: 'profile_selector_invalid',
+    message: 'profile selector is invalid',
+    path: '/profileId',
+  });
+});
+
+test('MCP tool errors preserve runner/provider mismatch without secrets', async () => {
+  const { server, tools } = makeServer();
+  const facade = {
+    async simulateRoute() {
+      throw new ControlPlaneError('VALIDATION_FAILURE', 'provider is not accepted', {
+        details: { code: 'runner_provider_mismatch', path: '/provider', secret: 'must-not-leak' },
+      });
+    },
+  } as unknown as McpFacadeService;
+  registerRevoMcpTools(server as never, facade);
+  const tool = tools.find((registered) => registered.name === 'simulate_route');
+  assert.ok(tool);
+
+  const result = await tool.handler({ title: 'Task', pipelineId: 'local-change' } as never) as {
+    isError?: boolean;
+    content: Array<{ text: string }>;
+  };
+  assert.equal(result.isError, true);
+  const payload = JSON.parse(result.content[0]?.text ?? '{}') as Record<string, unknown>;
+  assert.deepEqual(payload, { code: 'runner_provider_mismatch', message: 'provider is not accepted', path: '/provider' });
+  assert.equal(JSON.stringify(payload).includes('must-not-leak'), false);
+});
+
+test('MCP tool errors do not expose generic error messages', async () => {
+  const { server, tools } = makeServer();
+  const credential = 'ghp_super-secret-token';
+  const facade = {
+    async simulateRoute() {
+      throw new Error(`runner failed with credential ${credential}`);
+    },
+  } as unknown as McpFacadeService;
+  registerRevoMcpTools(server as never, facade);
+  const tool = tools.find((registered) => registered.name === 'simulate_route');
+  assert.ok(tool);
+
+  const result = await tool.handler({ title: 'Task', pipelineId: 'local-change' } as never) as {
+    isError?: boolean;
+    content: Array<{ text: string }>;
+  };
+  assert.equal(result.isError, true);
+  const payload = JSON.parse(result.content[0]?.text ?? '{}') as Record<string, unknown>;
+  assert.deepEqual(payload, { code: 'INTERNAL_ERROR', message: 'Internal MCP tool error' });
+  assert.equal(JSON.stringify(payload).includes(credential), false);
+});
 
 test('registerRevoMcpTools registers agent observability tools', () => {
   const { server, tools } = makeServer();
@@ -186,10 +257,10 @@ test('create_run schema rejects malformed inline run profile stages and bindings
   assert.equal(
     schema.safeParse({
       ...base,
-      profile: { ...base.profile, bindings: { slots: { developer: { modelLevel: 'unknown' } } } },
+      profile: { ...base.profile, bindings: { slots: { developer: { modelId: 'unknown' } } } },
     }).success,
     false,
-    'slot binding must constrain modelLevel',
+    'slot binding must use the exact agent contract',
   );
 });
 
@@ -249,15 +320,13 @@ test('get_agent_log MCP tool validates conflicting bounded read inputs before fa
   const tool = tools.find((registered) => registered.name === 'get_agent_log');
   assert.ok(tool);
 
-  await assert.rejects(
-    () => Promise.resolve(tool.handler({
+  const invalidResult = await tool.handler({
       runId: 'run-1',
       stream: 'combined',
       offsetBytes: 0,
       tailBytes: 10,
-    } as never)),
-    /VALIDATION_FAILURE: tailBytes cannot be combined/,
-  );
+    } as never) as { isError?: boolean };
+  assert.equal(invalidResult.isError, true);
   assert.deepEqual(calls, []);
 
   const result = await tool.handler({ runId: 'run-1', stream: 'combined', tailBytes: 65_536 } as never);
@@ -298,10 +367,8 @@ test('resolve_gate MCP schema and handler require adoption audit before facade d
     false,
   );
 
-  await assert.rejects(
-    () => Promise.resolve(tool.handler({ inboxId: 'inbox-1', outcome: 'adopt_patch_manually' } as never)),
-    /VALIDATION_FAILURE: adopt_patch_manually requires complete adoptionAudit/,
-  );
+  const invalidResult = await tool.handler({ inboxId: 'inbox-1', outcome: 'adopt_patch_manually' } as never) as { isError?: boolean };
+  assert.equal(invalidResult.isError, true);
   assert.deepEqual(calls, []);
 
   await tool.handler({ inboxId: 'inbox-1', outcome: 'adopt_patch_manually', adoptionAudit } as never);
@@ -348,10 +415,8 @@ test('resolve_gate MCP schema and handler require merge override audit threadIds
     false,
   );
 
-  await assert.rejects(
-    () => Promise.resolve(tool.handler({ inboxId: 'inbox-1', outcome: 'override_merge' } as never)),
-    /VALIDATION_FAILURE: override_merge requires complete mergeOverrideAudit/,
-  );
+  const invalidResult = await tool.handler({ inboxId: 'inbox-1', outcome: 'override_merge' } as never) as { isError?: boolean };
+  assert.equal(invalidResult.isError, true);
   assert.deepEqual(calls, []);
 
   await tool.handler({ inboxId: 'inbox-1', outcome: 'override_merge', mergeOverrideAudit } as never);
@@ -518,9 +583,7 @@ test('create_run schema accepts inline run profile', async () => {
           template_json: { specVersion: '1.0', pipelineId: 'local-change', entry: 'developer', verdicts: { domain: ['approved'] },
             nodes: { developer: { id: 'developer', kind: 'agent', roleRef: 'role:developer', next: 'done', onFailure: 'abort' }, done: { id: 'done', kind: 'terminal', status: 'succeeded' } } },
         },
-        launchBindings: [{ match: { roleId: 'developer' }, modelLevel: 'deep' }],
-        roleBindings: [{ roleId: 'developer', rowId: 'pb-developer', modelLevel: 'standard', runnerId: 'claude-code', resolvedRunnerId: 'claude-code', runnerSource: 'profile' }],
-        requiredRoles: ['developer'], optionalRoles: [], params: {}, pipelineRowId: 'pb-local-change',
+        executionPlanDigest: 'sha256:' + '1'.repeat(64), pipelineRowId: 'pb-local-change',
       };
     },
     async previewPipelineSelection() {
@@ -541,7 +604,7 @@ test('create_run schema accepts inline run profile', async () => {
       schemaVersion: 'run-profile/v1',
       topology: { stages: { developer: { mode: 'single' } } },
       bindings: {
-        slots: { developer: { runnerId: 'claude-code', modelLevel: 'deep' } },
+        slots: { 'node:developer': { runnerId: 'codex', provider: 'openai', modelId: 'gpt-5.6-luna', modelParams: {} } },
       },
     },
   } as never);
@@ -551,7 +614,7 @@ test('create_run schema accepts inline run profile', async () => {
   assert.ok(profile !== undefined, 'inline profile forwarded by create_run handler');
   assert.equal(profile.schemaVersion, 'run-profile/v1');
   assert.deepEqual(profile.topology, { stages: { developer: { mode: 'single' } } });
-  assert.deepEqual(profile.bindings, { slots: { developer: { runnerId: 'claude-code', modelLevel: 'deep' } } });
+  assert.deepEqual(profile.bindings, { slots: { 'node:developer': { runnerId: 'codex', provider: 'openai', modelId: 'gpt-5.6-luna', modelParams: {} } } });
 });
 
 test('simulate_route schema accepts inline run profile', async () => {
@@ -563,8 +626,7 @@ test('simulate_route schema accepts inline run profile', async () => {
       return {
         playbookId: 'pb', pipelineId: 'feature-development', source: 'explicit',
         routeGates: [], roles: [], executionPolicy: {},
-        launchBindings: [{ match: { roleId: 'developer' }, modelLevel: 'deep' }],
-        roleBindings: [], params: {},
+        executionPlanDigest: 'sha256:' + '1'.repeat(64),
       };
     },
   } as unknown as McpFacadeService;
@@ -575,12 +637,12 @@ test('simulate_route schema accepts inline run profile', async () => {
 
   await tool.handler({
     title: 'Test',
-    pipeline: 'feature-development',
+    pipelineId: 'feature-development',
     profile: {
       schemaVersion: 'run-profile/v1',
       topology: { stages: { planReviewer: { mode: 'single' } } },
       bindings: {
-        slots: { developer: { runnerId: 'claude-code', modelLevel: 'deep' } },
+        slots: { 'node:developer': { runnerId: 'codex', provider: 'openai', modelId: 'gpt-5.6-luna', modelParams: {} } },
       },
     },
   } as never);
@@ -590,7 +652,7 @@ test('simulate_route schema accepts inline run profile', async () => {
   assert.ok(profile !== undefined, 'inline profile forwarded by simulate_route handler');
   assert.equal(profile.schemaVersion, 'run-profile/v1');
   assert.deepEqual(profile.topology, { stages: { planReviewer: { mode: 'single' } } });
-  assert.deepEqual(profile.bindings, { slots: { developer: { runnerId: 'claude-code', modelLevel: 'deep' } } });
+  assert.deepEqual(profile.bindings, { slots: { 'node:developer': { runnerId: 'codex', provider: 'openai', modelId: 'gpt-5.6-luna', modelParams: {} } } });
 });
 
 test('profile management MCP tools validate schemas and delegate to facade', async () => {
@@ -622,7 +684,7 @@ test('profile management MCP tools validate schemas and delegate to facade', asy
   const profile = {
     schemaVersion: 'run-profile/v1',
     topology: { stages: { developer: { mode: 'single' } } },
-    bindings: { slots: { developer: { runnerId: 'codex', modelLevel: 'codex-standard' } } },
+    bindings: { slots: { 'node:developer': { runnerId: 'codex', provider: 'openai', modelId: 'gpt-5.6-luna', modelParams: {} } } },
   };
 
   registerRevoMcpTools(server as never, facade);
@@ -637,32 +699,32 @@ test('profile management MCP tools validate schemas and delegate to facade', asy
   assert.equal(tools.find((tool) => tool.name === 'deprecate_profile')?.config.annotations?.readOnlyHint, false);
 
   const createSchema = z.object(tools.find((tool) => tool.name === 'create_profile')?.config.inputSchema as Record<string, never>);
-  assert.equal(createSchema.safeParse({ pipelineId: 'local-change', profileId: 'custom-standard', displayName: 'Custom standard', profile }).success, true);
+  assert.equal(createSchema.safeParse({ pipelineId: 'local-change', profileId: 'custom-exact', displayName: 'Custom exact', profile }).success, true);
   assert.equal(
     createSchema.safeParse({
       pipelineId: 'local-change',
-      profileId: 'custom-standard',
-      displayName: 'Custom standard',
+      profileId: 'custom-exact',
+      displayName: 'Custom exact',
       profile: { ...profile, pipelineId: 'local-change' },
     }).success,
     false,
     'nested profile.pipelineId is rejected',
   );
   const updateSchema = z.object(tools.find((tool) => tool.name === 'update_profile')?.config.inputSchema as Record<string, never>);
-  assert.equal(updateSchema.safeParse({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileRevisionHash: 'hash', profile }).success, true);
-  assert.equal(updateSchema.safeParse({ pipelineId: 'local-change', profileId: 'custom-standard', profile }).success, false, 'expectedProfileRevisionHash is required');
+  assert.equal(updateSchema.safeParse({ pipelineId: 'local-change', profileId: 'custom-exact', expectedProfileRevisionHash: 'hash', profile }).success, true);
+  assert.equal(updateSchema.safeParse({ pipelineId: 'local-change', profileId: 'custom-exact', profile }).success, false, 'expectedProfileRevisionHash is required');
 
-  await tools.find((tool) => tool.name === 'get_profile')?.handler({ pipelineId: 'local-change', profileId: 'custom-standard' } as never);
-  await tools.find((tool) => tool.name === 'create_profile')?.handler({ pipelineId: 'local-change', profileId: 'custom-standard', displayName: 'Custom standard', profile } as never);
-  await tools.find((tool) => tool.name === 'update_profile')?.handler({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileRevisionHash: 'hash', profile } as never);
-  await tools.find((tool) => tool.name === 'deprecate_profile')?.handler({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileRevisionHash: 'hash' } as never);
+  await tools.find((tool) => tool.name === 'get_profile')?.handler({ pipelineId: 'local-change', profileId: 'custom-exact' } as never);
+  await tools.find((tool) => tool.name === 'create_profile')?.handler({ pipelineId: 'local-change', profileId: 'custom-exact', displayName: 'Custom exact', profile } as never);
+  await tools.find((tool) => tool.name === 'update_profile')?.handler({ pipelineId: 'local-change', profileId: 'custom-exact', expectedProfileRevisionHash: 'hash', profile } as never);
+  await tools.find((tool) => tool.name === 'deprecate_profile')?.handler({ pipelineId: 'local-change', profileId: 'custom-exact', expectedProfileRevisionHash: 'hash' } as never);
   await tools.find((tool) => tool.name === 'validate_profile')?.handler({ pipelineId: 'local-change', profile } as never);
 
   assert.deepEqual(calls, [
-    ['get', { pipelineId: 'local-change', profileId: 'custom-standard' }],
-    ['create', { pipelineId: 'local-change', profileId: 'custom-standard', displayName: 'Custom standard', profile }],
-    ['update', { pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileRevisionHash: 'hash', profile }],
-    ['deprecate', { pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileRevisionHash: 'hash' }],
+    ['get', { pipelineId: 'local-change', profileId: 'custom-exact' }],
+    ['create', { pipelineId: 'local-change', profileId: 'custom-exact', displayName: 'Custom exact', profile }],
+    ['update', { pipelineId: 'local-change', profileId: 'custom-exact', expectedProfileRevisionHash: 'hash', profile }],
+    ['deprecate', { pipelineId: 'local-change', profileId: 'custom-exact', expectedProfileRevisionHash: 'hash' }],
     ['validate', { pipelineId: 'local-change', profile }],
   ]);
 });

@@ -1,9 +1,9 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
-import { VALID_MODEL_LEVELS } from '../control-plane/definitions.js';
 import { MAX_WATCH_CURSOR_CHARS } from '../task-control-plane/run-watch.service.js';
 import { OPERATOR_MONITORING_PROTOCOL } from './monitoring-directive.js';
 import type { McpFacadeService } from './mcp-facade.service.js';
+import { serializeMcpToolError } from './mcp-tool-result.js';
 
 function json(value: unknown) {
   return {
@@ -28,23 +28,18 @@ const runProfileStageSchema = z.discriminatedUnion('mode', [
   z.object({ mode: z.literal('single') }).strict(),
   z.object({ mode: z.literal('consensus'), branches: z.number().int().min(2).max(8) }).strict(),
 ]);
-const runProfileSlotBindingSchema = z.object({
-  runnerId: z.string().min(1).optional(),
-  modelLevel: z.enum(VALID_MODEL_LEVELS).optional(),
-  timeoutMs: z.number().int().positive().optional(),
+const runProfileAgentBindingSchema = z.object({
+  runnerId: z.string().min(1),
+  provider: z.string().min(1),
+  modelId: z.string().min(1),
+  modelParams: z.record(z.string(), z.unknown()),
   permissionMode: z.string().min(1).optional(),
-  accounts: z.object({
-    github: z.string().min(1),
-  }).strict().optional(),
-}).strict().refine(
-  (value) =>
-    value.runnerId !== undefined ||
-    value.modelLevel !== undefined ||
-    value.timeoutMs !== undefined ||
-    value.permissionMode !== undefined ||
-    value.accounts !== undefined,
-  { message: 'run profile slot binding must set at least one launch field' },
-);
+  timeoutMs: z.number().int().positive().max(86_400_000).optional(),
+}).strict();
+const runProfileScriptBindingSchema = z.object({
+  accounts: z.record(z.string().min(1), z.string().min(1)).refine((value) => Object.keys(value).length > 0),
+}).strict();
+const runProfileSlotBindingSchema = z.union([runProfileAgentBindingSchema, runProfileScriptBindingSchema]);
 const runProfileBodySchema = z.object({
   schemaVersion: z.literal('run-profile/v1'),
   topology: z.object({
@@ -124,6 +119,27 @@ function assertValidResolveGateInput(input: { outcome: string; adoptionAudit?: u
 }
 
 export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService): void {
+  server = new Proxy(server, {
+    get(target, property, receiver) {
+      if (property !== 'registerTool') return Reflect.get(target, property, receiver);
+      const register = target.registerTool as unknown as (
+        name: string,
+        config: unknown,
+        handler: (input: unknown, extra: unknown) => unknown,
+      ) => unknown;
+      return (name: string, config: unknown, handler: (input: unknown, extra: unknown) => unknown) => register.call(target,
+        name,
+        config as never,
+        async (input: unknown, extra: unknown) => {
+          try {
+            return await handler(input, extra);
+          } catch (error) {
+            return serializeMcpToolError(error);
+          }
+        },
+      );
+    },
+  });
   server.registerTool(
     'get_status',
     {
@@ -636,7 +652,7 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
       description: 'List stored run profiles from control-plane storage. Compact by default; pass includeDetails:true to include full profile JSON.',
       inputSchema: {
         playbookId: z.string().min(1).optional(),
-        pipelineId: z.string().min(1).optional(),
+        pipelineId: z.string().min(1),
         includeDetails: z.boolean().optional(),
         includeDeprecated: z.boolean().optional(),
       },
@@ -737,7 +753,7 @@ export function registerRevoMcpTools(server: McpServer, facade: McpFacadeService
       inputSchema: {
         title: z.string().min(1),
         repo: z.string().optional(),
-        pipeline: z.string().optional(),
+        pipelineId: z.string().min(1),
         profileId: z.string().min(1).optional().describe('Optional stored run profile id. Use list_profiles to discover accepted ids for the selected pipeline.'),
         profile: runProfileSchema.describe('Optional inline run-profile/v1 body. Mutually exclusive with profileId.'),
         playbookId: z.string().optional(),

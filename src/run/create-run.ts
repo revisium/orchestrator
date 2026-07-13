@@ -78,7 +78,6 @@ function compactUtcStamp(date: Date): string {
   ].join('');
 }
 
-const DEFAULT_ROLE = 'architect';
 const maxRoleRowIdLength = 64;
 
 const maxSlugLength = 21;
@@ -132,8 +131,8 @@ function normalizeInput(input: CreateRunInput): NormalizedInput {
     throw new TypeError('priority must be a finite integer');
   }
 
-  const role = input.role?.trim() || DEFAULT_ROLE;
-  if (!isValidRoleRowId(role)) {
+  const role = input.role?.trim() ?? '';
+  if (role !== '' && !isValidRoleRowId(role)) {
     throw new Error(
       `role must be a well-formed role row id (${maxRoleRowIdLength} chars max, A-Z a-z 0-9 _ -)`,
     );

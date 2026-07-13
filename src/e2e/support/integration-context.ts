@@ -6,6 +6,7 @@ import { branchName } from '../../runners/integrator.js';
 import { taskBranchPrefix } from '../../runners/integrator-branch-naming.js';
 import { AGENT_OUTPUT_STREAM_KEY, type AgentOutputEvent } from '../../observability/types.js';
 import type { AgentSpec } from './agents.js';
+import { executionPlanFromRouteDecision, type RouteDecision } from '../../pipeline/route-contract.js';
 import {
   readRunAttempts,
   readRunDigest,
@@ -77,9 +78,9 @@ function integrationRepoPath(repo: 'workspace' | IntegrationTarget): string {
   return target.worktree;
 }
 
-function integrationProfile(profile: IntegrationProfile | undefined) {
+function integrationProfile(profile: IntegrationProfile | undefined, pipelineId: string) {
   if (profile === 'default-full') return stubDefaultFullProfile();
-  return stubFixtureAgentProfile();
+  return stubFixtureAgentProfile(pipelineId);
 }
 
 async function expectPersistedEvents(host: HostFixture, runId: string, types: readonly string[]): Promise<void> {
@@ -134,35 +135,53 @@ export type IntegrationCasePlan = Readonly<{
 export type IntegrationStart = Readonly<{
   engine?: string;
   alreadyStarted: boolean;
-  roleBindings: readonly Readonly<{ roleId: string; resolvedRunnerId: string }>[];
+  agentBindings: readonly Readonly<{
+    slotKey: string;
+    nodeId: string;
+    roleId: string;
+    runnerId: string;
+    provider: string;
+    modelId: string;
+    modelParams: Record<string, unknown>;
+    permissionMode: string;
+  }>[];
+  executionPlanDigest: string;
 }>;
 
 export class IntegrationRun {
   readonly runId: string;
   readonly taskId: string;
   readonly #host: HostFixture;
-  readonly #route: { roleBindings?: Array<{ roleId: string; resolvedRunnerId: string }> };
+  readonly #route?: RouteDecision;
   readonly #title: string;
 
   constructor(
     host: HostFixture,
-    created: { runId: string; taskId: string; title?: string; route?: { roleBindings?: Array<{ roleId: string; resolvedRunnerId: string }> } },
+    created: { runId: string; taskId: string; title?: string; route?: RouteDecision },
   ) {
     this.#host = host;
     this.runId = created.runId;
     this.taskId = created.taskId;
     this.#title = created.title ?? '';
-    this.#route = created.route ?? {};
+    this.#route = created.route;
   }
 
   async start(): Promise<IntegrationStart> {
     const started = await this.#host.api.startRun({ runId: this.runId });
+    const plan = this.#route ? executionPlanFromRouteDecision(this.#route) : undefined;
     return {
       engine: (started as { engine?: string }).engine,
       alreadyStarted: started.alreadyStarted,
-      roleBindings: (this.#route.roleBindings ?? []).map((binding) => ({
+      executionPlanDigest: plan?.executionPlanDigest ?? '',
+      agentBindings: (plan?.agentBindings ?? []).map((binding) => ({
+        slotKey: binding.slotKey,
+        nodeId: binding.nodeId,
         roleId: binding.roleId,
-        resolvedRunnerId: binding.resolvedRunnerId,
+        runnerId: binding.runnerId,
+        provider: binding.provider,
+        modelId: binding.modelId,
+        modelParams: binding.modelParams,
+        permissionMode: binding.permissionMode,
       })),
     };
   }
@@ -422,7 +441,7 @@ export class IntegrationContext {
       scope: plan.scope ?? plan.title,
       playbookId: plan.playbookId ?? PLAYBOOK_ID,
       pipelineId: plan.pipelineId,
-      ...(plan.profileId ? { profileId: plan.profileId } : { profile: integrationProfile(plan.profile) }),
+      ...(plan.profileId ? { profileId: plan.profileId } : { profile: integrationProfile(plan.profile, plan.pipelineId) }),
       ...(plan.params ? { params: plan.params } : {}),
       start: false,
     });

@@ -119,12 +119,14 @@ model RunAttempt {
   iteration      Int      @default(0)
   status         String
   idempotencyKey String   @default("")
-  modelProfile   String   @default("")
+  runnerId       String
+  provider       String
+  modelId        String
   verdict        String   @default("")
-  inputTokens    Int      @default(0)
-  outputTokens   Int      @default(0)
-  costAmount     Decimal  @default(0) @db.Decimal(20, 12)
-  currency       String   @default("USD")
+  inputTokens    Int?
+  outputTokens   Int?
+  costAmount     Decimal? @db.Decimal(20, 12)
+  currency       String?
   durationMs     Int      @default(0)
   outputSummary  String   @default("")
   artifactRef    String   @default("")
@@ -190,11 +192,13 @@ model CostLedgerEntry {
   run          TaskRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
   stepId       String   @default("")
   attemptId    String   @default("")
-  modelProfile String   @default("")
-  inputTokens  Int      @default(0)
-  outputTokens Int      @default(0)
-  costAmount   Decimal  @default(0) @db.Decimal(20, 12)
-  currency     String   @default("USD")
+  runnerId     String
+  provider     String
+  modelId      String
+  inputTokens  Int?
+  outputTokens Int?
+  costAmount   Decimal? @db.Decimal(20, 12)
+  currency     String?
   recordedAt   DateTime @default(now())
 
   @@index([runId])

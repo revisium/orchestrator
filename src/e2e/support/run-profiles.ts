@@ -1,31 +1,35 @@
 type E2eRunProfileSlotBinding = {
-  runnerId?: string;
-  modelLevel?: string;
-  accounts?: {
-    github: string;
-  };
+  runnerId: string;
+  provider: string;
+  modelId: string;
+  modelParams: Record<string, unknown>;
+  permissionMode?: string;
+  timeoutMs?: number;
+} | {
+  accounts: Record<string, string>;
 };
 
 export type E2eRunProfile = {
   schemaVersion: 'run-profile/v1';
-  topology: { stages: Record<string, { mode: 'single' }> };
+  topology: { stages: Record<string, { mode: 'single' | 'consensus'; branches?: number }> };
   bindings: {
     slots: Record<string, E2eRunProfileSlotBinding>;
   };
 };
 
 const DEFAULT_AGENT_ROLES = [
-  'orchestrator',
   'analyst',
   'reviewer',
   'developer',
-  'watcher',
   'triager',
 ] as const;
 
 const FIXTURE_AGENT_ROLES = [
-  ...DEFAULT_AGENT_ROLES,
-  'architect',
+  'analyst',
+  'developer',
+  'reviewer',
+  'triager',
+  'watcher',
   'deploy-watcher',
   'developer-backend',
   'developer-frontend',
@@ -36,16 +40,38 @@ const FIXTURE_AGENT_ROLES = [
   'qa-frontend',
 ] as const;
 
+const FIXTURE_PIPELINE_BINDINGS: Record<string, { roles: readonly string[]; scripts: readonly string[] }> = {
+  'analysis-only': { roles: ['analyst'], scripts: [] },
+  bugfix: { roles: ['analyst', 'developer', 'watcher'], scripts: ['integrator'] },
+  'feature-development': {
+    roles: ['analyst', 'developer', 'reviewer', 'triager'],
+    scripts: ['cleanupWorktree', 'confirmMerge', 'integrator', 'mergeApproveReverify', 'mergeReadiness', 'mergeRecheck', 'pollPr', 'questionReviewIntegrator', 'respondThreads', 'reviewIntegrator'],
+  },
+  'feature-development-dd': { roles: ['analyst', 'developer', 'reviewer', 'watcher'], scripts: ['integrator'] },
+  'feature-pr-poll': { roles: ['analyst', 'developer', 'reviewer', 'pr-poller'], scripts: ['integrator'] },
+  'feature-pr-watch': { roles: ['analyst', 'developer', 'reviewer', 'pr-watcher'], scripts: ['integrator'] },
+  'local-change': { roles: ['developer'], scripts: [] },
+  'method-development': { roles: ['knowledge-engineer'], scripts: [] },
+  'parallel-review-consensus-e2e': { roles: ['reviewer'], scripts: [] },
+  'post-merge-qa': { roles: ['deploy-watcher', 'qa-backend'], scripts: [] },
+};
+
 function stubProfile(
   agentRoles: readonly string[],
   scriptNodes: readonly string[] = [],
 ): E2eRunProfile {
   const slots: E2eRunProfile['bindings']['slots'] = {};
   for (const role of agentRoles) {
-    slots[`role:${role}`] = { runnerId: 'stub-agent', modelLevel: 'standard' };
+    slots[`role:${role}`] = {
+      runnerId: 'codex',
+      provider: 'openai',
+      modelId: 'gpt-5.6-luna',
+      modelParams: {},
+      permissionMode: role === 'developer' ? 'workspace-write' : 'read-only',
+    };
   }
   for (const nodeId of scriptNodes) {
-    slots[nodeId] = { accounts: { github: 'profile-bot' } };
+    slots[`node:${nodeId}`] = { accounts: { github: 'profile-bot' } };
   }
   return {
     schemaVersion: 'run-profile/v1',
@@ -54,22 +80,28 @@ function stubProfile(
   };
 }
 
-export function stubDefaultAgentProfile(): E2eRunProfile {
-  return stubProfile(DEFAULT_AGENT_ROLES);
+export function stubDefaultAgentProfile(pipelineId = 'feature-development'): E2eRunProfile {
+  const graph = pipelineId === 'local-change'
+    ? { roles: ['developer'], scripts: [] }
+    : pipelineId === 'analysis-only'
+      ? { roles: ['analyst'], scripts: [] }
+      : { roles: DEFAULT_AGENT_ROLES, scripts: ['integrator'] };
+  return stubProfile(graph.roles, graph.scripts);
 }
 
-export function stubDefaultFullProfile(): E2eRunProfile {
-  return stubProfile(DEFAULT_AGENT_ROLES, ['integrator']);
+export function stubDefaultFullProfile(pipelineId = 'feature-development'): E2eRunProfile {
+  return stubDefaultAgentProfile(pipelineId);
 }
 
-export function stubFixtureAgentProfile(): E2eRunProfile {
-  return stubProfile(FIXTURE_AGENT_ROLES);
+export function stubFixtureAgentProfile(pipelineId = 'feature-development'): E2eRunProfile {
+  const graph = FIXTURE_PIPELINE_BINDINGS[pipelineId] ?? { roles: FIXTURE_AGENT_ROLES, scripts: [] };
+  return stubProfile(graph.roles, graph.scripts);
 }
 
-export function stubFixtureFullProfile(): E2eRunProfile {
-  return stubProfile(FIXTURE_AGENT_ROLES, ['integrator']);
+export function stubFixtureFullProfile(pipelineId = 'feature-development'): E2eRunProfile {
+  return stubFixtureAgentProfile(pipelineId);
 }
 
-export function stubFixtureIntegratorProfile(): E2eRunProfile {
-  return stubProfile([], ['integrator']);
+export function stubFixtureIntegratorProfile(pipelineId = 'feature-pr-watch'): E2eRunProfile {
+  return stubFixtureAgentProfile(pipelineId);
 }

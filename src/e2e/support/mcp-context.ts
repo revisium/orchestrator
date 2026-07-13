@@ -146,7 +146,7 @@ export class McpContext {
       title: input.title,
       repo: target.worktree,
       pipelineId: input.pipelineId,
-      profile: stubDefaultAgentProfile(),
+      profile: stubDefaultAgentProfile(input.pipelineId),
       start: false,
     });
     if (!result.isError && result.data?.runId && result.data.taskId) {

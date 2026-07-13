@@ -4,6 +4,7 @@ import { CodexService } from './codex.service.js';
 import { RunService } from '../revisium/run.service.js';
 import { createInMemoryRuntimeDataAccess } from '../testing/runtime-data-access.js';
 import type { ExecResult, ProcessExecutor } from '../worker/process-executor.js';
+import type { ResolvedAgentBinding } from '../control-plane/run-profile-contract.js';
 
 function makeRunService(repoRef = '/tmp'): RunService {
   return new RunService(createInMemoryRuntimeDataAccess({
@@ -48,21 +49,27 @@ test('CodexService uses injected fake ProcessExecutor and resolves cwd from RunS
     role: {
       name: 'developer',
       systemPrompt: 'You are developer',
-      modelLevel: 'standard',
-      effort: 'high',
-      runner: 'codex',
       allowedTools: ['Read'],
       scopeRules: {},
       rights: 'read-only',
     },
-    profile: {
-      level: 'standard',
+    binding: {
+      runnerId: 'codex',
       provider: 'openai',
       modelId: 'gpt-5.5',
-      params: {},
-      costPerInput: 2,
-      costPerOutput: 8,
-    },
+      modelParams: {},
+      slotKey: 'node:developer',
+      nodeId: 'developer',
+      roleId: 'developer',
+      roleDocumentId: 'role-doc-developer',
+      permissionMode: 'workspace-write',
+      permissionSource: 'profile',
+      runner: {
+        runnerId: 'codex', manifestVersion: '1', manifestDigest: `sha256:${'a'.repeat(64)}`,
+        stdoutParserId: 'codex-jsonl', permissionStyleId: 'codex-sandbox',
+        declaredDefaultPermissionMode: 'read-only', capabilities: {}, constraints: {}, executionFields: {},
+      },
+    } satisfies ResolvedAgentBinding,
     context: 'test context',
     attemptId: 'attempt_1',
     step: {
@@ -74,7 +81,6 @@ test('CodexService uses injected fake ProcessExecutor and resolves cwd from RunS
       status: 'running',
       input: {},
       output: null,
-      modelProfile: 'standard',
       runAfter: '',
       attemptCount: 0,
       maxAttempts: 1,

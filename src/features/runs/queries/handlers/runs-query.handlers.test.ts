@@ -55,7 +55,9 @@ test('runs query handlers delegate and shape run data', async () => {
         iteration: 0,
         status: 'succeeded',
         verdict: 'approved',
-        modelProfile: 'standard',
+        runnerId: 'codex',
+        provider: 'openai',
+        modelId: 'gpt-test',
         inputTokens: 3,
         outputTokens: 4,
         costAmount: 0.02,
@@ -167,7 +169,7 @@ test('runs query handlers delegate and shape run data', async () => {
       };
     },
     async simulateRoute(input: unknown) {
-      assert.deepEqual(input, { title: 'Build', repo: '.', pipeline: 'local-change' });
+      assert.deepEqual(input, { title: 'Build', repo: '.', pipelineId: 'local-change' });
       return { pipelineId: 'default' };
     },
   } as unknown as TaskControlPlaneApiService;
@@ -206,5 +208,5 @@ test('runs query handlers delegate and shape run data', async () => {
   assert.equal(workflow.run.status, 'blocked');
   const prov = (workflow.pipeline as unknown as { provenance: { materializedTemplateHash: string } }).provenance;
   assert.equal(prov.materializedTemplateHash, 'abc123');
-  assert.deepEqual(await new SimulateRouteHandler(api).execute(new SimulateRouteQuery({ title: 'Build', repo: '.', pipeline: 'local-change' })), { pipelineId: 'default' });
+  assert.deepEqual(await new SimulateRouteHandler(api).execute(new SimulateRouteQuery({ title: 'Build', repo: '.', pipelineId: 'local-change' })), { pipelineId: 'default' });
 });

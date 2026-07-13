@@ -12,7 +12,7 @@ const BASE_INPUT: PollInput = {
   poll_count: 0,
 };
 
-const STEP = { ...BASE_STEP, taskId: 'task-1', modelProfile: 'cheap' };
+const STEP = { ...BASE_STEP, taskId: 'task-1' };
 
 type GhResponse = Record<string, unknown>;
 
@@ -115,7 +115,6 @@ test('pending CI: re-queues with incremented poll_count and future runAfter', as
   assert.ok(ns.runAfter, 'runAfter must be set');
   assert.ok(new Date(ns.runAfter!).getTime() > Date.now() - 1000, 'runAfter must be in the future');
   assert.equal(ns.taskId, STEP.taskId);
-  assert.equal(ns.modelProfile, STEP.modelProfile);
   assert.equal(result.needsHuman, undefined);
   assert.deepEqual(result.costs, []);
 });
@@ -145,16 +144,6 @@ test('EXPECTED status context: re-queues as pending, NOT failed terminal', async
   assert.equal(ns.kind, 'poll');
   assert.equal((ns.input as PollInput).poll_count, 1);
   assert.equal(result.needsHuman, undefined);
-});
-
-test('pending CI: uses custom modelProfile from step', async () => {
-  const pendingView = prViewResponse([checkRun('SonarCloud', 'IN_PROGRESS')]);
-  const execGh = makeFullResponses(pendingView);
-  const customStep = { ...STEP, modelProfile: 'standard' };
-
-  const result = await run(BASE_INPUT, customStep, execGh);
-
-  assert.equal(result.nextSteps[0]?.modelProfile, 'standard');
 });
 
 test('poll_count === maxPolls: returns needsHuman:true, empty nextSteps', async () => {
@@ -190,7 +179,6 @@ test('all checks terminal + CI passed: judge step with ci_passed:true', async ()
   const inp = ns.input as { ci_passed: boolean };
   assert.equal(inp.ci_passed, true);
   assert.equal(ns.taskId, STEP.taskId);
-  assert.equal(ns.modelProfile, STEP.modelProfile);
   assert.deepEqual(result.costs, []);
 });
 

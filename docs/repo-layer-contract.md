@@ -1,69 +1,83 @@
 # Revo data-access contract
 
-This page describes the **Current shipped behavior** product-service boundary, then identifies the **Draft target** for pinned
-execution. It does not define storage schemas.
-
-Product services hide storage details from transport adapters. MCP and GraphQL call product services; product services
-call Revisium meaning access for versioned control-plane rows and Prisma-backed services for runtime rows.
+This document defines the service boundary between transport, versioned meaning, runtime state, and execution. The
+execution-plan and run-profile specifications remain Draft until final review and gates.
 
 ## Boundary
 
-- Current authoring, discovery, and route-time meaning reads use committed `head`.
-- Runtime writes use Prisma transactions and are never committed as Revisium revisions.
-- DBOS progress is accessed through the engine adapter, not through Revisium tables.
-- Git/worktree operations are accessed through bounded repository/effect adapters, not through storage services.
-- Consumers receive domain objects, not raw Revisium or Prisma payloads.
+- MCP and GraphQL call application services; they do not read raw Revisium, Prisma, or DBOS tables.
+- Revisium owns committed meaning: playbooks, role meaning, provider-neutral pipelines, routing policy, and run
+  profiles.
+- Prisma owns runtime rows: runs, tasks, attempts, events, inbox, outputs, and usage/cost provenance.
+- DBOS owns workflow progress and durable waits/retries.
+- Git/worktree and integration operations run through bounded application adapters.
 
-## Meaning reads
+Consumers receive domain objects and read-only projections, not storage payloads.
 
-- `loadRole` and role listing read committed role definitions.
-- `loadPipeline` and pipeline listing read committed pipeline definitions.
-- `loadPlaybook` and playbook listing read committed playbook metadata.
-- `listRunProfiles` and `resolveRunProfile` read committed run profile definitions.
-- `loadModelProfile` reads committed model profile mapping.
-- Routing policy reads committed policy rows.
+## Meaning reads and writes
 
-Current run creation pins a materialized template/profile decision in Prisma. Role/model and other meaning reads are
-not yet unified into the full Draft `ExecutionPlan`.
+Services load roles, pipelines, playbooks, routing policy, and run profiles from the committed Revisium head or an
+explicit authoring scope. Role reads return meaning only. Pipeline reads return opaque graph semantics and execution
+policy. Profile reads return exact launch bodies plus storage/lifecycle metadata.
 
-## Runtime writes and reads
+Profile create/update/deprecate operations validate the same exact profile body used for launch. Updates use a revision
+hash precondition and commit a new versioned meaning revision. A deprecated profile may be queried when requested but
+cannot be selected for a new run.
 
-- Runs and tasks are Prisma runtime rows.
-- Events are append-only Prisma rows.
-- Inbox items are Prisma rows that represent human decisions.
-- Attempts and costs are Prisma runtime provenance/accounting.
-- Run outputs are Prisma runtime data used for step-to-step dataflow.
+No service loads a model mapping, applies a model alias, estimates price, or supplies a default model. Concrete model
+ids are values in a selected profile. Runner manifests are resolved only during route planning and their non-secret
+snapshot is pinned into the plan.
 
-## Revision rules
+## Launch command boundary
 
-- Installing or updating playbook/role/pipeline/model meaning creates committed revisions.
-- Creating runs, resolving gates, appending events, recording costs, and recording outputs never create committed
-  revisions.
-- Runtime row writes must be idempotent where DBOS replay can repeat a side effect.
+`create_run` and `simulate_route` require `pipelineId` and exactly one of `profileId` or an inline profile body. They
+share one resolver/compiler path:
+
+1. resolve playbook and pipeline;
+2. validate the selected stored/inline profile with the common validator;
+3. normalize business parameters separately from `modelParams`;
+4. materialize the provider-neutral graph;
+5. resolve every graph `roleRef`/`scriptRef` obligation with canonical node-over-role precedence;
+6. validate exact runner/provider/model/permission values against the runner manifest;
+7. compile canonical plan bytes/digest and read-only route projection; and
+8. return the result, or persist it before DBOS enqueue for `create_run`.
+
+The response can include decoded pins for every agent and script slot. This decoded view is derived from the canonical
+bytes and is not a second launch object. Scripts carry account aliases only; credentials remain in host-local runtime
+configuration.
+
+The absence of a live model-availability capability is intentional. The service neither probes nor claims availability
+and does not add an unavailable-model stop condition.
+
+## Runtime boundary
+
+- Run/task/event/inbox/output/attempt/cost writes use Prisma services and are idempotent where DBOS replay can repeat a
+  side effect.
+- `TaskRun.routeDecision` stores the canonical route envelope and plan bytes/digest before workflow enqueue.
+- Start, replay, resume, and recovery parse and verify the stored plan. They do not reread mutable profile, role,
+  pipeline, or runner meaning.
+- Runner/provider/model provenance is stored on attempts and cost rows. Token and cost values are nullable because they
+  are runner reports. A reported cost, including zero, defaults to USD when no currency is reported; currency without a
+  cost creates no cost record.
+- Event and artifact payloads are secret-redacted before persistence.
 
 ## Transport adapters
 
-MCP and GraphQL must remain thin:
+MCP and GraphQL remain thin:
 
-- no raw Revisium table access;
-- no raw Prisma model access from transports;
-- no DBOS table access;
-- no duplicate lifecycle logic;
-- stable error mapping at the service/transport boundary.
+- schemas describe the same profile body and profile-source XOR;
+- handlers delegate to the same service methods;
+- stable domain errors are mapped at the boundary;
+- no transport invents a runner/model default or a second override object; and
+- no transport exposes credentials, price tables, model catalogs, or availability claims.
 
-Different wire contracts are allowed, but MCP and GraphQL must delegate the same product command/query rather than
-reimplement its state transition. A future UI remains a projection/editor over these application services.
+## Provider-neutral state-machine ownership
 
-## Draft Execution Boundary
+`pipeline-core` owns graph reduction and state transitions. It sees opaque role/script handles and dataflow, not model
+configuration. Route planning owns exact execution binding. This separation keeps graph policy reusable across
+profiles and prevents provider-specific pipeline copies.
 
-The Draft [execution plan](./specs/execution-plan-v1.spec.md) contract changes execution-time reads: route planning
-fully resolves and pins execution-affecting playbook, role, runner, script, policy, resource, context, and accepted
-knowledge inputs. Workflow execution/recovery consumes that pin and must not re-read mutable Revisium `head`, a source
-checkout, or a live registry.
+## Fresh-alpha migration boundary
 
-The Draft [script runtime](./specs/script-runtime-v1.spec.md) and
-[resources/workspaces/effects](./specs/resources-workspaces-effects-v1.spec.md) specs own bounded external operations
-and repository/worktree lifecycle. Scripts return typed results; application routing remains in `pipeline-core`.
-
-Exact table ownership is documented in [control-plane-schema.md](./control-plane-schema.md). Run dataflow storage
-is specified in [specs/run-dataflow-v1.spec.md](./specs/run-dataflow-v1.spec.md).
+The exact contract is a direct internal-alpha replacement. Supported validation uses Prisma generation/validation and
+fresh bootstrap/reset/reseed fixtures. No legacy rows are transformed, dual-written, or used as fallback authority.

@@ -143,7 +143,7 @@ export class ConcurrencyContext {
       scope: 'No source changes.',
       playbookId: PLAYBOOK_ID,
       pipelineId: 'local-change',
-      profile: stubFixtureAgentProfile(),
+      profile: stubFixtureAgentProfile('local-change'),
       start: false,
     });
     this.#host.casePlans.register(created.taskId, { title: 'concurrent double-start' });

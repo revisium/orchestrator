@@ -32,26 +32,6 @@ test('validateBootstrapJsonFields: rejects malformed role scope_rules JSON', () 
   );
 });
 
-test('validateBootstrapJsonFields: rejects non-object model profile params', () => {
-  assert.throws(
-    () =>
-      validateBootstrapJsonFields([
-        { tableId: 'model_profiles', rowId: 'standard', data: { params: '[]' } },
-      ]),
-    /model_profiles\/standard\.params violates model profile params schema: \/ must be object/,
-  );
-});
-
-test('validateBootstrapJsonFields: rejects unknown model profile params keys', () => {
-  assert.throws(
-    () =>
-      validateBootstrapJsonFields([
-        { tableId: 'model_profiles', rowId: 'standard', data: { params: '{"maxTuns":10}' } },
-      ]),
-    /model_profiles\/standard\.params violates model profile params schema: .*maxTuns/,
-  );
-});
-
 test('validateBootstrapJsonFields: rejects invalid routing policy rule shape', () => {
   assert.throws(
     () =>

@@ -14,12 +14,6 @@ import { ValidateRunProfileQuery } from '../impl/validate-run-profile.query.js';
 type RoleLike = {
   id?: string;
   name: string;
-  modelLevel: string;
-  runner: string;
-};
-
-type PipelineLike = {
-  alternativeRoles: Array<{ group_id: string; roles: string[]; resolution: string }>;
 };
 
 function roleId(role: RoleLike): string {
@@ -30,15 +24,8 @@ function mapRole<T extends RoleLike>(role: T) {
   return { id: roleId(role), ...role };
 }
 
-function mapPipeline<T extends PipelineLike>(pipeline: T) {
-  return {
-    ...pipeline,
-    alternativeRoles: pipeline.alternativeRoles.map((group) => ({
-      groupId: group.group_id,
-      roles: group.roles,
-      resolution: group.resolution,
-    })),
-  };
+function mapPipeline<T>(pipeline: T): T {
+  return pipeline;
 }
 
 function definedProfileListInput(data: ListRunProfilesQuery['data']): {

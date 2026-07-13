@@ -9,6 +9,7 @@ import type { HostFixture } from "./harness.js";
 import { DEFAULT_PLAYBOOK_ID, PLAYBOOK_ID } from "./scenarios.js";
 import { hashTemplate } from "../../pipeline-core/materialize.js";
 import { templateFromExecutionPolicy } from "../../pipeline/data-driven-template.js";
+import { executionPlanFromRouteDecision, type RouteDecision } from "../../pipeline/route-contract.js";
 import { waitForGate, waitState } from "./drive.js";
 import { assertCaseExpectations } from "./pipeline-case-evidence.js";
 import {
@@ -62,12 +63,12 @@ function repoPath(
   return target.worktree;
 }
 
-function runProfile(profile: PipelineProfile): E2eRunProfile {
-  if (profile === "default-agent") return stubDefaultAgentProfile();
-  if (profile === "default-full") return stubDefaultFullProfile();
-  if (profile === "fixture-full") return stubFixtureFullProfile();
-  if (profile === "fixture-integrator") return stubFixtureIntegratorProfile();
-  return stubFixtureAgentProfile();
+function runProfile(profile: PipelineProfile, pipelineId: string): E2eRunProfile {
+  if (profile === "default-agent") return stubDefaultAgentProfile(pipelineId);
+  if (profile === "default-full") return stubDefaultFullProfile(pipelineId);
+  if (profile === "fixture-full") return stubFixtureFullProfile(pipelineId);
+  if (profile === "fixture-integrator") return stubFixtureIntegratorProfile(pipelineId);
+  return stubFixtureAgentProfile(pipelineId);
 }
 
 function assertObservedGate(
@@ -180,7 +181,7 @@ function topicFromPinnedGateReason(reason: string): GateTopic {
   return "plan";
 }
 
-function selectorProfile(given: PipelineCase["given"]): {
+function selectorProfile(given: PipelineCase["given"], pipelineId: string): {
   profileId?: string;
   profile?: E2eRunProfile;
 } {
@@ -189,6 +190,7 @@ function selectorProfile(given: PipelineCase["given"]): {
     profile: runProfile(
       given.profile ??
         (given.playbook === "default" ? "default-agent" : "fixture-agent"),
+      pipelineId,
     ),
   };
 }
@@ -246,7 +248,7 @@ function validateCasePreflight(
         : casePlan.coverage.caseId,
     playbookId: playbook,
     pipelineId,
-    ...selectorProfile(given),
+    ...selectorProfile(given, pipelineId),
   };
 }
 
@@ -271,37 +273,31 @@ function indexPinnedGates(
   return Object.freeze({ template, gates, agents });
 }
 function validateReturnedRoute(
-  route: {
-    playbookId: string;
-    pipelineId: string;
-    materializedTemplateHash?: string;
-    materializedTemplate?: unknown;
-    executionPolicy: unknown;
-    profileSource?: "stored" | "inline";
-    profileId?: string;
-  },
+  route: RouteDecision,
   prepared: PreparedCase,
 ): PinnedCatalog {
+  const plan = executionPlanFromRouteDecision(route);
+  const projection = route.projection;
   assert.equal(
-    route.playbookId,
+    projection.playbookId,
     prepared.playbookId,
     "returned route playbook mismatch",
   );
   assert.equal(
-    route.pipelineId,
+    projection.pipelineId,
     prepared.pipelineId,
     "returned route pipeline mismatch",
   );
   assert.ok(
-    route.materializedTemplateHash,
+    projection.materializedTemplateHash,
     "returned route materialized template hash is required",
   );
-  const template = route.materializedTemplate;
+  const template = plan.pipeline.executableGraph;
   assert.ok(
     template && typeof template === "object",
     "returned route materialized template is required",
   );
-  const executionTemplate = templateFromExecutionPolicy(route.executionPolicy);
+  const executionTemplate = templateFromExecutionPolicy(plan.pipeline.executionPolicy);
   assert.ok(
     executionTemplate,
     "returned route execution policy must contain a materialized template",
@@ -313,35 +309,35 @@ function validateReturnedRoute(
   );
   assert.equal(
     hashTemplate(template as import("../../pipeline-core/types.js").Template),
-    route.materializedTemplateHash,
+    projection.materializedTemplateHash,
     "returned route template hash mismatch",
   );
   if (prepared.profileId !== undefined) {
     assert.equal(
-      route.profileSource,
+      projection.profileSource,
       "stored",
       "returned route profile provenance mismatch",
     );
     assert.equal(
-      route.profileId,
+      projection.profileId,
       prepared.profileId,
       "returned route profile id mismatch",
     );
   } else {
     assert.equal(
-      route.profileSource,
+      projection.profileSource,
       "inline",
       "returned route profile provenance mismatch",
     );
     assert.equal(
-      route.profileId,
+      projection.profileId,
       undefined,
       "inline route must not return a profile id",
     );
   }
   if (prepared.casePlan.coverage.kind === "registered-dsl")
     assert.equal(
-      route.materializedTemplateHash,
+      projection.materializedTemplateHash,
       prepared.casePlan.coverage.materialized.materializedTemplateHash,
       "returned route hash does not match canonical coverage",
     );
