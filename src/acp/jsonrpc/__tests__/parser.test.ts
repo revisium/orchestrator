@@ -7,6 +7,14 @@ function assertFailure(code: JsonRpcProtocolError['code'], run: () => unknown): 
   assert.throws(run, (error: unknown) => error instanceof JsonRpcProtocolError && error.code === code);
 }
 
+function restoreOwnProperty(value: object, key: PropertyKey, descriptor: PropertyDescriptor | undefined): void {
+  if (descriptor) {
+    Object.defineProperty(value, key, descriptor);
+    return;
+  }
+  Reflect.deleteProperty(value, key);
+}
+
 function nestedArray(depth: number): unknown {
   let value: unknown = null;
   for (let currentDepth = 1; currentDepth < depth; currentDepth += 1) value = [value];
@@ -137,4 +145,53 @@ test('parseJsonRpcMessage snapshots top-level and error records before reading f
     parseJsonRpcMessage({ jsonrpc: '2.0', id: 1, error }),
     { jsonrpc: '2.0', id: 1, error: errorTarget },
   );
+});
+
+test('parseJsonRpcMessage requires own protocol and error fields despite prototype pollution', () => {
+  const jsonrpc = Object.getOwnPropertyDescriptor(Object.prototype, 'jsonrpc');
+  const code = Object.getOwnPropertyDescriptor(Object.prototype, 'code');
+  const message = Object.getOwnPropertyDescriptor(Object.prototype, 'message');
+
+  try {
+    Object.defineProperties(Object.prototype, {
+      jsonrpc: { configurable: true, value: '2.0', writable: true },
+      code: { configurable: true, value: -32001, writable: true },
+      message: { configurable: true, value: 'Polluted', writable: true },
+    });
+
+    assertFailure('invalid_message', () => parseJsonRpcMessage({ method: 'missing-version' }));
+    assertFailure('invalid_message', () =>
+      parseJsonRpcMessage({ jsonrpc: '2.0', id: 1, error: { message: 'Own message' } }),
+    );
+    assertFailure('invalid_message', () =>
+      parseJsonRpcMessage({ jsonrpc: '2.0', id: 1, error: { code: -32001 } }),
+    );
+  } finally {
+    restoreOwnProperty(Object.prototype, 'jsonrpc', jsonrpc);
+    restoreOwnProperty(Object.prototype, 'code', code);
+    restoreOwnProperty(Object.prototype, 'message', message);
+    assert.deepEqual(Object.getOwnPropertyDescriptor(Object.prototype, 'jsonrpc'), jsonrpc);
+    assert.deepEqual(Object.getOwnPropertyDescriptor(Object.prototype, 'code'), code);
+    assert.deepEqual(Object.getOwnPropertyDescriptor(Object.prototype, 'message'), message);
+  }
+});
+
+test('canonicalizer rejects inflated Proxy array length before numeric descriptor reads', () => {
+  let numericDescriptorReads = 0;
+  const target = [true];
+  const params = new Proxy(target, {
+    getOwnPropertyDescriptor(current, key) {
+      const descriptor = Reflect.getOwnPropertyDescriptor(current, key);
+      if (key === 'length') return { ...descriptor!, value: 1_024 };
+      if (typeof key === 'string' && /^(0|[1-9]\d*)$/.test(key)) numericDescriptorReads += 1;
+      return descriptor;
+    },
+    getPrototypeOf: (current) => Reflect.getPrototypeOf(current),
+    ownKeys: (current) => Reflect.ownKeys(current),
+  });
+
+  assertFailure('invalid_message', () =>
+    parseJsonRpcMessage({ jsonrpc: '2.0', method: 'run', params, id: 1 }),
+  );
+  assert.equal(numericDescriptorReads, 0);
 });

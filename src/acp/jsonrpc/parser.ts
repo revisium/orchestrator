@@ -34,7 +34,8 @@ function invalidMessage(message: string, details?: unknown): JsonRpcProtocolErro
 
 function parseErrorObject(value: unknown): JsonRpcErrorObject {
   const record = snapshotJsonRpcRecord(value);
-  if (!record || !Number.isSafeInteger(record.code) ||
+  if (!record || !hasOwn(record, 'code') || !hasOwn(record, 'message') ||
+      !Number.isSafeInteger(record.code) ||
       typeof record.message !== 'string' || record.message.trim() === '') {
     throw invalidMessage('JSON-RPC error must contain a safe integer code and nonempty message', value);
   }
@@ -95,7 +96,9 @@ function parseResponse(value: Record<string, unknown>): JsonRpcSuccessResponse |
 export function parseJsonRpcMessage(value: unknown): JsonRpcMessage {
   const record = snapshotJsonRpcRecord(value);
   if (!record) throw invalidMessage('JSON-RPC batch and non-object messages are not supported', value);
-  if (record.jsonrpc !== '2.0') throw invalidMessage('JSON-RPC version must be 2.0', record.jsonrpc);
+  if (!hasOwn(record, 'jsonrpc') || record.jsonrpc !== '2.0') {
+    throw invalidMessage('JSON-RPC version must be 2.0', record.jsonrpc);
+  }
   if (hasOwn(record, 'method')) return parseRequest(record);
   return parseResponse(record);
 }

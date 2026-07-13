@@ -60,21 +60,25 @@ function jsonContainerEntries(value: object): JsonContainerEntries | undefined {
     }
     const length = lengthDescriptor.value as number;
     const keys = Reflect.ownKeys(value);
-    const entries: JsonContainerEntries['entries'] = [];
-    for (let index = 0; index < length; index += 1) {
-      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
-      if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) return undefined;
-      entries.push({ key: index, value: descriptor.value });
-    }
+    let ownIndexKeyCount = 0;
     for (const key of keys) {
       if (typeof key !== 'string') return undefined;
       if (key === 'length') continue;
-      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      const descriptor = key === 'toJSON' ? Object.getOwnPropertyDescriptor(value, key) : undefined;
       if (isJsonHookSentinel(key, descriptor)) continue;
       const index = Number(key);
       if (!Number.isSafeInteger(index) || index < 0 || index >= length || String(index) !== key) {
         return undefined;
       }
+      ownIndexKeyCount += 1;
+    }
+    if (ownIndexKeyCount !== length) return undefined;
+
+    const entries: JsonContainerEntries['entries'] = [];
+    for (let index = 0; index < length; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+      if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) return undefined;
+      entries.push({ key: index, value: descriptor.value });
     }
     return { kind: 'array', entries };
   }

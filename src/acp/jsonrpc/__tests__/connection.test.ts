@@ -42,6 +42,14 @@ async function assertFailure(code: JsonRpcProtocolError['code'], run: () => Prom
   assert.equal(caught.code, code);
 }
 
+function restoreOwnProperty(value: object, key: PropertyKey, descriptor: PropertyDescriptor | undefined): void {
+  if (descriptor) {
+    Object.defineProperty(value, key, descriptor);
+    return;
+  }
+  Reflect.deleteProperty(value, key);
+}
+
 test('connection assigns monotonic ids and resolves out-of-order responses', async () => {
   const writes: Uint8Array[] = [];
   const connection = createJsonRpcConnection({
@@ -548,4 +556,70 @@ test('connection applies absent request and notification handler defaults', asyn
   assert.deepEqual(writes.map(decodeWrite), [
     { jsonrpc: '2.0', id: 'server-default', error: { code: -32601, message: 'Method not found' } },
   ]);
+});
+
+test('connection classifies result, method, and id by own properties', async () => {
+  const result = Object.getOwnPropertyDescriptor(Object.prototype, 'result');
+  const method = Object.getOwnPropertyDescriptor(Object.prototype, 'method');
+  const id = Object.getOwnPropertyDescriptor(Object.prototype, 'id');
+  const connections: Array<ReturnType<typeof createJsonRpcConnection>> = [];
+
+  try {
+    Object.defineProperty(Object.prototype, 'result', {
+      configurable: true, value: 'polluted success', writable: true,
+    });
+    const errorConnection = createJsonRpcConnection({ async write() {} });
+    connections.push(errorConnection);
+    const remote = errorConnection.request('remote-error').then(
+      (value) => value,
+      (error: unknown) => error,
+    );
+    await Promise.resolve();
+    await errorConnection.receive({
+      jsonrpc: '2.0', id: 1, error: { code: -32001, message: 'Provider failed' },
+    });
+    const remoteError = await remote;
+    assert.ok(remoteError instanceof JsonRpcProtocolError);
+    assert.equal(remoteError.code, 'remote_error');
+    Reflect.deleteProperty(Object.prototype, 'result');
+
+    Object.defineProperty(Object.prototype, 'method', {
+      configurable: true, value: 'polluted request', writable: true,
+    });
+    const responseWrites: Uint8Array[] = [];
+    const responseConnection = createJsonRpcConnection({
+      async write(chunk) { responseWrites.push(chunk); },
+    });
+    connections.push(responseConnection);
+    const pending = responseConnection.request('response');
+    void pending.catch(() => undefined);
+    await Promise.resolve();
+    responseWrites.length = 0;
+    await responseConnection.receive({ jsonrpc: '2.0', id: 1, result: 'accepted' });
+    assert.deepEqual(responseWrites, []);
+    assert.equal(await pending, 'accepted');
+    Reflect.deleteProperty(Object.prototype, 'method');
+
+    Object.defineProperty(Object.prototype, 'id', {
+      configurable: true, value: 9_001, writable: true,
+    });
+    const notifications: string[] = [];
+    const notificationWrites: Uint8Array[] = [];
+    const notificationConnection = createJsonRpcConnection({
+      async write(chunk) { notificationWrites.push(chunk); },
+      async onNotification(notification) { notifications.push(notification.method); },
+    });
+    connections.push(notificationConnection);
+    await notificationConnection.receive({ jsonrpc: '2.0', method: 'updated' });
+    assert.deepEqual(notifications, ['updated']);
+    assert.deepEqual(notificationWrites, []);
+  } finally {
+    for (const connection of connections) connection.close();
+    restoreOwnProperty(Object.prototype, 'result', result);
+    restoreOwnProperty(Object.prototype, 'method', method);
+    restoreOwnProperty(Object.prototype, 'id', id);
+    assert.deepEqual(Object.getOwnPropertyDescriptor(Object.prototype, 'result'), result);
+    assert.deepEqual(Object.getOwnPropertyDescriptor(Object.prototype, 'method'), method);
+    assert.deepEqual(Object.getOwnPropertyDescriptor(Object.prototype, 'id'), id);
+  }
 });

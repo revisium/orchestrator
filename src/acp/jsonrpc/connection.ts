@@ -5,6 +5,7 @@ import type {
   JsonRpcErrorResponse,
   JsonRpcId,
   JsonRpcMessage,
+  JsonRpcNotification,
   JsonRpcParams,
   JsonRpcRequest,
   JsonRpcSuccessResponse,
@@ -54,6 +55,20 @@ function requestMessage(method: string, params: JsonRpcParams | undefined, id: J
     ...(params === undefined ? {} : { params }),
     id,
   }) as JsonRpcRequest;
+}
+
+function hasOwnMethod(message: JsonRpcMessage): message is JsonRpcRequest | JsonRpcNotification {
+  return Object.prototype.hasOwnProperty.call(message, 'method');
+}
+
+function hasOwnId(message: JsonRpcRequest | JsonRpcNotification): message is JsonRpcRequest {
+  return Object.prototype.hasOwnProperty.call(message, 'id');
+}
+
+function hasOwnResult(
+  message: JsonRpcSuccessResponse | JsonRpcErrorResponse,
+): message is JsonRpcSuccessResponse {
+  return Object.prototype.hasOwnProperty.call(message, 'result');
 }
 
 class JsonRpcConnectionImpl implements JsonRpcConnection {
@@ -130,7 +145,7 @@ class JsonRpcConnectionImpl implements JsonRpcConnection {
     }
     this.#pending.delete(message.id);
     this.#rememberResponse(message.id);
-    if ('result' in message) {
+    if (hasOwnResult(message)) {
       call.resolve(message.result);
       return;
     }
@@ -204,11 +219,11 @@ class JsonRpcConnectionImpl implements JsonRpcConnection {
   async receive(message: JsonRpcMessage): Promise<void> {
     this.#ensureOpen();
     const valid = parseJsonRpcMessage(message);
-    if (!('method' in valid)) {
+    if (!hasOwnMethod(valid)) {
       this.#receiveResponse(valid);
       return;
     }
-    if ('id' in valid) {
+    if (hasOwnId(valid)) {
       await this.#receiveRequest(valid);
       return;
     }
