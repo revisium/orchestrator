@@ -45,6 +45,11 @@ export { Prisma }
  */
 export type RevoProject = Prisma.RevoProjectModel
 /**
+ * Model RevoRepository
+ * 
+ */
+export type RevoRepository = Prisma.RevoRepositoryModel
+/**
  * Model TaskRun
  * 
  */
