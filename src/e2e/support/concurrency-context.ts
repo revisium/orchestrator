@@ -63,8 +63,8 @@ export class ConcurrentRun {
     ]);
   }
 
-  async waitForState(): Promise<string> {
-    return (await waitState(this.#host.api, this.runId)).state;
+  async waitForState(timeoutMs?: number): Promise<string> {
+    return (await waitState(this.#host.api, this.runId, timeoutMs)).state;
   }
 
   async waitForGate(topic: 'plan' | 'merge'): Promise<void> {
