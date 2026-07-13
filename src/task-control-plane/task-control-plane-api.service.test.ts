@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { ControlPlaneError } from '../control-plane/errors.js';
@@ -3179,6 +3180,237 @@ test('TaskControlPlaneApiService.resolveRunState exposes the latest workflow eve
   assert.equal(state.state, 'running');
   assert.equal(state.latestEventAt, '2026-06-28T09:40:19.802Z');
   assert.equal(state.latestEventType, 'pr_polled');
+});
+
+test('TaskControlPlaneApiService.validateRepository reports non-existent paths without throwing', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'revo-mcp-test-'));
+  const result = await makeApi().validateRepository(join(dir, 'missing'));
+
+  assert.equal(result.exists, false);
+  assert.equal(result.isDirectory, false);
+  assert.equal(result.gitRoot, '');
+  assert.equal(result.error, 'Path does not exist.');
+});
+
+test('TaskControlPlaneApiService.getRepositoryContext reports malformed package metadata without throwing', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'revo-mcp-test-'));
+  execFileSync('git', ['init'], { cwd: dir, stdio: 'ignore' });
+  writeFileSync(join(dir, 'package.json'), '{ not json', 'utf8');
+
+  const result = await makeApi().getRepositoryContext(dir);
+
+  assert.notEqual(result.gitRoot, '');
+  assert.equal(result.packageName, '');
+  assert.deepEqual(result.scripts, []);
+  assert.match(result.packageError, /JSON/);
+});
+
+test('TaskControlPlaneApiService.getRepositoryContext ignores non-object package scripts metadata', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'revo-mcp-test-'));
+  execFileSync('git', ['init'], { cwd: dir, stdio: 'ignore' });
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'pkg', scripts: 'oops' }), 'utf8');
+
+  const result = await makeApi().getRepositoryContext(dir);
+
+  assert.equal(result.packageName, 'pkg');
+  assert.deepEqual(result.scripts, []);
+  assert.equal(result.packageError, '');
+});
+
+test('TaskControlPlaneApiService.resolveInboxItem signals merge gates without completing the run', async () => {
+  const completed: Array<{ runId: string; source?: string; actor?: string }> = [];
+  const api = makeApi({
+    inboxService: {
+      async getInbox() {
+        return makeInboxItem({ title: 'Merge approval', context: { topic: 'merge' } });
+      },
+    },
+    runService: {
+      async completeRun(runId, opts) {
+        completed.push({ runId, source: opts?.source, actor: opts?.actor });
+        return { runId, previousStatus: 'ready', status: 'completed' };
+      },
+    },
+  });
+
+  const result = await api.resolveInboxItem({ inboxId: 'inbox-1', answer: { decision: 'approve' } });
+
+  assert.equal(result.topic, 'merge');
+  assert.equal(result.signaled, true);
+  assert.deepEqual(completed, []);
+});
+
+test('TaskControlPlaneApiService.resolveInboxItem skips merge gate signaling when signalGate is false', async () => {
+  let completeRunCalled = false;
+  const api = makeApi({
+    inboxService: {
+      async getInbox() {
+        return makeInboxItem({ title: 'Merge approval', context: { topic: 'merge' } });
+      },
+    },
+    runService: {
+      async completeRun() {
+        completeRunCalled = true;
+        return null;
+      },
+    },
+  });
+
+  const result = await api.resolveInboxItem({ inboxId: 'inbox-1', answer: { decision: 'approve' }, signalGate: false });
+
+  assert.equal(result.signaled, false);
+  assert.equal(completeRunCalled, false);
+});
+
+test('TaskControlPlaneApiService.resolveInboxItem does not complete a plan gate', async () => {
+  let completeRunCalled = false;
+  const api = makeApi({
+    runService: {
+      async completeRun() {
+        completeRunCalled = true;
+        return null;
+      },
+    },
+  });
+
+  const result = await api.resolveInboxItem({ inboxId: 'inbox-1', answer: { decision: 'approve' } });
+
+  assert.equal(result.topic, 'plan');
+  assert.equal(result.signaled, true);
+  assert.equal(completeRunCalled, false);
+});
+
+test('TaskControlPlaneApiService.resolveRunState surfaces blockedReason from a pipeline_blocked event', async () => {
+  const api = makeApi({
+    runService: {
+      async showRun() {
+        return {
+          run: { runId: 'run-1', title: 'R', status: 'running', priority: 0, createdAt: '', description: '', scope: '', repos: [] },
+          tasks: [],
+        };
+      },
+      async listRunEvents() {
+        return [{ eventId: 'e1', type: 'pipeline_blocked', actor: 'engine', createdAt: '', taskId: '', stepId: '', payload: { reason: 'plan gate rejected', nodeId: 'reviewer' } }];
+      },
+    },
+    inboxService: { async listInbox() { return []; } },
+    dbosService: { async getWorkflowStatus() { return null; } },
+  });
+
+  const state = await api.resolveRunState('run-1');
+
+  assert.equal(state.state, 'blocked');
+  assert.equal(state.blockedReason, 'plan gate rejected');
+});
+
+test('TaskControlPlaneApiService.resolveRunState omits blockedReason without a pipeline_blocked event', async () => {
+  const api = makeApi({
+    runService: {
+      async showRun() {
+        return {
+          run: { runId: 'run-1', title: 'R', status: 'running', priority: 0, createdAt: '', description: '', scope: '', repos: [] },
+          tasks: [],
+        };
+      },
+      async listRunEvents() { return []; },
+    },
+    inboxService: { async listInbox() { return []; } },
+    dbosService: { async getWorkflowStatus() { return null; } },
+  });
+
+  const state = await api.resolveRunState('run-1');
+
+  assert.equal(state.blockedReason, undefined);
+});
+
+test('TaskControlPlaneApiService.resolveRunState surfaces blockedReason for a paused run', async () => {
+  const api = makeApi({
+    runService: {
+      async showRun() {
+        return {
+          run: { runId: 'run-1', title: 'R', status: 'paused', priority: 0, createdAt: '', description: '', scope: '', repos: [] },
+          tasks: [],
+        };
+      },
+      async listRunEvents() {
+        return [{ eventId: 'e1', type: 'pipeline_blocked', actor: 'engine', createdAt: '', taskId: '', stepId: '', payload: { reason: 'reviewer blocked' } }];
+      },
+    },
+    inboxService: { async listInbox() { return []; } },
+    dbosService: { async getWorkflowStatus() { return null; } },
+  });
+
+  const state = await api.resolveRunState('run-1');
+
+  assert.equal(state.state, 'blocked');
+  assert.equal(state.blockedReason, 'reviewer blocked');
+});
+
+test('TaskControlPlaneApiService.getRunDigest includes blockedReason from a pipeline_blocked event', async () => {
+  const api = makeApi({
+    runService: {
+      async showRun() {
+        return { run: { runId: 'run-1', title: 'R', status: 'paused', priority: 0, createdAt: '', description: '', scope: '', repos: [] }, tasks: [] };
+      },
+      async listRunEvents() {
+        return [{ eventId: 'e1', type: 'pipeline_blocked', actor: 'engine', createdAt: '', taskId: '', stepId: '', payload: { reason: 'no budget' } }];
+      },
+      async listRunAttempts() { return []; },
+    },
+    inboxService: { async listInbox() { return []; } },
+  });
+
+  const digest = await api.getRunDigest('run-1');
+
+  assert.equal(digest.blockedReason, 'no budget');
+});
+
+test('TaskControlPlaneApiService.getRunDigest omits blockedReason without a pipeline_blocked event', async () => {
+  const api = makeApi({
+    runService: {
+      async showRun() {
+        return { run: { runId: 'run-1', title: 'R', status: 'running', priority: 0, createdAt: '', description: '', scope: '', repos: [] }, tasks: [] };
+      },
+      async listRunEvents() { return []; },
+      async listRunAttempts() { return []; },
+    },
+    inboxService: { async listInbox() { return []; } },
+  });
+
+  const digest = await api.getRunDigest('run-1');
+
+  assert.equal(digest.blockedReason, undefined);
+});
+
+test('TaskControlPlaneApiService.getRunDigest normalizes a stale ready row while workflow is running', async () => {
+  const api = makeApi({
+    runService: {
+      async showRun() {
+        return {
+          run: { runId: 'run-1', title: 'R', status: 'ready', priority: 0, createdAt: '', description: '', scope: '', repos: [] },
+          tasks: [{ taskId: 'task-1', title: 'T', status: 'ready', roleHint: 'developer' }],
+        };
+      },
+      async listRunEvents() {
+        return [{ eventId: 'e1', type: 'step_succeeded', actor: 'engine', createdAt: '', taskId: 'task-1', stepId: 'step-1', payload: { stepKey: 'developer' } }];
+      },
+      async listRunAttempts() { return []; },
+    },
+    inboxService: { async listInbox() { return []; } },
+    dbosService: {
+      async getWorkflowStatus() {
+        return {
+          workflowID: 'run-1', status: 'PENDING', workflowName: 'dataDrivenTask', workflowClassName: 'PipelineService',
+          createdAt: Date.parse('2026-06-28T09:34:06.403Z'), updatedAt: Date.parse('2026-06-28T09:36:16.078Z'), priority: 0, applicationID: 'test',
+        } as Awaited<ReturnType<DbosService['getWorkflowStatus']>>;
+      },
+    },
+  });
+
+  const digest = await api.getRunDigest('run-1');
+
+  assert.equal(digest.run.status, 'running');
+  assert.equal(digest.tasks[0]?.status, 'running');
 });
 
 test('TaskControlPlaneApiService.previewPipelineSelection returns confident wouldAutoRoute pick', async () => {

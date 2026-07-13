@@ -84,6 +84,64 @@ test('run-profile contract requires exact agent fields and rejects model-level a
   );
 });
 
+test('run-profile contract rejects unsupported profile permission modes with a stable path', () => {
+  const constrainedManifestSnapshot = {
+    ...manifestSnapshot,
+    constraints: { ...manifestSnapshot.constraints, permissionModes: ['read-only'] },
+  };
+  const constrainedManifest = {
+    ...constrainedManifestSnapshot,
+    manifestDigest: runnerManifestDigest({ ...constrainedManifestSnapshot, manifestDigest: '' }),
+  };
+
+  assert.throws(
+    () => resolveGraphBindings(validateRunProfile({
+      ...profile,
+      bindings: { slots: { 'node:developer': profile.bindings.slots['node:developer'] } },
+    }), {
+      nodes: [{ id: 'developer', kind: 'agent', roleRef: 'role:developer' }],
+      roleDocuments: { developer: { roleDocumentId: 'role-doc-developer' } },
+      runnerManifests: { codex: constrainedManifest },
+    }),
+    (error: unknown) => {
+      const contractError = error as { code?: string; path?: string };
+      return contractError.code === 'runner_permission_invalid'
+        && contractError.path === 'node:developer.permissionMode';
+    },
+  );
+});
+
+test('run-profile contract rejects unsupported model parameters with a stable path', () => {
+  const constrainedManifestSnapshot = {
+    ...manifestSnapshot,
+    constraints: { ...manifestSnapshot.constraints, modelParamKeys: ['temperature'] },
+  };
+  const constrainedManifest = {
+    ...constrainedManifestSnapshot,
+    manifestDigest: runnerManifestDigest({ ...constrainedManifestSnapshot, manifestDigest: '' }),
+  };
+
+  assert.throws(
+    () => resolveGraphBindings(validateRunProfile({
+      ...profile,
+      bindings: {
+        slots: {
+          'node:developer': { ...profile.bindings.slots['node:developer'], modelParams: { maxTurns: 12 } },
+        },
+      },
+    }), {
+      nodes: [{ id: 'developer', kind: 'agent', roleRef: 'role:developer' }],
+      roleDocuments: { developer: { roleDocumentId: 'role-doc-developer' } },
+      runnerManifests: { codex: constrainedManifest },
+    }),
+    (error: unknown) => {
+      const contractError = error as { code?: string; path?: string };
+      return contractError.code === 'model_config_invalid'
+        && contractError.path === 'node:developer.modelParams';
+    },
+  );
+});
+
 test('run-profile contract uses canonical node slots before role slots and keeps script accounts separate', () => {
   const resolved = resolveGraphBindings(validateRunProfile(profile), {
     nodes: [
