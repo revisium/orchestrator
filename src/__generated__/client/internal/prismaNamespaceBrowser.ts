@@ -52,6 +52,7 @@ export const AnyNull = runtime.AnyNull
 
 export const ModelName = {
   RevoProject: 'RevoProject',
+  RevoRepository: 'RevoRepository',
   TaskRun: 'TaskRun',
   RunTask: 'RunTask',
   RunEvent: 'RunEvent',
@@ -96,6 +97,20 @@ export const RevoProjectScalarFieldEnum = {
 } as const
 
 export type RevoProjectScalarFieldEnum = (typeof RevoProjectScalarFieldEnum)[keyof typeof RevoProjectScalarFieldEnum]
+
+
+export const RevoRepositoryScalarFieldEnum = {
+  id: 'id',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt',
+  projectId: 'projectId',
+  name: 'name',
+  remoteUrl: 'remoteUrl',
+  localPath: 'localPath',
+  defaultBranch: 'defaultBranch'
+} as const
+
+export type RevoRepositoryScalarFieldEnum = (typeof RevoRepositoryScalarFieldEnum)[keyof typeof RevoRepositoryScalarFieldEnum]
 
 
 export const TaskRunScalarFieldEnum = {
@@ -398,6 +413,18 @@ export const RevoProjectOrderByRelevanceFieldEnum = {
 } as const
 
 export type RevoProjectOrderByRelevanceFieldEnum = (typeof RevoProjectOrderByRelevanceFieldEnum)[keyof typeof RevoProjectOrderByRelevanceFieldEnum]
+
+
+export const RevoRepositoryOrderByRelevanceFieldEnum = {
+  id: 'id',
+  projectId: 'projectId',
+  name: 'name',
+  remoteUrl: 'remoteUrl',
+  localPath: 'localPath',
+  defaultBranch: 'defaultBranch'
+} as const
+
+export type RevoRepositoryOrderByRelevanceFieldEnum = (typeof RevoRepositoryOrderByRelevanceFieldEnum)[keyof typeof RevoRepositoryOrderByRelevanceFieldEnum]
 
 
 export const JsonNullValueFilter = {
