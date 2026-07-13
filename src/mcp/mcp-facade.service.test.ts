@@ -222,9 +222,6 @@ test('McpFacadeService pipeline tools return compact defaults without execution 
     pipelineId: 'feature-development',
     path: 'pipelines/feature-development.json',
     triggers: ['feature', 'implementation'],
-    requiredRoles: ['analyst', 'developer'],
-    alternativeRoles: [],
-    optionalRoles: ['watcher'],
     routeGates: ['plan', 'merge'],
     executionPolicy: {
       raw: ['large'],
@@ -257,9 +254,6 @@ test('McpFacadeService pipeline tools return compact defaults without execution 
     pipelineId: 'feature-development',
     path: 'pipelines/feature-development.json',
     triggers: ['feature', 'implementation'],
-    requiredRoles: ['analyst', 'developer'],
-    alternativeRoles: [],
-    optionalRoles: ['watcher'],
     routeGates: ['plan', 'merge'],
     executionPolicySummary: {
       hasTemplate: true,
@@ -306,9 +300,6 @@ test(focusedCaseTitle(
     pipelineId: 'local-change',
     path: 'pipelines/local-change.json',
     triggers: ['small edit'],
-    requiredRoles: ['developer'],
-    alternativeRoles: [],
-    optionalRoles: [],
     routeGates: [],
     executionPolicy: { template_json: { specVersion: '1.0', nodes: {} } },
   }];
@@ -365,11 +356,11 @@ test(focusedCaseTitle('H9b', focusedOwner, 'listProfiles preserves stored profil
 test('McpFacadeService profile management methods delegate to storage-backed API and compact defaults', async () => {
   const calls: unknown[] = [];
   const profile = {
-    profileId: 'custom-standard',
+    profileId: 'custom-exact',
     playbookId: 'pb',
     pipelineId: 'local-change',
     version: '1',
-    displayName: 'Custom standard',
+    displayName: 'Custom exact',
     summary: 'Custom profile',
     profileHash: 'hash',
     profileRevisionHash: 'revision-hash',
@@ -381,10 +372,6 @@ test('McpFacadeService profile management methods delegate to storage-backed API
     pipelineId: 'local-change',
     source: 'explicit',
     roles: ['developer'],
-    profileSource: 'inline',
-    profileHash: 'hash',
-    materializedTemplateHash: 'template-hash',
-    roleBindings: [{ roleId: 'developer' }],
   };
   const api = {
     async getProfile(input: unknown) {
@@ -411,45 +398,45 @@ test('McpFacadeService profile management methods delegate to storage-backed API
   const facade = new McpFacadeService(api);
   const body = profile.profile;
 
-  assert.deepEqual(await facade.getProfile({ pipelineId: 'local-change', profileId: 'custom-standard' }), {
-    profileId: 'custom-standard',
+  assert.deepEqual(await facade.getProfile({ pipelineId: 'local-change', profileId: 'custom-exact' }), {
+    profileId: 'custom-exact',
     pipelineId: 'local-change',
     playbookId: 'pb',
     version: '1',
-    displayName: 'Custom standard',
+    displayName: 'Custom exact',
     summary: 'Custom profile',
     profileHash: 'hash',
     profileRevisionHash: 'revision-hash',
     status: 'active',
   });
-  assert.deepEqual(await facade.createProfile({ pipelineId: 'local-change', profileId: 'custom-standard', displayName: 'Custom standard', profile: body }), {
-    profileId: 'custom-standard',
+  assert.deepEqual(await facade.createProfile({ pipelineId: 'local-change', profileId: 'custom-exact', displayName: 'Custom exact', profile: body }), {
+    profileId: 'custom-exact',
     pipelineId: 'local-change',
     playbookId: 'pb',
     version: '1',
-    displayName: 'Custom standard',
+    displayName: 'Custom exact',
     summary: 'Custom profile',
     profileHash: 'hash',
     profileRevisionHash: 'revision-hash',
     status: 'active',
   });
-  assert.deepEqual(await facade.updateProfile({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileRevisionHash: 'hash', profile: body }), {
-    profileId: 'custom-standard',
+  assert.deepEqual(await facade.updateProfile({ pipelineId: 'local-change', profileId: 'custom-exact', expectedProfileRevisionHash: 'hash', profile: body }), {
+    profileId: 'custom-exact',
     pipelineId: 'local-change',
     playbookId: 'pb',
     version: '1',
-    displayName: 'Custom standard',
+    displayName: 'Custom exact',
     summary: 'Custom profile',
     profileHash: 'hash',
     profileRevisionHash: 'revision-hash',
     status: 'active',
   });
-  assert.deepEqual(await facade.deprecateProfile({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileRevisionHash: 'hash' }), {
-    profileId: 'custom-standard',
+  assert.deepEqual(await facade.deprecateProfile({ pipelineId: 'local-change', profileId: 'custom-exact', expectedProfileRevisionHash: 'hash' }), {
+    profileId: 'custom-exact',
     pipelineId: 'local-change',
     playbookId: 'pb',
     version: '1',
-    displayName: 'Custom standard',
+    displayName: 'Custom exact',
     summary: 'Custom profile',
     profileHash: 'hash',
     profileRevisionHash: 'revision-hash',
@@ -459,28 +446,32 @@ test('McpFacadeService profile management methods delegate to storage-backed API
     playbookId: 'pb',
     pipelineId: 'local-change',
     roles: ['developer'],
-    source: 'explicit',
-    profileSource: 'inline',
-    profileHash: 'hash',
-    materializedTemplateHash: 'template-hash',
-    roleBindingCount: 1,
   });
   assert.deepEqual(calls, [
-    ['get', { pipelineId: 'local-change', profileId: 'custom-standard' }],
-    ['create', { pipelineId: 'local-change', profileId: 'custom-standard', displayName: 'Custom standard', profile: body }],
-    ['update', { pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileRevisionHash: 'hash', profile: body }],
-    ['deprecate', { pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileRevisionHash: 'hash' }],
+    ['get', { pipelineId: 'local-change', profileId: 'custom-exact' }],
+    ['create', { pipelineId: 'local-change', profileId: 'custom-exact', displayName: 'Custom exact', profile: body }],
+    ['update', { pipelineId: 'local-change', profileId: 'custom-exact', expectedProfileRevisionHash: 'hash', profile: body }],
+    ['deprecate', { pipelineId: 'local-change', profileId: 'custom-exact', expectedProfileRevisionHash: 'hash' }],
     ['validate', { pipelineId: 'local-change', profile: body }],
   ]);
 });
 
 test('McpFacadeService.simulateRoute returns a compact default response without the full route graph', async () => {
   const route = {
-    playbookId: 'pb',
-    pipelineId: 'feature-development',
-    source: 'explicit',
-    routeGates: ['plan', 'merge'],
-    roles: ['analyst', 'developer', 'reviewer'],
+    schemaVersion: 'route-decision/v1',
+    executionPlanBytes: '{}',
+    executionPlanDigest: 'sha256:' + '1'.repeat(64),
+    projection: {
+      playbookId: 'pb',
+      pipelineId: 'feature-development',
+      source: 'explicit',
+      routeGates: ['plan', 'merge'],
+      roles: ['analyst', 'developer', 'reviewer'],
+      profileSource: 'stored',
+      profileId: 'codex-gpt-5-6-luna',
+      profileHash: 'abc123',
+      materializedTemplateHash: 'sha256:' + '2'.repeat(64),
+    },
     executionPolicy: {
       raw: ['large'],
       template_json: {
@@ -490,15 +481,6 @@ test('McpFacadeService.simulateRoute returns a compact default response without 
         },
       },
     },
-    profileSource: 'stored',
-    profileId: 'codex-standard',
-    profileHash: 'abc123',
-    launchBindings: [{ match: { roleId: 'developer' }, modelLevel: 'codex-standard' }],
-    roleBindings: [
-      { roleId: 'analyst', runnerId: 'claude-code', resolvedRunnerId: 'claude-code' },
-      { roleId: 'developer', runnerId: 'claude-code', resolvedRunnerId: 'claude-code' },
-    ],
-    params: {},
   };
   const api = {
     async simulateRoute() {
@@ -507,20 +489,21 @@ test('McpFacadeService.simulateRoute returns a compact default response without 
   } as unknown as TaskControlPlaneApiService;
   const facade = new McpFacadeService(api);
 
-  const result = await facade.simulateRoute({ title: 'Task', repo: '.', pipeline: 'feature-development' });
+  const result = await facade.simulateRoute({ title: 'Task', repo: '.', pipelineId: 'feature-development' });
   const serialized = JSON.stringify(result);
 
   assert.deepEqual(result, {
     playbookId: 'pb',
     pipelineId: 'feature-development',
-    source: 'explicit',
     routeGates: ['plan', 'merge'],
     roles: ['analyst', 'developer', 'reviewer'],
+    source: 'explicit',
     profileSource: 'stored',
-    profileId: 'codex-standard',
+    profileId: 'codex-gpt-5-6-luna',
     profileHash: 'abc123',
-    launchBindingCount: 1,
-    roleBindingCount: 2,
+    materializedTemplateHash: 'sha256:' + '2'.repeat(64),
+    executionPlanBytes: '{}',
+    executionPlanDigest: 'sha256:' + '1'.repeat(64),
   });
   assert.equal(serialized.includes('template_json'), false);
   assert.equal(serialized.includes('executionPolicy'), false);
@@ -540,7 +523,7 @@ test('McpFacadeService.simulateRoute can include route details when explicitly r
   } as unknown as TaskControlPlaneApiService;
   const facade = new McpFacadeService(api);
 
-  const result = await facade.simulateRoute({ title: 'Task', includeDetails: true });
+  const result = await facade.simulateRoute({ title: 'Task', pipelineId: 'feature-development', includeDetails: true });
 
   assert.equal(result, route);
 });
@@ -552,9 +535,6 @@ test('McpFacadeService.createRun returns confirmationRequired when pipelineId is
     pipelineId: 'feature-development',
     path: 'pipelines/feature-development.json',
     triggers: ['feature'],
-    requiredRoles: ['developer'],
-    alternativeRoles: [],
-    optionalRoles: [],
     routeGates: [],
     executionPolicy: { template_json: { specVersion: '1.0', nodes: { developer: { id: 'developer' } } } },
   };
@@ -1045,9 +1025,7 @@ test('McpFacadeService.simulateRoute forwards inline profile to api.simulateRout
       capturedInput = input;
       return {
         playbookId: 'pb', pipelineId: 'feature-development', source: 'explicit',
-        routeGates: [], roles: [], executionPolicy: {},
-        launchBindings: [{ match: { roleId: 'developer' }, modelLevel: 'deep' }],
-        roleBindings: [], params: {},
+        routeGates: [], roles: [], executionPlanDigest: 'sha256:' + '1'.repeat(64), executionPolicy: {},
       };
     },
   } as unknown as TaskControlPlaneApiService;
@@ -1055,11 +1033,11 @@ test('McpFacadeService.simulateRoute forwards inline profile to api.simulateRout
 
   await facade.simulateRoute({
     title: 'Task',
-    pipeline: 'feature-development',
+    pipelineId: 'feature-development',
     profile: {
       schemaVersion: 'run-profile/v1',
       topology: { stages: { developer: { mode: 'single' } } },
-      bindings: { slots: { developer: { runnerId: 'claude-code', modelLevel: 'deep' } } },
+      bindings: { slots: { 'node:developer': { runnerId: 'codex', provider: 'openai', modelId: 'gpt-5.6-luna', modelParams: {} } } },
     },
   });
 
@@ -1067,22 +1045,20 @@ test('McpFacadeService.simulateRoute forwards inline profile to api.simulateRout
   assert.ok(input.profile !== undefined, 'inline profile forwarded');
 });
 
-test('McpFacadeService.simulateRoute compact response includes launchBindingCount when profile bindings are present', async () => {
+test('McpFacadeService.simulateRoute compact response exposes plan provenance, not legacy binding counts', async () => {
   const api = {
     async simulateRoute() {
       return {
-        playbookId: 'pb', pipelineId: 'feature-development', source: 'explicit',
-        routeGates: [], roles: [],
-        executionPolicy: {},
-        launchBindings: [{ match: { roleId: 'developer' }, modelLevel: 'deep' }],
-        roleBindings: [], params: {},
+        schemaVersion: 'route-decision/v1', executionPlanBytes: '{}', executionPlanDigest: 'sha256:' + '1'.repeat(64),
+        projection: { playbookId: 'pb', pipelineId: 'feature-development', source: 'explicit', routeGates: [], roles: [], profileSource: 'inline', profileHash: 'sha256:' + '2'.repeat(64), materializedTemplateHash: 'sha256:' + '3'.repeat(64) },
       };
     },
   } as unknown as TaskControlPlaneApiService;
   const facade = new McpFacadeService(api);
 
-  const result = await facade.simulateRoute({ title: 'Task' }) as Record<string, unknown>;
-  assert.equal(result.launchBindingCount, 1, 'compact response includes launchBindingCount');
+  const result = await facade.simulateRoute({ title: 'Task', pipelineId: 'feature-development' }) as Record<string, unknown>;
+  assert.equal(result.executionPlanDigest, 'sha256:' + '1'.repeat(64));
+  assert.equal('launchBindingCount' in result, false);
 });
 
 test('McpFacadeService.createRun forwards inline profile to api.createRun', async () => {
@@ -1095,11 +1071,9 @@ test('McpFacadeService.createRun forwards inline profile to api.createRun', asyn
     async simulateRoute() {
       return {
         playbookId: 'pb', pipelineId: 'local-change', source: 'explicit' as const,
-        routeGates: [], roles: ['developer'], requiredRoles: ['developer'], optionalRoles: [],
+        routeGates: [], roles: ['developer'],
         executionPolicy: { template_json: { specVersion: '1.0', pipelineId: 'local-change', entry: 'developer', verdicts: { domain: ['approved'] }, nodes: { developer: { id: 'developer', kind: 'agent', roleRef: 'role:developer', next: 'done', onFailure: 'abort' }, done: { id: 'done', kind: 'terminal', status: 'succeeded' } } } },
-        launchBindings: [{ match: { roleId: 'developer' }, modelLevel: 'deep' }],
-        roleBindings: [{ roleId: 'developer', rowId: 'dev', modelLevel: 'standard', runnerId: 'claude-code', resolvedRunnerId: 'claude-code', runnerSource: 'profile' as const }],
-        params: {},
+        executionPlanDigest: 'sha256:' + '1'.repeat(64),
         pipelineRowId: 'pb-local-change',
       };
     },
@@ -1114,7 +1088,7 @@ test('McpFacadeService.createRun forwards inline profile to api.createRun', asyn
     profile: {
       schemaVersion: 'run-profile/v1',
       topology: { stages: { developer: { mode: 'single' } } },
-      bindings: { slots: { developer: { runnerId: 'claude-code', modelLevel: 'deep' } } },
+      bindings: { slots: { 'node:developer': { runnerId: 'codex', provider: 'openai', modelId: 'gpt-5.6-luna', modelParams: {} } } },
     },
   });
 
@@ -1123,5 +1097,5 @@ test('McpFacadeService.createRun forwards inline profile to api.createRun', asyn
   assert.ok(profile !== undefined, 'inline profile forwarded to createRun');
   assert.equal(profile.schemaVersion, 'run-profile/v1');
   assert.deepEqual(profile.topology, { stages: { developer: { mode: 'single' } } });
-  assert.deepEqual(profile.bindings, { slots: { developer: { runnerId: 'claude-code', modelLevel: 'deep' } } });
+  assert.deepEqual(profile.bindings, { slots: { 'node:developer': { runnerId: 'codex', provider: 'openai', modelId: 'gpt-5.6-luna', modelParams: {} } } });
 });

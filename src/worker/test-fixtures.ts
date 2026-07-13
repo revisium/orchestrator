@@ -1,5 +1,6 @@
 import type { ControlPlaneRow } from '../control-plane/data-access.js';
-import type { Role, ModelProfile } from '../control-plane/definitions.js';
+import type { Role } from '../control-plane/definitions.js';
+import type { AgentBinding } from '../control-plane/run-profile-contract.js';
 import type { Step } from '../control-plane/steps.js';
 
 export function fakeRow(rowId: string, data: Record<string, unknown>): ControlPlaneRow {
@@ -10,22 +11,17 @@ export function makeRole(name: string, overrides: Partial<Role> = {}): Role {
   return {
     name,
     systemPrompt: `You are the ${name}.`,
-    modelLevel: 'standard',
-    effort: 'high',
-    runner: 'claude-code',
     allowedTools: [],
     scopeRules: {},
     ...overrides,
   };
 }
 
-export const TEST_PROFILE: ModelProfile = {
-  level: 'standard',
+export const TEST_PROFILE: AgentBinding = {
+  runnerId: 'claude-code',
   provider: 'test',
   modelId: 'test-model',
-  params: {},
-  costPerInput: 0,
-  costPerOutput: 0,
+  modelParams: {},
 };
 
 export const BASE_STEP: Step = {
@@ -37,7 +33,6 @@ export const BASE_STEP: Step = {
   status: 'claimed',
   input: null,
   output: null,
-  modelProfile: 'standard',
   runAfter: '',
   attemptCount: 0,
   maxAttempts: 3,

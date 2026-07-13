@@ -1,0 +1,25 @@
+ALTER TABLE "RunAttempt" DROP COLUMN "modelProfile";
+ALTER TABLE "RunAttempt" ADD COLUMN "runnerId" TEXT NOT NULL;
+ALTER TABLE "RunAttempt" ADD COLUMN "provider" TEXT NOT NULL;
+ALTER TABLE "RunAttempt" ADD COLUMN "modelId" TEXT NOT NULL;
+ALTER TABLE "RunAttempt" ALTER COLUMN "inputTokens" DROP DEFAULT;
+ALTER TABLE "RunAttempt" ALTER COLUMN "inputTokens" DROP NOT NULL;
+ALTER TABLE "RunAttempt" ALTER COLUMN "outputTokens" DROP DEFAULT;
+ALTER TABLE "RunAttempt" ALTER COLUMN "outputTokens" DROP NOT NULL;
+ALTER TABLE "RunAttempt" ALTER COLUMN "costAmount" DROP DEFAULT;
+ALTER TABLE "RunAttempt" ALTER COLUMN "costAmount" DROP NOT NULL;
+ALTER TABLE "RunAttempt" ALTER COLUMN "currency" DROP DEFAULT;
+ALTER TABLE "RunAttempt" ALTER COLUMN "currency" DROP NOT NULL;
+
+ALTER TABLE "CostLedgerEntry" DROP COLUMN "modelProfile";
+ALTER TABLE "CostLedgerEntry" ADD COLUMN "runnerId" TEXT NOT NULL;
+ALTER TABLE "CostLedgerEntry" ADD COLUMN "provider" TEXT NOT NULL;
+ALTER TABLE "CostLedgerEntry" ADD COLUMN "modelId" TEXT NOT NULL;
+ALTER TABLE "CostLedgerEntry" ALTER COLUMN "inputTokens" DROP DEFAULT;
+ALTER TABLE "CostLedgerEntry" ALTER COLUMN "inputTokens" DROP NOT NULL;
+ALTER TABLE "CostLedgerEntry" ALTER COLUMN "outputTokens" DROP DEFAULT;
+ALTER TABLE "CostLedgerEntry" ALTER COLUMN "outputTokens" DROP NOT NULL;
+ALTER TABLE "CostLedgerEntry" ALTER COLUMN "costAmount" DROP DEFAULT;
+ALTER TABLE "CostLedgerEntry" ALTER COLUMN "costAmount" DROP NOT NULL;
+ALTER TABLE "CostLedgerEntry" ALTER COLUMN "currency" DROP DEFAULT;
+ALTER TABLE "CostLedgerEntry" ALTER COLUMN "currency" DROP NOT NULL;

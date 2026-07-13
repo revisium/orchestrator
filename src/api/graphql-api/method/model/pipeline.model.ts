@@ -1,6 +1,5 @@
 import { Field, ID, ObjectType } from '@nestjs/graphql';
 import { GraphQLJSON } from 'graphql-scalars';
-import { AlternativeRoleGroupModel } from './alternative-role-group.model.js';
 
 @ObjectType()
 export class PipelineModel {
@@ -18,15 +17,6 @@ export class PipelineModel {
 
   @Field(() => [String])
   triggers!: string[];
-
-  @Field(() => [String])
-  requiredRoles!: string[];
-
-  @Field(() => [AlternativeRoleGroupModel])
-  alternativeRoles!: AlternativeRoleGroupModel[];
-
-  @Field(() => [String])
-  optionalRoles!: string[];
 
   @Field(() => [String])
   routeGates!: string[];

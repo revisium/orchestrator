@@ -1,4 +1,4 @@
-import type { ModelProfile } from '../control-plane/definitions.js';
+import type { ResolvedAgentBinding } from '../control-plane/run-profile-contract.js';
 import type { CostRecord, Step } from '../control-plane/steps.js';
 import type { ProcessArtifactSnapshot } from './artifact-store.js';
 import type { AttemptResult } from './runner.js';
@@ -23,6 +23,7 @@ export type UsageSummary = {
   costUsd?: number;
   inputTokens?: number;
   outputTokens?: number;
+  currency?: string;
 };
 
 export type AgentAttemptResult = {
@@ -141,23 +142,21 @@ export function runnerTimeoutFailure(
   });
 }
 
-export function buildUsageCosts(step: Step, profile: ModelProfile, usage: UsageSummary): CostRecord[] {
-  const inputTokens = usage.inputTokens ?? 0;
-  const outputTokens = usage.outputTokens ?? 0;
-  const reportedUsd = typeof usage.costUsd === 'number' && Number.isFinite(usage.costUsd) ? usage.costUsd : undefined;
-  if (inputTokens === 0 && outputTokens === 0 && reportedUsd === undefined) return [];
-  const computed =
-    (inputTokens / 1_000_000) * profile.costPerInput +
-    (outputTokens / 1_000_000) * profile.costPerOutput;
-  return [
-    {
-      modelProfile: step.modelProfile,
-      inputTokens,
-      outputTokens,
-      costAmount: reportedUsd ?? computed,
-      currency: 'USD',
-    },
-  ];
+export function buildUsageCosts(binding: ResolvedAgentBinding, usage: UsageSummary): CostRecord[] {
+  const inputTokens = typeof usage.inputTokens === 'number' && Number.isFinite(usage.inputTokens) ? usage.inputTokens : null;
+  const outputTokens = typeof usage.outputTokens === 'number' && Number.isFinite(usage.outputTokens) ? usage.outputTokens : null;
+  const costAmount = typeof usage.costUsd === 'number' && Number.isFinite(usage.costUsd) ? usage.costUsd : null;
+  const reportedCurrency = typeof usage.currency === 'string' && usage.currency.trim().length > 0 ? usage.currency.trim() : null;
+  if (inputTokens === null && outputTokens === null && costAmount === null) return [];
+  return [{
+    runnerId: binding.runner.runnerId,
+    provider: binding.provider,
+    modelId: binding.modelId,
+    inputTokens,
+    outputTokens,
+    costAmount,
+    currency: costAmount === null ? reportedCurrency : reportedCurrency ?? 'USD',
+  }];
 }
 
 export function buildAttemptResult(

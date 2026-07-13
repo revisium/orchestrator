@@ -4,8 +4,7 @@
  * `makeRunStep` is the generic step the data-driven engine reuses for every `agent` node (role→runner
  * dispatch + attempt/cost/event bookkeeping). It is exercised through the REAL production builder with
  * fakes (C1) — PipelineService registers exactly this function, so these tests fail if the dispatch,
- * canonical-role loading, event/attempt bookkeeping, runner-failure handling, or model-profile
- * resolution regresses.
+ * canonical-role loading, event/attempt bookkeeping, or runner-failure handling regresses.
  *
  * (The old hardcoded `developTask` workflow + `verdictOf` were REMOVED in plan 0015 slice 3 — the
  * data-driven engine is the sole pipeline engine; its loop is covered by data-driven-task.workflow.test.ts
@@ -18,36 +17,56 @@ import { stubRunAgent } from '../worker/stub-runner.js';
 import { createRunAgent } from '../worker/runner-dispatch.js';
 import { RunAgentError, type AttemptResult, type RunAgent } from '../worker/runner.js';
 import { RUNNER_IDLE_TIMEOUT_KIND } from '../worker/process-executor.js';
-import type { Role, ModelProfile } from '../control-plane/definitions.js';
+import type { Role } from '../control-plane/definitions.js';
 import type { Step } from '../control-plane/steps.js';
 import type { ControlPlaneDataAccess } from '../control-plane/data-access.js';
 import { ControlPlaneError } from '../control-plane/errors.js';
 import type { AppendEventInput, AppendCostInput, AppendAttemptInput } from '../run/append-event.js';
-import type { LaunchOverrides } from './route-contract.js';
 import type { AgentOutputEvent } from '../observability/types.js';
+import type { ResolvedAgentBinding } from '../control-plane/run-profile-contract.js';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-function makeRole(name: string, runner: 'claude-code' | 'script' = 'script'): Role {
+const BINDING: ResolvedAgentBinding = {
+  runnerId: 'stub-agent',
+  provider: 'test',
+  modelId: 'test-model',
+  modelParams: {},
+  slotKey: 'node:developer',
+  nodeId: 'developer',
+  roleId: 'developer',
+  roleDocumentId: 'role-doc-developer',
+  permissionMode: 'read-only',
+  permissionSource: 'profile',
+  runner: {
+    runnerId: 'stub-agent',
+    manifestVersion: 'test',
+    manifestDigest: `sha256:${'a'.repeat(64)}`,
+    stdoutParserId: 'stub',
+    permissionStyleId: 'stub',
+    declaredDefaultPermissionMode: 'read-only',
+    capabilities: {},
+    constraints: {},
+    executionFields: {},
+  },
+};
+
+function bindingFor(role: string): ResolvedAgentBinding {
   return {
-    name,
-    systemPrompt: `System prompt for ${name}`,
-    modelLevel: name === 'architect' ? 'deep' : 'standard',
-    effort: 'high',
-    runner,
-    allowedTools: [],
-    scopeRules: {},
+    ...BINDING,
+    slotKey: `role:${role}`,
+    nodeId: role,
+    roleId: role,
+    roleDocumentId: `role-doc-${role}`,
   };
 }
 
-function makeProfile(level: 'cheap' | 'standard' | 'deep' = 'standard'): ModelProfile {
+function makeRole(name: string): Role {
   return {
-    level,
-    provider: 'anthropic',
-    modelId: 'claude-sonnet-4-6',
-    params: {},
-    costPerInput: 3,
-    costPerOutput: 15,
+    name,
+    systemPrompt: `System prompt for ${name}`,
+    allowedTools: [],
+    scopeRules: {},
   };
 }
 
@@ -68,7 +87,7 @@ function makeFakeDa(opts: { throwConflict?: boolean } = {}): { da: ControlPlaneD
   return { da };
 }
 
-/** loadPipelineContext fake returning an in-memory Step (records the modelProfile arg). */
+/** loadPipelineContext fake returning an in-memory Step. */
 function makeLoadPipelineContext(taskId = 'task-001') {
   const { da } = makeFakeDa();
   return async (
@@ -76,7 +95,6 @@ function makeLoadPipelineContext(taskId = 'task-001') {
     role: string,
     stepKey: string,
     stepInput: unknown,
-    modelProfile: string,
   ): Promise<Awaited<ReturnType<RunStepDeps['loadPipelineContext']>>> => {
     const step: Step = {
       id: `pstep_fake_${stepKey}`,
@@ -87,7 +105,6 @@ function makeLoadPipelineContext(taskId = 'task-001') {
       status: 'running',
       input: stepInput,
       output: null,
-      modelProfile,
       runAfter: '',
       attemptCount: 0,
       maxAttempts: 1,
@@ -120,9 +137,9 @@ function buildRunStepDeps(opts: { roles?: Map<string, Role> } = {}): {
   const harness: Harness = { loadRoleArgs: [], appendEventArgs: [], appendCostInputs: [], appendAttemptInputs: [] };
 
   const roles = opts.roles ?? new Map<string, Role>([
-    ['architect', makeRole('architect')],
-    ['developer', makeRole('developer')],
-    ['reviewer', makeRole('reviewer')],
+    ['role-doc-architect', makeRole('architect')],
+    ['role-doc-developer', makeRole('developer')],
+    ['role-doc-reviewer', makeRole('reviewer')],
   ]);
 
   const throwingClaudeCode: RunAgent = async () => {
@@ -134,8 +151,6 @@ function buildRunStepDeps(opts: { roles?: Map<string, Role> } = {}): {
       harness.loadRoleArgs.push(name);
       return roles.get(name) ?? makeRole(name);
     },
-    loadModelProfile: async (level: string): Promise<ModelProfile> =>
-      makeProfile(level as 'cheap' | 'standard' | 'deep'),
     loadPipelineContext: makeLoadPipelineContext(),
     appendEvent: async (input: AppendEventInput): Promise<void> => {
       harness.appendEventArgs.push(input);
@@ -154,20 +169,20 @@ function buildRunStepDeps(opts: { roles?: Map<string, Role> } = {}): {
 
 // ─── Tests ──────────────────────────────────────────────────────────────────
 
-test('T1: runStep(architect) writes one step_succeeded event with a canonical loadRole + bounded id', async () => {
+test('T1: runStep(architect) writes one step_succeeded event with a pinned role document + bounded id', async () => {
   const runId = 'run-t1';
   const { deps, harness } = buildRunStepDeps();
   const runStep = makeRunStep(deps);
 
-  const result = await runStep(runId, 'architect', 'architect', { phase: 'plan' }, 'script');
+  const result = await runStep(runId, 'architect', 'architect', { phase: 'plan' }, bindingFor('architect'));
 
   // One step_succeeded event written by the REAL appendEvent fake.
   assert.equal(harness.appendEventArgs.length, 1);
   assert.equal(harness.appendEventArgs[0]?.type, 'step_succeeded');
   assert.equal(harness.appendEventArgs[0]?.stepKey, 'architect');
 
-  // loadRole received the CANONICAL name (never a `#k` rework suffix).
-  assert.equal(harness.loadRoleArgs[0], 'architect');
+  // loadRole received the exact document identity (never a `#k` rework suffix).
+  assert.equal(harness.loadRoleArgs[0], 'role-doc-architect');
   assert.ok(!harness.loadRoleArgs[0]?.includes('#'), 'loadRole must receive canonical name');
 
   // Output carries the generic stub echo; the routing verdict is top-level (the stub is role-agnostic).
@@ -196,7 +211,7 @@ test('runStep forwards accepted template verdicts to the runner', async () => {
     'developer',
     'developer',
     { phase: 'implement' },
-    'script',
+    BINDING,
     undefined,
     ['approved'],
   );
@@ -204,33 +219,16 @@ test('runStep forwards accepted template verdicts to the runner', async () => {
   assert.deepEqual(capturedVerdicts, ['approved']);
 });
 
-test('B7: the model profile is resolved from role.modelLevel (architect=deep), not hardcoded', async () => {
-  const runId = 'run-b7';
-  const { deps, harness } = buildRunStepDeps();
-  let capturedModelProfile = '';
-  const origLoadPipelineContext = deps.loadPipelineContext;
-  deps.loadPipelineContext = async (rId, role, stepKey, stepInput, modelProfile) => {
-    if (role === 'architect') capturedModelProfile = modelProfile;
-    return origLoadPipelineContext(rId, role, stepKey, stepInput, modelProfile);
-  };
-  const runStep = makeRunStep(deps);
-
-  await runStep(runId, 'architect', 'architect', { phase: 'plan' }, 'script');
-
-  assert.equal(capturedModelProfile, 'deep', `architect step must pass modelProfile='deep'`);
-  assert.equal(harness.appendEventArgs.length, 1, 'one event written');
-});
-
 test('runner failure → step_failed event + a fail-closed BLOCKER attempt (never a stranded DBOS error)', async () => {
   const runId = 'run-fail';
-  const seededRoles = new Map<string, Role>([['architect', makeRole('architect', 'claude-code')]]);
+  const seededRoles = new Map<string, Role>([['role-doc-architect', makeRole('architect')]]);
   const { deps, harness, throwingClaudeCode } = buildRunStepDeps({ roles: seededRoles });
   // A claude-code role + the throwing runner: the runner-process failure becomes a DOMAIN blocking
   // result (needsHuman + BLOCKER attempt), NOT a thrown DBOS step error that strands task_runs=ready.
   deps.runAgent = throwingClaudeCode;
   const runStep = makeRunStep(deps);
 
-  const result = await runStep(runId, 'architect', 'architect', { phase: 'plan' }, 'live');
+  const result = await runStep(runId, 'architect', 'architect', { phase: 'plan' }, bindingFor('architect'));
 
   assert.equal(result.needsHuman, true, 'a runner crash parks the step (needsHuman)');
   assert.match(result.lesson ?? '', /RUNNER_NOT_IMPLEMENTED/);
@@ -263,7 +261,7 @@ test('runner failure envelope carries structured timeout classification and timi
   };
   const runStep = makeRunStep(deps);
 
-  const result = await runStep(runId, 'developer', 'developer', { phase: 'implement' }, 'live');
+  const result = await runStep(runId, 'developer', 'developer', { phase: 'implement' }, BINDING);
   const output = result.output as Record<string, unknown>;
 
   assert.equal(result.needsHuman, true);
@@ -281,13 +279,13 @@ test('attempt row surfaces the verdict + iteration (from stepKey) + a determinis
     output: '# Plan\nShip it.',
     verdict: 'approved',
     nextSteps: [],
-    costs: [{ modelProfile: 'standard', currency: 'USD', inputTokens: 10, outputTokens: 5, costAmount: 0.001 }],
+    costs: [{ runnerId: 'stub-agent', provider: 'test', modelId: 'test-model', currency: null, inputTokens: 10, outputTokens: 5, costAmount: null }],
     needsHuman: false,
   });
   const runStep = makeRunStep(deps);
 
   // A rework stepKey (`developer#2`) → iteration 2, attemptNo 3.
-  await runStep(runId, 'developer', 'developer#2', { phase: 'rework' }, 'script');
+  await runStep(runId, 'developer', 'developer#2', { phase: 'rework' }, BINDING);
 
   const attempt = harness.appendAttemptInputs[0];
   assert.ok(attempt, 'an attempt row is written');
@@ -315,7 +313,7 @@ test('physical attempt argument scopes attempt row, events, costs, reporter, and
       output: { ok: true },
       verdict: 'approved',
       nextSteps: [],
-      costs: [{ modelProfile: 'standard', inputTokens: 1, outputTokens: 2, costAmount: 0.003 }],
+      costs: [{ runnerId: 'stub-agent', provider: 'test', modelId: 'test-model', inputTokens: 1, outputTokens: 2, costAmount: null, currency: null }],
       needsHuman: false,
     };
   };
@@ -326,7 +324,7 @@ test('physical attempt argument scopes attempt row, events, costs, reporter, and
     'developer',
     'developer',
     { nodeId: 'developer', attempt: physicalAttempt },
-    'script',
+    BINDING,
     physicalAttempt,
   );
 
@@ -354,7 +352,7 @@ test('attempt row includes the process artifact ref + stdout/stderr tails', asyn
   });
   const runStep = makeRunStep(deps);
 
-  await runStep(runId, 'architect', 'architect', { phase: 'plan' }, 'script');
+  await runStep(runId, 'architect', 'architect', { phase: 'plan' }, bindingFor('architect'));
 
   const attempt = harness.appendAttemptInputs[0];
   assert.equal(attempt?.artifactRef, `${runId}/attempt_test`);
@@ -378,12 +376,12 @@ test('agent activity reporter is scoped to the attempt, streamed, and flushed be
   };
   const runStep = makeRunStep(deps);
 
-  await runStep(runId, 'developer', 'developer', { phase: 'implement' }, 'script');
+  await runStep(runId, 'developer', 'developer', { phase: 'implement' }, BINDING);
 
   assert.deepEqual(streamEvents.map((event) => event.kind), ['activity', 'output', 'status']);
   assert.equal(streamEvents[0]?.runId, runId);
   assert.equal(streamEvents[0]?.stepKey, 'developer');
-  assert.equal(streamEvents[0]?.snapshot?.runner, 'script');
+  assert.equal(streamEvents[0]?.snapshot?.runner, 'stub-agent');
   assert.equal(streamEvents[1]?.snapshot?.stdoutBytes, 5);
   assert.equal(streamEvents[2]?.snapshot?.status, 'exited');
 });
@@ -403,7 +401,7 @@ test('agent activity reporter writer failures do not fail a successful agent ste
     };
     const runStep = makeRunStep(deps);
 
-    const result = await runStep('run-reporter-fail', 'developer', 'developer', {}, 'script');
+    const result = await runStep('run-reporter-fail', 'developer', 'developer', {}, BINDING);
 
     assert.equal(result.verdict, 'approved');
     assert.equal(harness.appendEventArgs.at(-1)?.type, 'step_succeeded');
@@ -417,8 +415,8 @@ test('params.planPath context error fails before launching the agent', async () 
   const runId = 'run-context-missing';
   const { deps, harness } = buildRunStepDeps();
   let launched = false;
-  deps.loadPipelineContext = async (rId, role, stepKey, stepInput, modelProfile) => {
-    const base = await makeLoadPipelineContext()(rId, role, stepKey, stepInput, modelProfile);
+  deps.loadPipelineContext = async (rId, role, stepKey, stepInput) => {
+    const base = await makeLoadPipelineContext()(rId, role, stepKey, stepInput);
     return { ...base, runContext: { description: '', params: { planPath: 'missing.md' } } };
   };
   deps.runAgent = async (): Promise<AttemptResult> => {
@@ -428,7 +426,7 @@ test('params.planPath context error fails before launching the agent', async () 
   const runStep = makeRunStep(deps);
 
   await assert.rejects(
-    () => runStep(runId, 'architect', 'architect', { phase: 'plan' }, 'script'),
+    () => runStep(runId, 'architect', 'architect', { phase: 'plan' }, bindingFor('architect')),
     /revo\.ContextMissing/,
   );
 
@@ -438,13 +436,13 @@ test('params.planPath context error fails before launching the agent', async () 
 
 test('per-role runner threading: a resolved stub runner dispatches via the stub (never the throwing claude-code)', async () => {
   const runId = 'run-thread';
-  // Role is seeded with claude-code, but the resolved runner is the stub → dispatch must hit the stub.
-  const seededRoles = new Map<string, Role>([['developer', makeRole('developer', 'claude-code')]]);
+  // The role document is not the runner authority; the pinned binding selects the stub.
+  const seededRoles = new Map<string, Role>([['role-doc-developer', makeRole('developer')]]);
   const { deps, harness } = buildRunStepDeps({ roles: seededRoles });
   const runStep = makeRunStep(deps);
 
-  // resolvedRunnerId='stub-agent' → dispatchRunnerId → 'script' → stubRunAgent (no throw).
-  const result = await runStep(runId, 'developer', 'developer', { phase: 'implement' }, 'stub-agent');
+  // The pinned stub-agent binding selects the injected test runner (no throw).
+  const result = await runStep(runId, 'developer', 'developer', { phase: 'implement' }, BINDING);
 
   assert.equal(harness.appendEventArgs.at(-1)?.type, 'step_succeeded', 'stub runner succeeds (no claude throw)');
   const output = result.output as Record<string, unknown>;
@@ -464,78 +462,4 @@ test('idempotency: appendEvent ROW_CONFLICT on replay is a no-op (no duplicate w
     payload: {},
   });
   // Reaching here (no throw) is the assertion.
-});
-
-// ─── launchOverrides dispatch tests ─────────────────────────────────────────
-
-test('launchOverrides: modelLevel override selects a different model profile (ignored role default)', async () => {
-  const runId = 'run-lo-model';
-  let capturedModelProfile: string | undefined;
-  const { deps, harness } = buildRunStepDeps();
-  deps.loadPipelineContext = async (rId, role, stepKey, stepInput, modelProfile) => {
-    capturedModelProfile = modelProfile;
-    return (makeLoadPipelineContext())(rId, role, stepKey, stepInput, modelProfile);
-  };
-  const runStep = makeRunStep(deps);
-  const overrides: LaunchOverrides = { modelLevel: 'cheap' };
-
-  // architect role has modelLevel='deep' by default; overrides pick 'cheap'
-  await runStep(runId, 'architect', 'architect', { phase: 'plan' }, 'script', undefined, undefined, overrides);
-
-  assert.equal(capturedModelProfile, 'cheap', 'expected cheap model level from launchOverrides, not deep from role');
-  assert.equal(harness.appendEventArgs.at(-1)?.type, 'step_succeeded');
-});
-
-test('launchOverrides: undefined launchOverrides -> role default model level used', async () => {
-  const runId = 'run-lo-nooverride';
-  let capturedModelProfile: string | undefined;
-  const { deps } = buildRunStepDeps();
-  deps.loadPipelineContext = async (rId, role, stepKey, stepInput, modelProfile) => {
-    capturedModelProfile = modelProfile;
-    return (makeLoadPipelineContext())(rId, role, stepKey, stepInput, modelProfile);
-  };
-  const runStep = makeRunStep(deps);
-
-  // architect has modelLevel='deep', no override
-  await runStep(runId, 'architect', 'architect', { phase: 'plan' }, 'script');
-
-  assert.equal(capturedModelProfile, 'deep', 'expected deep model level from role definition');
-});
-
-test('launchOverrides: permissionMode and timeoutMs forwarded to dispatchRole for runAgent', async () => {
-  const runId = 'run-lo-pm';
-  let capturedRole: Role | undefined;
-  const { deps, harness } = buildRunStepDeps();
-  const originalRunAgent = deps.runAgent;
-  deps.runAgent = async (input) => {
-    capturedRole = input.role as Role;
-    return originalRunAgent(input);
-  };
-  const runStep = makeRunStep(deps);
-  const overrides: LaunchOverrides = { timeoutMs: 90000, permissionMode: 'bypassPermissions' };
-
-  await runStep(runId, 'developer', 'developer', { phase: 'implement' }, 'script', undefined, undefined, overrides);
-
-  assert.ok(capturedRole !== undefined, 'runAgent was called');
-  assert.equal((capturedRole as Role & { timeoutMs?: number }).timeoutMs, 90000);
-  assert.equal((capturedRole as Role & { permissionMode?: string }).permissionMode, 'bypassPermissions');
-  assert.equal(harness.appendEventArgs.at(-1)?.type, 'step_succeeded');
-});
-
-test('launchOverrides: null/undefined overrides do not set permissionMode or timeoutMs on dispatchRole', async () => {
-  const runId = 'run-lo-nullpm';
-  let capturedRole: Role | undefined;
-  const { deps } = buildRunStepDeps();
-  const originalRunAgent = deps.runAgent;
-  deps.runAgent = async (input) => {
-    capturedRole = input.role as Role;
-    return originalRunAgent(input);
-  };
-  const runStep = makeRunStep(deps);
-
-  await runStep(runId, 'developer', 'developer', { phase: 'implement' }, 'script');
-
-  assert.ok(capturedRole !== undefined);
-  assert.equal((capturedRole as Role & { permissionMode?: string }).permissionMode, undefined);
-  assert.equal((capturedRole as Role & { timeoutMs?: number }).timeoutMs, undefined);
 });

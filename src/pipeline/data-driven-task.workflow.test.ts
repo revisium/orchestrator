@@ -11,15 +11,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { makeDataDrivenTask, resolveRunnerTransientRetryPolicy, type DataDrivenProgressCursor, type DataDrivenTaskDeps, type GateSummary, type RunnerTransientRetryPolicy } from './data-driven-task.workflow.js';
+import { makeDataDrivenTask, resolveRunnerTransientRetryPolicy, scriptGithubAccount, type DataDrivenProgressCursor, type DataDrivenTaskDeps, type GateSummary, type RunnerTransientRetryPolicy } from './data-driven-task.workflow.js';
 import { templateFromExecutionPolicy } from './data-driven-template.js';
 import { featureDevelopment, featureDevelopmentPrReview, confirmMergeFlow, localChange } from '../pipeline-core/kit/fixtures.js';
-import { materializeTemplate } from '../pipeline-core/materialize.js';
+import { hashTemplate, materializeTemplate } from '../pipeline-core/materialize.js';
 import { topologyProfileFromRunProfile } from '../control-plane/run-profiles.js';
+import { compileExecutionPlan } from '../control-plane/run-profile-contract.js';
+import type { ResolvedAgentBinding } from '../control-plane/run-profile-contract.js';
+import { runnerManifests } from '../runners/runner-manifest.js';
 import type { Template } from '../pipeline-core/index.js';
 import type { AttemptResult } from '../worker/runner.js';
 import type { AppendEventInput } from '../run/append-event.js';
-import type { RouteDecision, RouteRoleBinding, LaunchOverrides } from './route-contract.js';
+import { routeDecisionFromCompiledPlan, type RouteDecision } from './route-contract.js';
 import type { Decision as GateDecision, GateTopic } from './await-human.js';
 import type {
   IntegratorInput,
@@ -36,6 +39,13 @@ import { RUNNER_IDLE_TIMEOUT_KIND, RUNNER_WALL_CLOCK_LIMIT_KIND } from '../worke
 import type { IssueAction, IssueRef } from '../run/issue-ref.js';
 
 const RUN_ID = 'run-dd-001';
+
+test('script execution fails closed when its pinned binding is absent', () => {
+  assert.throws(
+    () => scriptGithubAccount({ type: 'invokeScript', nodeId: 'integrator', scriptRef: 'script:integrator' } as never, []),
+    /execution_plan_binding_unresolved: script node integrator has no pinned binding/,
+  );
+});
 
 type PipelineCatalogEntry = {
   id: string;
@@ -56,41 +66,61 @@ const defaultPlaybookRunProfiles = JSON.parse(
   readFileSync(new URL('../../control-plane/default-playbook/catalog/run-profiles.json', import.meta.url), 'utf8'),
 ) as RunProfileCatalogEntry[];
 
-function binding(roleId: string, resolvedRunnerId = 'script'): RouteRoleBinding {
-  return { roleId, rowId: roleId, modelLevel: 'standard', runnerId: 'claude-code', resolvedRunnerId, runnerSource: 'playbook' };
+function exactRouteForTemplate(template: Template): RouteDecision {
+  const manifests = runnerManifests();
+  const codex = manifests.codex;
+  assert.ok(codex, 'codex runner manifest exists');
+  const agentBindings: ResolvedAgentBinding[] = Object.values(template.nodes)
+    .filter((node): node is Extract<Template['nodes'][string], { kind: 'agent' }> => node.kind === 'agent')
+    .map((node) => ({
+      slotKey: `node:${node.id}`,
+      nodeId: node.id,
+      roleId: node.roleRef.replace(/^role:/, ''),
+      roleDocumentId: node.roleRef.replace(/^role:/, ''),
+      runnerId: codex.runnerId,
+      provider: 'openai',
+      modelId: 'gpt-5.6-luna',
+      modelParams: {},
+      permissionMode: 'workspace-write',
+      permissionSource: 'profile',
+      runner: codex,
+    }));
+  const scriptBindings = Object.values(template.nodes)
+    .filter((node): node is Extract<Template['nodes'][string], { kind: 'script' }> => node.kind === 'script')
+    .map((node) => ({
+      nodeId: node.id,
+      scriptRef: node.scriptRef,
+      accountAliases: { github: 'profile-bot' },
+    }));
+  return routeDecisionFromCompiledPlan(compileExecutionPlan({
+    selection: {
+      playbookId: 'pb',
+      pipelineId: template.pipelineId,
+      pipelineRowId: `pb-${template.pipelineId}`,
+      source: 'explicit',
+    },
+    businessParams: {},
+    profile: { source: 'inline', profileHash: `sha256:${'0'.repeat(64)}` },
+    pipeline: {
+      executableGraph: template,
+      graphDigest: hashTemplate(template),
+      materializerVersion: 'test',
+      policyVersion: 'test',
+      routeGates: [],
+      executionPolicy: { template_json: template },
+    },
+    agentBindings,
+    scriptBindings,
+  }));
 }
 
-/** A route binding the data-driven feature template's roleRefs/scriptRef resolve against. */
-function makeRoute(options: { developerRunnerId?: string; integratorRunnerId?: string } = {}): RouteDecision {
-  return {
-    playbookId: 'pb',
-    pipelineId: 'feature-development-dd',
-    pipelineRowId: 'row',
-    source: 'explicit',
-    roles: ['analyst', 'developer', 'reviewer', 'triager', 'integrator', 'watcher'],
-    requiredRoles: ['analyst', 'developer', 'reviewer', 'triager', 'integrator', 'watcher'],
-    optionalRoles: [],
-    routeGates: ['plan', 'merge'],
-    executionPolicy: {},
-    launchBindings: [],
-    roleBindings: [
-      binding('analyst'),
-      binding('developer', options.developerRunnerId ?? 'claude-code'),
-      binding('reviewer'),
-      binding('triager'),
-      binding('integrator', options.integratorRunnerId ?? 'script'),
-      binding('watcher'),
-    ],
-    params: {},
-  };
-}
 
 function defaultConsensusProfileTemplate(): Template {
   const pipeline = defaultPlaybookPipelines.find((candidate) => candidate.id === 'feature-development');
   assert.ok(pipeline, 'bundled feature-development pipeline exists');
   const base = templateFromExecutionPolicy(pipeline.execution_policy);
   assert.ok(base, 'bundled feature-development carries a valid template_json');
-  const profile = defaultPlaybookRunProfiles.find((candidate) => candidate.id === 'codex-primary-claude-review-consensus');
+  const profile = defaultPlaybookRunProfiles.find((candidate) => candidate.id === 'codex-gpt-5-6-luna-claude-opus-4-8-consensus');
   assert.ok(profile, 'bundled consensus run profile exists');
   const { template } = materializeTemplate(
     base,
@@ -98,39 +128,6 @@ function defaultConsensusProfileTemplate(): Template {
     { allowlist: ['planReviewer', 'codeReview'] },
   );
   return template;
-}
-
-function codexBinding(roleId: string): RouteRoleBinding {
-  if (roleId === 'integrator') {
-    return { roleId, rowId: roleId, modelLevel: 'standard', runnerId: 'script', resolvedRunnerId: 'script', runnerSource: 'playbook' };
-  }
-  return { roleId, rowId: roleId, modelLevel: 'codex-standard', runnerId: 'claude-code', resolvedRunnerId: 'codex', runnerSource: 'profile' };
-}
-
-function makeConsensusProfileRoute(): RouteDecision {
-  const roles = [
-    'orchestrator',
-    'analyst',
-    'reviewer',
-    'triager',
-    'developer',
-    'integrator',
-    'watcher',
-  ];
-  return {
-    playbookId: 'revisium-default',
-    pipelineId: 'feature-development',
-    pipelineRowId: 'revisium-default-feature-development',
-    source: 'explicit',
-    roles,
-    requiredRoles: roles,
-    optionalRoles: [],
-    routeGates: ['plan', 'merge'],
-    executionPolicy: {},
-    launchBindings: [],
-    roleBindings: roles.map(codexBinding),
-    params: {},
-  };
 }
 
 type Recorder = {
@@ -192,7 +189,6 @@ function buildAdapter(opts: {
   respondThreads?: (input: IntegratorInput) => RespondThreadsOutput | IntegratorBlocked | Promise<RespondThreadsOutput | IntegratorBlocked>;
   /** Exact per-node result override for invalid-result contract tests. */
   results?: Record<string, AttemptResult | AttemptResult[]>;
-  route?: RouteDecision;
   retryPolicy?: RunnerTransientRetryPolicy;
   onSleep?: (ms: number) => void | Promise<void>;
   issueRef?: IssueRef;
@@ -234,7 +230,7 @@ function buildAdapter(opts: {
     _role: string,
     stepKey: string,
     input: unknown,
-    _resolvedRunnerId?: string,
+    _binding: ResolvedAgentBinding,
     physicalAttempt?: { attemptNo: number; attemptId: string },
     acceptedVerdicts?: readonly string[],
   ): Promise<AttemptResult> => {
@@ -373,12 +369,12 @@ function buildAdapter(opts: {
     },
   };
 
-  const fn = makeDataDrivenTask(runStepFn, deps);
   const template = opts.template ?? featureDevelopment();
+  const fn = makeDataDrivenTask(runStepFn, deps);
+  const route = exactRouteForTemplate(template);
   return {
     run: () => fn(RUN_ID, {
-      route: opts.route ?? makeRoute(),
-      template,
+      route,
       runnerRetryPolicy: opts.retryPolicy ?? resolveRunnerTransientRetryPolicy(),
     }),
     rec,
@@ -629,7 +625,6 @@ test('DD-issue-279: override refused on trusted gate head mismatch never calls c
   };
   const { run, rec } = buildAdapter({
     template: defaultConsensusProfileTemplate(),
-    route: makeConsensusProfileRoute(),
     verdicts: {
       planReviewPrimary: 'approved',
       planReviewSecondary: 'approved',
@@ -751,17 +746,8 @@ test('gate summaries preserve the latest produced artifact across non-producing 
 });
 
 test('DD-parallel: fork executes both reviewer branches and feeds two join arrivals', async () => {
-  const route = {
-    ...makeRoute(),
-    pipelineId: 'parallel-consensus',
-    requiredRoles: ['reviewer'],
-    roles: ['reviewer'],
-    routeGates: [],
-    roleBindings: [binding('reviewer')],
-  };
   const { run, rec } = buildAdapter({
     template: parallelConsensusTemplate(),
-    route,
     verdicts: { primaryReview: 'approved', secondaryReview: 'approved' },
   });
 
@@ -790,17 +776,8 @@ test('DD-parallel: fork executes both reviewer branches and feeds two join arriv
 });
 
 test('DD-parallel: consensus passes when reviewers return approved plus clean', async () => {
-  const route = {
-    ...makeRoute(),
-    pipelineId: 'parallel-consensus',
-    requiredRoles: ['reviewer'],
-    roles: ['reviewer'],
-    routeGates: [],
-    roleBindings: [binding('reviewer')],
-  };
   const { run, rec } = buildAdapter({
     template: parallelConsensusTemplate(),
-    route,
     verdicts: { primaryReview: 'approved', secondaryReview: 'clean' },
   });
 
@@ -819,17 +796,8 @@ test('DD-parallel: consensus passes when reviewers return approved plus clean', 
 });
 
 test('DD-parallel: branch without a verdict does not inherit the pre-fork verdict', async () => {
-  const route = {
-    ...makeRoute(),
-    pipelineId: 'parallel-consensus-after-pre-approved',
-    requiredRoles: ['reviewer'],
-    roles: ['reviewer'],
-    routeGates: [],
-    roleBindings: [binding('reviewer')],
-  };
   const { run, rec } = buildAdapter({
     template: parallelConsensusAfterPreApprovedTemplate(),
-    route,
     verdicts: { precheck: 'approved', primaryReview: 'approved' },
   });
 
@@ -868,17 +836,8 @@ test('DD-parallel: consensus blocks when either reviewer is non-approved, regard
   ];
 
   for (const c of cases) {
-    const route = {
-      ...makeRoute(),
-      pipelineId: 'parallel-consensus',
-      requiredRoles: ['reviewer'],
-      roles: ['reviewer'],
-      routeGates: [],
-      roleBindings: [binding('reviewer')],
-    };
     const { run, rec } = buildAdapter({
       template: parallelConsensusTemplate(),
-      route,
       verdicts: c.verdicts,
     });
 
@@ -897,17 +856,8 @@ test('DD-parallel: consensus blocks when either reviewer is non-approved, regard
 });
 
 test('DD-parallel: consensus blocks when both reviewers are non-approved', async () => {
-  const route = {
-    ...makeRoute(),
-    pipelineId: 'parallel-consensus',
-    requiredRoles: ['reviewer'],
-    roles: ['reviewer'],
-    routeGates: [],
-    roleBindings: [binding('reviewer')],
-  };
   const { run, rec } = buildAdapter({
     template: parallelConsensusTemplate(),
-    route,
     verdicts: { primaryReview: 'changes_requested', secondaryReview: 'blocker' },
   });
 
@@ -928,7 +878,6 @@ test('DD-parallel: consensus blocks when both reviewers are non-approved', async
 test('DD-default-codex: plan consensus reworks when one reviewer is non-approved, then proceeds after both pass', async () => {
   const { run, rec } = buildAdapter({
     template: defaultConsensusProfileTemplate(),
-    route: makeConsensusProfileRoute(),
     verdicts: {
       planReviewPrimary: ['changes_requested', 'approved'],
       planReviewSecondary: ['approved', 'clean'],
@@ -953,7 +902,6 @@ test('DD-default-codex: plan consensus reworks when one reviewer is non-approved
 test('DD-default-codex: code consensus reworks when one reviewer is non-approved, then integrates after both pass', async () => {
   const { run, rec } = buildAdapter({
     template: defaultConsensusProfileTemplate(),
-    route: makeConsensusProfileRoute(),
     verdicts: {
       planReviewPrimary: 'approved',
       planReviewSecondary: 'approved',
@@ -977,7 +925,6 @@ test('DD-default-codex: code consensus reworks when one reviewer is non-approved
 test('DD-default-codex: repeated plan consensus failures hit planStuckGate at the cap', async () => {
   const { run, rec } = buildAdapter({
     template: defaultConsensusProfileTemplate(),
-    route: makeConsensusProfileRoute(),
     verdicts: {
       planReviewPrimary: 'changes_requested',
       planReviewSecondary: 'approved',
@@ -1000,7 +947,6 @@ test('DD-default-codex: codeStuckGate rework runs bounded recovery then returns 
   let planTopicGates = 0;
   const { run, rec } = buildAdapter({
     template: defaultConsensusProfileTemplate(),
-    route: makeConsensusProfileRoute(),
     verdicts: {
       planReviewPrimary: 'approved',
       planReviewSecondary: 'approved',
@@ -1044,7 +990,6 @@ test('DD-default-codex: failed stuck rework routes to final stuck gate without a
   let planTopicGates = 0;
   const { run, rec } = buildAdapter({
     template: defaultConsensusProfileTemplate(),
-    route: makeConsensusProfileRoute(),
     verdicts: {
       planReviewPrimary: 'approved',
       planReviewSecondary: 'approved',
@@ -1558,7 +1503,6 @@ test('issueRef: run context overrides mismatched produced change issueRef before
     .build();
   const { run, rec } = buildAdapter({
     template: tmpl,
-    route: makeRoute({ developerRunnerId: 'script', integratorRunnerId: 'script' }),
     issueRef: runIssueRef,
     results: {
       developer: {
@@ -1610,7 +1554,6 @@ test('issueRef: no-issue run strips produced change issueRef before integrator h
     .build();
   const { run, rec } = buildAdapter({
     template: tmpl,
-    route: makeRoute({ developerRunnerId: 'script', integratorRunnerId: 'script' }),
     results: {
       developer: {
         output: { from: 'developer', change: stubChange },
@@ -1659,7 +1602,6 @@ test('DD4a-issue-140: produced change metadata reaches the live integrator witho
     .build();
   const { run, rec } = buildAdapter({
     template: tmpl,
-    route: makeRoute({ developerRunnerId: 'script', integratorRunnerId: 'script' }),
     results: {
       developer: {
         output: { from: 'developer', change: stubChange },
@@ -2462,10 +2404,6 @@ test('DD5d: the adapter threads the active template accepted-verdict domain to e
 test('DD5e: a narrow single-token domain (local-change) reaches the agent step verbatim (issue #207)', async () => {
   const { run, rec } = buildAdapter({
     template: localChange(),
-    route: {
-      ...makeRoute(),
-      roleBindings: [binding('orchestrator', 'claude-code'), binding('developer', 'claude-code')],
-    },
     verdicts: { orchestrator: 'approved', developer: 'approved' },
   });
 
@@ -2882,20 +2820,6 @@ test('plain featureDevelopment (no cleanupWorktree) succeeded run does NOT relea
   assert.ok(!rec.events.includes('worktree_release:pipeline'), 'no release without an explicit cleanupWorktree node');
 });
 
-// ─── launchOverrides dispatch tests ──────────────────────────────────────────
-
-function bindingWithOverride(roleId: string, overrides: Partial<RouteRoleBinding> = {}): RouteRoleBinding {
-  return {
-    roleId,
-    rowId: roleId,
-    modelLevel: 'standard',
-    runnerId: 'claude-code',
-    resolvedRunnerId: 'script',
-    runnerSource: 'playbook',
-    ...overrides,
-  };
-}
-
 function makeMinimalDeps(): DataDrivenTaskDeps {
   return {
     appendEvent: async () => {},
@@ -2928,85 +2852,35 @@ function makeMinimalDeps(): DataDrivenTaskDeps {
   };
 }
 
-// localChange() template needs orchestrator + developer bindings.
-function makeLocalChangeRoute(developerBindingOverrides: Partial<RouteRoleBinding> = {}): RouteDecision {
-  return {
-    playbookId: 'pb',
-    pipelineId: 'local-change',
-    pipelineRowId: 'row',
-    source: 'explicit',
-    roles: ['orchestrator', 'developer'],
-    requiredRoles: ['orchestrator', 'developer'],
-    optionalRoles: [],
-    routeGates: [],
-    executionPolicy: {},
-    launchBindings: [],
-    roleBindings: [
-      bindingWithOverride('orchestrator'),
-      bindingWithOverride('developer', developerBindingOverrides),
-    ],
-    params: {},
-  };
-}
-
-test('dispatch: launchOverrides forwarded to runStepFn when binding has profile source', async () => {
-  const capturedLaunchOverrides = new Map<string, LaunchOverrides | undefined>();
-
+test('dispatch: runStepFn receives the exact pinned model binding for each agent node', async () => {
+  const capturedBindings = new Map<string, ResolvedAgentBinding>();
   const runStepFn = async (
     _runId: string,
     _role: string,
     stepKey: string,
     _input: unknown,
-    _resolvedRunnerId?: string,
+    binding: ResolvedAgentBinding,
     _physicalAttempt?: { attemptNo: number; attemptId: string },
     _acceptedVerdicts?: readonly string[],
-    launchOverrides?: LaunchOverrides,
   ): Promise<AttemptResult> => {
-    capturedLaunchOverrides.set(stepKey, launchOverrides);
+    capturedBindings.set(stepKey, binding);
     return { output: { from: stepKey }, verdict: 'approved', nextSteps: [], costs: [] };
   };
 
-  const route = makeLocalChangeRoute({
-    resolvedModelLevel: 'cheap',
-    modelSource: 'profile',
-    resolvedTimeoutMs: 60000,
-    timeoutSource: 'profile',
+  const fn = makeDataDrivenTask(runStepFn, makeMinimalDeps());
+  await fn(RUN_ID, {
+    route: exactRouteForTemplate(localChange()),
+    runnerRetryPolicy: resolveRunnerTransientRetryPolicy(),
   });
-  route.launchBindings = [{ match: { roleId: 'developer' }, modelLevel: 'cheap', timeoutMs: 60000 }];
 
-  const fn = makeDataDrivenTask(runStepFn, makeMinimalDeps());
-  await fn(RUN_ID, { route, template: localChange(), runnerRetryPolicy: resolveRunnerTransientRetryPolicy() });
-
-  const developerLaunchOverrides = capturedLaunchOverrides.get('developer');
-  assert.ok(developerLaunchOverrides !== undefined, 'launchOverrides were passed to runStepFn for developer');
-  assert.equal(developerLaunchOverrides?.modelLevel, 'cheap');
-  assert.equal(developerLaunchOverrides?.timeoutMs, 60000);
-  assert.equal(developerLaunchOverrides?.permissionMode, undefined);
-});
-
-test('dispatch: no launchOverrides when binding has only playbook sources', async () => {
-  const capturedLaunchOverrides = new Map<string, LaunchOverrides | undefined>();
-
-  const runStepFn = async (
-    _runId: string,
-    _role: string,
-    stepKey: string,
-    _input: unknown,
-    _resolvedRunnerId?: string,
-    _physicalAttempt?: { attemptNo: number; attemptId: string },
-    _acceptedVerdicts?: readonly string[],
-    launchOverrides?: LaunchOverrides,
-  ): Promise<AttemptResult> => {
-    capturedLaunchOverrides.set(stepKey, launchOverrides);
-    return { output: { from: stepKey }, verdict: 'approved', nextSteps: [], costs: [] };
-  };
-
-  const route = makeLocalChangeRoute();
-  const fn = makeDataDrivenTask(runStepFn, makeMinimalDeps());
-  await fn(RUN_ID, { route, template: localChange(), runnerRetryPolicy: resolveRunnerTransientRetryPolicy() });
-
-  const developerLaunchOverrides = capturedLaunchOverrides.get('developer');
-  assert.equal(developerLaunchOverrides, undefined, 'no launchOverrides for playbook-only binding');
+  const developerBinding = capturedBindings.get('developer');
+  assert.ok(developerBinding);
+  assert.equal(developerBinding.runnerId, 'codex');
+  assert.equal(developerBinding.provider, 'openai');
+  assert.equal(developerBinding.modelId, 'gpt-5.6-luna');
+  assert.deepEqual(developerBinding.modelParams, {});
+  assert.equal(developerBinding.permissionMode, 'workspace-write');
+  assert.equal(developerBinding.slotKey, 'node:developer');
 });
 
 // ─── reverify-path tests: AC#2 (stale/unmergeable at mergeApproveReverify → recovery) ───────────
@@ -3169,7 +3043,6 @@ test('DD-reverify-profile-consensus: blocked at mergeApproveReverify → recover
   let pollCount = 0;
   const { run, rec } = buildAdapter({
     template: defaultConsensusProfileTemplate(),
-    route: makeConsensusProfileRoute(),
     verdicts: { codeReview: 'approved', planReview: 'approved' },
     gate: (_topic, gateKey) => gateKey.startsWith('recoveryGate') ? { outcome: 'cancel' } : { decision: 'approve' },
     pollPr: (): PrFeedback | IntegratorBlocked => {

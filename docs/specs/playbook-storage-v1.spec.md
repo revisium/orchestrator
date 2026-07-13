@@ -60,8 +60,6 @@ The role catalog parser currently requires:
 - `surface`
 - `rights`
 - `allowed_tools`
-- `default_model_level`
-- `runner_id`
 - optional `wrappers`
 
 The pipeline catalog parser currently requires:
@@ -69,16 +67,13 @@ The pipeline catalog parser currently requires:
 - `id`
 - `path`
 - `triggers`
-- `required_roles`
-- `alternative_roles`
-- `optional_roles`
 - `route_gates`
 - `platform_invocation`
 - optional `execution_policy`
 
-The importer validates unique role ids, unique pipeline ids, catalog path containment, referenced pipeline role ids,
-allowed model-level ids, and production-blocked runner ids. It composes a role `system_prompt` from the role source
-and a sibling `references/core.md` when present.
+The importer validates unique role ids, unique pipeline ids, catalog path containment, and executable graph policy.
+It composes a role `system_prompt` from the role source and a sibling `references/core.md` when present. Launch
+identity is supplied by `run-profile/v1`, not by role or pipeline catalog metadata.
 
 The current contract does not store full source documents, stack references, shared references, method docs,
 templates, checklists, route-time selected references, or a complete immutable snapshot.
@@ -208,8 +203,6 @@ type PlaybookRole = {
   surface: string;
   rights: string;
   allowedTools: string[];
-  defaultModelLevel: string;
-  runnerId: string;
   wrapperPaths: Record<string, string>;
   coreReferenceDocumentId?: string;
 };
@@ -228,13 +221,6 @@ type PlaybookPipeline = {
   documentId: string;
   path: string;
   triggers: string[];
-  requiredRoles: string[];
-  alternativeRoles: Array<{
-    groupId: string;
-    roles: string[];
-    resolution: string;
-  }>;
-  optionalRoles: string[];
   routeGates: string[];
   platformInvocation: string;
   executionPolicyJson: string;
@@ -245,8 +231,9 @@ type PlaybookPipeline = {
 };
 ```
 
-Every role id referenced by `requiredRoles`, `alternativeRoles`, or `optionalRoles` MUST resolve to a `PlaybookRole`
-inside the same `PlaybookVersion`.
+Every graph `roleRef` in a launchable pipeline MUST resolve to a `PlaybookRole` inside the same `PlaybookVersion`.
+Graph `scriptRef` values are validated as script obligations. The pipeline does not declare an independent launch-role
+list.
 
 Every script and artifact-schema reference MUST resolve inside the same `PlaybookVersion`. The installed
 projection above is a compiler output contract; it does not freeze the exact next authoring catalog JSON fields.
@@ -302,9 +289,7 @@ type PlaybookRelation = {
   sourceKind: string;
   sourceId: string;
   relationType:
-    | "requires_role"
-    | "alternative_role"
-    | "optional_role"
+    | "uses_role"
     | "has_document"
     | "has_core_reference"
     | "has_shared_reference"
@@ -325,8 +310,8 @@ When `required` is true, the importer MUST validate that the target exists in th
 SHOULD still be validated when the target is present.
 
 Relations are a query/index aid. Entity projections remain the source of truth for fields that require structure,
-such as `PlaybookPipeline.alternativeRoles[].groupId` and `resolution`. A relation MAY duplicate that data in
-`metadataJson`, but readers MUST NOT rely on relations alone to reconstruct pipeline semantics.
+such as executable graph nodes and their `roleRef`/`scriptRef` values. A relation MAY duplicate that data in
+`metadataJson`, but readers MUST NOT rely on relations alone to reconstruct pipeline semantics or launch authority.
 
 ### Canonical roots
 
@@ -397,9 +382,7 @@ Storage validation MUST cover:
 - pipeline role references resolve inside the same snapshot;
 - required script definitions and artifact schemas resolve inside the same snapshot;
 - graph script and dataflow declarations agree with the installed typed projections;
-- `default_model_level` remains in the allowed portable or Codex model-level vocabulary;
-- production role catalog rows do not bind `runner_id` to `stub-agent`;
-- role frontmatter matches catalog id, surface, rights, default model level, and runner id when present;
+  - role frontmatter matches catalog id, surface, rights, and meaning fields when present;
 - stack references listed in `STACK.md` resolve inside the stack directory when the stack root exists;
 - markdown links that point inside canonical roots resolve or are explicitly marked optional;
 - `contentTreeHash` and `snapshotHash` are deterministic across repeated imports of identical content.

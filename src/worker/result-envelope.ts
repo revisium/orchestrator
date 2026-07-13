@@ -39,7 +39,7 @@ export function structuredResultNote(acceptedVerdicts?: readonly string[]): stri
 Return your final answer as JSON matching the provided output schema:
 - "verdict": the single routing token for your role (lowercase), exactly one of: ${verdictMenu(acceptedVerdicts)}. Use no other token.
 - "output": a short summary, or — if you produce an artifact for a later step (e.g. an implementation plan) — that artifact.
-- "nextSteps": [] unless you are explicitly creating legacy follow-up steps.
+- "nextSteps": [] unless you are explicitly creating follow-up steps.
 Set "needsHuman": true only if you are blocked and a human must intervene.
 `;
 }
@@ -87,6 +87,7 @@ export type TransportEnvelope = {
   costUsd?: number;
   inputTokens?: number;
   outputTokens?: number;
+  currency?: string;
 
   structuredOutput?: unknown;
 };
@@ -138,6 +139,7 @@ export function parseTransportEnvelope(stdout: string): TransportEnvelope {
     costUsd: readNumber(obj.total_cost_usd) ?? readNumber(obj.cost_usd),
     inputTokens: readNumber(usage?.input_tokens),
     outputTokens: readNumber(usage?.output_tokens),
+    currency: readNonEmptyString(obj.currency) ?? readNonEmptyString(usage?.currency),
     structuredOutput: obj.structured_output,
   };
 }
@@ -194,10 +196,6 @@ export function normalizeNextSteps(raw: unknown[], step: Step): NewStepSpec[] {
       role: e.role,
       kind: e.kind,
       input: e.input,
-      modelProfile:
-        typeof e.modelProfile === 'string' && e.modelProfile.length > 0
-          ? e.modelProfile
-          : step.modelProfile,
     };
     if (typeof e.priority === 'number') spec.priority = e.priority;
     if (typeof e.maxAttempts === 'number') spec.maxAttempts = e.maxAttempts;

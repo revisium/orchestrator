@@ -67,8 +67,8 @@ function mutateTemplate(mutator: (template: MutableTemplate) => void): Template 
 }
 
 function materializedConsensusProfile(): Template {
-  const profile = runProfiles.find((item) => item.id === 'codex-primary-claude-review-consensus');
-  assert.ok(profile, 'codex-primary-claude-review-consensus profile exists');
+  const profile = runProfiles.find((item) => item.id === 'codex-gpt-5-6-luna-claude-opus-4-8-consensus');
+  assert.ok(profile, 'codex-gpt-5-6-luna-claude-opus-4-8-consensus profile exists');
   return materializedProfile(profile);
 }
 

@@ -35,10 +35,10 @@ test('M0: the shipped catalog contains valid default pipeline templates and seed
       .map((profile) => profile.id)
       .sort(),
     [
-      'claude-primary-codex-review-consensus',
-      'claude-standard',
-      'codex-primary-claude-review-consensus',
-      'codex-standard',
+      'claude-opus-4-8-codex-gpt-5-6-luna-consensus',
+      'claude-opus-4-8-sonnet-4-6',
+      'codex-gpt-5-6-luna',
+      'codex-gpt-5-6-luna-claude-opus-4-8-consensus',
     ],
   );
 });

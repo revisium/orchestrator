@@ -17,14 +17,22 @@ import type {
   WatchAgentOutputInput,
 } from '../observability/types.js';
 import { ControlPlaneError } from '../control-plane/errors.js';
-import { VALID_MODEL_LEVELS } from '../control-plane/definitions.js';
+import {
+  compileExecutionPlan,
+  resolveGraphBindings,
+  resolveProfileSource,
+  validateRunProfile,
+  RunProfileContractError,
+  type GraphExecutableNode,
+  type RunProfile,
+} from '../control-plane/run-profile-contract.js';
 import type { InboxItem } from '../control-plane/inbox.js';
 import { validateManualAdoptionAudit, type ManualAdoptionAuditInput } from '../control-plane/manual-adoption-audit.js';
 import { validateMergeOverrideAudit, type MergeOverrideAuditInput } from '../control-plane/merge-override-audit.js';
 import { fnv1a64Hex } from '../control-plane/steps.js';
+import { aggregateReportedUsage } from '../control-plane/usage-aggregation.js';
 import { POLICY_VERSION } from '../control-plane/default-playbook-policy.js';
 import {
-  launchBindingsFromRunProfile,
   runProfileHash,
   topologyProfileFromRunProfile,
   topologyStageTargetsFromRunProfile,
@@ -33,30 +41,25 @@ import { materializeTemplate, MATERIALIZER_VERSION } from '../pipeline-core/mate
 import type { Template } from '../pipeline-core/types.js';
 import { DbosService } from '../engine/dbos.service.js';
 import type { GateTopic } from '../pipeline/await-human.js';
-import { PipelineService, type RunnerMode } from '../pipeline/pipeline.service.js';
+import { PipelineService } from '../pipeline/pipeline.service.js';
 import { INTEGRATOR_PROGRESS_EVENT_TYPES, RUN_PROGRESS_EVENT_KEY, type DataDrivenProgressCursor } from '../pipeline/data-driven-task.workflow.js';
 import { templateFromExecutionPolicy } from '../pipeline/data-driven-template.js';
 import {
   normalizeParams,
   normalizeRouteGates,
-  resolveBindingForRole,
-  resolveRunnerForRole,
-  RUNNER_PERMISSION_MODES,
-  type BindingOverride,
   type RouteDecision,
-  type RouteRoleBinding,
+  routeDecisionFromCompiledPlan,
+  executionPlanFromRouteDecision,
 } from '../pipeline/route-contract.js';
-import { assertValidInlineRunProfile } from '../playbook/catalog-schema-validator.js';
 import { InboxService } from '../revisium/inbox.service.js';
 import { PlaybooksService } from '../revisium/playbooks.service.js';
 import type {
   CreateRunProfileInput,
   DeprecateRunProfileInput,
   PipelineSummary,
-  RunProfileSummary,
   UpdateRunProfileInput,
 } from '../revisium/playbooks.service.js';
-import { RolesService, type RoleSummary } from '../revisium/roles.service.js';
+import { RolesService } from '../revisium/roles.service.js';
 import { RunService } from '../revisium/run.service.js';
 import {
   CreateRunWorkflowError,
@@ -67,6 +70,7 @@ import {
 import type { AttemptSummary, EventSummary } from '../run/inspect-run.js';
 import type { IssueRef } from '../run/issue-ref.js';
 import { PrReadinessService, type GetPrReadinessInput } from './pr-readiness.service.js';
+import { runnerManifests } from '../runners/runner-manifest.js';
 
 const execFileAsync = promisify(execFile);
 const GATE_TOPICS = new Set<string>(['plan', 'merge', 'question', 'retry']);
@@ -79,10 +83,6 @@ export const WORKFLOW_PROGRESS_EVENT_TYPES = new Set<string>([
   'pr_polled',
   ...INTEGRATOR_PROGRESS_EVENT_TYPES,
 ]);
-const BUILTIN_RUNNERS = new Set(['claude-code', 'codex', 'script', 'stub-agent']);
-
-export type RunnerModeInput = RunnerMode;
-
 export type RepositoryValidation = {
   input: string;
   path: string;
@@ -333,15 +333,8 @@ function pathDirectoryState(path: string): { exists: boolean; isDirectory: boole
   }
 }
 
-function summarizeAttempts(attempts: Array<{ inputTokens: number; outputTokens: number; costAmount: number }>) {
-  return attempts.reduce(
-    (acc, attempt) => ({
-      inputTokens: acc.inputTokens + attempt.inputTokens,
-      outputTokens: acc.outputTokens + attempt.outputTokens,
-      costAmount: acc.costAmount + attempt.costAmount,
-    }),
-    { inputTokens: 0, outputTokens: 0, costAmount: 0 },
-  );
+function summarizeAttempts(attempts: AttemptSummary[]) {
+  return aggregateReportedUsage(attempts);
 }
 
 function normalizedRunStatus(status: string): string {
@@ -471,8 +464,20 @@ function recoverableStartRunResponse(runId: string, route: RouteDecision, recove
     blockedEventId: recoverable.blockedEventId,
     blockedReason: recoverable.reason,
     workflowStatus: recoverable.workflowStatus,
-    route,
+    route: publicRouteDecision(route),
     engine: 'data-driven' as const,
+  };
+}
+
+/**
+ * Expose the decoded plan only as a read-only transport projection. The stored
+ * route remains the canonical bytes/digest pair; callers never get a second
+ * execution authority to feed back into the workflow.
+ */
+function publicRouteDecision(route: RouteDecision) {
+  return {
+    ...route,
+    executionPlan: executionPlanFromRouteDecision(route),
   };
 }
 
@@ -515,7 +520,9 @@ function mapAttemptForWorkflow(runId: string, attempt: AttemptSummary) {
     iteration: attempt.iteration,
     status: attempt.status,
     verdict: attempt.verdict,
-    modelProfile: attempt.modelProfile,
+    runnerId: attempt.runnerId,
+    provider: attempt.provider,
+    modelId: attempt.modelId,
     inputTokens: attempt.inputTokens,
     outputTokens: attempt.outputTokens,
     costAmount: attempt.costAmount,
@@ -627,24 +634,36 @@ function routeScore(pipeline: PipelineSummary, text: string): number {
 
 function isRouteDecision(value: unknown): value is RouteDecision {
   const record = asRecord(value);
-  return Boolean(record?.playbookId && record?.pipelineRowId && Array.isArray(record.roleBindings));
-}
-
-function assertRunnerAvailable(runnerId: string, roleId: string): void {
-  if (!BUILTIN_RUNNERS.has(runnerId)) {
-    throw new ControlPlaneError(
-      'VALIDATION_FAILURE',
-      `runner implementation is not registered for role ${roleId}: ${runnerId}`,
-    );
-  }
-}
-
-function assertProductionRunnerBinding(runnerId: string, runnerSource: RouteRoleBinding['runnerSource'], roleId: string): void {
-  if (runnerId !== 'stub-agent' || runnerSource === 'profile') return;
-  throw new ControlPlaneError(
-    'VALIDATION_FAILURE',
-    `role ${roleId} binds production runner stub-agent; use a run profile binding for test stubs`,
+  return Boolean(
+    record?.schemaVersion === 'route-decision/v1' &&
+    typeof record.executionPlanBytes === 'string' &&
+    typeof record.executionPlanDigest === 'string' &&
+    asRecord(record.projection),
   );
+}
+
+function contractControlPlaneError(error: unknown, context?: string): ControlPlaneError {
+  const contractError = error instanceof RunProfileContractError ? error : undefined;
+  const message = error instanceof Error ? error.message : String(error);
+  return new ControlPlaneError('VALIDATION_FAILURE', context ? `${context}: ${message}` : message, {
+    details: {
+      code: contractError?.code ?? 'profile_schema_invalid',
+      ...(contractError?.path ? { path: contractError.path } : {}),
+    },
+  });
+}
+
+function expandScriptAccountBindings(profile: RunProfile, nodes: GraphExecutableNode[]): RunProfile {
+  const integrator = profile.bindings.slots['node:integrator'];
+  if (!integrator || !('accounts' in integrator) || !integrator.accounts.github) return profile;
+  const slots = { ...profile.bindings.slots };
+  for (const node of nodes) {
+    if (node.kind !== 'script') continue;
+    const slotKey = `node:${node.id}`;
+    if (slots[slotKey] !== undefined) continue;
+    slots[slotKey] = { accounts: { github: integrator.accounts.github } };
+  }
+  return { ...profile, bindings: { slots } };
 }
 
 @Injectable()
@@ -784,7 +803,6 @@ export class TaskControlPlaneApiService {
     role?: string;
     start?: boolean;
 
-    runnerMode?: RunnerModeInput;
   }) {
     const route = await this.resolveRouteDecision({
       title: input.title,
@@ -800,29 +818,30 @@ export class TaskControlPlaneApiService {
       issueAction: input.issueAction,
       source: 'explicit',
     });
+    const plan = executionPlanFromRouteDecision(route);
+    const publicRoute = publicRouteDecision(route);
     const result = await this.runs.createRun({
       title: input.title,
       repo: input.repo,
       description: input.description,
       scope: input.scope,
       priority: input.priority ?? 0,
-      role: route.roleBindings[0]?.rowId ?? input.role ?? 'architect',
-      playbookId: route.playbookId,
-      pipelineId: route.pipelineId,
-      params: route.params,
-      issueRef: route.params.issueRef,
+      role: route.projection.roles[0] ?? input.role ?? '',
+      playbookId: route.projection.playbookId,
+      pipelineId: route.projection.pipelineId,
+      params: plan.businessParams,
+      issueRef: plan.businessParams.issueRef,
       routeDecision: route,
     });
-    if (!input.start) return { ...result, started: false, route };
+    if (!input.start) return { ...result, started: false, route: publicRoute };
     const started = await this.startRun({
       runId: result.runId,
-      runnerMode: input.runnerMode,
       route,
     });
-    return { ...result, started: true, workflow: started };
+    return { ...result, started: true, route: publicRoute, workflow: started };
   }
 
-  async startRun(input: { runId: string; runnerMode?: RunnerModeInput; route?: RouteDecision }) {
+  async startRun(input: { runId: string; route?: RouteDecision }) {
     const run = await this.runs.getRun(input.runId);
     if (!run) throw new ControlPlaneError('ROW_NOT_FOUND', `run not found: ${input.runId}`);
     const existingStatus = await this.dbos.getWorkflowStatus(input.runId);
@@ -830,25 +849,27 @@ export class TaskControlPlaneApiService {
     const recoverable = await this.detectRecoverablePreflightBlock(input.runId, run.data.status, existingStatus);
     if (recoverable) return recoverableStartRunResponse(input.runId, route, recoverable);
 
-    const template = templateFromExecutionPolicy(route.executionPolicy);
-    if (!template) {
+    const plan = executionPlanFromRouteDecision(route);
+    if (!templateFromExecutionPolicy(plan.pipeline.executionPolicy)) {
       throw new ControlPlaneError(
         'VALIDATION_FAILURE',
-        `PIPELINE_NOT_DATA_DRIVEN: pipeline ${route.pipelineId} carries no state-machine template ` +
+        `PIPELINE_NOT_DATA_DRIVEN: pipeline ${route.projection.pipelineId} carries no state-machine template ` +
           `(execution_policy.template_json); the data-driven engine is the only engine`,
       );
     }
-    const handle = await this.pipeline.startDataDrivenTask(input.runId, { route, template });
+    const handle = await this.pipeline.startDataDrivenTask(input.runId, {
+      route,
+    });
     return {
       runId: input.runId,
       workflowID: handle.workflowID,
       alreadyStarted: existingStatus !== null,
-      route,
+      route: publicRouteDecision(route),
       engine: 'data-driven' as const,
     };
   }
 
-  async resumeRun(input: { runId: string; runnerMode?: RunnerModeInput }) {
+  async resumeRun(input: { runId: string }) {
     const run = await this.runs.getRun(input.runId);
     if (!run) throw new ControlPlaneError('ROW_NOT_FOUND', `run not found: ${input.runId}`);
     const workflow = await this.dbos.getWorkflowStatus(input.runId);
@@ -858,7 +879,6 @@ export class TaskControlPlaneApiService {
     const recovery = await this.createOrReusePreflightRecoveryRun(input.runId, run.data, recoverable.blockedEvent);
     const started = await this.startRun({
       runId: recovery.recoveryRunId,
-      runnerMode: input.runnerMode,
     });
     return {
       ...started,
@@ -1044,7 +1064,9 @@ export class TaskControlPlaneApiService {
     ]);
     if (!runRow) throw new ControlPlaneError('ROW_NOT_FOUND', `run not found: ${runId}`);
     const route = await this.routeForRun(runRow);
-    const template = templateFromExecutionPolicy(route.executionPolicy);
+    const plan = executionPlanFromRouteDecision(route);
+    const projection = route.projection;
+    const template = templateFromExecutionPolicy(plan.pipeline.executionPolicy);
     const activeIds = activeNodeIds(progress);
     const active = new Set(activeIds);
     const succeeded = new Set(
@@ -1083,9 +1105,10 @@ export class TaskControlPlaneApiService {
       const record = node as typeof node & { roleRef?: string; scriptRef?: string };
       const nodeAttempts = attemptsByBase.get(node.id) ?? [];
       const roleId = roleFromRef(record.roleRef);
-      const binding = roleId ? route.roleBindings.find((item) => item.roleId === roleId) : undefined;
+      const binding = plan.agentBindings.find((item) => item.nodeId === node.id);
       const isActive = active.has(node.id);
       const gate = inboxByNode.get(node.id);
+      const usage = aggregateReportedUsage(nodeAttempts);
       const status = workflowNodeStatus({
         gate,
         failed: failed.has(node.id),
@@ -1098,13 +1121,14 @@ export class TaskControlPlaneApiService {
         kind: node.kind,
         roleId,
         scriptId: scriptFromRef(record.scriptRef),
-        modelLevel: binding?.modelLevel ?? null,
-        runner: binding?.resolvedRunnerId ?? null,
+        runner: binding?.runner.runnerId ?? null,
+        provider: binding?.provider ?? null,
+        modelId: binding?.modelId ?? null,
         status,
         attemptCount: nodeAttempts.length,
-        inputTokens: nodeAttempts.reduce((sum, attempt) => sum + attempt.inputTokens, 0),
-        outputTokens: nodeAttempts.reduce((sum, attempt) => sum + attempt.outputTokens, 0),
-        costAmount: nodeAttempts.reduce((sum, attempt) => sum + attempt.costAmount, 0),
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        costAmount: usage.costAmount,
         verdict: nodeAttempts.at(-1)?.verdict ?? null,
         inboxId: gate?.id ?? null,
         metadata: node,
@@ -1116,24 +1140,25 @@ export class TaskControlPlaneApiService {
         ...mapRunForWorkflow(detail.run),
       },
       pipeline: {
-        id: route.pipelineRowId,
-        pipelineId: route.pipelineId,
-        playbookId: route.playbookId,
-        title: template?.title ?? route.pipelineId,
-        routeGates: route.routeGates,
+        id: projection.pipelineRowId,
+        pipelineId: projection.pipelineId,
+        playbookId: projection.playbookId,
+        title: template?.title ?? projection.pipelineId,
+        routeGates: projection.routeGates,
         activeNodeIds: activeIds,
         status: cursorStatus(progress),
         provenance: Object.fromEntries(
           (
             [
-              ['requestedPipelineId', route.requestedPipelineId],
-              ['basePipelineId', route.basePipelineId],
-              ['profileId', route.profileId],
-              ['profileVersion', route.profileVersion],
-              ['profileHash', route.profileHash],
-              ['materializedTemplateHash', route.materializedTemplateHash],
-              ['materializerVersion', route.materializerVersion],
-              ['policyVersion', route.policyVersion],
+              ['requestedPipelineId', plan.selection.requestedPipelineId],
+              ['basePipelineId', plan.selection.basePipelineId],
+              ['profileId', projection.profileId],
+              ['profileVersion', projection.profileVersion],
+              ['profileHash', projection.profileHash],
+              ['materializedTemplateHash', projection.materializedTemplateHash],
+              ['materializerVersion', plan.pipeline.materializerVersion],
+              ['policyVersion', plan.pipeline.policyVersion],
+              ['executionPlanDigest', route.executionPlanDigest],
             ] as [string, string | undefined][]
           ).filter(([, v]) => v !== undefined),
         ),
@@ -1620,17 +1645,16 @@ export class TaskControlPlaneApiService {
     });
   }
 
-  validateProfile(input: ValidateProfileInput) {
-    return this.validateRunProfileForPipeline(input);
+  async validateProfile(input: ValidateProfileInput) {
+    return publicRouteDecision(await this.validateRunProfileForPipeline(input));
   }
 
   async createProfile(input: CreateProfileInput) {
-    const route = await this.validateRunProfileForPipeline(input);
-    const profile = asRecord(route.profileSnapshot);
-    if (!profile) throw new ControlPlaneError('VALIDATION_FAILURE', 'validated profile snapshot is missing');
+    await this.validateRunProfileForPipeline(input);
+    const profile = validateRunProfile(input.profile) as unknown as Record<string, unknown>;
     return this.playbooks.createRunProfile({
-      playbookId: route.playbookId,
-      pipelineId: route.basePipelineId ?? route.pipelineId,
+      playbookId: input.playbookId,
+      pipelineId: input.pipelineId,
       profileId: input.profileId,
       displayName: input.displayName,
       summary: input.summary,
@@ -1644,15 +1668,14 @@ export class TaskControlPlaneApiService {
     let pipelineId = input.pipelineId;
     let profile: Record<string, unknown> | undefined;
     if (input.profile !== undefined) {
-      const route = await this.validateRunProfileForPipeline({
+      await this.validateRunProfileForPipeline({
         playbookId: input.playbookId,
         pipelineId: input.pipelineId,
         profile: input.profile,
       });
-      playbookId = route.playbookId;
-      pipelineId = route.basePipelineId ?? route.pipelineId;
-      profile = asRecord(route.profileSnapshot) ?? undefined;
-      if (!profile) throw new ControlPlaneError('VALIDATION_FAILURE', 'validated profile snapshot is missing');
+      playbookId = input.playbookId ?? (await this.playbooks.resolvePlaybook()).id;
+      pipelineId = input.pipelineId;
+      profile = validateRunProfile(input.profile) as unknown as Record<string, unknown>;
     } else {
       const playbook = await this.playbooks.resolvePlaybook(input.playbookId);
       const pipeline = await this.playbooks.resolvePipeline({ playbookId: playbook.id, pipelineId: input.pipelineId });
@@ -1688,17 +1711,17 @@ export class TaskControlPlaneApiService {
     return result;
   }
 
-  simulateRoute(input: { title: string; repo?: string; pipeline?: string; profileId?: string; profile?: unknown; playbookId?: string; params?: unknown }) {
+  simulateRoute(input: { title: string; repo?: string; pipelineId: string; profileId?: string; profile?: unknown; playbookId?: string; params?: unknown }) {
     return this.resolveRouteDecision({
       title: input.title,
       repo: input.repo ?? '',
       playbookId: input.playbookId,
-      pipelineId: input.pipeline,
+      pipelineId: input.pipelineId,
       profileId: input.profileId,
       profile: input.profile,
       params: input.params,
       source: 'explicit',
-    });
+    }).then(publicRouteDecision);
   }
 
   async previewPipelineSelection(input: {
@@ -1726,7 +1749,14 @@ export class TaskControlPlaneApiService {
   }
 
   private async routeForRun(run: { data: Record<string, unknown> }): Promise<RouteDecision> {
-    if (isRouteDecision(run.data.route_decision)) return run.data.route_decision;
+    if (isRouteDecision(run.data.route_decision)) {
+      try {
+        executionPlanFromRouteDecision(run.data.route_decision);
+      } catch (error) {
+        throw contractControlPlaneError(error, 'stored execution plan is invalid');
+      }
+      return run.data.route_decision;
+    }
     throw new ControlPlaneError('VALIDATION_FAILURE', 'run route_decision is missing or invalid');
   }
 
@@ -1742,7 +1772,7 @@ export class TaskControlPlaneApiService {
     params?: unknown;
     issueRef?: unknown;
     issueAction?: unknown;
-    source: RouteDecision['source'];
+    source: 'explicit';
   }): Promise<RouteDecision> {
     const params = normalizeParams(input.params, input.issueRef, input.issueAction);
     const playbook = await this.playbooks.resolvePlaybook(input.playbookId);
@@ -1752,63 +1782,68 @@ export class TaskControlPlaneApiService {
       throw new ControlPlaneError('VALIDATION_FAILURE', 'pipelineId is required');
     }
 
-    const hasProfileId = input.profileId !== undefined;
-    const hasInlineProfile = input.profile !== undefined;
-    if (hasProfileId === hasInlineProfile) {
-      throw new ControlPlaneError('VALIDATION_FAILURE', 'exactly one of profileId or profile is required');
-    }
-    if (input.profileId?.trim() === '') {
-      throw new ControlPlaneError('VALIDATION_FAILURE', 'profileId must be a non-empty string');
-    }
-
     const pipeline = await this.playbooks.resolvePipeline({ playbookId: playbook.id, pipelineId: requestedPipelineId });
 
-    let profileSnapshot: Record<string, unknown>;
-    let profileHash: string;
-    let provenanceFields: Partial<RouteDecision>;
+    let resolvedProfile;
+    try {
+      resolvedProfile = await resolveProfileSource(
+        { profileId: input.profileId, profile: input.profile },
+        async (profileId) => {
+          let storedProfile;
+          try {
+            storedProfile = await this.playbooks.resolveRunProfile({
+              playbookId: playbook.id,
+              pipelineId: pipeline.pipelineId,
+              profileId,
+              includeDeprecated: true,
+            });
+          } catch (error) {
+            if (error instanceof ControlPlaneError && error.code === 'ROW_NOT_FOUND') {
+              throw new RunProfileContractError('profile_not_found', `stored run profile ${profileId} was not found`, '/profileId');
+            }
+            throw error;
+          }
+          return {
+            profile: storedProfile.profile,
+            profileId: storedProfile.profileId,
+            profileVersion: storedProfile.version,
+            profileHash: storedProfile.profileHash,
+            pipelineId: storedProfile.pipelineId,
+            schemaVersion: storedProfile.schemaVersion,
+            status: storedProfile.status,
+          };
+        },
+      );
+    } catch (error) {
+      if (error instanceof ControlPlaneError) throw error;
+      throw contractControlPlaneError(error);
+    }
 
-    if (input.profileId !== undefined) {
-      const storedProfile = await this.playbooks.resolveRunProfile({
-        playbookId: playbook.id,
-        pipelineId: pipeline.pipelineId,
-        profileId: input.profileId,
-      });
-      profileSnapshot = storedProfile.profile;
-      this.assertStoredRunProfileValid(storedProfile);
-      profileHash = runProfileHash(profileSnapshot, {
-        pipelineId: storedProfile.pipelineId,
-        schemaVersion: storedProfile.schemaVersion,
-      });
-      if (storedProfile.profileHash !== profileHash) {
-        throw new ControlPlaneError(
-          'VALIDATION_FAILURE',
-          `stored run profile ${storedProfile.profileId} hash mismatch: expected ${storedProfile.profileHash}, got ${profileHash}`,
-        );
-      }
-      provenanceFields = {
-        profileSource: 'stored',
-        profileId: storedProfile.profileId,
-        profileVersion: storedProfile.version,
-      };
-    } else {
-      const inlineProfile = asRecord(input.profile);
-      if (!inlineProfile) {
-        throw new ControlPlaneError('VALIDATION_FAILURE', 'profile must be an object');
-      }
-      try {
-        assertValidInlineRunProfile(inlineProfile, 'profile');
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        throw new ControlPlaneError('VALIDATION_FAILURE', message);
-      }
-      profileSnapshot = inlineProfile;
-      profileHash = runProfileHash(profileSnapshot, { pipelineId: pipeline.pipelineId });
-      provenanceFields = { profileSource: 'inline' };
+    const profileSnapshot = resolvedProfile.profile as unknown as Record<string, unknown>;
+    const profileHash = runProfileHash(profileSnapshot, {
+      pipelineId: resolvedProfile.pipelineId ?? pipeline.pipelineId,
+      schemaVersion: resolvedProfile.schemaVersion,
+    });
+    if (resolvedProfile.source === 'stored' && resolvedProfile.profileHash !== undefined && resolvedProfile.profileHash !== profileHash) {
+      throw new ControlPlaneError(
+        'VALIDATION_FAILURE',
+        `stored run profile ${resolvedProfile.profileId ?? input.profileId} hash mismatch: expected ${resolvedProfile.profileHash}, got ${profileHash}`,
+      );
+    }
+    const profileSource = resolvedProfile.source;
+    const profileId = resolvedProfile.profileId;
+    const profileVersion = resolvedProfile.profileVersion;
+    if (resolvedProfile.source === 'stored' && resolvedProfile.pipelineId !== undefined && resolvedProfile.pipelineId !== pipeline.pipelineId) {
+      throw new ControlPlaneError(
+        'VALIDATION_FAILURE',
+        `stored run profile ${resolvedProfile.profileId ?? input.profileId} belongs to pipeline ${resolvedProfile.pipelineId}, not ${pipeline.pipelineId}`,
+        { details: { code: 'profile_pipeline_mismatch' } },
+      );
     }
 
     const topologyProfile = topologyProfileFromRunProfile(profileSnapshot, {
       pipelineId: pipeline.pipelineId,
-      profileId: provenanceFields.profileId ?? 'inline',
+      profileId: profileId ?? 'inline',
     });
     const baseTemplate = (pipeline.executionPolicy as { template_json?: unknown }).template_json;
     if (!baseTemplate) {
@@ -1830,38 +1865,51 @@ export class TaskControlPlaneApiService {
     }
 
     const executionPolicy = { ...asRecord(pipeline.executionPolicy), template_json: materializedTemplate };
-    const launchBindings = launchBindingsFromRunProfile(profileSnapshot, {
-      lifecycleNodeIds: Object.entries(materializedTemplate.nodes)
-        .filter(([, node]) => node.kind === 'script')
-        .map(([nodeId]) => nodeId),
-    });
+    const graphNodes: GraphExecutableNode[] = Object.values(materializedTemplate.nodes).reduce<GraphExecutableNode[]>((nodes, node) => {
+      if (node.kind === 'agent') nodes.push({ id: node.id, kind: 'agent', roleRef: node.roleRef });
+      if (node.kind === 'script') nodes.push({ id: node.id, kind: 'script', scriptRef: node.scriptRef });
+      return nodes;
+    }, []);
     const allRoles = (await this.roles.listRoles()).filter((role) => role.playbookId === playbook.id);
-    await this.assertLaunchBindingsClosed(launchBindings, allRoles, materializedTemplate);
-    const roleBindings = await this.resolveRouteRoles(playbook.id, pipeline, launchBindings, allRoles);
-
-    return {
-      playbookId: playbook.id,
-      pipelineId: requestedPipelineId,
-      pipelineRowId: pipeline.id,
-      source: input.source,
-      roles: roleBindings.map((binding) => binding.roleId),
-      requiredRoles: pipeline.requiredRoles,
-      optionalRoles: pipeline.optionalRoles,
-      routeGates: normalizeRouteGates(pipeline.routeGates),
-      executionPolicy,
-      launchBindings,
-      roleBindings,
-      params,
-      requestedPipelineId,
-      basePipelineId: pipeline.pipelineId,
-      profileHash,
-      profileSnapshot,
-      materializedTemplateHash,
-      materializedTemplate,
-      materializerVersion: MATERIALIZER_VERSION,
-      policyVersion: POLICY_VERSION,
-      ...provenanceFields,
-    };
+    const expandedProfile = expandScriptAccountBindings(validateRunProfile(profileSnapshot), graphNodes);
+    let resolvedBindings;
+    try {
+      resolvedBindings = resolveGraphBindings(expandedProfile, {
+        nodes: graphNodes,
+        roleDocuments: Object.fromEntries(allRoles.map((role) => [role.playbookRoleId || role.name, { roleDocumentId: role.id }])),
+        runnerManifests: runnerManifests(),
+      });
+    } catch (error) {
+      throw contractControlPlaneError(error);
+    }
+    const routeGates = normalizeRouteGates(pipeline.routeGates);
+    const compiled = compileExecutionPlan({
+      selection: {
+        playbookId: playbook.id,
+        pipelineId: requestedPipelineId,
+        pipelineRowId: pipeline.id,
+        source: input.source,
+        requestedPipelineId,
+        basePipelineId: pipeline.pipelineId,
+      },
+      businessParams: params,
+      profile: {
+        source: profileSource,
+        ...(profileId ? { profileId } : {}),
+        ...(profileVersion ? { profileVersion } : {}),
+        profileHash,
+      },
+      pipeline: {
+        executableGraph: materializedTemplate,
+        graphDigest: materializedTemplateHash,
+        materializerVersion: MATERIALIZER_VERSION,
+        policyVersion: POLICY_VERSION,
+        routeGates,
+        executionPolicy,
+      },
+      ...resolvedBindings,
+    });
+    return routeDecisionFromCompiledPlan(compiled);
   }
 
   private async validateRunProfileForPipeline(input: ValidateProfileInput): Promise<RouteDecision> {
@@ -1875,196 +1923,18 @@ export class TaskControlPlaneApiService {
     });
   }
 
-  private assertStoredRunProfileValid(storedProfile: RunProfileSummary): void {
-    try {
-      assertValidInlineRunProfile(storedProfile.profile, `run_profiles.${storedProfile.profileId}.profile_json`);
-    } catch (error) {
-      throw new ControlPlaneError('VALIDATION_FAILURE', asErrorMessage(error));
-    }
-  }
-
   private assertRunProfileStagesClosed(profileSnapshot: Record<string, unknown>, template: Template): void {
     const nodeIds = new Set(Object.keys(template.nodes));
     for (const stage of topologyStageTargetsFromRunProfile(profileSnapshot)) {
       if (nodeIds.has(stage)) continue;
-      throw this.profileSchemaClosed(`topology stage "${stage}" does not exist in pipeline ${template.pipelineId}`);
-    }
-  }
-
-  private async assertLaunchBindingsClosed(
-    launchBindings: BindingOverride[],
-    roles: RoleSummary[],
-    template: Template,
-  ): Promise<void> {
-    if (launchBindings.length === 0) return;
-    const byPlaybookRole = new Map(roles.map((r) => [r.playbookRoleId || r.name, r]));
-    const nodes = template.nodes as Record<string, { kind?: string }>;
-    const cachedProfiles = new Map<string, boolean>();
-
-    for (const override of launchBindings) {
-      const matchLabel = JSON.stringify(override.match);
-      this.assertBindingMatchIsClosed(override, matchLabel);
-      this.assertBindingTargetIsKnown(override, matchLabel, byPlaybookRole, nodes);
-      this.assertScriptBindingShape(override, matchLabel, nodes);
-      this.assertBindingAccounts(override, matchLabel, nodes);
-      this.assertRegisteredRunner(override.match.runnerId, matchLabel);
-      this.assertRegisteredRunner(override.runnerId, matchLabel);
-      await this.assertModelLevelAvailable(override.modelLevel, matchLabel, cachedProfiles);
-      this.assertBindingTimeout(override, matchLabel);
-      this.assertBindingPermissionMode(override, matchLabel, byPlaybookRole, launchBindings);
-    }
-  }
-
-  private profileSchemaClosed(message: string): ControlPlaneError {
-    return new ControlPlaneError('VALIDATION_FAILURE', `PROFILE_SCHEMA_CLOSED: ${message}`);
-  }
-
-  private assertBindingMatchIsClosed(override: BindingOverride, matchLabel: string): void {
-    const { roleId, nodeId, runnerId } = override.match;
-    if (roleId || nodeId || runnerId) return;
-    throw this.profileSchemaClosed(
-      `bindingOverride match ${matchLabel} must specify at least one of roleId, nodeId, runnerId`,
-    );
-  }
-
-  private assertBindingTargetIsKnown(
-    override: BindingOverride,
-    matchLabel: string,
-    byPlaybookRole: Map<string, RoleSummary>,
-    nodes: Record<string, { kind?: string }>,
-  ): void {
-    const { roleId, nodeId } = override.match;
-    if (roleId !== undefined && !byPlaybookRole.has(roleId)) {
-      throw this.profileSchemaClosed(`bindingOverride match ${matchLabel} roleId "${roleId}" does not exist in the selected playbook`);
-    }
-    if (nodeId !== undefined && !nodes[nodeId]) {
-      throw this.profileSchemaClosed(`bindingOverride match ${matchLabel} nodeId "${nodeId}" does not exist in the selected pipeline`);
-    }
-  }
-
-  private assertScriptBindingShape(
-    override: BindingOverride,
-    matchLabel: string,
-    nodes: Record<string, { kind?: string }>,
-  ): void {
-    const nodeId = override.match.nodeId;
-    if (!nodeId || nodes[nodeId]?.kind !== 'script') return;
-    if (override.runnerId || override.modelLevel || override.timeoutMs !== undefined || override.permissionMode) {
-      throw this.profileSchemaClosed(
-        `bindingOverride match ${matchLabel} targets script node "${nodeId}" and must not set runnerId, modelLevel, timeoutMs, or permissionMode`,
+      throw new ControlPlaneError(
+        'VALIDATION_FAILURE',
+        `topology stage "${stage}" does not exist in pipeline ${template.pipelineId}`,
+        { details: { code: 'profile_pipeline_mismatch' } },
       );
     }
   }
 
-  private assertBindingAccounts(
-    override: BindingOverride,
-    matchLabel: string,
-    nodes: Record<string, { kind?: string }>,
-  ): void {
-    const github = override.accounts?.github;
-    if (github === undefined) return;
-    if (!github.trim()) {
-      throw this.profileSchemaClosed(`bindingOverride match ${matchLabel} accounts.github must be a non-empty string`);
-    }
-    const nodeId = override.match.nodeId;
-    if (!nodeId || nodes[nodeId]?.kind !== 'script') {
-      throw this.profileSchemaClosed(`bindingOverride match ${matchLabel} accounts are only supported for script nodes`);
-    }
-  }
-
-  private assertRegisteredRunner(runnerId: string | undefined, matchLabel: string): void {
-    if (runnerId === undefined || BUILTIN_RUNNERS.has(runnerId)) return;
-    throw this.profileSchemaClosed(`bindingOverride match ${matchLabel} runnerId "${runnerId}" is not a registered runner`);
-  }
-
-  private async assertModelLevelAvailable(
-    modelLevel: string | undefined,
-    matchLabel: string,
-    cachedProfiles: Map<string, boolean>,
-  ): Promise<void> {
-    if (modelLevel === undefined) return;
-    if (!(VALID_MODEL_LEVELS as readonly string[]).includes(modelLevel)) {
-      throw this.unavailableModelLevel(matchLabel, modelLevel);
-    }
-    const cached = cachedProfiles.get(modelLevel);
-    if (cached === true) return;
-    if (cached === false) throw this.unavailableModelLevel(matchLabel, modelLevel);
-    try {
-      await this.roles.loadModelProfile(modelLevel);
-      cachedProfiles.set(modelLevel, true);
-    } catch (err) {
-      const isUnavailable = err instanceof ControlPlaneError && (err.code === 'ROW_NOT_FOUND' || err.code === 'VALIDATION_FAILURE');
-      if (!isUnavailable) throw err;
-      cachedProfiles.set(modelLevel, false);
-      throw this.unavailableModelLevel(matchLabel, modelLevel);
-    }
-  }
-
-  private unavailableModelLevel(matchLabel: string, modelLevel: string): ControlPlaneError {
-    return this.profileSchemaClosed(`bindingOverride match ${matchLabel} modelLevel "${modelLevel}" is unavailable`);
-  }
-
-  private assertBindingTimeout(override: BindingOverride, matchLabel: string): void {
-    const ms = override.timeoutMs;
-    if (ms === undefined || (Number.isInteger(ms) && ms > 0 && ms <= 86_400_000)) return;
-    throw this.profileSchemaClosed(
-      `bindingOverride match ${matchLabel} timeoutMs must be a positive integer <= 86400000, got ${ms}`,
-    );
-  }
-
-  private assertBindingPermissionMode(
-    override: BindingOverride,
-    matchLabel: string,
-    byPlaybookRole: Map<string, RoleSummary>,
-    launchBindings: BindingOverride[],
-  ): void {
-    const permissionMode = override.permissionMode;
-    if (permissionMode === undefined) return;
-    const effectiveRunner = this.effectivePermissionRunner(override, matchLabel, byPlaybookRole, launchBindings);
-    const validModes = RUNNER_PERMISSION_MODES[effectiveRunner];
-    if (!validModes) {
-      throw this.profileSchemaClosed(
-        `bindingOverride match ${matchLabel} permissionMode not supported for runner ${effectiveRunner}`,
-      );
-    }
-    if (!validModes.includes(permissionMode)) {
-      throw this.profileSchemaClosed(
-        `bindingOverride match ${matchLabel} permissionMode "${permissionMode}" is not valid for runner ${effectiveRunner}; expected one of ${validModes.join(', ')}`,
-      );
-    }
-  }
-
-  private effectivePermissionRunner(
-    override: BindingOverride,
-    matchLabel: string,
-    byPlaybookRole: Map<string, RoleSummary>,
-    launchBindings: BindingOverride[],
-  ): string {
-    if (override.runnerId) return override.runnerId;
-    if (override.match.runnerId) return override.match.runnerId;
-    const roleId = override.match.roleId;
-    if (!roleId) throw this.unresolvablePermissionRunner(matchLabel);
-    const role = byPlaybookRole.get(roleId);
-    if (!role) throw this.unresolvablePermissionRunner(matchLabel);
-    const roleOverride = this.findLastRoleRunnerOverride(launchBindings, roleId);
-    return roleOverride?.runnerId ?? role.runner;
-  }
-
-  private findLastRoleRunnerOverride(launchBindings: BindingOverride[], roleId: string): BindingOverride | undefined {
-    for (let index = launchBindings.length - 1; index >= 0; index -= 1) {
-      const candidate = launchBindings[index]!;
-      if (candidate.match.roleId === roleId && !candidate.match.nodeId && candidate.runnerId !== undefined) {
-        return candidate;
-      }
-    }
-    return undefined;
-  }
-
-  private unresolvablePermissionRunner(matchLabel: string): ControlPlaneError {
-    return this.profileSchemaClosed(
-      `bindingOverride match ${matchLabel} permissionMode override requires a resolvable runner; pin runnerId`,
-    );
-  }
 
   private async resolveAutoPipeline(playbookId: string, text: string): Promise<PipelineSummary> {
     const pipelines = (await this.playbooks.listPipelines())
@@ -2091,59 +1961,6 @@ export class TaskControlPlaneApiService {
       );
     }
     return best.pipeline;
-  }
-
-  private async resolveRouteRoles(
-    playbookId: string,
-    pipeline: PipelineSummary,
-    launchBindings: BindingOverride[],
-    preloadedRoles?: RoleSummary[],
-  ): Promise<RouteRoleBinding[]> {
-    const roles = preloadedRoles ?? (await this.roles.listRoles()).filter((role) => role.playbookId === playbookId);
-    const byPlaybookRole = new Map(roles.map((role) => [role.playbookRoleId || role.name, role]));
-    const selected = [...pipeline.requiredRoles];
-    for (const group of pipeline.alternativeRoles) {
-      const match = group.roles.find((roleId) => byPlaybookRole.has(roleId));
-      if (!match) {
-        throw new ControlPlaneError(
-          'VALIDATION_FAILURE',
-          `pipeline ${pipeline.pipelineId} alternative group ${group.group_id} has no installed role`,
-        );
-      }
-      if (!selected.includes(match)) selected.push(match);
-    }
-    for (const roleId of selected) {
-      if (!byPlaybookRole.has(roleId)) {
-        throw new ControlPlaneError(
-          'VALIDATION_FAILURE',
-          `pipeline ${pipeline.pipelineId} references missing installed role: ${roleId}`,
-        );
-      }
-    }
-    return selected.map((roleId): RouteRoleBinding => {
-      const role = byPlaybookRole.get(roleId) as RoleSummary;
-      assertProductionRunnerBinding(role.runner, 'playbook', roleId);
-      const runnerResolved = resolveRunnerForRole(role.runner, roleId, launchBindings);
-      assertProductionRunnerBinding(runnerResolved.runnerId, runnerResolved.source, roleId);
-      assertRunnerAvailable(runnerResolved.runnerId, roleId);
-      const bindingResolution = resolveBindingForRole(role, roleId, runnerResolved.runnerId, launchBindings);
-      return {
-        roleId,
-        rowId: role.id,
-        modelLevel: role.modelLevel,
-        runnerId: role.runner,
-        resolvedRunnerId: runnerResolved.runnerId,
-        runnerSource: runnerResolved.source,
-        resolvedModelLevel: bindingResolution.resolvedModelLevel,
-        modelSource: bindingResolution.modelSource,
-        timeoutMs: role.timeoutMs,
-        resolvedTimeoutMs: bindingResolution.resolvedTimeoutMs,
-        timeoutSource: bindingResolution.timeoutSource,
-        permissionMode: role.permissionMode,
-        resolvedPermissionMode: bindingResolution.resolvedPermissionMode,
-        permissionSource: bindingResolution.permissionSource,
-      };
-    });
   }
 
   getPrReadiness(input: GetPrReadinessInput) {

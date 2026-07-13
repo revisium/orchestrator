@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import type { ModelProfile, Role } from '../control-plane/definitions.js';
+import type { ResolvedAgentBinding } from '../control-plane/run-profile-contract.js';
 import type { Step } from '../control-plane/steps.js';
 import type { AgentActivityReporter } from '../observability/agent-activity-reporter.js';
 import type { RunnerActivityTracker } from '../observability/activity-signal.js';
@@ -48,6 +48,7 @@ type CodexJsonlSummary = {
   costUsd?: number;
   inputTokens?: number;
   outputTokens?: number;
+  currency?: string;
 };
 
 const DEFAULT_COMMAND = 'codex';
@@ -87,13 +88,12 @@ export const CODEX_OUTPUT_SCHEMA = {
           role: { type: ['string', 'null'] },
           kind: { type: ['string', 'null'] },
           input: { type: ['string', 'null'] },
-          modelProfile: { type: ['string', 'null'] },
           priority: { type: ['number', 'null'] },
           maxAttempts: { type: ['number', 'null'] },
           dependsOn: { type: ['array', 'null'], items: { type: 'string' } },
           runAfter: { type: ['string', 'null'] },
         },
-        required: ['taskId', 'role', 'kind', 'input', 'modelProfile', 'priority', 'maxAttempts', 'dependsOn', 'runAfter'],
+        required: ['taskId', 'role', 'kind', 'input', 'priority', 'maxAttempts', 'dependsOn', 'runAfter'],
       },
     },
     needsHuman: {
@@ -150,51 +150,15 @@ function isOpenAiCompatibleProvider(provider: string): boolean {
   return normalized.includes('openai') || normalized.includes('codex');
 }
 
-const WRITE_TOOL_NAMES = new Set(['edit', 'multiedit', 'notebookedit', 'write']);
-const READ_ONLY_RIGHTS = new Set([
-  '',
-  'deploy-read',
-  'qa-live',
-  'read only',
-  'read-only',
-  'read-only pr inspection',
-  'readonly',
-  'state and routing only',
-]);
-const WORKSPACE_WRITE_RIGHTS = new Set([
-  'git and github writes',
-  'git-gh',
-  'write',
-  'write working tree',
-  'write-working-tree',
-  'working tree write',
-  'working-tree-write',
-]);
-
 function normalizedPolicyLabel(value: string | undefined): string {
   return (value ?? '').trim().toLowerCase().replaceAll('_', '-').replace(/\s+/g, ' ');
 }
 
-function isWriteToolName(tool: string): boolean {
-  const normalized = tool.trim().toLowerCase();
-  return WRITE_TOOL_NAMES.has(normalized);
-}
-
-function sandboxForRole(role: Role): 'read-only' | 'workspace-write' {
-  const pm = normalizedPolicyLabel(role.permissionMode);
+function sandboxForPermission(permissionMode: string): 'read-only' | 'workspace-write' {
+  const pm = normalizedPolicyLabel(permissionMode);
   if (pm === 'workspace-write') return 'workspace-write';
   if (pm === 'read-only') return 'read-only';
-
-  if (role.allowedTools.some(isWriteToolName)) return 'workspace-write';
-
-  const rights = normalizedPolicyLabel(role.rights);
-  if (WORKSPACE_WRITE_RIGHTS.has(rights)) return 'workspace-write';
-  if (READ_ONLY_RIGHTS.has(rights)) return 'read-only';
-
-  if (rights.length > 0) {
-    throw new Error(`codex runner does not know how to map role rights "${role.rights}" to a sandbox`);
-  }
-  return 'read-only';
+  throw new Error(`codex runner requires a pinned read-only or workspace-write permission mode, got "${permissionMode}"`);
 }
 
 function buildArgs(modelId: string, sandbox: 'read-only' | 'workspace-write', cwd: string, schemaPath: string): string[] {
@@ -219,12 +183,12 @@ function buildArgs(modelId: string, sandbox: 'read-only' | 'workspace-write', cw
   ];
 }
 
-function requireCompatibleProfile(profile: ModelProfile): void {
-  if (profile.modelId.trim().length === 0) {
-    throw new Error('codex runner requires a non-empty model_profiles.model_id');
+function requireCompatibleBinding(binding: ResolvedAgentBinding): void {
+  if (binding.modelId.trim().length === 0) {
+    throw new Error('codex runner requires a non-empty exact modelId');
   }
-  if (!isOpenAiCompatibleProvider(profile.provider)) {
-    throw new Error(`codex runner requires an OpenAI/Codex-compatible provider, got "${profile.provider}"`);
+  if (!isOpenAiCompatibleProvider(binding.provider)) {
+    throw new Error(`codex runner requires an OpenAI/Codex-compatible provider, got "${binding.provider}"`);
   }
 }
 
@@ -351,6 +315,7 @@ function usageFromEvent(event: Record<string, unknown>): {
   costUsd?: number;
   inputTokens?: number;
   outputTokens?: number;
+  currency?: string;
 } {
   const usage = maybeObject(event.usage) ?? maybeObject(event.token_usage) ?? {};
   return {
@@ -365,6 +330,7 @@ function usageFromEvent(event: Record<string, unknown>): {
       ?? readNumber(event.outputTokens)
       ?? readNumber(usage.output_tokens)
       ?? readNumber(usage.outputTokens),
+    currency: readString(event.currency) ?? readString(usage.currency),
   };
 }
 
@@ -398,6 +364,7 @@ function applyUsageSummary(summary: CodexJsonlSummary, event: Record<string, unk
   summary.costUsd = usage.costUsd ?? summary.costUsd;
   summary.inputTokens = usage.inputTokens ?? summary.inputTokens;
   summary.outputTokens = usage.outputTokens ?? summary.outputTokens;
+  summary.currency = usage.currency ?? summary.currency;
 }
 
 function applyFailureSummary(summary: CodexJsonlSummary, event: Record<string, unknown>): void {
@@ -578,28 +545,31 @@ export function createCodexRunner(deps: CodexRunnerDeps): RunAgent {
     idleTimeoutMs: deps.idleTimeoutMs,
     wallClockLimitMs: deps.timeoutMs,
   });
-  const command = deps.command ?? DEFAULT_COMMAND;
+  const defaultCommand = deps.command ?? DEFAULT_COMMAND;
 
-  return async ({ role, profile, context, attemptId, step, reporter, acceptedVerdicts }) => {
+  return async ({ role, binding, context, attemptId, step, reporter, acceptedVerdicts }) => {
+    const command = typeof binding.runner.executionFields.command === 'string'
+      ? binding.runner.executionFields.command
+      : defaultCommand;
     let processArtifact: ReturnType<ArtifactStore['startProcess']> | undefined;
     let processActivity: RunnerActivityTracker | undefined;
     try {
-      requireCompatibleProfile(profile);
+      requireCompatibleBinding(binding);
       const timeoutPolicy = resolveEffectiveRunnerTimeoutPolicy({
         idleTimeoutMs: defaultTimeoutPolicy.idleTimeoutMs,
         wallClockLimitMs: defaultTimeoutPolicy.wallClockLimitMs,
-        roleTimeoutMs: role.timeoutMs,
+        roleTimeoutMs: binding.timeoutMs,
       });
       const cwd = await deps.resolveCwd(step);
-      const sandbox = sandboxForRole(role);
+      const sandbox = sandboxForPermission(binding.permissionMode);
       const schemaPath = writeCodexOutputSchema(deps.artifactStore.resolveAttemptDir(step.runId, attemptId), acceptedVerdicts);
-      const args = buildArgs(profile.modelId, sandbox, cwd, schemaPath);
+      const args = buildArgs(binding.modelId, sandbox, cwd, schemaPath);
       processArtifact = deps.artifactStore.startProcess({
         runId: step.runId,
         attemptId,
         stepId: step.id,
         role: role.name,
-        runner: role.runner,
+        runner: binding.runner.runnerId,
         command,
         args,
         cwd,
@@ -667,7 +637,7 @@ export function createCodexRunner(deps: CodexRunnerDeps): RunAgent {
       }
 
       const agent = normalizeCodexResult(summary.finalStructured);
-      const costs = buildUsageCosts(step, profile, summary);
+      const costs = buildUsageCosts(binding, summary);
       reporter?.finished({ exitCode: result.code, timedOut: result.timedOut });
       return buildAttemptResult(agent, step, costs, processSnapshot);
     } catch (err) {

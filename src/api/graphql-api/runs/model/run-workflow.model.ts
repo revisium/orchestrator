@@ -50,10 +50,13 @@ export class RunWorkflowNodeModel {
   scriptId!: string | null;
 
   @Field(() => String, { nullable: true })
-  modelLevel!: string | null;
+  runner!: string | null;
 
   @Field(() => String, { nullable: true })
-  runner!: string | null;
+  provider!: string | null;
+
+  @Field(() => String, { nullable: true })
+  modelId!: string | null;
 
   @Field(() => String)
   status!: string;
@@ -61,14 +64,14 @@ export class RunWorkflowNodeModel {
   @Field(() => Int)
   attemptCount!: number;
 
-  @Field(() => Int)
-  inputTokens!: number;
+  @Field(() => Int, { nullable: true })
+  inputTokens!: number | null;
 
-  @Field(() => Int)
-  outputTokens!: number;
+  @Field(() => Int, { nullable: true })
+  outputTokens!: number | null;
 
-  @Field(() => Float)
-  costAmount!: number;
+  @Field(() => Float, { nullable: true })
+  costAmount!: number | null;
 
   @Field(() => String, { nullable: true })
   verdict!: string | null;

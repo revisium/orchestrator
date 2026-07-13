@@ -4,6 +4,7 @@ import { ClaudeCodeService } from './claude-code.service.js';
 import { RunService } from '../revisium/run.service.js';
 import type { ProcessExecutor, ExecResult } from '../worker/process-executor.js';
 import { createInMemoryRuntimeDataAccess } from '../testing/runtime-data-access.js';
+import type { ResolvedAgentBinding } from '../control-plane/run-profile-contract.js';
 
 function makeRunService(repoRef = '/tmp'): RunService {
   return new RunService(createInMemoryRuntimeDataAccess({
@@ -58,7 +59,6 @@ test('M2: ClaudeCodeService uses injected fake ProcessExecutor — no real spawn
     status: 'running',
     input: {},
     output: null,
-    modelProfile: 'standard',
     runAfter: '',
     attemptCount: 0,
     maxAttempts: 1,
@@ -71,25 +71,31 @@ test('M2: ClaudeCodeService uses injected fake ProcessExecutor — no real spawn
   const role = {
     name: 'architect',
     systemPrompt: 'You are architect',
-    modelLevel: 'standard' as const,
-    effort: 'high',
-    runner: 'claude-code' as const,
     allowedTools: ['Read'],
     scopeRules: {},
   };
 
-  const profile = {
-    level: 'standard' as const,
+  const binding: ResolvedAgentBinding = {
+    runnerId: 'claude-code',
     provider: 'anthropic',
     modelId: 'claude-sonnet-4-6',
-    params: {},
-    costPerInput: 3,
-    costPerOutput: 15,
+    modelParams: {},
+    slotKey: 'node:architect',
+    nodeId: 'architect',
+    roleId: 'architect',
+    roleDocumentId: 'role-doc-architect',
+    permissionMode: 'default',
+    permissionSource: 'profile',
+    runner: {
+      runnerId: 'claude-code', manifestVersion: '1', manifestDigest: `sha256:${'a'.repeat(64)}`,
+      stdoutParserId: 'claude-json', permissionStyleId: 'claude-permission-mode',
+      declaredDefaultPermissionMode: 'default', capabilities: {}, constraints: {}, executionFields: {},
+    },
   };
 
   const result = await svc.run({
     role,
-    profile,
+    binding,
     context: 'test context',
     attemptId: `attempt_${fnv1a64Hex('run-1|architect')}`,
     step,

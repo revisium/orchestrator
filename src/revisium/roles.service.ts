@@ -1,25 +1,15 @@
 import { Injectable, Inject } from '@nestjs/common';
 import type { ControlPlaneTransport } from '../control-plane/transport.js';
-import { loadRole, loadModelProfile, loadPipelinePolicy, toOptPosInt, type Role, type ModelProfile, type PipelinePolicy } from '../control-plane/definitions.js';
+import { loadRole, loadPipelinePolicy, type Role, type PipelinePolicy } from '../control-plane/definitions.js';
 import { REVISIUM_TRANSPORT_HEAD } from './tokens.js';
 
 export type RoleSummary = {
   id: string;
   name: string;
-  modelLevel: string;
-  runner: string;
   surface: string;
   rights: string;
   playbookId: string;
   playbookRoleId: string;
-  timeoutMs?: number;
-  permissionMode?: string;
-};
-
-export type ModelProfileSummary = {
-  level: string;
-  provider: string;
-  modelId: string;
 };
 
 function str(value: unknown): string {
@@ -45,32 +35,10 @@ export class RolesService {
       return [{
         id: node.id,
         name: str(data.name) || node.id,
-        modelLevel: str(data.model_level),
-        runner: str(data.runner_id) || str(data.runner),
         surface: str(data.surface),
         rights: str(data.rights),
         playbookId: str(data.playbook_id),
         playbookRoleId: str(data.playbook_role_id),
-        timeoutMs: toOptPosInt(data.timeout_ms),
-        permissionMode: str(data.permission_mode) || undefined,
-      }];
-    });
-  }
-
-  loadModelProfile(level: string): Promise<ModelProfile> {
-    return loadModelProfile(level, this.head);
-  }
-
-  async listModelProfiles(): Promise<ModelProfileSummary[]> {
-    const rows = await this.head.listRows('model_profiles', { first: 100 });
-    return (rows.edges ?? []).flatMap((edge) => {
-      const node = edge.node;
-      if (!node) return [];
-      const data = node.data ?? {};
-      return [{
-        level: str(data.level) || node.id,
-        provider: str(data.provider),
-        modelId: str(data.model_id),
       }];
     });
   }

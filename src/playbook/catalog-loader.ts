@@ -2,7 +2,6 @@ import { existsSync, readFileSync } from 'node:fs';
 import { PlaybookError } from './errors.js';
 import type { PlaybookManifest } from './manifest.js';
 import { resolvePathInside } from './source-resolver.js';
-import type { ModelLevel } from '../control-plane/definitions.js';
 import {
   assertValidPipelineExecutionPolicy,
   assertValidRunProfileCatalogRecord,
@@ -14,24 +13,13 @@ export type RoleCatalogRecord = {
   surface: string;
   rights: string;
   allowedTools: string[];
-  defaultModelLevel: ModelLevel;
-  runnerId: string;
   wrappers: Record<string, string>;
-};
-
-export type AlternativeRoleGroup = {
-  group_id: string;
-  roles: string[];
-  resolution: string;
 };
 
 export type PipelineCatalogRecord = {
   id: string;
   path: string;
   triggers: string[];
-  requiredRoles: string[];
-  alternativeRoles: AlternativeRoleGroup[];
-  optionalRoles: string[];
   routeGates: string[];
   platformInvocation: string;
   executionPolicy: unknown;
@@ -55,29 +43,22 @@ export type PlaybookCatalogs = {
   runProfiles: RunProfileCatalogRecord[];
 };
 
-const MODEL_LEVELS = new Set<ModelLevel>([
-  'cheap',
-  'standard',
-  'deep',
-  'codex-cheap',
-  'codex-standard',
-  'codex-deep',
-]);
-const PRODUCTION_BLOCKED_RUNNERS = new Set(['stub-agent']);
-
 function asRecord(value: unknown, context: string): Record<string, unknown> {
   if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
   throw new PlaybookError('PLAYBOOK_INVALID_CATALOG', `${context} must be an object`);
+}
+
+function rejectAuthorityFields(record: Record<string, unknown>, fields: readonly string[], context: string): void {
+  for (const field of fields) {
+    if (!(field in record)) continue;
+    throw new PlaybookError('PLAYBOOK_INVALID_CATALOG', `${context}.${field} is not part of the provider-neutral catalog contract`);
+  }
 }
 
 function stringField(record: Record<string, unknown>, key: string, context: string): string {
   const value = record[key];
   if (typeof value === 'string' && value.trim() !== '') return value;
   throw new PlaybookError('PLAYBOOK_INVALID_CATALOG', `${context}.${key} must be a non-empty string`);
-}
-
-function normalizedStringField(record: Record<string, unknown>, key: string, context: string): string {
-  return stringField(record, key, context).trim();
 }
 
 function stringArrayField(record: Record<string, unknown>, key: string, context: string): string[] {
@@ -112,28 +93,6 @@ function assertUniqueIds(records: Array<{ id: string }>, context: string): void 
   }
 }
 
-function assertKnownRole(roleIds: Set<string>, roleId: string, context: string): void {
-  if (roleIds.has(roleId)) return;
-  throw new PlaybookError('PLAYBOOK_INVALID_CATALOG', `${context} references unknown role id: ${roleId}`);
-}
-
-function assertPipelineRoleReferences(roles: RoleCatalogRecord[], pipelines: PipelineCatalogRecord[]): void {
-  const roleIds = new Set(roles.map((role) => role.id));
-  for (const pipeline of pipelines) {
-    for (const roleId of pipeline.requiredRoles) {
-      assertKnownRole(roleIds, roleId, `pipeline ${pipeline.id}.required_roles`);
-    }
-    for (const roleId of pipeline.optionalRoles) {
-      assertKnownRole(roleIds, roleId, `pipeline ${pipeline.id}.optional_roles`);
-    }
-    for (const group of pipeline.alternativeRoles) {
-      for (const roleId of group.roles) {
-        assertKnownRole(roleIds, roleId, `pipeline ${pipeline.id}.alternative_roles.${group.group_id}`);
-      }
-    }
-  }
-}
-
 function assertRunProfilePipelineReferences(
   pipelines: PipelineCatalogRecord[],
   runProfiles: RunProfileCatalogRecord[],
@@ -151,21 +110,11 @@ function assertRunProfilePipelineReferences(
 function parseRole(value: unknown, index: number, root: string): RoleCatalogRecord {
   const context = `roles[${index}]`;
   const record = asRecord(value, context);
-  const modelLevel = stringField(record, 'default_model_level', context);
-  if (!MODEL_LEVELS.has(modelLevel as ModelLevel)) {
-    throw new PlaybookError('PLAYBOOK_INVALID_CATALOG', `${context}.default_model_level is invalid: ${modelLevel}`);
-  }
+  rejectAuthorityFields(record, ['default_model_level', 'runner_id', 'runner', 'model_level', 'timeout_ms', 'permission_mode'], context);
   const path = stringField(record, 'path', context);
   const resolvedPath = resolvePathInside(root, path);
   if (!existsSync(resolvedPath)) {
     throw new PlaybookError('PLAYBOOK_INVALID_CATALOG', `${context}.path does not exist: ${path}`);
-  }
-  const runnerId = normalizedStringField(record, 'runner_id', context);
-  if (PRODUCTION_BLOCKED_RUNNERS.has(runnerId)) {
-    throw new PlaybookError(
-      'PLAYBOOK_INVALID_CATALOG',
-      `${context}.runner_id must not be ${runnerId}; use a run profile binding for test stubs`,
-    );
   }
   const id = stringField(record, 'id', context);
   return {
@@ -174,29 +123,14 @@ function parseRole(value: unknown, index: number, root: string): RoleCatalogReco
     surface: stringField(record, 'surface', context),
     rights: stringField(record, 'rights', context),
     allowedTools: stringArrayField(record, 'allowed_tools', context),
-    defaultModelLevel: modelLevel as RoleCatalogRecord['defaultModelLevel'],
-    runnerId,
     wrappers: optionalRecord(record, 'wrappers'),
   };
-}
-
-function parseAlternativeRoles(value: unknown, context: string): AlternativeRoleGroup[] {
-  if (!Array.isArray(value)) {
-    throw new PlaybookError('PLAYBOOK_INVALID_CATALOG', `${context}.alternative_roles must be an array`);
-  }
-  return value.map((entry, index) => {
-    const record = asRecord(entry, `${context}.alternative_roles[${index}]`);
-    return {
-      group_id: stringField(record, 'group_id', `${context}.alternative_roles[${index}]`),
-      roles: stringArrayField(record, 'roles', `${context}.alternative_roles[${index}]`),
-      resolution: stringField(record, 'resolution', `${context}.alternative_roles[${index}]`),
-    };
-  });
 }
 
 function parsePipeline(value: unknown, index: number, root: string): PipelineCatalogRecord {
   const context = `pipelines[${index}]`;
   const record = asRecord(value, context);
+  rejectAuthorityFields(record, ['required_roles', 'optional_roles', 'alternative_roles'], context);
   const executionPolicy = record.execution_policy ?? {};
   assertValidPipelineExecutionPolicy(executionPolicy, `${context}.execution_policy`);
   const path = stringField(record, 'path', context);
@@ -208,9 +142,6 @@ function parsePipeline(value: unknown, index: number, root: string): PipelineCat
     id: stringField(record, 'id', context),
     path,
     triggers: stringArrayField(record, 'triggers', context),
-    requiredRoles: stringArrayField(record, 'required_roles', context),
-    alternativeRoles: parseAlternativeRoles(record.alternative_roles, context),
-    optionalRoles: stringArrayField(record, 'optional_roles', context),
     routeGates: stringArrayField(record, 'route_gates', context),
     platformInvocation: stringField(record, 'platform_invocation', context),
     executionPolicy,
@@ -261,7 +192,6 @@ export function loadPlaybookCatalogs(root: string, manifest: PlaybookManifest): 
     assertUniqueIds(roles, 'role');
     assertUniqueIds(pipelines, 'pipeline');
     assertUniqueIds(runProfiles, 'run profile');
-    assertPipelineRoleReferences(roles, pipelines);
     assertRunProfilePipelineReferences(pipelines, runProfiles);
     return { roles, pipelines, runProfiles };
   } catch (error) {

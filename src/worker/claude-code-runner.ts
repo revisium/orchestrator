@@ -60,7 +60,7 @@ function permissionDenialsPreview(transport: TransportEnvelope): string {
 }
 
 function hasUsageSummary(transport: TransportEnvelope): boolean {
-  return transport.costUsd !== undefined || transport.inputTokens !== undefined || transport.outputTokens !== undefined;
+  return transport.costUsd !== undefined || transport.inputTokens !== undefined || transport.outputTokens !== undefined || transport.currency !== undefined;
 }
 
 function reportTransportMetadata(reporter: AgentActivityReporter | undefined, transport: TransportEnvelope): void {
@@ -74,6 +74,7 @@ function reportTransportMetadata(reporter: AgentActivityReporter | undefined, tr
         total_cost_usd: transport.costUsd,
         input_tokens: transport.inputTokens,
         output_tokens: transport.outputTokens,
+        currency: transport.currency,
       }),
     });
   }
@@ -95,14 +96,12 @@ function reportTransportMetadata(reporter: AgentActivityReporter | undefined, tr
 }
 
 
-function readParamNum(params: unknown, ...keys: string[]): number | undefined {
+function readParamNum(params: unknown, key: string): number | undefined {
   if (!params || typeof params !== 'object' || Array.isArray(params)) return undefined;
   const rec = params as Record<string, unknown>;
-  for (const k of keys) {
-    const v = rec[k];
-    const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN;
-    if (Number.isFinite(n) && n > 0) return n;
-  }
+  const v = rec[key];
+  const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN;
+  if (Number.isFinite(n) && n > 0) return n;
   return undefined;
 }
 
@@ -164,7 +163,7 @@ function buildArgs(
   if (deniedTools.length > 0) {
     args.push('--disallowedTools', deniedTools.join(','));
   }
-  const maxTurns = readParamNum(params, 'maxTurns', 'max_turns');
+  const maxTurns = readParamNum(params, 'maxTurns');
   if (maxTurns !== undefined) {
     args.push('--max-turns', String(Math.trunc(maxTurns)));
   }
@@ -203,27 +202,30 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
     idleTimeoutMs: deps.idleTimeoutMs,
     wallClockLimitMs: deps.timeoutMs,
   });
-  const command = deps.command ?? DEFAULT_COMMAND;
+  const defaultCommand = deps.command ?? DEFAULT_COMMAND;
 
-  return async ({ role, profile, context, attemptId, step, reporter, acceptedVerdicts }) => {
+  return async ({ role, binding, context, attemptId, step, reporter, acceptedVerdicts }) => {
+    const command = typeof binding.runner.executionFields.command === 'string'
+      ? binding.runner.executionFields.command
+      : defaultCommand;
     const timeoutPolicy = resolveEffectiveRunnerTimeoutPolicy({
       idleTimeoutMs: defaultTimeoutPolicy.idleTimeoutMs,
       wallClockLimitMs: defaultTimeoutPolicy.wallClockLimitMs,
-      roleTimeoutMs: role.timeoutMs,
+      roleTimeoutMs: binding.timeoutMs,
     });
-    const permissionMode = role.permissionMode ?? 'default';
+    const permissionMode = binding.permissionMode;
     let processArtifact: ReturnType<ArtifactStore['startProcess']> | undefined;
     let processActivity: RunnerActivityTracker | undefined;
     try {
       const cwd = await deps.resolveCwd(step);
       const liveWorktree = isWorktreeDir(cwd);
-      const args = buildArgs(profile.modelId, role, permissionMode, profile.params, acceptedVerdicts);
+      const args = buildArgs(binding.modelId, role, permissionMode, binding.modelParams, acceptedVerdicts);
       processArtifact = deps.artifactStore?.startProcess({
         runId: step.runId,
         attemptId,
         stepId: step.id,
         role: role.name,
-        runner: role.runner,
+        runner: binding.runner.runnerId,
         command,
         args,
         cwd,
@@ -307,7 +309,7 @@ export function createClaudeCodeRunner(deps: ClaudeCodeRunnerDeps): RunAgent {
       }
 
       const agent = agentResultFromStructured(transport.structuredOutput);
-      const costs = buildUsageCosts(step, profile, transport);
+      const costs = buildUsageCosts(binding, transport);
       const attemptResult = buildAttemptResult(agent, step, costs, processSnapshot);
       reporter?.finished({ exitCode: result.code, timedOut: result.timedOut });
       return attemptResult;

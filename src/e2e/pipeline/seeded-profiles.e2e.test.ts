@@ -30,7 +30,7 @@ test(
       given: {
         repo: target(),
         playbook: "default",
-        profileId: "codex-primary-claude-review-consensus",
+        profileId: "codex-gpt-5-6-luna-claude-opus-4-8-consensus",
         agent: {
           byRole: {
             reviewer: [
@@ -61,7 +61,7 @@ test(
   },
 );
 test(
-  "M1c: shipped standard profile completes the single-review signature",
+  "M1c: shipped exact single profile completes the single-review signature",
   { skip: e2eSkip },
   async () => {
     await pipeline.execute({
@@ -69,7 +69,7 @@ test(
       given: {
         repo: target(),
         playbook: "default",
-        profileId: "codex-standard",
+        profileId: "codex-gpt-5-6-luna",
       },
       when: [
         chooseGate("planGate", "approved"),
@@ -93,7 +93,7 @@ test(
         repo: target(),
         playbook: "default",
         pipelineId: "local-change",
-        profileId: "local-change-codex-standard",
+        profileId: "local-change-codex-gpt-5-6-luna",
       },
       when: [],
       then: [
@@ -115,7 +115,7 @@ test(
         repo: target(),
         playbook: "default",
         pipelineId: "analysis-only",
-        profileId: "analysis-only-codex-standard",
+        profileId: "analysis-only-codex-gpt-5-6-luna",
         developerWrite: false,
       },
       when: [],

@@ -135,19 +135,7 @@ test('agentResultFromStructured: requires top-level verdict and string output', 
 
 // ─── nextSteps normalization ──────────────────────────────────────────────────
 
-test('normalizeNextSteps: defaults taskId and modelProfile from the step', () => {
-  const specs = normalizeNextSteps(
-    [{ role: 'developer', kind: 'implement', input: { from: 'x' } }],
-    BASE_STEP,
-  );
-  assert.equal(specs.length, 1);
-  assert.equal(specs[0]?.taskId, BASE_STEP.taskId);
-  assert.equal(specs[0]?.modelProfile, BASE_STEP.modelProfile);
-  assert.equal(specs[0]?.role, 'developer');
-  assert.equal(specs[0]?.kind, 'implement');
-});
-
-test('normalizeNextSteps: passes through optional fields and honours explicit taskId/profile', () => {
+test('normalizeNextSteps: passes through optional task fields and honours explicit taskId', () => {
   const specs = normalizeNextSteps(
     [
       {
@@ -155,7 +143,6 @@ test('normalizeNextSteps: passes through optional fields and honours explicit ta
         kind: 'review',
         input: null,
         taskId: 'task-other',
-        modelProfile: 'deep',
         priority: 5,
         maxAttempts: 2,
         dependsOn: ['step-a'],
@@ -166,7 +153,6 @@ test('normalizeNextSteps: passes through optional fields and honours explicit ta
   );
   const spec = specs[0];
   assert.equal(spec?.taskId, 'task-other');
-  assert.equal(spec?.modelProfile, 'deep');
   assert.equal(spec?.priority, 5);
   assert.equal(spec?.maxAttempts, 2);
   assert.deepEqual(spec?.dependsOn, ['step-a']);

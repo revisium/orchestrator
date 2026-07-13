@@ -6,8 +6,17 @@ function str(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
 
+function requiredProvenance(value: unknown, field: 'runner_id' | 'provider' | 'model_id'): string {
+  if (typeof value === 'string' && value.trim().length > 0) return value;
+  throw new Error(`${field} must be a non-empty exact provenance value`);
+}
+
 function num(value: unknown): number {
   return typeof value === 'number' ? value : 0;
+}
+
+function nullableNum(value: unknown): number | null {
+  return typeof value === 'number' ? value : null;
 }
 
 function strArr(value: unknown): string[] {
@@ -61,11 +70,13 @@ export function mapRunCostRow(row: ControlPlaneRow) {
     runId: str(row.data.run_id),
     stepId: str(row.data.step_id),
     attemptId: str(row.data.attempt_id),
-    modelProfile: str(row.data.model_profile),
-    inputTokens: num(row.data.input_tokens),
-    outputTokens: num(row.data.output_tokens),
-    costAmount: num(row.data.cost_amount),
-    currency: str(row.data.currency),
+    runnerId: requiredProvenance(row.data.runner_id, 'runner_id'),
+    provider: requiredProvenance(row.data.provider, 'provider'),
+    modelId: requiredProvenance(row.data.model_id, 'model_id'),
+    inputTokens: nullableNum(row.data.input_tokens),
+    outputTokens: nullableNum(row.data.output_tokens),
+    costAmount: nullableNum(row.data.cost_amount),
+    currency: row.data.currency === null || row.data.currency === undefined ? null : str(row.data.currency),
     recordedAt: date(row.data.recorded_at ?? row.createdAt),
   };
 }

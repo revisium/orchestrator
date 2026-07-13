@@ -65,22 +65,35 @@ function str(value: unknown, fallback = ''): string {
   return typeof value === 'string' ? value : fallback;
 }
 
+function requiredProvenance(value: unknown, field: 'runner_id' | 'provider' | 'model_id'): string {
+  if (typeof value === 'string' && value.trim().length > 0) return value;
+  throw new ControlPlaneError('VALIDATION_FAILURE', `${field} must be a non-empty exact provenance value`);
+}
+
 function int(value: unknown, fallback = 0): number {
   const parsed = typeof value === 'number' ? value : Number(value);
   return Number.isInteger(parsed) ? parsed : fallback;
 }
 
-function num(value: unknown, fallback = 0): number {
+function nullableInt(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null;
   const parsed = typeof value === 'number' ? value : Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
+  return Number.isInteger(parsed) ? parsed : null;
 }
 
-function decimalNum(value: unknown, fallback = 0): number {
+function nullableNum(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null;
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function nullableDecimalNum(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null;
   if (value && typeof value === 'object' && 'toNumber' in value) {
     const toNumber = (value as { toNumber?: unknown }).toNumber;
-    if (typeof toNumber === 'function') return num(toNumber.call(value), fallback);
+    if (typeof toNumber === 'function') return nullableNum(toNumber.call(value));
   }
-  return num(value, fallback);
+  return nullableNum(value);
 }
 
 function strArr(value: unknown): string[] {
@@ -172,7 +185,9 @@ const DATA_PATH_FIELDS: Record<RuntimeTable, Record<string, string>> = {
     run_id: 'runId',
     step_id: 'stepId',
     idempotency_key: 'idempotencyKey',
-    model_profile: 'modelProfile',
+    runner_id: 'runnerId',
+    provider: 'provider',
+    model_id: 'modelId',
     status: 'status',
     verdict: 'verdict',
   },
@@ -188,7 +203,9 @@ const DATA_PATH_FIELDS: Record<RuntimeTable, Record<string, string>> = {
     run_id: 'runId',
     step_id: 'stepId',
     attempt_id: 'attemptId',
-    model_profile: 'modelProfile',
+    runner_id: 'runnerId',
+    provider: 'provider',
+    model_id: 'modelId',
     currency: 'currency',
   },
   run_outputs: {
@@ -351,12 +368,14 @@ function attemptRow(item: RuntimeItem): ControlPlaneRow {
     iteration: item.iteration,
     status: item.status,
     idempotency_key: item.idempotencyKey,
-    model_profile: item.modelProfile,
+    runner_id: requiredProvenance(item.runnerId, 'runner_id'),
+    provider: requiredProvenance(item.provider, 'provider'),
+    model_id: requiredProvenance(item.modelId, 'model_id'),
     verdict: item.verdict,
-    input_tokens: item.inputTokens,
-    output_tokens: item.outputTokens,
-    cost_amount: decimalNum(item.costAmount),
-    currency: item.currency,
+    input_tokens: nullableInt(item.inputTokens),
+    output_tokens: nullableInt(item.outputTokens),
+    cost_amount: nullableDecimalNum(item.costAmount),
+    currency: item.currency ?? null,
     duration_ms: item.durationMs,
     output_summary: item.outputSummary,
     artifact_ref: item.artifactRef,
@@ -409,11 +428,13 @@ function costLedgerRow(item: RuntimeItem): ControlPlaneRow {
     run_id: item.runId,
     step_id: item.stepId,
     attempt_id: item.attemptId,
-    model_profile: item.modelProfile,
-    input_tokens: item.inputTokens,
-    output_tokens: item.outputTokens,
-    cost_amount: decimalNum(item.costAmount),
-    currency: item.currency,
+    runner_id: requiredProvenance(item.runnerId, 'runner_id'),
+    provider: requiredProvenance(item.provider, 'provider'),
+    model_id: requiredProvenance(item.modelId, 'model_id'),
+    input_tokens: nullableInt(item.inputTokens),
+    output_tokens: nullableInt(item.outputTokens),
+    cost_amount: nullableDecimalNum(item.costAmount),
+    currency: item.currency ?? null,
     recorded_at: iso(item.recordedAt),
   }, item.createdAt);
 }
@@ -501,12 +522,14 @@ export function createPrismaRuntimeDataAccess(prisma: RevoPrismaService): Contro
           iteration: int(data.iteration),
           status: str(data.status),
           idempotencyKey: str(data.idempotency_key),
-          modelProfile: str(data.model_profile),
+          runnerId: requiredProvenance(data.runner_id, 'runner_id'),
+          provider: requiredProvenance(data.provider, 'provider'),
+          modelId: requiredProvenance(data.model_id, 'model_id'),
           verdict: str(data.verdict),
-          inputTokens: int(data.input_tokens),
-          outputTokens: int(data.output_tokens),
-          costAmount: num(data.cost_amount),
-          currency: str(data.currency, 'USD'),
+          inputTokens: nullableInt(data.input_tokens),
+          outputTokens: nullableInt(data.output_tokens),
+          costAmount: nullableNum(data.cost_amount),
+          currency: data.currency === null || data.currency === undefined ? null : str(data.currency),
           durationMs: int(data.duration_ms),
           outputSummary: str(data.output_summary),
           artifactRef: str(data.artifact_ref),
@@ -553,11 +576,13 @@ export function createPrismaRuntimeDataAccess(prisma: RevoPrismaService): Contro
           runId: str(data.run_id),
           stepId: str(data.step_id),
           attemptId: str(data.attempt_id),
-          modelProfile: str(data.model_profile),
-          inputTokens: int(data.input_tokens),
-          outputTokens: int(data.output_tokens),
-          costAmount: num(data.cost_amount),
-          currency: str(data.currency, 'USD'),
+          runnerId: requiredProvenance(data.runner_id, 'runner_id'),
+          provider: requiredProvenance(data.provider, 'provider'),
+          modelId: requiredProvenance(data.model_id, 'model_id'),
+          inputTokens: nullableInt(data.input_tokens),
+          outputTokens: nullableInt(data.output_tokens),
+          costAmount: nullableNum(data.cost_amount),
+          currency: data.currency === null || data.currency === undefined ? null : str(data.currency),
           recordedAt: dateValue(data.recorded_at),
         } });
       }

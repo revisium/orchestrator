@@ -108,7 +108,6 @@ export class RunService {
     role: string,
     stepKey: string,
     stepInput: unknown,
-    modelProfile: string,
   ): Promise<{ da: ControlPlaneDataAccess; step: Step; runContext: AgentRunContext }> {
     const detail = await showRun(this.da, runId);
     if (!detail) {
@@ -132,7 +131,6 @@ export class RunService {
       status: 'running',
       input: stepInput,
       output: null,
-      modelProfile,
       runAfter: '',
       attemptCount: 0,
       maxAttempts: 1,

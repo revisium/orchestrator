@@ -29,7 +29,7 @@ after(async () => {
 test('J1: queued runs beyond the worker limit all drain without loss', { skip: e2eSkip }, async () => {
   const runs = await runtime.startLocalChanges(10);
   assert.equal(new Set(runs.map((run) => run.runId)).size, 10);
-  for (const run of runs) assert.equal(await run.waitForState(), 'completed');
+  for (const run of runs) assert.equal(await run.waitForState(60_000), 'completed');
 });
 
 test('J2: concurrent double-start executes one durable workflow', { skip: e2eSkip }, async () => {

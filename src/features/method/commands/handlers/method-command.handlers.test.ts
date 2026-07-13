@@ -16,39 +16,39 @@ test('method command handlers delegate run profile mutations through TaskControl
   const api = {
     async createProfile(input: unknown) {
       calls.push(`create:${JSON.stringify(input)}`);
-      return { profileId: 'custom-standard' };
+      return { profileId: 'custom-exact' };
     },
     async updateProfile(input: unknown) {
       calls.push(`update:${JSON.stringify(input)}`);
-      return { profileId: 'custom-standard' };
+      return { profileId: 'custom-exact' };
     },
     async deprecateProfile(input: unknown) {
       calls.push(`deprecate:${JSON.stringify(input)}`);
-      return { profileId: 'custom-standard', status: 'deprecated' };
+      return { profileId: 'custom-exact', status: 'deprecated' };
     },
   } as unknown as TaskControlPlaneApiService;
 
   assert.equal((await new CreateRunProfileHandler(api).execute(new CreateRunProfileCommand({
     pipelineId: 'local-change',
-    profileId: 'custom-standard',
-    displayName: 'Custom standard',
+    profileId: 'custom-exact',
+    displayName: 'Custom exact',
     profile,
-  }))).profileId, 'custom-standard');
+  }))).profileId, 'custom-exact');
   assert.equal((await new UpdateRunProfileHandler(api).execute(new UpdateRunProfileCommand({
     pipelineId: 'local-change',
-    profileId: 'custom-standard',
+    profileId: 'custom-exact',
     expectedProfileRevisionHash: 'hash',
     profile,
-  }))).profileId, 'custom-standard');
+  }))).profileId, 'custom-exact');
   assert.equal((await new DeprecateRunProfileHandler(api).execute(new DeprecateRunProfileCommand({
     pipelineId: 'local-change',
-    profileId: 'custom-standard',
+    profileId: 'custom-exact',
     expectedProfileRevisionHash: 'hash',
   }))).status, 'deprecated');
 
   assert.deepEqual(calls, [
-    `create:${JSON.stringify({ pipelineId: 'local-change', profileId: 'custom-standard', displayName: 'Custom standard', profile })}`,
-    `update:${JSON.stringify({ pipelineId: 'local-change', profileId: 'custom-standard', expectedProfileRevisionHash: 'hash', profile })}`,
-    'deprecate:{"pipelineId":"local-change","profileId":"custom-standard","expectedProfileRevisionHash":"hash"}',
+    `create:${JSON.stringify({ pipelineId: 'local-change', profileId: 'custom-exact', displayName: 'Custom exact', profile })}`,
+    `update:${JSON.stringify({ pipelineId: 'local-change', profileId: 'custom-exact', expectedProfileRevisionHash: 'hash', profile })}`,
+    'deprecate:{"pipelineId":"local-change","profileId":"custom-exact","expectedProfileRevisionHash":"hash"}',
   ]);
 });

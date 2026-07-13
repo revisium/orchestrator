@@ -29,12 +29,15 @@ test('local-change: developer-only run completes and reattaches', { skip: e2eSki
   });
   const started = await run.start();
   assert.equal(started.alreadyStarted, false);
-  assert.deepEqual(started.roleBindings.map((binding) => binding.resolvedRunnerId), ['stub-agent', 'stub-agent']);
+  assert.deepEqual(started.agentBindings.map((binding) => [binding.roleId, binding.runnerId, binding.provider, binding.modelId]), [
+    ['developer', 'codex', 'openai', 'gpt-5.6-luna'],
+  ]);
+  assert.match(started.executionPlanDigest, /^sha256:[0-9a-f]{64}$/);
 
   await run.settle('completed');
   await run.expectCompleted();
   await run.expectAttemptVerdicts(['approved']);
-  run.expectExecutedRoles([['developer', 'script']]);
+  run.expectExecutedRoles([['developer', 'codex']]);
   await run.expectEvents(['step_succeeded', 'run_completed']);
   await run.expectUsage({ inputTokens: 10, outputTokens: 5, costAmount: 0.001 });
 
@@ -52,16 +55,19 @@ test('feature-development: real host lifecycle completes and opens a PR', { skip
     });
   const started = await run.start();
   assert.deepEqual(
-      started.roleBindings.map((binding) => [binding.roleId, binding.resolvedRunnerId]),
-      [
-        ['orchestrator', 'stub-agent'],
-        ['analyst', 'stub-agent'],
-        ['reviewer', 'stub-agent'],
-        ['triager', 'stub-agent'],
-        ['developer', 'stub-agent'],
-        ['integrator', 'script'],
-        ['watcher', 'stub-agent'],
-      ],
+    started.agentBindings.map((binding) => [binding.nodeId, binding.roleId, binding.runnerId, binding.provider, binding.modelId]),
+    [
+      ['analyst', 'analyst', 'codex', 'openai', 'gpt-5.6-luna'],
+      ['ciRework', 'developer', 'codex', 'openai', 'gpt-5.6-luna'],
+      ['classifyRecovery', 'triager', 'codex', 'openai', 'gpt-5.6-luna'],
+      ['codeReview', 'reviewer', 'codex', 'openai', 'gpt-5.6-luna'],
+      ['developer', 'developer', 'codex', 'openai', 'gpt-5.6-luna'],
+      ['planReviewer', 'reviewer', 'codex', 'openai', 'gpt-5.6-luna'],
+      ['questionReviewRework', 'developer', 'codex', 'openai', 'gpt-5.6-luna'],
+      ['reviewRework', 'developer', 'codex', 'openai', 'gpt-5.6-luna'],
+      ['reworkDeveloper', 'developer', 'codex', 'openai', 'gpt-5.6-luna'],
+      ['triage', 'triager', 'codex', 'openai', 'gpt-5.6-luna'],
+    ],
   );
 
   await run.resolveGate({ topic: 'plan', options: PLAN_OPTIONS, outcome: 'approved' });

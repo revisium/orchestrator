@@ -2,12 +2,12 @@ import { Field, Float, Int, ObjectType } from '@nestjs/graphql';
 
 @ObjectType()
 export class UsageModel {
-  @Field(() => Int)
-  inputTokens!: number;
+  @Field(() => Int, { nullable: true })
+  inputTokens!: number | null;
 
-  @Field(() => Int)
-  outputTokens!: number;
+  @Field(() => Int, { nullable: true })
+  outputTokens!: number | null;
 
-  @Field(() => Float)
-  costAmount!: number;
+  @Field(() => Float, { nullable: true })
+  costAmount!: number | null;
 }

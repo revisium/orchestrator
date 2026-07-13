@@ -1,6 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { featureDevelopment } from '../pipeline-core/kit/fixtures.js';
 import type { RouteDecision } from './route-contract.js';
 import {
   type DataDrivenResult,
@@ -89,13 +88,10 @@ test('startDataDrivenTask pins the resolved transient retry policy before DBOS e
     process.env['REVO_RUNNER_TRANSIENT_MAX_ATTEMPTS'] = '3';
     process.env['REVO_RUNNER_TRANSIENT_RETRY_BACKOFF_MS'] = '0';
     const route = {} as RouteDecision;
-    const template = featureDevelopment();
-
-    await harness.subject.startDataDrivenTask('run-policy-pin', { route, template });
+    await harness.subject.startDataDrivenTask('run-policy-pin', { route });
 
     assert.ok(harness.capturedOpts);
     assert.strictEqual(harness.capturedOpts.route, route);
-    assert.strictEqual(harness.capturedOpts.template, template);
     assert.deepEqual(harness.capturedOpts.runnerRetryPolicy, { maxAttempts: 3, backoffMs: 0 });
   } finally {
     restoreEnvVar('REVO_RUNNER_TRANSIENT_MAX_ATTEMPTS', oldMaxAttempts);
@@ -107,7 +103,6 @@ test('startDataDrivenTask validates explicit transient retry policy overrides be
   const validHarness = buildStartDataDrivenTaskSubject();
   await validHarness.subject.startDataDrivenTask('run-policy-explicit', {
     route: {} as RouteDecision,
-    template: featureDevelopment(),
     runnerRetryPolicy: { maxAttempts: 4, backoffMs: 5 },
   });
   assert.deepEqual(validHarness.capturedOpts?.runnerRetryPolicy, { maxAttempts: 4, backoffMs: 5 });
@@ -122,7 +117,6 @@ test('startDataDrivenTask validates explicit transient retry policy overrides be
     assert.throws(
       () => harness.subject.startDataDrivenTask('run-policy-invalid', {
         route: {} as RouteDecision,
-        template: featureDevelopment(),
         runnerRetryPolicy: c.policy,
       }),
       c.message,

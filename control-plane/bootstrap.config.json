@@ -24,25 +24,6 @@
             "type": "string",
             "default": ""
           },
-          "model_level": {
-            "type": "string",
-            "default": "standard",
-            "description": "cheap|standard|deep"
-          },
-          "effort": {
-            "type": "string",
-            "default": ""
-          },
-          "runner": {
-            "type": "string",
-            "default": "claude-code",
-            "description": "Deprecated alias for runner_id"
-          },
-          "runner_id": {
-            "type": "string",
-            "default": "",
-            "description": "Portable playbook runner binding, for example claude-code, codex, or script"
-          },
           "allowed_tools": {
             "type": "array",
             "items": {
@@ -84,16 +65,6 @@
             "type": "string",
             "default": "",
             "description": "Playbook role rights"
-          },
-          "timeout_ms": {
-            "type": "number",
-            "default": 0,
-            "description": "per-role agent timeout; 0 = use runner default (0008 #5)"
-          },
-          "permission_mode": {
-            "type": "string",
-            "default": "",
-            "description": "claude --permission-mode; '' = default (0008 #5)"
           },
           "status": {
             "type": "string",
@@ -203,25 +174,6 @@
               "default": ""
             }
           },
-          "required_roles": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "default": ""
-            }
-          },
-          "alternative_roles_json": {
-            "type": "string",
-            "default": "",
-            "description": "Serialized JSON"
-          },
-          "optional_roles": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "default": ""
-            }
-          },
           "route_gates": {
             "type": "array",
             "items": {
@@ -246,50 +198,6 @@
           "retired_at": {
             "type": "string",
             "default": ""
-          },
-          "updated_at": {
-            "type": "string",
-            "default": ""
-          }
-        },
-        "required": []
-      }
-    },
-    {
-      "id": "model_profiles",
-      "schema": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "type": "string",
-            "default": ""
-          },
-          "level": {
-            "type": "string",
-            "default": "",
-            "description": "cheap|standard|deep|codex-cheap|codex-standard|codex-deep"
-          },
-          "provider": {
-            "type": "string",
-            "default": ""
-          },
-          "model_id": {
-            "type": "string",
-            "default": ""
-          },
-          "params": {
-            "type": "string",
-            "default": "",
-            "description": "Serialized JSON"
-          },
-          "cost_per_input": {
-            "type": "number",
-            "default": 0
-          },
-          "cost_per_output": {
-            "type": "number",
-            "default": 0
           },
           "updated_at": {
             "type": "string",
@@ -390,10 +298,6 @@
             "default": "",
             "description": "Serialized JSON"
           },
-          "model_level": {
-            "type": "string",
-            "default": "standard"
-          },
           "requires_human": {
             "type": "boolean",
             "default": false
@@ -415,9 +319,6 @@
         "id": "architect",
         "name": "architect",
         "system_prompt": "You are the Architect agent in an autonomous dev loop. Read the task and provided context, then produce ONE executable, step-by-step plan (numbered steps, each with exact files, a Verify command, and stop conditions) like the repo's docs/plans/*. Ground every step in files you have ACTUALLY opened this session — quote the current line verbatim and re-open or grep the file to confirm a line number before citing it; NEVER cite a remembered or assumed line/content. BEFORE planning, check whether the feature ALREADY EXISTS (grep the codebase for it); if it is already implemented, do NOT invent a plan for a non-problem — set needsHuman true with output saying it already exists, and nextSteps []. Keep the slice small and single-concern; list out-of-scope items as later plans. Do NOT write implementation code, and do NOT change architecture or ADRs on your own initiative. In your result: set output to a short summary, write the plan to docs/plans/ and put its path in artifacts, and set nextSteps to exactly one developer step (role 'developer', kind 'implement', input referencing the plan path). If the task is ambiguous or needs an architectural decision, set needsHuman true and nextSteps [].",
-        "model_level": "deep",
-        "effort": "high",
-        "runner": "claude-code",
         "allowed_tools": [
           "Read",
           "Grep",
@@ -425,8 +326,6 @@
           "Write"
         ],
         "scope_rules": "{}",
-        "timeout_ms": 1200000,
-        "permission_mode": "default",
         "updated_at": "2026-06-11T00:00:00.000Z"
       }
     },
@@ -437,9 +336,6 @@
         "id": "developer",
         "name": "developer",
         "system_prompt": "You are the Developer agent in an autonomous dev loop. Implement the plan from the provided context. Work only in the task working tree and leave final handoff to later roles. Make the smallest correct change; write REAL behavior tests (never existence checks); NEVER use eslint-disable or NOSONAR — fix the code. Run the repo's gates (typecheck, lint:ci, test) and only finish when all pass. Do NOT change architecture or ADRs without explicit approval. Your Bash access is for local inspection and validation commands such as npm typecheck/lint/test. Before finishing, re-scan your own diff for the gate-blocking classes (unnecessary casts, unused imports, object stringification, repeated mutations, nested ternary) and apply lint fixes to ALL new code including any test helper you add. When your step kind is 'implement', your change MUST produce a NON-EMPTY diff — run `git status` / `git diff` and CONFIRM files actually changed before finishing; a 'succeeded' with no file change is a FAILURE, not success (gates passing on unchanged code proves nothing). If the work is ALREADY DONE (the feature/fix already exists in the code), do NOT silently succeed — set needsHuman true with output explaining it is already implemented, and nextSteps []. In your result: set output to what you implemented, the validation results, and confirmation the diff is non-empty; set nextSteps to exactly one reviewer step (role 'reviewer', kind 'review'). If blocked, set needsHuman true and nextSteps [].",
-        "model_level": "standard",
-        "effort": "high",
-        "runner": "claude-code",
         "allowed_tools": [
           "Read",
           "Edit",
@@ -449,8 +345,6 @@
           "Glob"
         ],
         "scope_rules": "{}",
-        "timeout_ms": 900000,
-        "permission_mode": "default",
         "updated_at": "2026-06-11T00:00:00.000Z"
       }
     },
@@ -461,9 +355,6 @@
         "id": "reviewer",
         "name": "reviewer",
         "system_prompt": "You are the Reviewer agent in an autonomous dev loop. Review the change against its plan and the project's invariants — make NO code changes, and do NOT commit/push/create PRs (your Bash access is for running gates only). Read the changed and new files in full (not just the diff), verify each plan step, and run the gates (typecheck, lint:ci, test). Calibrate severity to what the CI/Sonar bots actually block: treat data-completeness under a cap/limit, a verb not persisting every field its semantics require (state-consistency), non-atomic check-then-act idempotency, and the gate-blocking SonarTS lint rules as MAJOR. Any fix you suggest must obey repo rules — never propose eslint-disable. If the step under review was kind 'implement' but produced an EMPTY diff (no files changed), that is a BLOCKER — REQUEST_CHANGES for vacuous success: gates passing on unchanged code is NOT done work. Confirm the change actually exists in the files, not merely that gates pass. In your result: set output to a structured verdict (APPROVE or REQUEST_CHANGES with findings as file:line). If REQUEST_CHANGES, set nextSteps to one developer step carrying the findings; if APPROVE, set nextSteps to one integrator step.",
-        "model_level": "standard",
-        "effort": "high",
-        "runner": "claude-code",
         "allowed_tools": [
           "Read",
           "Grep",
@@ -471,8 +362,6 @@
           "Bash"
         ],
         "scope_rules": "{}",
-        "timeout_ms": 600000,
-        "permission_mode": "default",
         "updated_at": "2026-06-11T00:00:00.000Z"
       }
     },
@@ -483,16 +372,11 @@
         "id": "integrator",
         "name": "integrator",
         "system_prompt": "[DEPRECATED] Integration is now deterministic code in src/runners/integrator.ts; this role is retired from the executed chain and is not dispatched. Kept only so `run create --role integrator` resolves to a seeded role row.",
-        "model_level": "standard",
-        "effort": "high",
-        "runner": "script",
         "allowed_tools": [
           "Read",
           "Bash"
         ],
         "scope_rules": "{}",
-        "timeout_ms": 0,
-        "permission_mode": "default",
         "updated_at": "2026-06-08T00:00:00.000Z"
       }
     },
@@ -503,13 +387,8 @@
         "id": "ci-poller",
         "name": "ci-poller",
         "system_prompt": "",
-        "model_level": "cheap",
-        "effort": "low",
-        "runner": "script",
         "allowed_tools": [],
         "scope_rules": "{}",
-        "timeout_ms": 0,
-        "permission_mode": "default",
         "updated_at": "2026-06-04T00:00:00.000Z"
       }
     },
@@ -520,101 +399,12 @@
         "id": "pr-watcher",
         "name": "pr-watcher",
         "system_prompt": "You are the PR-Judge agent in an autonomous dev loop. You receive pre-gathered, structured findings: CI verdict (ci_passed), Sonar issues list (sonar_issues), Sonar security hotspots (sonar_hotspots_to_review), Sonar availability flag (sonar_unavailable), GitHub's authoritative review decision (reviewDecision — one of APPROVED, CHANGES_REQUESTED, REVIEW_REQUIRED, or '' when no review is required), the latest formal review per human reviewer (human_reviews — each entry carries a .state), and review/conversation comments (human_comments, bot_comments) gathered from BOTH the inline review threads AND the top-level PR conversation. Do NOT re-run gh api or re-check CI — the data is already collected. The AUTHORITATIVE human-review gate is reviewDecision: it is blocking when CHANGES_REQUESTED or REVIEW_REQUIRED, and satisfied when APPROVED or ''. Treat individual human_reviews entries as CONTEXT only — use them to understand who said what, NOT as the gate. Your job is to classify the free-text comments: decide which (if any) are blocking findings that require developer action. Zero-tolerance Sonar policy: the PR is NOT ready if sonar_issues is non-empty (ANY severity — BLOCKER through INFO) OR sonar_hotspots_to_review is non-empty. If either is non-empty, the verdict is NEEDS_WORK and you must carry those issues/hotspots (component, line, rule, message) as findings to the developer step. If sonar_unavailable is true, you CANNOT assert the PR is clean — do NOT declare READY; set needsHuman true with an output explaining Sonar could not be reached, and nextSteps []. Otherwise apply the full stopping criterion: READY only if ci_passed is true AND sonar_issues is empty AND sonar_hotspots_to_review is empty AND sonar_unavailable is not true AND reviewDecision is not blocking (neither CHANGES_REQUESTED nor REVIEW_REQUIRED) AND no human comment is a blocking request-for-change. In your result: set output to the merge verdict (READY or NEEDS_WORK). If NEEDS_WORK, set nextSteps to one developer step carrying only the blocking findings. If READY, set nextSteps [].",
-        "model_level": "cheap",
-        "effort": "low",
-        "runner": "claude-code",
         "allowed_tools": [
           "Read",
           "Bash"
         ],
         "scope_rules": "{}",
-        "timeout_ms": 300000,
-        "permission_mode": "default",
         "updated_at": "2026-06-05T00:00:00.000Z"
-      }
-    },
-    {
-      "tableId": "model_profiles",
-      "rowId": "standard",
-      "data": {
-        "id": "standard",
-        "level": "standard",
-        "provider": "anthropic",
-        "model_id": "claude-sonnet-4-6",
-        "params": "{}",
-        "cost_per_input": 3,
-        "cost_per_output": 15,
-        "updated_at": "2026-06-03T00:00:00.000Z"
-      }
-    },
-    {
-      "tableId": "model_profiles",
-      "rowId": "cheap",
-      "data": {
-        "id": "cheap",
-        "level": "cheap",
-        "provider": "anthropic",
-        "model_id": "claude-haiku-4-5-20251001",
-        "params": "{}",
-        "cost_per_input": 0.8,
-        "cost_per_output": 4,
-        "updated_at": "2026-06-03T00:00:00.000Z"
-      }
-    },
-    {
-      "tableId": "model_profiles",
-      "rowId": "deep",
-      "data": {
-        "id": "deep",
-        "level": "deep",
-        "provider": "anthropic",
-        "model_id": "claude-opus-4-8",
-        "params": "{}",
-        "cost_per_input": 15,
-        "cost_per_output": 75,
-        "updated_at": "2026-06-03T00:00:00.000Z"
-      }
-    },
-    {
-      "tableId": "model_profiles",
-      "rowId": "codex-standard",
-      "data": {
-        "id": "codex-standard",
-        "level": "codex-standard",
-        "provider": "openai",
-        "model_id": "gpt-5.5",
-        "params": "{}",
-        "cost_per_input": 2,
-        "cost_per_output": 8,
-        "updated_at": "2026-06-03T00:00:00.000Z"
-      }
-    },
-    {
-      "tableId": "model_profiles",
-      "rowId": "codex-cheap",
-      "data": {
-        "id": "codex-cheap",
-        "level": "codex-cheap",
-        "provider": "openai",
-        "model_id": "gpt-5.5",
-        "params": "{}",
-        "cost_per_input": 2,
-        "cost_per_output": 8,
-        "updated_at": "2026-06-03T00:00:00.000Z"
-      }
-    },
-    {
-      "tableId": "model_profiles",
-      "rowId": "codex-deep",
-      "data": {
-        "id": "codex-deep",
-        "level": "codex-deep",
-        "provider": "openai",
-        "model_id": "gpt-5.5",
-        "params": "{}",
-        "cost_per_input": 2,
-        "cost_per_output": 8,
-        "updated_at": "2026-06-03T00:00:00.000Z"
       }
     },
     {
@@ -623,11 +413,10 @@
       "data": {
         "id": "pipeline",
         "rule": "{\"max_review_iterations\":3,\"max_attempts\":3,\"budget_usd\":0,\"budget_tokens\":0}",
-        "model_level": "standard",
         "requires_human": false,
         "updated_at": "2026-06-11T00:00:00.000Z"
       }
     }
   ],
-  "commitMessage": "Bootstrap control-plane meaning schema and seed roles/model-profiles + pipeline policy"
+  "commitMessage": "Bootstrap provider-neutral control-plane meaning and exact run-profile contract"
 }

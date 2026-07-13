@@ -165,5 +165,5 @@ export function createGraphqlContext(): GraphqlContext {
 }
 
 export function graphqlStubAgentProfile(): ReturnType<typeof stubFixtureAgentProfile> {
-  return stubFixtureAgentProfile();
+  return stubFixtureAgentProfile('local-change');
 }

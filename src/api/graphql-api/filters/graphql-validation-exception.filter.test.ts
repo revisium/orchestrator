@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ArgumentsHost, BadRequestException } from '@nestjs/common';
 import { GraphQLError } from 'graphql';
+import { ControlPlaneError } from '../../../control-plane/errors.js';
+import { GraphQLControlPlaneExceptionFilter } from './graphql-control-plane-exception.filter.js';
 import { GraphQLValidationExceptionFilter } from './graphql-validation-exception.filter.js';
 
 function gqlHost(): ArgumentsHost {
@@ -60,4 +62,43 @@ test('GraphQLValidationExceptionFilter rethrows non-GraphQL bad requests unchang
   const exception = new BadRequestException('No GraphQL transport');
 
   assert.throws(() => filter.catch(exception, httpHost()), exception);
+});
+
+test('GraphQLControlPlaneExceptionFilter preserves stable route code and path', () => {
+  const filter = new GraphQLControlPlaneExceptionFilter();
+  const exception = new ControlPlaneError('VALIDATION_FAILURE', 'profile selector is invalid', {
+    details: { code: 'profile_selector_invalid', path: '/profileId' },
+  });
+
+  assert.throws(
+    () => filter.catch(exception, gqlHost()),
+    (error: unknown) => {
+      assert.ok(error instanceof GraphQLError);
+      assert.equal(error.message, 'profile selector is invalid');
+      assert.equal(error.extensions.code, 'VALIDATION_FAILURE');
+      assert.deepEqual(error.extensions.details, { code: 'profile_selector_invalid', path: '/profileId' });
+      return true;
+    },
+  );
+});
+
+test('GraphQLControlPlaneExceptionFilter preserves runner mismatch code without raw details', () => {
+  const filter = new GraphQLControlPlaneExceptionFilter();
+  const exception = new ControlPlaneError('VALIDATION_FAILURE', 'provider is not accepted', {
+    details: { code: 'runner_provider_mismatch', path: '/bindings/slots/role:developer/provider', secret: 'must-not-leak' },
+  });
+
+  assert.throws(
+    () => filter.catch(exception, gqlHost()),
+    (error: unknown) => {
+      assert.ok(error instanceof GraphQLError);
+      assert.equal(error.extensions.code, 'VALIDATION_FAILURE');
+      assert.deepEqual(error.extensions.details, {
+        code: 'runner_provider_mismatch',
+        path: '/bindings/slots/role:developer/provider',
+      });
+      assert.equal(JSON.stringify(error.extensions).includes('must-not-leak'), false);
+      return true;
+    },
+  );
 });

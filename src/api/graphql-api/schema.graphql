@@ -103,12 +103,6 @@ type AgentRunActivity {
   runId: ID!
 }
 
-type AlternativeRoleGroupModel {
-  groupId: String!
-  resolution: String!
-  roles: [String!]!
-}
-
 input AnswerQuestionInput {
   answer: JSON!
   inboxId: ID!
@@ -361,14 +355,11 @@ type PipelineConnection {
 }
 
 type PipelineModel {
-  alternativeRoles: [AlternativeRoleGroupModel!]!
   executionPolicy: JSON
   id: ID!
-  optionalRoles: [String!]!
   path: String!
   pipelineId: String!
   playbookId: String!
-  requiredRoles: [String!]!
   routeGates: [String!]!
   triggers: [String!]!
 }
@@ -618,21 +609,16 @@ type RoleConnection {
 
 type RoleModel {
   allowedTools: [String!]
-  effort: String
   id: ID!
-  modelLevel: String!
   name: String!
-  permissionMode: String
   playbookId: String
   playbookRoleId: String
   rights: String
-  runner: String!
   scopeRules: JSON
   sourceHash: String
   sourcePath: String
   surface: String
   systemPrompt: String
-  timeoutMs: Int
 }
 
 type RoleModelEdge {
@@ -657,18 +643,20 @@ type RunAttemptConnection {
 
 type RunAttemptModel {
   artifactRef: String!
-  costAmount: Float!
-  currency: String!
+  costAmount: Float
+  currency: String
   durationMs: Int!
   error: String!
   id: ID!
-  inputTokens: Int!
+  inputTokens: Int
   iteration: Int!
   lesson: String!
-  modelProfile: String!
+  modelId: String!
   outputSummary: String!
-  outputTokens: Int!
+  outputTokens: Int
+  provider: String!
   runId: ID!
+  runnerId: String!
   startedAt: DateTime!
   status: String!
   stepId: String!
@@ -689,14 +677,16 @@ type RunConnection {
 
 type RunCostModel {
   attemptId: String!
-  costAmount: Float!
-  currency: String!
+  costAmount: Float
+  currency: String
   id: ID!
-  inputTokens: Int!
-  modelProfile: String!
-  outputTokens: Int!
+  inputTokens: Int
+  modelId: String!
+  outputTokens: Int
+  provider: String!
   recordedAt: DateTime!
   runId: ID!
+  runnerId: String!
   stepId: String!
 }
 
@@ -820,15 +810,16 @@ type RunWorkflowModel {
 
 type RunWorkflowNodeModel {
   attemptCount: Int!
-  costAmount: Float!
+  costAmount: Float
   id: ID!
   inboxId: ID
-  inputTokens: Int!
+  inputTokens: Int
   kind: String!
   label: String!
   metadata: JSON
-  modelLevel: String
-  outputTokens: Int!
+  modelId: String
+  outputTokens: Int
+  provider: String
   roleId: String
   runner: String
   scriptId: String
@@ -849,7 +840,7 @@ type RunWorkflowPipelineModel {
 
 input SimulateRouteInput {
   params: JSON
-  pipeline: String!
+  pipelineId: String!
   playbookId: String
   profile: JSON
   profileId: String
@@ -886,9 +877,9 @@ input UpdateRunProfileInput {
 }
 
 type UsageModel {
-  costAmount: Float!
-  inputTokens: Int!
-  outputTokens: Int!
+  costAmount: Float
+  inputTokens: Int
+  outputTokens: Int
 }
 
 input ValidateRunProfileInput {

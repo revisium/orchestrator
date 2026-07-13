@@ -49,7 +49,6 @@ try {
     status: 'running',
     input: { repo: 'agent-orchestrator', plan: '0002' },
     output: null,
-    model_profile: 'standard',
     run_after: '',
     attempt_count: 0,
     max_attempts: 1,

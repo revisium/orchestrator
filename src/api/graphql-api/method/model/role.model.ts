@@ -1,4 +1,4 @@
-import { Field, ID, Int, ObjectType } from '@nestjs/graphql';
+import { Field, ID, ObjectType } from '@nestjs/graphql';
 import { GraphQLJSON } from 'graphql-scalars';
 
 @ObjectType()
@@ -8,12 +8,6 @@ export class RoleModel {
 
   @Field(() => String)
   name!: string;
-
-  @Field(() => String)
-  modelLevel!: string;
-
-  @Field(() => String)
-  runner!: string;
 
   @Field(() => String, { nullable: true })
   surface?: string;
@@ -30,9 +24,6 @@ export class RoleModel {
   @Field(() => String, { nullable: true })
   systemPrompt?: string;
 
-  @Field(() => String, { nullable: true })
-  effort?: string;
-
   @Field(() => [String], { nullable: true })
   allowedTools?: string[];
 
@@ -45,9 +36,4 @@ export class RoleModel {
   @Field(() => String, { nullable: true })
   sourceHash?: string;
 
-  @Field(() => Int, { nullable: true })
-  timeoutMs?: number;
-
-  @Field(() => String, { nullable: true })
-  permissionMode?: string;
 }
