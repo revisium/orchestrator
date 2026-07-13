@@ -1,6 +1,8 @@
 # ACP + OpenCode Research
 
-- **Status:** Pre-ADR research.
+- **Status:** Bounded PoC evidence for
+  [ADR-0012](../../adr/0012-acp-process-and-session-isolation.md) and the
+  [ACP runner session v1 spec](../../specs/acp-runner-session-v1.spec.md).
 - **Date:** 2026-07-08.
 
 ## Read Order
@@ -16,4 +18,6 @@ Raw JSONL artifacts from the local PoC runs were written outside the repository:
 /tmp/revo-opencode-acp-research-artifacts/*.jsonl
 ```
 
-Those artifacts are local evidence from bounded PoC runs, not a committed contract or reusable fixture set. Treat the results as input to the future ADR/spec, and re-run or refresh the experiments if the OpenCode version, provider setup, model, sandbox, or ACP implementation changes.
+Those artifacts are local evidence from bounded PoC runs, not a committed contract or reusable fixture set. The ADR
+and spec are normative; re-run or refresh these experiments if the OpenCode version, provider setup, model, sandbox,
+or ACP implementation changes.

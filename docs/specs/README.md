@@ -24,9 +24,10 @@ archive of superseded plans.
 | [default-playbook-policy.spec.md](./default-playbook-policy.spec.md) | Bundled `feature-development` policy rules, static verifier scope, and merge-gate recheck behavior |
 | [pipeline-test-coverage-v1.spec.md](./pipeline-test-coverage-v1.spec.md) | Pipeline test-layer ownership, DSL coverage matrix policy, profile coverage, and hard-skip rules |
 | [test-architecture-v1.spec.md](./test-architecture-v1.spec.md) | Accepted target test-layer/context boundaries, runtime-evidence requirements, matrix ownership, migration, and CI constraints |
-| [runner-manifest-v1.spec.md](./runner-manifest-v1.spec.md) | Runner manifest field schema, StdoutParser/PermissionStyle code contracts, route-time capability snapshot, and replay determinism |
+| [runner-manifest-v1.spec.md](./runner-manifest-v1.spec.md) | Runner manifest field schema, ProtocolDriver/StdoutParser/PermissionStyle code contracts, route-time capability snapshot, and replay determinism |
 | [runner-result-envelope-v1.spec.md](./runner-result-envelope-v1.spec.md) | Canonical result envelope, structured-output tiers, `submit_result` tool-call mechanism, tier degradation, and the verdict-presence validate seam |
 | [runner-capabilities-v1.spec.md](./runner-capabilities-v1.spec.md) | Runner capability vocabulary replacing the hardcoded branch functions, with one-to-one replacement mapping and worked `capabilities` examples |
+| [acp-runner-session-v1.spec.md](./acp-runner-session-v1.spec.md) | Draft ACP attempt, invocation, process-group, session, prompt, replay, and cleanup contract |
 | [run-profiles-v1.spec.md](./run-profiles-v1.spec.md) | Draft public run-profile contract for provider-neutral `feature-development`, profile-driven topology/bindings, MCP ergonomics, and replay pins |
 | [playbook-storage-v1.spec.md](./playbook-storage-v1.spec.md) | Versioned playbook snapshot storage, document/entity projections, relation records, and route-time pins |
 | [revo-playbook-materialization-v1.spec.md](./revo-playbook-materialization-v1.spec.md) | `.revo/playbook` worktree bundle layout, manifest validation, per-step selected references, and worker prompt discovery |

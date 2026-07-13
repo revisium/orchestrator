@@ -49,7 +49,7 @@ There is no internal archive of obsolete plans. Git history is the archive.
 | Test-layer boundaries, surface contexts, coverage evidence, semantic snapshots, or test timing | [test architecture v1](./specs/test-architecture-v1.spec.md), [current test coverage matrix](./specs/test-coverage-matrix-v1.json), [pipeline test coverage v1](./specs/pipeline-test-coverage-v1.spec.md) | `src/e2e/**`, `src/testing/policy/**`, `eslint-local-rules/test-architecture-boundaries.js`, `package.json`, `.github/workflows/ci.yml` |
 | Storage bootstrap, Prisma schema, DBOS placement, or embedded engine integration | [ADR-0007](./adr/0007-revo-storage-foundation.md), [storage database layout v1](./specs/storage-database-layout-v1.spec.md), [Revo Prisma and engine schema v1](./specs/revo-prisma-engine-schema-v1.spec.md) | `prisma/schema.prisma`, `src/storage/**`, `src/engine/**`, `src/revisium/**` |
 | Revo projects, ADR/KB stores, or template migrations | [ADR-0008](./adr/0008-revo-projects-and-versioned-knowledge.md), [Revo project knowledge and migrations v1](./specs/revo-project-knowledge-migrations-v1.spec.md) | `prisma/schema.prisma`, engine-backed project services as they land, project/knowledge tests |
-| Agent runner behavior | [runner-contract.md](./runner-contract.md) | `src/runners/**`, `src/worker/**`, e2e runner scenarios |
+| Agent runner behavior or interactive protocols | [runner-contract.md](./runner-contract.md), [ACP runner session v1](./specs/acp-runner-session-v1.spec.md) | `src/runners/**`, `src/worker/**`, e2e runner scenarios |
 | Script/effect registration or execution | [script runtime v1](./specs/script-runtime-v1.spec.md) | Current: `src/pipeline/data-driven-task.workflow.ts`, `src/runners/integrator.ts`; Draft target: `src/system-scripts/**`, pipeline script refs, runtime effect adapter |
 | Repository, worktree, or resource lifecycle | [resources, workspaces, and effects v1](./specs/resources-workspaces-effects-v1.spec.md) | Current: `src/worker/git-worktree-manager.ts`; Draft target: `src/run-resources/**`, `src/workspaces/**`, pipeline declarations, artifact refs |
 | Context compression or prompt inputs | [context-budget.md](./context-budget.md) | `src/worker/build-context.ts`, run output references, role prompt composition |
@@ -74,6 +74,7 @@ generated PNG diagrams unless the asset is genuinely visual and cannot be repres
 | [ADR-0009](./adr/0009-test-architecture-boundaries.md) | Accepted | Test-layer, context, and evidence-ownership boundaries |
 | [ADR-0010](./adr/0010-run-resources-and-workspace-planning.md) | Draft | Named run resources, isolated workspaces, and immutable execution-plan compilation |
 | [ADR-0011](./adr/0011-system-script-runtime-and-trusted-extensions.md) | Draft | Bounded script definitions, explicit registration, and trusted startup extensions |
+| [ADR-0012](./adr/0012-acp-process-and-session-isolation.md) | Accepted | ACP process and session isolation for MVP v1 |
 
 ADR-0001 and ADR-0002 are immutable historical decisions. Their Revisium runtime-storage descriptions do not reflect
 shipped ownership; current facts live in [control-plane-schema.md](./control-plane-schema.md) and
@@ -95,6 +96,7 @@ records stay unchanged unless that decision is accepted.
 | [Pipeline test coverage v1](./specs/pipeline-test-coverage-v1.spec.md) | Test-layer ownership, DSL coverage matrix policy, profile coverage, and hard-skip rules |
 | [Test architecture v1](./specs/test-architecture-v1.spec.md) | Accepted target layer/context boundaries, runtime-evidence requirements, matrix ownership, migration, and CI constraints |
 | [Run profiles v1](./specs/run-profiles-v1.spec.md) | Draft run-profile contract for provider-neutral `feature-development`, profile-driven topology/bindings, MCP ergonomics, and replay pins |
+| [ACP runner session v1](./specs/acp-runner-session-v1.spec.md) | Draft ACP attempt, invocation, process-group, session, prompt, replay, and cleanup contract |
 | [Storage database layout v1](./specs/storage-database-layout-v1.spec.md) | Draft storage v2 topology, database ownership, bootstrap order, and migration planes |
 | [Revo Prisma and engine schema v1](./specs/revo-prisma-engine-schema-v1.spec.md) | Draft Revo product DB schema ownership and embedded engine table compatibility |
 | [Revo project knowledge and migrations v1](./specs/revo-project-knowledge-migrations-v1.spec.md) | Draft Revo project ADR/KB table initialization and engine migration contract |

@@ -5,7 +5,9 @@
 - **Owners:** engine (pipeline), runner adapters (worker)
 - **Source files:** `src/worker/result-envelope.ts`, `src/worker/codex-runner.ts`, `src/worker/runner.ts`,
   `src/pipeline/data-driven-task.workflow.ts`
-- **Related ADRs:** [ADR-0004](../adr/0004-runner-execution-contract.md), [ADR-0002](../adr/0002-data-driven-pipeline-state-machine.md)
+- **Related ADRs:** [ADR-0004](../adr/0004-runner-execution-contract.md),
+  [ADR-0012](../adr/0012-acp-process-and-session-isolation.md),
+  [ADR-0002](../adr/0002-data-driven-pipeline-state-machine.md)
 
 ## Scope
 
@@ -17,7 +19,7 @@ the boundary.
 
 The key words MUST, MUST NOT, SHOULD, SHOULD NOT, MAY are to be interpreted as in RFC 2119 / BCP 14.
 
-The manifest field schema and the StdoutParser/PermissionStyle contracts are in
+The manifest field schema and the ProtocolDriver/StdoutParser/PermissionStyle contracts are in
 [runner-manifest-v1.spec.md](./runner-manifest-v1.spec.md); the full `capabilities` field list is in
 [runner-capabilities-v1.spec.md](./runner-capabilities-v1.spec.md).
 
@@ -160,9 +162,13 @@ For `tool-call`-tier runners, the engine injects exactly one tool:
 - `strict`: the provider rejects arguments violating the schema where supported; otherwise the validate seam
   catches drift.
 
-Harvest: the StdoutParser reads the tool-call arguments from the runner's event stream (the `parts-stream` parser
-for OpenCode) and returns them as `StdoutParserResult.structured`. The engine then maps `structured` →
-`AttemptResult` exactly as the `native-schema` path does.
+Harvest: the StdoutParser reads the tool-call arguments from the runner's event stream and returns them as
+`StdoutParserResult.structured`. The engine then maps `structured` → `AttemptResult` exactly as the
+`native-schema` path does.
+
+OpenCode ACP MVP is explicitly `prompt-only`; `acp-jsonrpc-v1` reduces its final agent-message text to the floor
+defined above. It MUST NOT harvest a `submit_result` tool call or advertise `tool-call` until the live conformance
+requirements in [acp-runner-session-v1.spec.md](./acp-runner-session-v1.spec.md) pass.
 
 ### Harvest per tier, then validate (the shared seam)
 
@@ -255,4 +261,5 @@ A `tool-call` runner attempt that degrades to the floor:
 
 ## Changelog
 
+- 2026-07-10: Aligned OpenCode ACP with the prompt-only MVP and replaced the premature `parts-stream` claim.
 - 2026-06-29: Initial version.

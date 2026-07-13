@@ -444,8 +444,13 @@ truth for the run, even when the run was created from `profileId`.
 - `policyVersion`;
 - resolved role/node launch bindings.
 
-Future route pins may add resolved GitHub auth provenance and resolved model-profile provenance once those contracts are
-versioned and implemented.
+For each agent binding, the target route pin MUST include the resolved model-profile snapshot used by the runner:
+`level`, `provider`, `modelId`, `params`, `costPerInput`, and `costPerOutput`. Resolution happens before DBOS enqueue.
+Workflow execution and replacement invocation MUST NOT re-read the mutable `model_profiles` row. This target schema
+change is required first by [acp-runner-session-v1.spec.md](./acp-runner-session-v1.spec.md) and applies provider-neutral
+replay determinism to later runners as they migrate.
+
+Future route pins may still add resolved GitHub auth provenance once that contract is versioned and implemented.
 
 The requested GitHub account alias is already pinned through the normalized profile snapshot and launch bindings.
 

@@ -8,10 +8,11 @@
   [execution plan v1](../specs/execution-plan-v1.spec.md),
   [resources, workspaces, and effects v1](../specs/resources-workspaces-effects-v1.spec.md)
 - **Refined by:** [ADR-0010](./0010-run-resources-and-workspace-planning.md),
-  [ADR-0011](./0011-system-script-runtime-and-trusted-extensions.md)
+   [ADR-0011](./0011-system-script-runtime-and-trusted-extensions.md)
 - **Refines:** [ADR-0002](./0002-data-driven-pipeline-state-machine.md)
 - **Relates-to:** [ADR-0004](./0004-runner-execution-contract.md),
-  [ADR-0005](./0005-versioned-playbook-storage-and-revo-materialization.md)
+  [ADR-0005](./0005-versioned-playbook-storage-and-revo-materialization.md),
+  [ADR-0012](./0012-acp-process-and-session-isolation.md)
 
 ## Context
 
@@ -71,6 +72,9 @@ runner/model/permission/timeout bindings, while Git/GitHub credential aliases mo
 named resource bindings. Scripts are selected by versioned pipeline refs and do not receive runner bindings or account
 fields. The amended run-profile, execution-plan, resource, and script-runtime specs are authoritative for the atomic
 target.
+
+ADR-0012 adds the ACP-specific requirement that an interactive replacement invocation uses the exact provider, model,
+params, privacy, and pricing resolved before DBOS enqueue; it must not re-read mutable model-profile meaning.
 
 ## Direct Cutover
 
