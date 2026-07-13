@@ -40,3 +40,16 @@ test('rejects unsupported names, cardinality, bindings, and credential-shaped in
   assert.ok(codes.includes('RESOURCE_REF_UNRESOLVED'));
   assert.equal(result.value, null);
 });
+
+test('rejects malformed and non-closed V1 input shapes', () => {
+  assert.ok(parseRunResourceInputV1(null).diagnostics.some((item) => item.path === 'input'));
+  const result = parseRunResourceInputV1({
+    resources: { source: { kind: 'repository', cardinality: 'one', required: true, extra: true } },
+    workspace: { isolation: 'scratch', retention },
+    bindings: { source: { repositoryId: 'repo_123', revision: 42, extra: true } },
+  });
+  const paths = result.diagnostics.map((item) => item.path);
+  assert.ok(paths.includes('resources.source.extra'));
+  assert.ok(paths.includes('bindings.source.extra'));
+  assert.ok(paths.includes('bindings.source.revision'));
+});
