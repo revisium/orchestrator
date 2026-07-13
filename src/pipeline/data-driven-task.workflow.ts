@@ -42,8 +42,9 @@ import {
   type TerminalStatus,
 } from '../pipeline-core/index.js';
 import type { AttemptResult } from '../worker/runner.js';
-import type { BindingOverride, LaunchOverrides, RouteDecision, RouteRoleBinding } from './route-contract.js';
-import { resolveLaunchOverrides, runnerNeedsLivePreflight } from './route-contract.js';
+import type { RouteDecision } from './route-contract.js';
+import { executionPlanFromRouteDecision, scriptBindingForNode } from './route-contract.js';
+import type { ResolvedAgentBinding, ResolvedScriptBinding } from '../control-plane/run-profile-contract.js';
 import type {
   IntegratorInput,
   IntegratorOutput,
@@ -97,15 +98,23 @@ export type DataDrivenProgressCursor = {
 
 export type DataDrivenTaskOpts = {
   route: RouteDecision;
-
-  template: Template;
-
   runnerRetryPolicy: RunnerTransientRetryPolicy;
 };
 
 const MAX_STEPS = 1_000;
 const DEFAULT_RUNNER_TRANSIENT_MAX_ATTEMPTS = 2;
 const DEFAULT_RUNNER_TRANSIENT_RETRY_BACKOFF_MS = 2_000;
+
+export function resolvePinnedAgentBinding(
+  bindings: ReadonlyMap<string, ResolvedAgentBinding>,
+  nodeId: string,
+): ResolvedAgentBinding {
+  const binding = bindings.get(`node:${nodeId}`);
+  if (binding === undefined) {
+    throw new Error(`execution_plan_binding_unresolved: agent node ${nodeId} has no pinned binding`);
+  }
+  return binding;
+}
 
 export type RunnerTransientRetryPolicy = {
   maxAttempts: number;
@@ -439,10 +448,6 @@ function nodeProducesChange(node: Node): boolean {
 function recoveryContextAfterNode(nodeId: string, recoveryContext: RunOutputRow | undefined): RunOutputRow | null | undefined {
   if (!recoveryContext) return undefined;
   return nodeId === 'classifyRecovery' ? recoveryContext : null;
-}
-
-function runnerProducesWorktreeChanges(runnerId: string): boolean {
-  return runnerId === 'claude-code' || runnerId === 'codex';
 }
 
 const LIVE_WORKTREE_SCRIPT_REFS = new Set([
@@ -918,8 +923,8 @@ type SystemScriptInvocation = {
   runId: string;
   decision: Extract<Decision, { type: 'invokeScript' }>;
   ctx: { taskId: string; title: string; base: string; issueRef?: IssueRef; issueAction?: IssueAction };
-  bindingByRef: Map<string, RouteRoleBinding>;
-  launchBindings?: BindingOverride[];
+  bindingByNode: Map<string, ResolvedAgentBinding>;
+  scriptBindings?: ResolvedScriptBinding[];
   stepKey: string;
   inputs: Record<string, unknown>;
 };
@@ -976,16 +981,11 @@ function mergeOverrideEventPayload(result: MergeOverrideOutput): Record<string, 
   };
 }
 
-function scriptGithubAccount(
+export function scriptGithubAccount(
   decision: Extract<Decision, { type: 'invokeScript' }>,
-  launchBindings: BindingOverride[] | undefined,
+  scriptBindings: ResolvedScriptBinding[] | undefined,
 ): string | undefined {
-  if (!launchBindings) return undefined;
-  for (let index = launchBindings.length - 1; index >= 0; index -= 1) {
-    const binding = launchBindings[index]!;
-    if (binding.match.nodeId === decision.nodeId) return binding.accounts?.github;
-  }
-  return undefined;
+  return scriptBindingForNode({ scriptBindings: scriptBindings ?? [] }, decision.nodeId).accountAliases.github;
 }
 
 export function buildSystemScriptRegistry(deps: ScriptRegistryDeps): Map<string, SystemScriptHandler> {
@@ -1029,8 +1029,8 @@ export function buildSystemScriptRegistry(deps: ScriptRegistryDeps): Map<string,
     blockedReason: string;
     mapSuccess: (result: TSuccess) => { eventType: string; payload: Record<string, unknown>; pointer: unknown; verdict?: string };
   }): SystemScriptHandler {
-    return async ({ runId, decision, ctx, launchBindings, stepKey, inputs }) => {
-      const integratorInput = buildIntegratorInput(runId, ctx, inputs, scriptGithubAccount(decision, launchBindings));
+    return async ({ runId, decision, ctx, scriptBindings, stepKey, inputs }) => {
+      const integratorInput = buildIntegratorInput(runId, ctx, inputs, scriptGithubAccount(decision, scriptBindings));
       let result: TSuccess | IntegratorBlocked;
       try {
         result = await desc.real(integratorInput);
@@ -1146,8 +1146,8 @@ export function buildSystemScriptRegistry(deps: ScriptRegistryDeps): Map<string,
     }),
   });
 
-  const overrideMergeScript: SystemScriptHandler = async ({ runId, decision, ctx, launchBindings, stepKey, inputs }) => {
-    const integratorInput = buildIntegratorInput(runId, ctx, inputs, scriptGithubAccount(decision, launchBindings));
+  const overrideMergeScript: SystemScriptHandler = async ({ runId, decision, ctx, scriptBindings, stepKey, inputs }) => {
+    const integratorInput = buildIntegratorInput(runId, ctx, inputs, scriptGithubAccount(decision, scriptBindings));
     let result: MergeOverrideOutput | IntegratorBlocked;
     try {
       result = await overrideMergeFn(integratorInput);
@@ -1218,10 +1218,9 @@ export function makeDataDrivenTask(
     role: string,
     stepKey: string,
     stepInput: unknown,
-    resolvedRunnerId?: string,
+    binding: ResolvedAgentBinding,
     physicalAttempt?: PhysicalRunStepAttempt,
     acceptedVerdicts?: readonly string[],
-    launchOverrides?: LaunchOverrides,
   ) => Promise<AttemptResult>,
   deps: DataDrivenTaskDeps,
 ) {
@@ -1327,7 +1326,9 @@ export function makeDataDrivenTask(
   };
 
   async function runBody(runId: string, opts: DataDrivenTaskOpts): Promise<DataDrivenResult> {
-    const { route, template } = opts;
+    const { route } = opts;
+    const plan = executionPlanFromRouteDecision(route);
+    const template = plan.pipeline.executableGraph as Template;
 
     const diagnostics = validateTemplate(template).filter((d) => d.severity === 'error');
     if (diagnostics.length > 0) {
@@ -1339,7 +1340,7 @@ export function makeDataDrivenTask(
     const { taskId, title, base, issueRef, issueAction } = await loadRunTaskContext(runId);
 
     const live =
-      route.roleBindings.some((b) => runnerNeedsLivePreflight(b.resolvedRunnerId)) ||
+      plan.agentBindings.some((binding) => binding.runner.capabilities.worktreeChanges === true) ||
       templateRequiresLiveWorktree(template);
     if (live) {
       const pf = await preflightFn(taskId, base);
@@ -1365,14 +1366,15 @@ export function makeDataDrivenTask(
     issueAction: IssueAction | undefined,
     live: boolean,
   ): Promise<DataDrivenResult> {
-    const { route, template, runnerRetryPolicy } = opts;
+    const { route, runnerRetryPolicy } = opts;
 
-    const bindingByRef = new Map<string, RouteRoleBinding>();
-    for (const binding of route.roleBindings) {
-      bindingByRef.set(`role:${binding.roleId}`, binding);
-      bindingByRef.set(binding.roleId, binding);
+    const plan = executionPlanFromRouteDecision(route);
+    const template = plan.pipeline.executableGraph as Template;
+    const bindingByNode = new Map<string, ResolvedAgentBinding>();
+    for (const binding of plan.agentBindings) {
+      bindingByNode.set(`node:${binding.nodeId}`, binding);
     }
-    const launchBindings = route.launchBindings ?? [];
+    const scriptBindings = plan.scriptBindings;
 
     let state: RunState = initialState(template);
     let lastResult: LastResult | undefined;
@@ -1396,7 +1398,7 @@ export function makeDataDrivenTask(
       }
 
       const eff = await applyDecision(decision, {
-        runId, template, state, bindingByRef, launchBindings, taskId, title, base, issueRef, issueAction,
+        runId, template, state, bindingByNode, scriptBindings, taskId, title, base, issueRef, issueAction,
         effectOrdinalByNode, outputsByNode, runnerRetryPolicy, agentQuestionRetryContextByNode,
         live,
         lastVerdict,
@@ -1459,8 +1461,8 @@ export function makeDataDrivenTask(
     runId: string;
     template: Template;
     state: RunState;
-    bindingByRef: Map<string, RouteRoleBinding>;
-    launchBindings: BindingOverride[];
+    bindingByNode: Map<string, ResolvedAgentBinding>;
+    scriptBindings: ResolvedScriptBinding[];
     taskId: string;
     title: string;
     base: string;
@@ -1489,7 +1491,7 @@ export function makeDataDrivenTask(
     ctx: EffectCtx;
     inputs: Record<string, unknown>;
     stepKey: string;
-    binding: RouteRoleBinding;
+    binding: ResolvedAgentBinding;
     retryContext?: AgentQuestionRetryContext;
   };
   type NeedsHumanRoleResult = RetryRoleResult | InvokeRoleBlockedResult | InvokeRoleQuestionResult | undefined;
@@ -1624,7 +1626,7 @@ export function makeDataDrivenTask(
     decision: Exclude<Decision, { type: 'complete' }>,
     ctx: EffectCtx,
   ): Promise<DecisionEffect> {
-    const { runId, template, bindingByRef, taskId, title, base } = ctx;
+    const { runId, template, bindingByNode, taskId, title, base } = ctx;
     switch (decision.type) {
       case 'invokeRole': {
         const node = resolveNode(template, decision.nodeId);
@@ -1721,7 +1723,7 @@ export function makeDataDrivenTask(
           });
           return { lastResult: { outcome: 'failed', errorCode: REVO_INPUT_MISSING }, lastVerdict: 'failed', failureReason: reason, stepDelta: 1 };
         }
-        const scriptResult = await invokeScript(runId, decision, { taskId, title, base, issueRef: ctx.issueRef, issueAction: ctx.issueAction }, bindingByRef, ctx.launchBindings, stepKeyFor(node.id, ordinal), resolved.inputs);
+        const scriptResult = await invokeScript(runId, decision, { taskId, title, base, issueRef: ctx.issueRef, issueAction: ctx.issueAction }, bindingByNode, ctx.scriptBindings, stepKeyFor(node.id, ordinal), resolved.inputs);
         if (scriptResult.outcome === 'blocked') {
           const recoveryContext = scriptResult.pointer === undefined
             ? undefined
@@ -1809,7 +1811,7 @@ export function makeDataDrivenTask(
     input: {
       node: Node;
       stepKey: string;
-      binding: RouteRoleBinding;
+      binding: ResolvedAgentBinding;
       retry: RunnerRetryBlockPayload;
     },
   ): Promise<TransientRetryGateOutcome> {
@@ -1825,8 +1827,8 @@ export function makeDataDrivenTask(
         taskId: ctx.taskId,
         nodeId: input.node.id,
         step: input.stepKey,
-        role: input.binding.rowId,
-        runner: input.binding.resolvedRunnerId,
+        role: input.binding.roleId,
+        runner: input.binding.runner.runnerId,
         reason: input.retry.reason,
         lesson: input.retry.lesson,
         attemptsExhausted: input.retry.attemptsExhausted,
@@ -1869,12 +1871,8 @@ export function makeDataDrivenTask(
   function resolveRoleBinding(
     ctx: EffectCtx,
     decision: Extract<Decision, { type: 'invokeRole' }>,
-  ): RouteRoleBinding {
-    const binding = ctx.bindingByRef.get(decision.roleRef);
-    if (binding === undefined) {
-      throw new Error(`CAPABILITY_UNRESOLVED: roleRef ${decision.roleRef} has no route binding`);
-    }
-    return binding;
+  ): ResolvedAgentBinding {
+    return resolvePinnedAgentBinding(ctx.bindingByNode, decision.nodeId);
   }
 
   async function invokeRoleAttempts(input: InvokeRoleAttemptInput): Promise<InvokeRoleResult> {
@@ -1885,16 +1883,14 @@ export function makeDataDrivenTask(
     for (let attemptNo = 1; attemptNo <= ctx.runnerRetryPolicy.maxAttempts; attemptNo++) {
       const physicalAttempt = physicalAttemptFor(runId, stepKey, attemptNo);
       attemptIds.push(physicalAttempt.attemptId);
-      const launchOverrides = resolveLaunchOverrides(binding, decision.nodeId, ctx.launchBindings);
       const result = await runStepFn(
         runId,
-        binding.rowId,
+        binding.roleId,
         stepKey,
         stepInputForAttempt(decision.nodeId, inputs, physicalAttempt, retryContext),
-        binding.resolvedRunnerId,
+        binding,
         physicalAttempt,
         ctx.template.verdicts.domain,
-        launchOverrides,
       );
 
       const needsHuman = await maybeHandleNeedsHumanRoleResult({
@@ -1919,7 +1915,7 @@ export function makeDataDrivenTask(
         nodeProducesChange(node) &&
         !hasProducedChange &&
         ctx.live &&
-        runnerProducesWorktreeChanges(binding.resolvedRunnerId);
+        binding.runner.capabilities.worktreeChanges === true;
       if (shouldCaptureChange) {
         const artifactRef = artifactRefFromResult(result);
         const change = await captureChangeFn({
@@ -1968,8 +1964,8 @@ export function makeDataDrivenTask(
             classification: 'verification_environment',
             nodeId: node.id,
             stepKey,
-            role: binding.rowId,
-            runner: binding.resolvedRunnerId,
+            role: binding.roleId,
+            runner: binding.runner.runnerId,
             reason: recoveryBlock.reason,
             lesson: recoveryBlock.lesson,
             attemptId: physicalAttempt.attemptId,
@@ -2015,8 +2011,8 @@ export function makeDataDrivenTask(
         taskId: ctx.taskId,
         nodeId: node.id,
         step: stepKey,
-        role: binding.rowId,
-        runner: binding.resolvedRunnerId,
+        role: binding.roleId,
+        runner: binding.runner.runnerId,
         lesson: safeLesson,
         attemptId: physicalAttempt.attemptId,
       },
@@ -2260,8 +2256,8 @@ export function makeDataDrivenTask(
     runId: string,
     decision: Extract<Decision, { type: 'invokeScript' }>,
     ctx: { taskId: string; title: string; base: string; issueRef?: IssueRef; issueAction?: IssueAction },
-    bindingByRef: Map<string, RouteRoleBinding>,
-    launchBindings: BindingOverride[],
+    bindingByNode: Map<string, ResolvedAgentBinding>,
+    scriptBindings: ResolvedScriptBinding[],
     stepKey: string,
     inputs: Record<string, unknown>,
   ): Promise<ScriptResult> {
@@ -2278,7 +2274,7 @@ export function makeDataDrivenTask(
       });
       return { outcome: 'failed', reason };
     }
-    return handler({ runId, decision, ctx, bindingByRef, launchBindings, stepKey, inputs });
+    return handler({ runId, decision, ctx, bindingByNode, scriptBindings, stepKey, inputs });
   }
 
 

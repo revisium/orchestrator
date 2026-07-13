@@ -1,7 +1,7 @@
 # ACP + OpenCode Research
 
 - **Status:** Bounded PoC evidence for
-  [ADR-0010](../../adr/0010-acp-process-and-session-isolation.md) and the
+  [ADR-0012](../../adr/0012-acp-process-and-session-isolation.md) and the
   [ACP runner session v1 spec](../../specs/acp-runner-session-v1.spec.md).
 - **Date:** 2026-07-08.
 

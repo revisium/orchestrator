@@ -28,7 +28,7 @@ type JsonRecord = Record<string, unknown>;
 type SimulateRouteMcpInput = {
   title: string;
   repo?: string;
-  pipeline?: string;
+  pipelineId: string;
   profileId?: string;
   profile?: unknown;
   playbookId?: string;
@@ -154,10 +154,11 @@ function definedEntries(record: JsonRecord): JsonRecord {
 function compactRouteSummary(result: JsonRecord): JsonRecord | undefined {
   const workflow = asRecord(result.workflow);
   const route = asRecord(workflow?.route) ?? asRecord(result.route) ?? result;
+  const projection = asRecord(route.projection) ?? route;
   if (!route) return undefined;
-  const routeGates = compactStringArray(route.routeGates);
-  const roles = Array.isArray(route.roles)
-    ? route.roles
+  const routeGates = compactStringArray(projection.routeGates);
+  const roles = Array.isArray(projection.roles)
+    ? projection.roles
       .map((role) => {
         if (typeof role === 'string') return role;
         const roleRecord = asRecord(role);
@@ -166,8 +167,8 @@ function compactRouteSummary(result: JsonRecord): JsonRecord | undefined {
       .filter((role): role is string => Boolean(role))
     : [];
   const summary = definedEntries({
-    playbookId: asString(route.playbookId),
-    pipelineId: asString(route.pipelineId),
+    playbookId: asString(projection.playbookId),
+    pipelineId: asString(projection.pipelineId),
     engine: asString(workflow?.engine) ?? asString(route.engine),
     routeGates: routeGates.length > 0 ? routeGates : undefined,
     roles: roles.length > 0 ? roles : undefined,
@@ -178,19 +179,30 @@ function compactRouteSummary(result: JsonRecord): JsonRecord | undefined {
 function compactRouteDecision(value: unknown): unknown {
   const route = asRecord(value);
   if (!route) return value;
-  const roleBindings = compactRecordArray(route.roleBindings);
-  const launchBindings = compactRecordArray(route.launchBindings);
+  const projection = asRecord(route.projection) ?? {};
   const summary = compactRouteSummary(route) ?? {};
+  const plan = asRecord(route.executionPlan);
+  const decodedPins = plan
+    ? definedEntries({
+      executionPlanId: asString(plan.executionPlanId),
+      executionPlanDigest: asString(plan.executionPlanDigest),
+      selection: plan.selection,
+      profile: plan.profile,
+      agentBindings: plan.agentBindings,
+      scriptBindings: plan.scriptBindings,
+    })
+    : undefined;
   return definedEntries({
     ...summary,
-    source: asString(route.source),
-    profileSource: asString(route.profileSource),
-    profileId: asString(route.profileId),
-    profileVersion: asString(route.profileVersion),
-    profileHash: asString(route.profileHash),
-    materializedTemplateHash: asString(route.materializedTemplateHash),
-    launchBindingCount: launchBindings.length > 0 ? launchBindings.length : undefined,
-    roleBindingCount: roleBindings.length > 0 ? roleBindings.length : undefined,
+    source: asString(projection.source),
+    profileSource: asString(projection.profileSource),
+    profileId: asString(projection.profileId),
+    profileVersion: asString(projection.profileVersion),
+    profileHash: asString(projection.profileHash),
+    materializedTemplateHash: asString(projection.materializedTemplateHash),
+    executionPlanBytes: asString(route.executionPlanBytes),
+    executionPlanDigest: asString(route.executionPlanDigest),
+    executionPlan: decodedPins,
   });
 }
 
@@ -215,9 +227,6 @@ function compactPipeline(value: unknown): unknown {
     pipelineId: asString(pipeline.pipelineId),
     path: asString(pipeline.path),
     triggers: compactStringArray(pipeline.triggers),
-    requiredRoles: compactStringArray(pipeline.requiredRoles),
-    alternativeRoles: compactRecordArray(pipeline.alternativeRoles),
-    optionalRoles: compactStringArray(pipeline.optionalRoles),
     routeGates: compactStringArray(pipeline.routeGates),
     executionPolicySummary: compactExecutionPolicySummary(pipeline.executionPolicy),
   });
@@ -243,6 +252,7 @@ function compactCreateRunResult(value: unknown): unknown {
   const result = asRecord(value);
   if (!result) return value;
   const workflow = asRecord(result.workflow);
+  const route = asRecord(result.route) ?? asRecord(workflow?.route);
   return definedEntries({
     runId: asString(result.runId),
     taskId: asString(result.taskId),
@@ -257,6 +267,7 @@ function compactCreateRunResult(value: unknown): unknown {
         engine: asString(workflow.engine),
       })
       : undefined,
+    route: route ? compactRouteDecision(route) : undefined,
     routeSummary: compactRouteSummary(result),
   });
 }

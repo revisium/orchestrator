@@ -10,8 +10,8 @@
  *      with the expected roles, pipelines, and launch profiles.
  *   2. Every pipeline carries a data-driven `template_json` that passes `pipeline-core.validateTemplate`
  *      (zero errors) — the authoritative validator.
- *   3. Every `roleRef`/`scriptRef` a template references is covered by the pipeline's required_roles
- *      AND declared in the roles catalog (the route-binding contract the data-driven adapter relies on).
+ *   3. Every executable `roleRef`/`scriptRef` a template references is covered by the role catalog or
+ *      an explicit built-in script rule; the graph, not a pipeline role list, owns obligations.
  *   4. seedDefaultPlaybook is idempotent (skips when already installed) and tolerates a duplicate race.
  */
 import test from 'node:test';
@@ -74,7 +74,7 @@ test('default playbook: installs as revisium-default with launchable pipelines a
 
   assert.equal(result.playbookId, DEFAULT_PLAYBOOK_ID);
   assert.equal(result.committed, true);
-  assert.equal(result.roles, 13, `expected exactly 13 default roles (got ${result.roles})`);
+  assert.equal(result.roles, 7, `expected exactly 7 logical default roles (got ${result.roles})`);
   assert.equal(result.pipelines, 3, 'feature-development + local-change + analysis-only');
   assert.equal(result.runProfiles, 8, 'built-in run profiles for all launchable pipelines');
 
@@ -100,11 +100,10 @@ test('default playbook: installs as revisium-default with launchable pipelines a
 });
 
 // ---------------------------------------------------------------------------
-// 2 + 3. Every pipeline template validates AND its capability handles resolve to required_roles.
+// 2 + 3. Every pipeline template validates AND its executable graph handles resolve to meaning rows.
 // ---------------------------------------------------------------------------
 type PipelineCatalogEntry = {
   id: string;
-  required_roles: string[];
   triggers?: string[];
   route_gates?: string[];
   execution_policy: { template_json?: unknown };
@@ -166,24 +165,24 @@ test('default playbook: consensus launch shapes are catalog data, not pipeline r
     'consensus launch shapes are not public pipeline rows',
   );
   assert.deepEqual(runProfiles.map((profile) => profile.id).sort(), [
-    'analysis-only-claude-standard',
-    'analysis-only-codex-standard',
-    'claude-primary-codex-review-consensus',
-    'claude-standard',
-    'codex-primary-claude-review-consensus',
-    'codex-standard',
-    'local-change-claude-standard',
-    'local-change-codex-standard',
+    'analysis-only-claude-opus-4-8',
+    'analysis-only-codex-gpt-5-6-luna',
+    'claude-opus-4-8-codex-gpt-5-6-luna-consensus',
+    'claude-opus-4-8-sonnet-4-6',
+    'codex-gpt-5-6-luna',
+    'codex-gpt-5-6-luna-claude-opus-4-8-consensus',
+    'local-change-claude-sonnet-4-6',
+    'local-change-codex-gpt-5-6-luna',
   ]);
   const expectedPipelineByProfile = new Map([
-    ['analysis-only-claude-standard', 'analysis-only'],
-    ['analysis-only-codex-standard', 'analysis-only'],
-    ['claude-primary-codex-review-consensus', 'feature-development'],
-    ['claude-standard', 'feature-development'],
-    ['codex-primary-claude-review-consensus', 'feature-development'],
-    ['codex-standard', 'feature-development'],
-    ['local-change-claude-standard', 'local-change'],
-    ['local-change-codex-standard', 'local-change'],
+    ['analysis-only-claude-opus-4-8', 'analysis-only'],
+    ['analysis-only-codex-gpt-5-6-luna', 'analysis-only'],
+    ['claude-opus-4-8-codex-gpt-5-6-luna-consensus', 'feature-development'],
+    ['claude-opus-4-8-sonnet-4-6', 'feature-development'],
+    ['codex-gpt-5-6-luna-claude-opus-4-8-consensus', 'feature-development'],
+    ['codex-gpt-5-6-luna', 'feature-development'],
+    ['local-change-claude-sonnet-4-6', 'local-change'],
+    ['local-change-codex-gpt-5-6-luna', 'local-change'],
   ]);
   for (const profile of runProfiles) {
     assert.equal(profile.pipelineId, expectedPipelineByProfile.get(profile.id), `${profile.id} is scoped to its pipeline`);
@@ -194,8 +193,8 @@ test('default playbook: consensus launch shapes are catalog data, not pipeline r
 test('default playbook: materialized consensus profile fans out plan + code review with canonical role refs', () => {
   const base = pipelines.find((p) => p.id === 'feature-development')?.execution_policy?.template_json;
   assert.ok(base, 'feature-development carries execution_policy.template_json');
-  const profile = runProfiles.find((item) => item.id === 'codex-primary-claude-review-consensus');
-  assert.ok(profile, 'codex-primary-claude-review-consensus profile exists');
+  const profile = runProfiles.find((item) => item.id === 'codex-gpt-5-6-luna-claude-opus-4-8-consensus');
+  assert.ok(profile, 'codex-gpt-5-6-luna-claude-opus-4-8-consensus profile exists');
   const { template: materialized, diagnostics } = materializeTemplate(
     base as never,
     topologyProfileFromRunProfile(profile as never),
@@ -250,21 +249,11 @@ test('default playbook: developer prompt is working-tree only and contains no pu
   );
 });
 
-test('default playbook: every role model level has a bootstrap model profile', () => {
-  const profileRowIds = new Set(
-    (bootstrapSeed.rows ?? [])
-      .filter((row) => row.tableId === 'model_profiles')
-      .map((row) => row.rowId),
-  );
-  const modelLevels = new Set(
-    (roleCatalog as Array<{ default_model_level?: string }>)
-      .map((role) => role.default_model_level)
-      .filter((level): level is string => typeof level === 'string' && level.length > 0),
-  );
-
-  for (const modelLevel of modelLevels) {
-    assert.ok(profileRowIds.has(modelLevel), `bootstrap model_profiles row is missing for default model level ${modelLevel}`);
-  }
+test('default playbook: bootstrap has no model catalog and catalogs keep launch authority separate', () => {
+  assert.equal((bootstrapSeed.rows ?? []).some((row) => row.tableId === 'model_profiles'), false);
+  const roleRecords = roleCatalog as Array<Record<string, unknown>>;
+  assert.equal(roleRecords.some((role) => 'default_model_level' in role || 'runner_id' in role || 'model_level' in role), false);
+  assert.equal(pipelines.some((pipeline) => 'required_roles' in pipeline || 'optional_roles' in pipeline || 'alternative_roles' in pipeline), false);
 });
 
 test('default playbook: stuck code-review gates surface the latest code-change artifact', () => {
@@ -290,20 +279,13 @@ for (const pipeline of pipelines) {
     assert.deepEqual(errors, [], `${pipeline.id} template must have no validation errors`);
   });
 
-  test(`default playbook: ${pipeline.id} capability handles are covered by required_roles + roles catalog`, () => {
+  test(`default playbook: ${pipeline.id} graph executable obligations are covered by the meaning catalog`, () => {
     const template = pipeline.execution_policy.template_json as {
       nodes: Record<string, Record<string, unknown>>;
     };
-    const required = new Set(pipeline.required_roles);
     for (const roleId of capabilityRoleIds(template)) {
-      assert.ok(
-        required.has(roleId),
-        `${pipeline.id}: roleRef/scriptRef "${roleId}" must be listed in required_roles (route binding)`,
-      );
-      assert.ok(
-        declaredRoleIds.has(roleId),
-        `${pipeline.id}: role "${roleId}" must be declared in the roles catalog`,
-      );
+      if (roleId === 'integrator') continue;
+      assert.ok(declaredRoleIds.has(roleId), `${pipeline.id}: role "${roleId}" must be declared in the roles catalog`);
     }
   });
 }
@@ -344,7 +326,7 @@ const STUB_RESULT: PlaybookInstallResult = {
   name: 'Revisium Default Playbook',
   version: '0.1.0',
   source: 'local:default',
-  roles: 13,
+  roles: 7,
   pipelines: 3,
   runProfiles: 8,
   operations: [],

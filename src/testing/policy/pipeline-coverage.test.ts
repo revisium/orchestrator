@@ -344,9 +344,9 @@ test('pipeline coverage registry: production builder deep-freezes detached input
 
 test('pipeline coverage registry: contract identities come from pinned materialized templates and routing signatures', () => {
   const derived = derivePipelineCoverageCatalog(pipelines, runProfiles);
-  const single = derived.materialized.find((item) => item.profileId === 'codex-standard');
+  const single = derived.materialized.find((item) => item.profileId === 'codex-gpt-5-6-luna');
   const consensus = derived.materialized.find((item) =>
-    item.profileId === 'codex-primary-claude-review-consensus');
+    item.profileId === 'codex-gpt-5-6-luna-claude-opus-4-8-consensus');
   assert.ok(single);
   assert.ok(consensus);
   assert.equal(single.routingSignature, 'single-review');
@@ -357,10 +357,10 @@ test('pipeline coverage registry: contract identities come from pinned materiali
   assert.match(derived.catalogIdentity, /^[a-f0-9]{64}$/);
 
   const singleCell = derived.cells.find((cell) =>
-    cell.materialized.profileId === 'codex-standard' &&
+    cell.materialized.profileId === 'codex-gpt-5-6-luna' &&
     cell.tag === 'node:mergeGate:outcome:approved');
   const consensusCell = derived.cells.find((cell) =>
-    cell.materialized.profileId === 'codex-primary-claude-review-consensus' &&
+    cell.materialized.profileId === 'codex-gpt-5-6-luna-claude-opus-4-8-consensus' &&
     cell.tag === 'node:mergeGate:outcome:approved');
   assert.ok(singleCell);
   assert.ok(consensusCell);
@@ -487,7 +487,7 @@ test('pipeline coverage registry: unknown and copied non-DSL attachments are rej
 test('pipeline coverage registry: registered attachments reject the wrong selected materialized identity', () => {
   const attachment = coverageForScenario('M1-profile-single');
   const selected = PIPELINE_COVERAGE_MANIFEST.catalog.materialized.find((identity) =>
-    identity.pipelineId === 'feature-development' && identity.profileId === 'codex-standard');
+    identity.pipelineId === 'feature-development' && identity.profileId === 'codex-gpt-5-6-luna');
   assert.ok(selected);
   const validateSelected = validatePipelineCaseAttachment as (
     value: PipelineCaseAttachment,
@@ -496,7 +496,7 @@ test('pipeline coverage registry: registered attachments reject the wrong select
 
   for (const wrong of [
     { ...selected, pipelineId: 'local-change' },
-    { ...selected, profileId: 'claude-standard' },
+    { ...selected, profileId: 'claude-opus-4-8-sonnet-4-6' },
     { ...selected, materializedTemplateHash: '0'.repeat(64) },
     { ...selected, routingSignature: 'wrong-signature' },
   ]) {
@@ -588,7 +588,7 @@ test('pipeline coverage registry: rejects a defined primary cell forged under mi
     diagnostics.filter((diagnostic) => String(diagnostic.code) === 'PIPELINE_COVERAGE_INCONSISTENT_PRIMARY_CLAIM'),
     [{
       code: 'PIPELINE_COVERAGE_INCONSISTENT_PRIMARY_CLAIM',
-      message: `primary coverage cell ${cellId} is not derived from DSL scenario M1-profile-single primary tags under feature-development/codex-standard`,
+      message: `primary coverage cell ${cellId} is not derived from DSL scenario M1-profile-single primary tags under feature-development/codex-gpt-5-6-luna`,
       cellId,
       tag,
       scenarioId: 'M1-profile-single',
@@ -661,7 +661,7 @@ test('pipeline coverage registry: DSL ownership does not transfer to a sibling m
     candidate.materialized.pipelineId === 'feature-development' &&
     candidate.materialized.profileId === 'base' &&
     candidate.primaryTags.includes(tag));
-  const sibling = materializedIdentity('feature-development', 'claude-standard');
+  const sibling = materializedIdentity('feature-development', 'claude-opus-4-8-sonnet-4-6');
   const siblingCellId = pipelineCoverageCellId(sibling, tag);
   assert.ok(scenario);
   assert.deepEqual(
@@ -721,8 +721,8 @@ test('pipeline coverage registry: #234 agent-question resume is executable DSL c
 });
 
 test('pipeline coverage registry: a bare primary tag cannot forge DSL signature ownership', () => {
-  const tag = 'profile:codex-standard:signature:single-review' as PipelineCoverageTag;
-  const materialized = materializedIdentity('feature-development', 'codex-standard');
+  const tag = 'profile:codex-gpt-5-6-luna:signature:single-review' as PipelineCoverageTag;
+  const materialized = materializedIdentity('feature-development', 'codex-gpt-5-6-luna');
   const cellId = pipelineCoverageCellId(materialized, tag);
   const dslOwner = PIPELINE_COVERAGE_REGISTRY.scenarios.find((scenario) =>
     scenario.primaryCellIds.includes(cellId));
@@ -960,7 +960,7 @@ test('pipeline coverage registry: validates waiver expiry and keeps the committe
 });
 
 test('pipeline coverage registry: Stage 3 rejects a signature waiver that expires at Stage 3', () => {
-  const tag = 'profile:codex-standard:signature:single-review' as PipelineCoverageTag;
+  const tag = 'profile:codex-gpt-5-6-luna:signature:single-review' as PipelineCoverageTag;
   const diagnostics = validatePipelineCoverageRegistry({
     pipelines,
     runProfiles,
@@ -975,7 +975,7 @@ test('pipeline coverage registry: Stage 3 rejects a signature waiver that expire
         ...waiverForCell({
           id: 'stage-3-expired-signature',
           tag,
-          materialized: materializedIdentity('feature-development', 'codex-standard'),
+          materialized: materializedIdentity('feature-development', 'codex-gpt-5-6-luna'),
           reason: 'negative fixture',
           ownerSurface: 'src/testing/policy/pipeline-coverage.test.ts',
           expiry: { stage: 'stage-3' },

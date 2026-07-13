@@ -14,6 +14,9 @@
 - **Related specs:** [pipeline-state-machine-v1.spec.md](./pipeline-state-machine-v1.spec.md),
   [default-playbook-policy.spec.md](./default-playbook-policy.spec.md),
   [run-profiles-v1.spec.md](./run-profiles-v1.spec.md),
+  [execution-plan-v1.spec.md](./execution-plan-v1.spec.md),
+  [resources-workspaces-effects-v1.spec.md](./resources-workspaces-effects-v1.spec.md),
+  [script-runtime-v1.spec.md](./script-runtime-v1.spec.md),
   [test-architecture-v1.spec.md](./test-architecture-v1.spec.md).
 
 This spec defines how pipeline behavior is tested. It is agent-facing: before adding or changing tests for default
@@ -42,6 +45,54 @@ The current registry proves declared ownership and typed case attachment against
 routing signatures. It rejects duplicate primary owners and incomplete or expired waivers; the committed waiver set
 is empty. It does not prove observed runtime traversal. Authoritative observed coverage will come only from runtime
 facts through a separately approved Stage 3 persistence, projection, and read design.
+
+### ADR-0010/0011 target ownership
+
+The data-driven execution target keeps the same four layers. The rows below are concern families mapped onto those
+layers, not additional test layers:
+
+| Concern | Primary proof layer |
+| --- | --- |
+| Plan grammar, canonical hash, credential precedence, branch rendering, allocation/lifecycle transitions | Focused unit/contract tests |
+| Script `inputBindings` alias/pointer/plan validation and generic runtime hydration | Compiler plus adapter unit/contract tests with arbitrary identifiers |
+| Script manifest/schema/definition digest, bounded clients, redaction, provider classification, crash-window reconciliation | Per-operation unit/contract tests and registry meta-tests |
+| V2 graph shape, old-ref exclusion, lifecycle ownership, and one-to-one V1 safeguard parity | Static graph/default-policy tests |
+| Workspace/gate/recovery routes and expected Git/GitHub operation calls/no-calls | Declarative DSL scenarios against pinned plans |
+| Exact runner/script replay pins after registry/profile/repository/playbook mutation | Focused recovery integration tests |
+| GitHub-first task-to-reviewed-PR-to-approved-merge and repository-free scratch isolation | Two representative full-host e2e proofs |
+
+V2 wait coverage is intentionally split so the production policy keeps real durations without making required CI wait
+minutes:
+
+| Wait concern | Sole proof owner |
+| --- | --- |
+| Production bundled readiness duration is exactly `PT30S` | Static default-policy/catalog test |
+| Parser maps `PT30S` to `30_000` and the adapter awaits that value once | Focused unit test with the injected sleep dependency |
+| DBOS timer survives host crash/restart without repeating the preceding effect | D12 focused recovery integration using declared `PT2S` |
+| Recheck routing, counter advance, and cap exhaustion through a real host | Existing declarative/full-host scenarios using the test-only catalog's declared `PT0.050S` wait |
+
+The test-only playbook at `src/e2e/support/fixtures/playbook/catalog/pipelines.json` MUST use the same wait node ids,
+`next` edges, counters, and surrounding topology as the production V2 graph. Its readiness waits are exactly
+`PT0.050S`; this declared fixture data is the only permitted duration difference. A parity test loads both catalogs,
+builds a closed readiness-wait projection containing each wait id/next, every inbound branch guard and counter
+increment, and every referenced counter declaration, then deep-compares the projections after normalizing only the
+duration field. It requires production `duration=PT30S` and E2E fixture `duration=PT0.050S`; it MUST NOT normalize any
+other projected field.
+
+`TC-272-never-settling-recovery` remains the real-host cap-exhaustion owner and
+`RG-F-unknown-then-clean` remains the real-host one-recheck-then-clean owner. Both traverse the actual DBOS-backed
+`startTimer` path with the test catalog duration. `WAIT_TIMEOUT_MS=30_000` remains the stuck detector and MUST NOT be
+raised to accommodate production polling time. No environment variable, host-boot override, runtime scaling factor,
+or handler-local sleep may alter a declared wait duration.
+
+An arbitrary synthetic script id/version MUST prove generic verdict extraction and `choice`/`wait` routing without an
+executor id comparison. Lifecycle probes cover blocked retention, cancel during prepare, dirty release, prepare/release
+failure, restart from every nonterminal state, and fencing against a second writer. Mutation probes crash after the
+external write but before DBOS result persistence and assert exact read-back reconciliation or an explicit blocked
+state, never a duplicate effect.
+
+The deterministic `stub-agent` used by tests remains test infrastructure outside the public launch registry. It MUST
+NOT require or reintroduce a production `deterministic-script` runner kind.
 
 ## Layer Ownership
 
@@ -221,6 +272,10 @@ product behavior, or define Stage 3 runtime evidence.
 
 ## Changelog
 
+- 2026-07-12: Assigned V2 wait-duration, durability, and real-host route/cap proofs to explicit layers and fixed the
+  sole test-catalog duration difference without a runtime acceleration knob.
+- 2026-07-11: Added target test-layer ownership for execution-plan compilation, workspace lifecycle, system-script
+  contracts, V2 policy parity, replay pins, and the two representative full-host proofs.
 - 2026-07-08: Added test-layer ownership, declarative DSL coverage matrix policy, profile coverage rules, and
   hard-skip/milestone guidance after the default-pipeline audit remediation work.
 - 2026-07-09: Marked the policy implemented after the default-pipeline audit remediation close-out: graph coverage is

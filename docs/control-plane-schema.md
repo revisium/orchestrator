@@ -1,189 +1,129 @@
 # Control-plane schema
 
-This page describes **Current shipped behavior**. Revo has three durable ownership planes plus source/artifact
-storage:
+This page records current ownership for the Revo control plane. It is implementation documentation, while the
+linked execution-plan and run-profile documents remain Draft until final review and gates.
 
-- DBOS owns workflow progress, waits, retries, queues, checkpoints, and replay.
-- Revo Prisma owns hot product/runtime facts: projects, runs, tasks, events, attempts, inbox, outputs, cost ledger,
-  route pins, and indexes.
-- The embedded Revisium engine owns committed/versioned meaning: installed playbook metadata, roles, pipelines, model
-  profiles, run profiles, and routing policy.
-- Git, worktrees, and files own repository state, source changes, diffs, logs, and large artifacts.
+## Ownership
 
-`control-plane/bootstrap.config.json` is the human-authored bootstrap source for Revisium meaning tables. Prisma schema
-and migrations are the authoritative source for Revo runtime tables and engine-required physical tables. The engine
-tables share the Revo product database, while DBOS uses its own logical database and migration owner.
+- DBOS owns durable workflow progress, retries, waits, queues, checkpoints, and workflow replay.
+- Revo Prisma owns runtime facts: projects, runs, tasks, events, attempts, inbox items, outputs, and cost ledger
+  entries.
+- Embedded Revisium owns committed/versioned meaning: playbooks, role meaning, provider-neutral pipelines, routing
+  policy, and run profiles.
+- Git, worktrees, and files own repository state, diffs, logs, and large artifacts.
+- MCP and GraphQL are transport adapters over application services; they do not read raw storage.
 
-## Ownership Classes
+`control-plane/bootstrap.config.json` is the bootstrap source for Revisium meaning tables. `prisma/schema.prisma`
+and migrations are the source for Prisma runtime tables and generated client artifacts.
 
-| Storage | Table/model | Class | Revision behavior |
-| --- | --- | --- | --- |
-| Revisium | `playbooks` | Installed playbook metadata | committed; route/import reads head |
-| Revisium | `roles` | Versioned meaning | committed; execution reads head |
-| Revisium | `pipelines` | Versioned meaning and current built-in graph | committed; run start reads and pins materialized template meaning |
-| Revisium | `run_profiles` | Versioned meaning | committed; launch resolves profile data by playbook + pipeline |
-| Revisium | `model_profiles` | Versioned meaning | committed; execution reads head |
-| Revisium | `routing_policy` | Versioned meaning | committed; route policy reads head |
-| Prisma | `RevoProject` | Product state | soft-deleted project grouping; no first-class `Repository` model is shipped |
-| Prisma | `TaskRun` | Runtime run | transactional runtime row; stores route pins |
-| Prisma | `RunTask` | Runtime task | transactional runtime row |
-| Prisma | `RunEvent` | Runtime journal | append-only runtime event |
-| Prisma | `RunAttempt` | Runtime provenance | per-attempt logs/cost/provenance |
-| Prisma | `InboxItem` | Runtime human queue | pending/resolved human decisions |
-| Prisma | `RunOutput` | Runtime dataflow artifact | node output and artifact pointers |
-| Prisma | `CostLedgerEntry` | Runtime accounting | token/cost ledger |
+## Meaning tables
 
-DBOS owns workflow progress and replay. Prisma runtime rows are Revo's product/runtime state around that workflow.
-Revisium rows are never the authoritative store for run lifecycle facts.
+The bootstrap meaning table set is:
 
-The current catalogs in `@revisium/agent-playbook` are metadata, not an executable graph, and the package is not
-compatible with the shipped importer end to end. The executable graphs stored in current `pipelines` rows come from
-the product-owned built-in playbook under `control-plane/default-playbook/`.
+| Table | Meaning |
+| --- | --- |
+| `playbooks` | Installed playbook identity and catalog provenance. |
+| `roles` | Versioned role meaning: prompt, tools, scope, rights, and playbook provenance. |
+| `pipelines` | Versioned provider-neutral graph templates, triggers, route gates, and execution policy data. |
+| `routing_policy` | Runtime policy limits and human-gate policy data; it does not select a model. |
+| `run_profiles` | Versioned exact launch configuration scoped to a playbook and pipeline. |
 
-## Revisium Schema Rules
+Roles do not carry runner, provider, model, timeout, or permission defaults. Pipelines do not carry provider/model
+launch choices or role-list launch authority. A graph's `roleRef` and `scriptRef` nodes determine executable
+obligations.
 
-- Row identity is the Revisium row id. Explicit `id` fields are readability mirrors.
-- Versioned meaning edits require a commit.
-- Free-form JSON is stored in serialized string fields where the Revisium schema layer requires it.
-- Serialized JSON fields that carry structured control-plane config must be AJV-validated before import/write. The
-  Revisium table schema protects storage shape; the importer protects nested JSON semantics.
-- Bootstrap seed rows validate `roles.scope_rules`, `model_profiles.params`, and `routing_policy.rule` before they are
-  written.
-- Product services should use domain APIs, not raw transport table reads.
+## Bootstrap and catalog rules
 
-## Revisium Meaning Tables
+The bootstrap file contains strict schemas and rows for the five meaning tables above. Role catalog records retain
+meaning fields only. Pipeline catalog records retain opaque graph semantics. Run-profile catalog records contain
+catalog metadata plus the exact `run-profile/v1` body.
 
-### `playbooks`
+Catalog import rejects unknown launch-authority fields, invalid graph templates, invalid profile bodies, duplicate ids,
+and profile references to unknown pipelines. It validates the same profile body used by profile management and route
+planning. Current catalogs contain concrete model ids as profile configuration only; no separate model registry or
+price table is loaded.
 
-Installed playbook metadata. The current row is not the Draft immutable full-package `PlaybookVersion` snapshot.
+## `run_profiles`
 
-Fields: `id, name, package_name, source, version, schema_version, manifest_path, roles_catalog_path,
-pipelines_catalog_path, run_profiles_catalog_path, catalog_hash, installed_at, updated_at`.
+Stored row fields are:
 
-### `roles`
+`id`, `playbook_id`, `pipeline_id`, `profile_id`, `schema_version`, `version`, `display_name`, `summary`,
+`profile_json`, `profile_hash`, `profile_revision_hash`, `status`, `retired_at`, `source_path`, `source_hash`, and
+`updated_at`.
 
-Versioned role definitions.
+`profile_json` stores only:
 
-Fields: `id, name, system_prompt, model_level, effort, runner_id, runner, allowed_tools[], scope_rules,
-timeout_ms, permission_mode, playbook_id, playbook_role_id, source_path, source_hash, surface, rights, status,
-retired_at, updated_at`.
+```json
+{
+  "schemaVersion": "run-profile/v1",
+  "topology": { "stages": {} },
+  "bindings": { "slots": {} }
+}
+```
 
-`scope_rules` is serialized JSON. `runner_id` is the preferred imported playbook field; `runner` remains a readability
-mirror while role imports settle.
+Agent slots use exact `runnerId`, `provider`, `modelId`, required `modelParams`, and optional permission/timeout.
+Script slots contain account aliases only. Account aliases are not credentials. `modelParams` is separate from run
+business parameters and is secret-free.
 
-### `pipelines`
+The public profile id is `profile_id`; an internal scoped row id is not a launch alias. Stored profiles can be listed,
+read, validated, created, updated with an optimistic revision hash, or deprecated. Deprecated rows remain readable when
+requested but are rejected by launch resolution.
 
-Imported pipeline definitions. Current product bootstrap rows carry executable templates. The canonical
-`agent-playbook` catalog currently carries discovery, role-set, route-gate, and execution-policy recommendation
-metadata only and cannot launch a run by itself.
+## Prisma runtime models
 
-Fields: `id, playbook_id, pipeline_id, path, triggers[], required_roles[], alternative_roles_json,
-optional_roles[], route_gates[], platform_invocation, execution_policy_json, status, retired_at, updated_at`.
+`TaskRun` stores the run identity and the `routeDecision` JSON envelope. The envelope contains
+`route-decision/v1` plus canonical `executionPlanBytes` and `executionPlanDigest`, with a read-only route projection.
+The plan bytes/digest are written before DBOS enqueue and are the sole execution authority.
 
-For the built-in default playbook, `execution_policy_json` carries the data-driven pipeline template. The base pipeline
-owns workflow semantics only; provider/model/topology launch choices belong to `run_profiles`. When a catalog record
-contains `execution_policy.template_json`, the importer validates it before serialization. Catalog metadata without a
-template is not silently interpreted from Markdown.
+The execution plan pins the selected playbook/pipeline, normalized business parameters, profile provenance, materialized
+graph and hash, route gates, execution policy, exact resolved agent bindings, exact script account bindings, and runner
+manifest snapshots. A public response may also expose a decoded read-only plan view derived from those bytes; it is not
+stored as a second executable object.
 
-### `run_profiles`
+`RunTask.roleHint` is a display/runtime skeleton field. It is not used to choose a runner or model. The workflow reads
+the plan bindings by graph node.
 
-Versioned launch profiles scoped to an imported playbook and pipeline.
+`RunAttempt` fields include exact `runnerId`, `provider`, and `modelId` provenance plus nullable `inputTokens`,
+`outputTokens`, `costAmount`, and `currency`. `CostLedgerEntry` carries the same exact provenance and nullable usage.
+A reported cost, including zero, defaults to currency `USD` when the runner omits a currency. Currency alone does not
+create a cost row. No model price is calculated.
 
-Fields: `id, playbook_id, pipeline_id, profile_id, schema_version, version, display_name, summary, profile_json,
-profile_hash, profile_revision_hash, status, retired_at, source_path, source_hash, updated_at`.
+Events are append-only and payloads are secret-redacted. Outputs are node-scoped runtime dataflow artifacts. Inbox
+items are human decisions. None of these tables resolves mutable launch configuration.
 
-`profile_json` stores the normalized launch payload: `schemaVersion`, `topology`, and `bindings`. Profile scope and
-lifecycle metadata live in row columns such as `pipeline_id`, `profile_id`, `version`, and `status`. `profile_hash` is
-pinned into Prisma `TaskRun.routeDecision` when a run is created. Catalog run profiles must pass the `run-profile/v1`
-JSON Schema before they are serialized into `profile_json`. Seeded profiles are editable after import; profile updates
-write a new Revisium revision. Launch-affecting edits write a new `profile_hash`; metadata/status edits can keep the
-same `profile_hash` but write a new `profile_revision_hash` and must mark the row as user-edited for catalog
-reconciliation.
+## Public route and profile operations
 
-`source_path` and `source_hash` record the last applied catalog source when a row came from default playbook import.
-`source_hash` is the last applied normalized catalog profile hash, computed with the same normalization as
-`profile_hash`. The normalized launch hash includes launch-affecting fields such as selected/storage pipeline id,
-topology, bindings, and future launch policy fields; it excludes display/lifecycle/provenance row metadata. Catalog
-reconciliation must not silently overwrite edits: import may update or retire only rows whose current `profile_hash`
-still matches `source_hash`. User edits clear or otherwise invalidate `source_hash`, so metadata-only edits and
-deprecations are preserved as customized rows.
+MCP and GraphQL expose the same application-service operations:
 
-The public pipeline/profile identifiers are `pipeline_id` and `profile_id`. The storage row `id` is an internal scoped
-row id and is not accepted as a launch alias. When a catalog removes a profile, import may mark unchanged seeded rows
-`status=removed`; runtime listing/resolution ignores removed rows.
+- `list_profiles` / `runProfiles`;
+- `get_profile` / `runProfile`;
+- `validate_profile` / `validateRunProfile`;
+- `create_profile` / `createRunProfile`;
+- `update_profile` / `updateRunProfile`; and
+- `deprecate_profile` / `deprecateRunProfile`.
 
-Top-level publishing identity is outside the current `run-profile/v1` shape. GitHub account aliases are accepted as
-validated script-node launch bindings in `profile_json`, for example `bindings.slots.integrator.accounts.github`.
-Current `feature-development` materialization expands that convenience binding across its named PR lifecycle nodes.
-This node-id expansion is a product-specific implementation fact, not a generic target: Draft ADR-0006 and the
-resources/effects spec replace it with graph-declared logical capability/resource bindings.
+`create_run` and `simulate_route` require a pipeline id and exactly one stored profile id or inline profile. Both use
+the same compiler and return the same canonical plan bytes/digest plus decoded slot pins. A missing or deprecated
+stored profile, invalid profile, provider mismatch, invalid manifest default, unbound slot, unknown slot, or script
+binding misuse maps to a stable validation error.
 
-### `model_profiles`
+No public operation exposes a model resource, model alias, price list, allowed-model list, or availability probe.
 
-Versioned model-level mapping.
+## Fresh-alpha reset/reseed boundary
 
-Fields: `id, level, provider, model_id, params, cost_per_input, cost_per_output, updated_at`.
+Schema changes in this tranche are fresh-alpha DDL changes. Validation uses repository-supported Prisma generation,
+validation, reset/reseed fixtures, and catalog installer tests. Legacy rows are not transformed or read through a
+compatibility migration. Historical migration SQL may retain old dropped-column names only as DDL history.
 
-Route and role data reference levels such as `cheap`, `standard`, `deep`, `codex-standard`, and `codex-deep`, not raw
-provider model ids.
+## Draft target
 
-### `routing_policy`
+The Draft [execution-plan-v1.spec.md](./specs/execution-plan-v1.spec.md) and related resource/workspace specs may
+expand the immutable plan with installed-package and resource provenance. That future work must preserve this
+authority chain:
 
-Versioned routing policy.
-
-Fields: `id, rule, model_level, requires_human, updated_at`.
-
-## Prisma Runtime Models
-
-### `TaskRun`
-
-Runtime run record.
-
-Important fields: `id, projectId, title, description, status, repos, scope, priority, playbookId, pipelineId, params,
-routeDecision, createdBy, createdAt, updatedAt`.
-
-The current `routeDecision` pins `requestedPipelineId`, `basePipelineId`, `profileSource`, `profileHash`, `profileSnapshot`,
-`materializedTemplateHash`, `materializedTemplate`, `materializerVersion`, `policyVersion`, and resolved launch
-bindings. Stored-profile launches also pin `profileId` and `profileVersion`; inline-profile launches omit or null
-stored-profile identity fields and use `profileHash` as replay identity. Public launches are created from either a
-stored `profileId` or an inline profile body, and Prisma stores the resolved normalized profile snapshot in both cases.
-Replay uses this pin, not the latest Revisium profile row.
-
-Launch configuration is stored in `routeDecision.profileSnapshot` and resolved launch bindings. There is no separate
-Prisma column for profile-like launch overrides. The ACP runner session v1 target extends each agent launch binding
-with a resolved model-profile snapshot before DBOS enqueue; the shipped schema still pins only `modelLevel` until that
-migration lands. Replacement execution MUST use the resolved pin rather than re-read mutable Revisium meaning.
-
-`routeDecision.profileSnapshot` stores the normalized launch payload, not the selected pipeline id. The selected pipeline
-is pinned separately as `requestedPipelineId` and `basePipelineId`.
-
-`params.issueRef` is the canonical issue traceability location for issue-bound runs. Shape:
-`{ repo: string, number: positive integer, url: string }`. `params.issueAction` controls delivery linkage and is one of
-`close`, `refs`, or `none`.
-
-### Runtime Child Models
-
-- `RunTask`: task rows under a run.
-- `RunEvent`: append-only runtime journal with a monotonic `sequence` for deterministic ordering. Payloads must be secret-redacted before write.
-- `RunAttempt`: per-attempt provenance for logs, verdict assertions, decimal cost amounts, and summaries.
-- `InboxItem`: human approval/question/alert queue.
-- `RunOutput`: node output and artifact pointers. Large content should use `payloadRef`.
-- `CostLedgerEntry`: token and decimal cost accounting.
-
-## Draft Target Boundary
-
-The current tables above remain implementation truth. They do not by themselves establish the Draft target.
-
-The Draft [playbook storage](./specs/playbook-storage-v1.spec.md) and
-[execution plan](./specs/execution-plan-v1.spec.md) contracts replace the current partial import/pin with an immutable
-installed `PlaybookVersion` and a fully resolved per-run `ExecutionPlan`. That plan pins every execution-affecting
-graph, role, runner capability, script/effect, policy, resource/workspace, selected-context, and accepted-knowledge
-input needed for recovery. Execution does not read mutable playbook HEAD or live registries.
-
-The Draft [script runtime](./specs/script-runtime-v1.spec.md) contract owns script definition/execution records; the
-Draft [resources, workspaces, and effects](./specs/resources-workspaces-effects-v1.spec.md) contract owns repository
-and worktree lifecycle. Exact schemas stay in those specs rather than this inventory.
-
-ADR/KB accepted revisions are Draft under ADR-0008. Run-authored proposals, review state, and future-run selection pins
-must not be confused with hot Prisma run facts. The target is direct cutover for internal alpha data: no compatibility
-rows, fallback reads, or dual-write old/new authority models.
+```text
+provider-neutral graph + exact RunProfile
+        -> compiled plan bytes/digest
+        -> persisted TaskRun route envelope
+        -> DBOS workflow/recovery reads the stored plan only
+```

@@ -244,7 +244,7 @@ test('Prisma runtime data access creates and reads runtime rows through Prisma m
         playbook_id: 'revisium-default',
         pipeline_id: 'feature-development',
         params: { issue: 285 },
-        route_decision: { profileId: 'codex-standard' },
+        route_decision: { profileId: 'codex-gpt-5-6-luna' },
         created_by: 'tester',
       },
       expected: { status: 'ready', pipeline_id: 'feature-development' },
@@ -288,7 +288,13 @@ test('Prisma runtime data access creates and reads runtime rows through Prisma m
         iteration: 1,
         status: 'succeeded',
         idempotency_key: 'idem-1',
-        model_profile: 'codex-standard',
+        runner_id: 'codex',
+        provider: 'openai',
+        model_id: 'gpt-test',
+        input_tokens: null,
+        output_tokens: null,
+        cost_amount: null,
+        currency: null,
       },
       expected: { step_id: 'developer', status: 'succeeded' },
     },
@@ -330,13 +336,15 @@ test('Prisma runtime data access creates and reads runtime rows through Prisma m
         run_id: 'run-1',
         step_id: 'developer',
         attempt_id: 'attempt-1',
-        model_profile: 'codex-standard',
+        runner_id: 'codex',
+        provider: 'openai',
+        model_id: 'gpt-test',
         input_tokens: 10,
         output_tokens: 20,
         cost_amount: 0.01,
         currency: 'USD',
       },
-      expected: { model_profile: 'codex-standard', input_tokens: 10 },
+      expected: { runner_id: 'codex', provider: 'openai', model_id: 'gpt-test', input_tokens: 10 },
     },
   ];
 
@@ -365,14 +373,14 @@ test('Prisma runtime data access patches mutable runtime rows and lists by mappe
 
   const patched = await access.patchRow('task_runs', 'run-1', [
     { op: 'replace', path: 'status', value: 'running' },
-    { op: 'replace', path: 'route_decision', value: { profileId: 'codex-standard' } },
+    { op: 'replace', path: 'route_decision', value: { profileId: 'codex-gpt-5-6-luna' } },
   ]);
   const listed = await access.listRows('task_runs', {
     where: { data: { path: 'status', equals: 'running' } },
   });
 
   assert.equal(patched.data.status, 'running');
-  assert.deepEqual(patched.data.route_decision, { profileId: 'codex-standard' });
+  assert.deepEqual(patched.data.route_decision, { profileId: 'codex-gpt-5-6-luna' });
   assert.deepEqual(listed.map((row) => row.rowId), ['run-1']);
 });
 

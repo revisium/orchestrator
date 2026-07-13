@@ -19,7 +19,6 @@ export const controlPlaneMeaningTables = [
   'playbooks',
   'roles',
   'pipelines',
-  'model_profiles',
   'routing_policy',
   'run_profiles',
 ] as const;

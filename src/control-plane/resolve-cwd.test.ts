@@ -47,7 +47,7 @@ function missingDA(): ControlPlaneDataAccess {
 
 const FAKE_STEP: Step = {
   id: 's-1', taskId: 'task-1', runId: 'run-1', role: 'developer', kind: 'implement',
-  status: 'claimed', input: null, output: null, modelProfile: 'standard', runAfter: '',
+  status: 'claimed', input: null, output: null, runAfter: '',
   attemptCount: 0, maxAttempts: 3, priority: 0, leaseOwner: '', leaseExpiresAt: '', deadReason: '',
 };
 

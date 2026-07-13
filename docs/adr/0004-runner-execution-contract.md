@@ -7,6 +7,8 @@
   [runner capabilities v1](../specs/runner-capabilities-v1.spec.md),
   [ACP runner session v1](../specs/acp-runner-session-v1.spec.md)
 - **Refines:** [ADR-0002](./0002-data-driven-pipeline-state-machine.md) (data-driven pipeline state machine)
+- **Refined by:** [ADR-0010](./0010-run-resources-and-workspace-planning.md),
+  [ADR-0011](./0011-system-script-runtime-and-trusted-extensions.md)
 - **Relates-to:** [runner contract](../runner-contract.md),
   [script runtime v1](../specs/script-runtime-v1.spec.md),
   [execution plan v1](../specs/execution-plan-v1.spec.md)
@@ -51,6 +53,11 @@ The runner-id branch functions and the provider throw become declarative `capabi
 data. Schema-less runners are not excluded: structured output degrades to a prompt-only floor that leans on the
 engine's existing verdict-presence validate seam, with the degradation mechanism defined in the result-envelope
 spec.
+
+ADR-0010/0011 narrow this statement: runner manifests describe runner ability and request construction only.
+Workspace/preflight need, resource access, change capture, merge behavior, and system-script selection are owned by
+pipeline resources/node requirements and the script-runtime contract, not runner capabilities. The amended linked
+specs are authoritative for that composition.
 
 This refines, but does not replace, the runner contract: the timeout and transient-retry policy there are
 unchanged. ADR-0004 only relocates which runner facts are code versus data, and pins that resolution for replay.

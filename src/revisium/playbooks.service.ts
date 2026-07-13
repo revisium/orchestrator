@@ -34,9 +34,6 @@ export type PipelineSummary = {
   pipelineId: string;
   path: string;
   triggers: string[];
-  requiredRoles: string[];
-  alternativeRoles: Array<{ group_id: string; roles: string[]; resolution: string }>;
-  optionalRoles: string[];
   routeGates: string[];
   executionPolicy: unknown;
   status?: 'active' | 'removed';
@@ -121,23 +118,6 @@ function parseJson(value: unknown): unknown {
   }
 }
 
-function alternativeRoles(value: unknown): PipelineSummary['alternativeRoles'] {
-  const parsed = parseJson(value);
-  if (!Array.isArray(parsed)) return [];
-  return parsed.flatMap((entry) => {
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return [];
-    const record = entry as Record<string, unknown>;
-    return [{
-      group_id: str(record.group_id),
-      roles: strArr(record.roles),
-      resolution: str(record.resolution),
-    }];
-  });
-}
-
-
-
-
 type Invalidatable = { invalidate(): void };
 
 function canInvalidate(transport: unknown): transport is Invalidatable {
@@ -152,9 +132,6 @@ function pipelineFromRow(row: { id: string; data?: Record<string, unknown> }): P
     pipelineId: str(data.pipeline_id) || row.id,
     path: str(data.path),
     triggers: strArr(data.triggers),
-    requiredRoles: strArr(data.required_roles),
-    alternativeRoles: alternativeRoles(data.alternative_roles_json),
-    optionalRoles: strArr(data.optional_roles),
     routeGates: normalizeRouteGates(data.route_gates),
     executionPolicy: parseJson(data.execution_policy_json),
     status: str(data.status) === 'removed' ? 'removed' : 'active',

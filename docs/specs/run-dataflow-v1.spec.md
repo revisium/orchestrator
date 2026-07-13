@@ -6,7 +6,8 @@
   `src/pipeline/data-driven-task.workflow.ts`, `src/run/run-outputs.ts`, `src/run/prisma-runtime-data-access.ts`.
 - **Related specs:** [pipeline-state-machine-v1.spec.md](./pipeline-state-machine-v1.spec.md),
   [execution-plan-v1.spec.md](./execution-plan-v1.spec.md),
-  [resources-workspaces-effects-v1.spec.md](./resources-workspaces-effects-v1.spec.md).
+  [resources-workspaces-effects-v1.spec.md](./resources-workspaces-effects-v1.spec.md),
+  [script-runtime-v1.spec.md](./script-runtime-v1.spec.md).
 
 ## Scope
 
@@ -132,18 +133,21 @@ type ArtifactSchemaRef = {
   digest: string;
 };
 
+type OutputProvenance = {
+  runId: string;
+  nodeId: string;
+  ordinal: number;
+  attemptId: string;
+  resource?: string;
+  workspaceId: string;
+  executionPlanHash: string;
+};
+
 type ArtifactEnvelope = {
   artifactId: string;
   schema: ArtifactSchemaRef;
   value: ArtifactValueRef;
-  provenance: {
-    runId: string;
-    nodeId: string;
-    ordinal: number;
-    attemptId?: string;
-    executionPlanDigest: string;
-    producedAt: string;
-  };
+  provenance: OutputProvenance;
 };
 
 type ArtifactValueRef =
@@ -167,11 +171,28 @@ type ArtifactValueRef =
       immutableRevision: string;
       contentDigest?: string;
     };
+
+type HydratedOutputV1 = {
+  artifactId: string;
+  schema: ArtifactSchemaRef;
+  contentDigest: string;
+  provenance: OutputProvenance;
+  value: unknown;
+};
 ```
 
-The installed playbook owns artifact schema documents. The execution plan pins every schema id, version, and digest
-that its graph can produce or consume. [execution-plan-v1.spec.md](./execution-plan-v1.spec.md) owns that pin; it MUST
-NOT redefine family fields or reference semantics.
+The installed materialized graph and exact script-definition pins own every schema id/version/digest a run can produce
+or consume. Execution-plan-v1 persists those owners through its nested route decision and script pins; it does not add
+a second global schema registry field. This spec remains the sole owner of artifact fields and reference semantics.
+
+Target `consumes` hydration exposes `HydratedOutputV1` to script input bindings. `value` is the validated hydrated
+domain payload; `artifactId` is the canonical `revo://runs/...` identity; `contentDigest` is verified against inline,
+content-addressed, or external bytes before exposure. Agent prompt rendering still receives only the bounded `value`
+plus a safe source label. Pipeline data cannot author or override envelope metadata.
+
+The host constructs `artifactId` exactly as
+`revo://runs/<runId>/nodes/<nodeId>/outputs/<ordinal>/<produces.name>` with every path component RFC 3986
+percent-encoded UTF-8. It is stable for one logical output and is never derived from a filesystem path or provider URL.
 
 Initial family vocabulary:
 
@@ -204,26 +225,169 @@ Prisma `RunOutput` rows store the envelope and bounded inline value or reference
 source trees, diffs, repository blobs, large logs, or duplicate accepted ADR/KB bodies. The authoritative bytes remain
 in Git, the validated filesystem/content-addressed store, GitHub, or Revisium.
 
-### Target change artifact
+### Closed V1 payload schemas
 
-The target `change` family separates repository/workspace identity from source and diff content:
+ADR-0010/0011 define five domain payload schemas plus the gate-resolution artifact owned by human-gates-v1. There is
+no generic `ChangeArtifact` union or `schema:change`
+compatibility alias: producers and consumers use the exact schema reference owned by the materialized graph.
 
 ```ts
-type ChangeArtifact = {
-  repositorySnapshotDigest: string;
-  workspaceResourceId: string;
+type CaptureRef =
+  | `git-commit:${string}`
+  | `git-tree:${string}`
+  | `workspace-snapshot:sha256:${string}`;
+
+type WorkspaceChangeV1 = {
+  schemaVersion: 'workspace-change/v1';
+  provenance: OutputProvenance;
+  baseCapture: CaptureRef;
+  headCapture: CaptureRef;
+  changedPaths: Array<{
+    path: string;
+    status: 'added' | 'modified' | 'deleted' | 'renamed' | 'untracked';
+  }>;
+  clean: boolean;
+  artifactRef?: string;
+};
+
+type GitChangeV1 = {
+  schemaVersion: 'git-change/v1';
+  provenance: OutputProvenance;
+  repositoryId: string;
+  remoteIdentity: string;
+  branch: string;
   baseCommit: string;
   headCommit: string;
-  branch?: string;
-  sourceRef: ArtifactValueRef;
-  diffRef?: ArtifactValueRef;
-  pullRequestRef?: ArtifactValueRef;
+  commits: string[];
+};
+
+type GitHubPullRequestV1 = {
+  schemaVersion: 'github-pull-request/v1';
+  provenance: OutputProvenance;
+  repositoryId: string;
+  owner: string;
+  repository: string;
+  number: number;
+  url: string;
+  state: 'open' | 'closed' | 'merged';
+  draft: boolean;
+  baseRef: string;
+  headRef: string;
+  headCommit: string;
+  providerRevision: `github-pr-metadata/v1:sha256:${string}`;
+  issueRef?: {
+    owner: string;
+    repository: string;
+    number: number;
+    action: 'close' | 'refs' | 'none';
+  };
+};
+
+type GitHubReadinessV1 = {
+  schemaVersion: 'github-readiness/v1';
+  provenance: OutputProvenance;
+  pullRequest: { owner: string; repository: string; number: number; url: string };
+  observedAt: string;
+  headCommit: string;
+  state: 'open' | 'closed' | 'merged';
+  draft: boolean;
+  mergeable: 'mergeable' | 'conflicting' | 'unknown';
+  mergeState: string;
+  requiredChecks: Array<{ name: string; status: string; conclusion?: string }>;
+  unresolvedThreads: Array<{ id: string; url?: string; outdated: boolean }>;
+  advisory: string[];
+  classification:
+    | 'clean'
+    | 'recheck'
+    | 'ci_changes'
+    | 'review_changes'
+    | 'closed'
+    | 'merged'
+    | 'unclassifiable';
+};
+
+type ApprovalSubjectV1 = {
+  schemaVersion: 'approval-subject/v1';
+  provenance: OutputProvenance;
+  kind: 'plan' | 'change' | 'publication' | 'operation';
+  identity: { scheme: string; value: string };
+  revision: { scheme: string; value: string };
+  title: string;
+  summary: string;
+  evidence: Array<{ node: string; ordinal: number; name: string }>;
+  risk?: string;
 };
 ```
 
-`sourceRef` and `diffRef` MUST use external or content-addressed modes. They MUST NOT embed source
-or diff text inline. Workspace identity and lifecycle semantics are owned by
-[resources-workspaces-effects-v1.spec.md](./resources-workspaces-effects-v1.spec.md).
+`GateResolutionArtifactV1` and its nested `GateResolutionRecordV1` union are defined only by
+[human-gates-v1](./human-gates-v1.spec.md). Run-dataflow owns their artifact family, schema registration, envelope,
+provenance, persistence, and reference behavior, not their decision fields.
+
+Rules:
+
+- the adapter creates `OutputProvenance`; handlers and agents cannot override it;
+- `resource` is required for resource-backed captures and omitted for repository-free/run-level subjects;
+- `changedPaths` is bounded and sorted; contents and diffs remain in `artifactRef`;
+- a Git workspace observation uses `baseCapture=git-commit:<oid>` for the exact observed `HEAD` and
+  `headCapture=git-tree:<oid>` for the complete desired tree computed from that same bounded observation, including
+  staged, unstaged, and untracked paths. A repository-free capture uses
+  `workspace-snapshot:sha256:<lowercase-hex>`. Capture refs are immutable, scheme-qualified, and never paths;
+- `GitChangeV1.headCommit` is the only revision downstream publication may push;
+- `GitHubPullRequestV1.providerRevision` is the metadata revision owned by bounded PR operations; metadata writes
+  compare it while head-sensitive effects compare `headCommit` independently;
+- readiness is one immutable observation and performs no wait or mutation;
+- approval identity/revision is provider-neutral; GitHub fields stay in linked PR/readiness outputs;
+- credentials, raw provider payloads, diffs, and absolute workspace paths never appear in these payloads.
+
+Schema-ref/wire-version pairs are fixed:
+
+| Schema ref | Wire `schemaVersion` |
+| --- | --- |
+| `schema:workspaceChange/v1` | `workspace-change/v1` |
+| `schema:gitChange/v1` | `git-change/v1` |
+| `schema:githubPullRequest/v1` | `github-pull-request/v1` |
+| `schema:githubReadiness/v1` | `github-readiness/v1` |
+| `schema:approvalSubject/v1` | `approval-subject/v1` |
+| `schema:gateResolution/v1` | `gate-resolution/v1` |
+
+Refs are registry identities in lower camel case; wire versions are kebab case. Adapters MUST NOT derive one by ad
+hoc casing conversion.
+
+The graph builds approval subjects through the pure, registered `script:approval/subject` operation. It receives
+already hydrated identity, revision, display, evidence, and risk fields; generic gate code never parses source or
+GitHub artifacts.
+
+The bundled V2 policy fixes these subject schemes:
+
+| Subject | Identity | Revision |
+| --- | --- | --- |
+| Plan/plan-stuck approval | `{scheme:'revo-run-output', value:'revo://runs/<runId>/nodes/<nodeId>/outputs/<ordinal>/<name>'}` | `{scheme:'content-digest', value:'sha256:<lowercase-hex>'}` over the exact artifact value |
+| Pull-request publication/merge | `{scheme:'uri', value:'github://<owner>/<repository>/pull/<number>'}` | `{scheme:'git-commit', value:<headCommit>}` |
+| Generic named operation | `{scheme:'revo-operation', value:<operation-id>}` | `{scheme:'content-digest', value:'sha256:<lowercase-hex>'}` over its frozen authorization input |
+
+URI path components are RFC 3986 percent-encoded UTF-8. `content-digest` is the `ArtifactValueRef.contentDigest`
+recorded by the host envelope, never a digest supplied by an agent. The execution-plan hash remains a separate required
+subject field copied by human-gates-v1; it does not replace the approved artifact revision.
+
+### Target script verdict extraction
+
+When a script manifest declares `verdict: { jsonPointer }`:
+
+1. definition and plan validation require an RFC 6901 pointer to a required string enum in the closed result schema;
+2. every enum value must appear in the template domain verdict set;
+3. after result validation, the adapter extracts the value into `LastResult.verdict`;
+4. missing, non-string, or undeclared values fail as `revo.ScriptResultInvalid` before routing;
+5. the algorithm is identical for every definition and never compares script/node ids.
+
+Static validation reports `SCRIPT_VERDICT_VALUES_UNDECLARED` with exact missing values. A definition without a
+verdict declaration produces data but no domain verdict.
+
+Readiness provider-state classification belongs to the operation-local `CONTRACT.md` and tests; default policy owns
+the graph consequence. At minimum, `clean` means open, non-draft, mergeable at `headCommit`, all required checks pass
+or none are registered, and no unresolved blocking review thread exists.
+
+PR operations preserve `issueRef.action`: upsert renders required close/reference metadata and merge verifies it
+before mutation. `none` forbids injected issue tokens.
 
 ### Target validation
 
@@ -237,6 +401,10 @@ The compiler and runtime MUST validate:
 - external references contain store-specific immutable identity;
 - recovery uses the recorded envelope and does not re-query a mutable latest artifact;
 - an unavailable reference fails with a typed artifact error before worker invocation.
+- caller-authored provenance is rejected;
+- required consumed output absence fails as `revo.InputMissing` before effects;
+- subject-authorizing gates reject missing/changed identity or revision;
+- verdict pointers and values fail before routing when schema/domain validation fails.
 
 ### `schema:change` Produced Artifact
 
@@ -296,6 +464,9 @@ guards still catch dynamic skips and stale paths.
 
 ## Changelog
 
+- 2026-07-12: Consolidated the exact workspace, Git, GitHub PR/readiness, and provider-neutral approval-subject payloads
+  plus generic script-verdict extraction into the PR #320 artifact-family owner.
+- 2026-07-12: Added the GitHub PR metadata revision used by fenced upsert and mark-ready effects.
 - 2026-07-11: Made this spec the artifact-family owner and added the Draft inline, content-addressed, and external
   reference contract while preserving `schema:change` as current shipped behavior.
 - 2026-06-29: Normative-language / canon-discipline pass; no contract change.

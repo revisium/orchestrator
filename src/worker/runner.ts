@@ -1,5 +1,6 @@
 import type { NewStep, CostRecord, Step } from '../control-plane/steps.js';
-import type { Role, ModelProfile } from '../control-plane/definitions.js';
+import type { Role } from '../control-plane/definitions.js';
+import type { ResolvedAgentBinding } from '../control-plane/run-profile-contract.js';
 import type { AgentActivityReporter } from '../observability/agent-activity-reporter.js';
 import type { RunnerTimeoutEvidence, RunnerTimeoutFailureKind } from './process-executor.js';
 
@@ -17,7 +18,7 @@ export type AttemptResult = {
 
 export type RunAgent = (args: {
   role: Role;
-  profile: ModelProfile;
+  binding: ResolvedAgentBinding;
   context: string;
   attemptId: string;
   step: Step;

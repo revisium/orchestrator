@@ -12,7 +12,9 @@
   [run-dataflow-v1.spec.md](./run-dataflow-v1.spec.md),
   [default-playbook-policy.spec.md](./default-playbook-policy.spec.md),
   [playbook-storage-v1.spec.md](./playbook-storage-v1.spec.md),
-  [execution-plan-v1.spec.md](./execution-plan-v1.spec.md)
+  [execution-plan-v1.spec.md](./execution-plan-v1.spec.md),
+  [resources-workspaces-effects-v1.spec.md](./resources-workspaces-effects-v1.spec.md),
+  [script-runtime-v1.spec.md](./script-runtime-v1.spec.md)
 
 ## Scope
 
@@ -59,6 +61,9 @@ playbook version and current profile revision into the
 
 Run profiles may carry publication account aliases only as script-node launch bindings. Credentials remain runtime host
 secrets and MUST NOT be stored in Revisium profiles or Prisma route pins.
+
+That sentence is shipped behavior. The atomic target carries Git/GitHub aliases as named-resource bindings, never
+script-node expansion. Tokens remain host-local in both contracts.
 
 ## Default Catalog
 
@@ -263,6 +268,28 @@ implementation is selected by the pipeline node `scriptRef`.
 
 Profile bindings are the public launch binding source.
 
+### Target resource bindings
+
+The binding shape above is shipped V1. ADR-0010 removes `accounts.github` from node bindings and defines:
+
+```ts
+type RunProfileV1Target = {
+  schemaVersion: 'run-profile/v1';
+  topology: RunProfileTopology;
+  bindings: {
+    slots: Record<string, AgentLaunchBinding>;
+    resources?: Record<string, {
+      credentials?: { git?: string; github?: string };
+    }>;
+  };
+};
+```
+
+`slots` continues to own runner/model/permission/timeout selection for agents. Script nodes select neither runner nor
+account. `bindings.resources.<resource>.credentials` supplies aliases for operations authorized against that resource.
+Pipeline declarations determine valid keys. The execution-plan compiler pins alias and source once; secret material
+remains host-local.
+
 ## Profile Lifecycle
 
 All profiles are stored in the same `run_profiles` table and use the same `run-profile/v1` payload shape. Seeded
@@ -323,6 +350,8 @@ launch values during route resolution; route resolution consumes a normalized pr
 
 ## GitHub Account Binding
 
+This section documents shipped behavior. It is replaced by target resource bindings when ADR-0010 lands.
+
 GitHub publication identity is launch configuration for script nodes. Stored and inline profiles may set:
 
 ```json
@@ -359,6 +388,11 @@ the running workflow because the expanded launch bindings are pinned into the Pr
 
 `gh pr ready` failures in `pollPr` and `confirmMerge` are recoverable script blocks. The surfaced evidence MUST be
 secret-redacted and actionable, and the workflow MUST route to human recovery with at least `recheck` and `cancel`.
+
+The target has no named-node expansion, `PR_LIFECYCLE_NODES`, `REVO_GH_ACCOUNT` precedence inside generic
+execution, or active-account fallback. Compilation resolves exactly one alias per required resource/kind using launch,
+then profile resource binding, then explicit host default. It records only `<resource>:<kind>` alias/source pins and
+fails before enqueue on ambiguity or absence. Operation-time resolution cannot choose another alias.
 
 ## Runtime Resolution
 
@@ -439,14 +473,15 @@ Revisium profile row for an existing run.
 The target route service produces one immutable `ExecutionPlan` after profile validation and topology
 materialization. Profile data is an input to planning, not an execution-time registry.
 
-The plan MUST pin:
+The nested `RouteDecision` component MUST pin:
 
 - the selected profile revision/hash and normalized launch payload;
 - the immutable playbook version and executable graph/hash;
 - resolved agent runner/model/permission/timeout/retry bindings;
-- resolved script definitions, permission/resource bindings, and secret-binding references;
-- artifact and approval-subject schema versions;
-- repository snapshots, workspace plan, iteration caps, and budget policy.
+- iteration caps, budget/execution policy, and selected context/materialization pins.
+
+Beside that one component, `ExecutionPlanV1` pins resolved repositories/workspace, node access/captures, exact script
+definitions, and resource credential aliases. It does not duplicate profile/playbook/runner/policy/context fields.
 
 After plan creation, replay and recovery MUST NOT re-read `run_profiles`, rematerialize topology from a
 mutable profile, or discover missing bindings from process defaults. Profile edits affect only later plans.
@@ -518,7 +553,19 @@ Required automated coverage:
 - top-level `publishing` fields are rejected in stored and inline `run-profile/v1` payloads;
 - GitHub tokens are never stored in `profile_json`, inline `profile`, or `routeDecision`.
 
+Target migration coverage additionally requires:
+
+- resource aliases validate against declared resources and never expand by node id;
+- script-node account fields and active-account fallback are rejected;
+- run creation nests route provenance in one hashed execution plan without a duplicate replay source;
+- tokens remain absent from profile, route decision, plan, outputs, and events.
+
+The target is a direct alpha replacement: no alias between node accounts and resource credentials, no dual profile
+shape, and no historical-run migration.
+
 ## Changelog
 
+- 2026-07-12: Consolidated ADR-0010 resource credential bindings and one nested route-decision execution-plan
+  composition into the PR #320 Draft migration.
 - 2026-07-11: Clarified that profiles are mutable planning inputs, documented the current partial route pin, and
   added the Draft direct compilation path to an immutable execution plan.

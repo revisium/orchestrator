@@ -299,40 +299,40 @@ function unit(
 }
 
 const SINGLE_REVIEW_PROFILE_TAGS = [
-  profileSignature('claude-standard', 'single-review'),
-  profileSignature('codex-standard', 'single-review'),
+  profileSignature('claude-opus-4-8-sonnet-4-6', 'single-review'),
+  profileSignature('codex-gpt-5-6-luna', 'single-review'),
 ] as const;
 
 const CONSENSUS_PROFILE_TAGS = [
-  profileSignature('codex-primary-claude-review-consensus', 'dual-consensus-review'),
-  profileSignature('claude-primary-codex-review-consensus', 'dual-consensus-review'),
+  profileSignature('codex-gpt-5-6-luna-claude-opus-4-8-consensus', 'dual-consensus-review'),
+  profileSignature('claude-opus-4-8-codex-gpt-5-6-luna-consensus', 'dual-consensus-review'),
 ] as const;
 
 const LOCAL_CHANGE_PROFILE_TAGS = [
-  profileSignature('local-change-claude-standard', 'developer-single'),
-  profileSignature('local-change-codex-standard', 'developer-single'),
+  profileSignature('local-change-claude-sonnet-4-6', 'developer-single'),
+  profileSignature('local-change-codex-gpt-5-6-luna', 'developer-single'),
 ] as const;
 
 const ANALYSIS_ONLY_PROFILE_TAGS = [
-  profileSignature('analysis-only-claude-standard', 'analyst-single'),
-  profileSignature('analysis-only-codex-standard', 'analyst-single'),
+  profileSignature('analysis-only-claude-opus-4-8', 'analyst-single'),
+  profileSignature('analysis-only-codex-gpt-5-6-luna', 'analyst-single'),
 ] as const;
 
 const FEATURE_CLAUDE_STANDARD_MATERIALIZED = {
   pipelineId: 'feature-development',
-  profileId: 'claude-standard',
+  profileId: 'claude-opus-4-8-sonnet-4-6',
 } as const;
 const FEATURE_CODEX_STANDARD_MATERIALIZED = {
   pipelineId: 'feature-development',
-  profileId: 'codex-standard',
+  profileId: 'codex-gpt-5-6-luna',
 } as const;
 const FEATURE_CODEX_CONSENSUS_MATERIALIZED = {
   pipelineId: 'feature-development',
-  profileId: 'codex-primary-claude-review-consensus',
+  profileId: 'codex-gpt-5-6-luna-claude-opus-4-8-consensus',
 } as const;
 const FEATURE_CLAUDE_CONSENSUS_MATERIALIZED = {
   pipelineId: 'feature-development',
-  profileId: 'claude-primary-codex-review-consensus',
+  profileId: 'claude-opus-4-8-codex-gpt-5-6-luna-consensus',
 } as const;
 
 const FEATURE_SIBLING_MATERIALIZED = [
@@ -521,16 +521,16 @@ const PIPELINE_DSL_COVERAGE_SCENARIOS = [
   ),
   seedDefaultPlaybookScenario(
     'M1-profile-single',
-    { pipelineId: 'feature-development', profileId: 'codex-standard' },
+    { pipelineId: 'feature-development', profileId: 'codex-gpt-5-6-luna' },
     [
-      profileSignature('codex-standard', 'single-review'),
+      profileSignature('codex-gpt-5-6-luna', 'single-review'),
       nodeOutcome('planReviewRouter', 'approved'),
       nodeOutcome('planGate', 'approved'),
       nodeOutcome('codeReviewRouter', 'approved'),
       nodeOutcome('mergeGate', 'approved'),
     ],
     [
-      profileSignature('codex-standard', 'single-review'),
+      profileSignature('codex-gpt-5-6-luna', 'single-review'),
       nodeOutcome('planReviewRouter', 'approved'),
       nodeOutcome('planGate', 'approved'),
       nodeOutcome('codeReviewRouter', 'approved'),
@@ -538,9 +538,9 @@ const PIPELINE_DSL_COVERAGE_SCENARIOS = [
   ),
   seedDefaultPlaybookScenario(
     'M1b-profile-consensus-rework',
-    { pipelineId: 'feature-development', profileId: 'codex-primary-claude-review-consensus' },
+    { pipelineId: 'feature-development', profileId: 'codex-gpt-5-6-luna-claude-opus-4-8-consensus' },
     [
-      profileSignature('codex-primary-claude-review-consensus', 'dual-consensus-review'),
+      profileSignature('codex-gpt-5-6-luna-claude-opus-4-8-consensus', 'dual-consensus-review'),
       nodeOutcome('planReviewRouter', 'changes_requested'),
       nodeOutcome('planReviewRouter', 'approved'),
       nodeOutcome('planGate', 'approved'),
@@ -548,22 +548,22 @@ const PIPELINE_DSL_COVERAGE_SCENARIOS = [
       nodeOutcome('mergeGate', 'approved'),
     ],
     [
-      profileSignature('codex-primary-claude-review-consensus', 'dual-consensus-review'),
+      profileSignature('codex-gpt-5-6-luna-claude-opus-4-8-consensus', 'dual-consensus-review'),
       nodeOutcome('planReviewRouter', 'changes_requested'),
     ],
   ),
   seedDefaultPlaybookScenario(
     'M2-profile-local-change',
-    { pipelineId: 'local-change', profileId: 'local-change-codex-standard' },
+    { pipelineId: 'local-change', profileId: 'local-change-codex-gpt-5-6-luna' },
     [
-      profileSignature('local-change-codex-standard', 'developer-single'),
+      profileSignature('local-change-codex-gpt-5-6-luna', 'developer-single'),
     ],
   ),
   seedDefaultPlaybookScenario(
     'M3-profile-analysis-only',
-    { pipelineId: 'analysis-only', profileId: 'analysis-only-codex-standard' },
+    { pipelineId: 'analysis-only', profileId: 'analysis-only-codex-gpt-5-6-luna' },
     [
-      profileSignature('analysis-only-codex-standard', 'analyst-single'),
+      profileSignature('analysis-only-codex-gpt-5-6-luna', 'analyst-single'),
     ],
   ),
 ] as const;
@@ -689,16 +689,16 @@ const PIPELINE_COVERAGE_OWNERSHIP: readonly PipelineCoverageOwnershipDeclaration
     ...nodeCatches(['cleanupWorktree']),
   ]),
   unit('src/control-plane/run-profiles.test.ts', [SINGLE_REVIEW_PROFILE_TAGS[0]], [SINGLE_REVIEW_PROFILE_TAGS[0]], [
-    { pipelineId: 'feature-development', profileId: 'claude-standard' },
+    { pipelineId: 'feature-development', profileId: 'claude-opus-4-8-sonnet-4-6' },
   ]),
   unit('src/control-plane/run-profiles.test.ts', [CONSENSUS_PROFILE_TAGS[1]], [CONSENSUS_PROFILE_TAGS[1]], [
-    { pipelineId: 'feature-development', profileId: 'claude-primary-codex-review-consensus' },
+    { pipelineId: 'feature-development', profileId: 'claude-opus-4-8-codex-gpt-5-6-luna-consensus' },
   ]),
   unit('src/control-plane/run-profiles.test.ts', [LOCAL_CHANGE_PROFILE_TAGS[0]], [LOCAL_CHANGE_PROFILE_TAGS[0]], [
-    { pipelineId: 'local-change', profileId: 'local-change-claude-standard' },
+    { pipelineId: 'local-change', profileId: 'local-change-claude-sonnet-4-6' },
   ]),
   unit('src/control-plane/run-profiles.test.ts', [ANALYSIS_ONLY_PROFILE_TAGS[0]], [ANALYSIS_ONLY_PROFILE_TAGS[0]], [
-    { pipelineId: 'analysis-only', profileId: 'analysis-only-claude-standard' },
+    { pipelineId: 'analysis-only', profileId: 'analysis-only-claude-opus-4-8' },
   ]),
   unit('src/pipeline-core/interpret.test.ts', [
     nodeOutcome('recoveryRouter', 'fix'),

@@ -1,4 +1,4 @@
-# ADR-0010 - ACP process and session isolation for MVP v1
+# ADR-0012 - ACP process and session isolation for MVP v1
 
 - **Status:** Accepted
 - **Decision date:** 2026-07-10

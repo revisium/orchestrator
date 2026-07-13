@@ -17,7 +17,6 @@ export type Step = {
   status: string;
   input: unknown;
   output: unknown;
-  modelProfile: string;
   runAfter: string;
   attemptCount: number;
   maxAttempts: number;
@@ -33,7 +32,6 @@ export type NewStep = {
   role: string;
   kind: string;
   input: unknown;
-  modelProfile: string;
   priority?: number;
   maxAttempts?: number;
   dependsOn?: string[];
@@ -41,11 +39,13 @@ export type NewStep = {
 };
 
 export type CostRecord = {
-  modelProfile: string;
-  inputTokens: number;
-  outputTokens: number;
-  costAmount: number;
-  currency?: string;
+  runnerId: string;
+  provider: string;
+  modelId: string;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  costAmount: number | null;
+  currency: string | null;
 };
 
 

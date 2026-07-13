@@ -1,20 +1,9 @@
 import { createHash } from 'node:crypto';
-import type { BindingOverride } from '../pipeline/route-contract.js';
 import type { ConsensusToggle, TopologyProfile } from '../pipeline-core/materialize.js';
 
 type StageConfig = {
   mode?: string;
   branches?: number;
-};
-
-type SlotBinding = {
-  runnerId?: string;
-  modelLevel?: string;
-  timeoutMs?: number;
-  permissionMode?: string;
-  accounts?: {
-    github?: string;
-  };
 };
 
 const HASHED_PROFILE_FIELDS = new Set(['pipelineId', 'schemaVersion', 'topology', 'bindings']);
@@ -50,15 +39,6 @@ type RunProfileRevisionContext = {
   status: string;
 };
 
-const ROLE_SLOTS = new Set([
-  'orchestrator',
-  'analyst',
-  'reviewer',
-  'developer',
-  'watcher',
-  'triager',
-]);
-
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
@@ -73,7 +53,7 @@ function stableStringify(value: unknown): string {
     const record = value as Record<string, unknown>;
     const entries = Object.keys(record)
       .filter((key) => record[key] !== undefined)
-      .sort((left, right) => left.localeCompare(right))
+      .sort((left, right) => left < right ? -1 : left > right ? 1 : 0)
       .map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`);
     return `{${entries.join(',')}}`;
   }
@@ -166,70 +146,4 @@ export function topologyProfileFromRunProfile(
     toggles.push(consensusToggle(target, stage.branches ?? 2));
   }
   return { profileId, pipelineId, toggles };
-}
-
-function slotMatch(slot: string): BindingOverride['match'] {
-  if (slot.startsWith('role:')) return { roleId: slot.slice('role:'.length) };
-  if (slot.startsWith('node:')) return { nodeId: slot.slice('node:'.length) };
-  return ROLE_SLOTS.has(slot) ? { roleId: slot } : { nodeId: slot };
-}
-
-function bindingSlotMatch(slot: string, binding: SlotBinding): BindingOverride['match'] {
-  const hasRunnerLaunchFields =
-    binding.runnerId !== undefined ||
-    binding.modelLevel !== undefined ||
-    binding.timeoutMs !== undefined ||
-    binding.permissionMode !== undefined;
-  if (!hasRunnerLaunchFields && binding.accounts !== undefined && !slot.startsWith('role:') && !slot.startsWith('node:')) {
-    return { nodeId: slot };
-  }
-  return slotMatch(slot);
-}
-
-function bindingOverride(slot: string, binding: SlotBinding): BindingOverride | null {
-  const override: BindingOverride = { match: bindingSlotMatch(slot, binding) };
-  if (binding.runnerId) override.runnerId = binding.runnerId;
-  if (binding.modelLevel) override.modelLevel = binding.modelLevel;
-  if (binding.timeoutMs !== undefined) override.timeoutMs = binding.timeoutMs;
-  if (binding.permissionMode) override.permissionMode = binding.permissionMode;
-  if (binding.accounts?.github) override.accounts = { github: binding.accounts.github };
-  return Object.keys(override).length > 1 ? override : null;
-}
-
-function overrideKey(override: BindingOverride): string {
-  if (override.match.roleId) return `role:${override.match.roleId}`;
-  if (override.match.nodeId) return `node:${override.match.nodeId}`;
-  return `runner:${override.match.runnerId ?? ''}`;
-}
-
-export function launchBindingsFromRunProfile(
-  profile: Record<string, unknown>,
-  options: { lifecycleNodeIds?: Iterable<string> } = {},
-): BindingOverride[] {
-  const bindings = asRecord(profile.bindings);
-  const slots = asRecord(bindings.slots);
-  const explicit = Object.entries(slots)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([slot, raw]) => bindingOverride(slot, asRecord(raw) as SlotBinding))
-    .filter((override): override is BindingOverride => override !== null);
-
-  const byKey = new Map(explicit.map((override) => [overrideKey(override), override]));
-  const publishAccount = byKey.get('node:integrator')?.accounts?.github;
-  if (!publishAccount) return explicit;
-
-  const lifecycleNodeIds = options.lifecycleNodeIds
-    ? [...options.lifecycleNodeIds].filter((nodeId): nodeId is typeof PR_LIFECYCLE_NODES[number] =>
-      (PR_LIFECYCLE_NODES as readonly string[]).includes(nodeId))
-    : [...PR_LIFECYCLE_NODES];
-
-  for (const nodeId of lifecycleNodeIds) {
-    const key = `node:${nodeId}`;
-    const explicitOverride = byKey.get(key);
-    byKey.set(key, {
-      ...explicitOverride,
-      match: { nodeId },
-      accounts: { github: explicitOverride?.accounts?.github ?? publishAccount },
-    });
-  }
-  return [...byKey.values()].sort((left, right) => overrideKey(left).localeCompare(overrideKey(right)));
 }

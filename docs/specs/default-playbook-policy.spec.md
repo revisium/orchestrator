@@ -6,7 +6,10 @@
   `src/control-plane/default-playbook-policy.ts`, `src/control-plane/default-playbook-policy.test.ts`.
 - **Related specs:** [pipeline-state-machine-v1.spec.md](./pipeline-state-machine-v1.spec.md),
   [run-dataflow-v1.spec.md](./run-dataflow-v1.spec.md),
-  [human-gates-v1.spec.md](./human-gates-v1.spec.md).
+  [human-gates-v1.spec.md](./human-gates-v1.spec.md),
+  [execution-plan-v1.spec.md](./execution-plan-v1.spec.md),
+  [resources-workspaces-effects-v1.spec.md](./resources-workspaces-effects-v1.spec.md),
+  [script-runtime-v1.spec.md](./script-runtime-v1.spec.md).
 
 The static bundled-playbook checks are accepted, and #141 merge-gate reject/recheck routing, #233 thread-recovery outcomes, #240 mergeability-honest `clean`, and #246 recovery/reverify graph reconciliation are implemented.
 
@@ -21,7 +24,7 @@ The verifier covers the canonical PRODUCT catalog pipeline in
 
 - `feature-development` — the reconciled canonical variant; passes all rules with zero diagnostics.
 
-The e2e test fixture at `src/e2e/fixtures/playbook/catalog/pipelines.json` is test infrastructure (a smaller
+The e2e test fixture at `src/e2e/support/fixtures/playbook/catalog/pipelines.json` is test infrastructure (a smaller
 pre-escalation graph driven by specific e2e paths) and is out of product-policy scope. The AC's
 "hand-authored variants" refers to product catalog entries, not run profiles.
 
@@ -73,6 +76,92 @@ The bundled `feature-development` policy verifier reports errors for these stati
 non-benign failures are surfaced as redacted recovery evidence and route through the existing recovery gate with
 `recheck,cancel`. A benign GitHub response that the PR is already ready/not draft is idempotent success.
 
+## Target GitHub-first policy V2
+
+Everything above this section is the shipped, implemented V1 policy. ADR-0010/0011 require one atomic target switch;
+the target MUST NOT be described as landed until the catalog, verifier, workflow adapter, and runtime tests all move
+together.
+
+The V2 bundled `feature-development` proof remains:
+
+```text
+task -> approved plan -> implementation -> reviewed pull request -> merge approval -> merge
+```
+
+The target changes ownership, not product safety outcomes:
+
+- the pipeline declares one named repository resource and a mutable isolated workspace policy;
+- every agent/script node declares resource access and captures;
+- implementation steps produce `workspaceChange` and `gitChange`, not `schema:change`;
+- Git commit, push, pull-request upsert, mark-ready, readiness snapshot, thread response/resolution, and merge use the
+  explicit `script:git/*` and `script:github/*` definitions from script-runtime-v1;
+- readiness is one mutation-free snapshot; bounded `choice`/`wait` loops own waiting and escalation, and every
+  bundled readiness recheck uses exact `PT30S` through the DBOS-backed adapter timer;
+- plan and merge approval consume provider-neutral subjects for exact revisions;
+- approved and override routes capture a fresh readiness snapshot before merge and require matching
+  subject/readiness revisions;
+- externally merged pull requests reach the merged terminal and lifecycle releases the workspace without a graph
+  cleanup node;
+- externally closed unmerged pull requests reach human recovery with `pr_closed_externally` evidence;
+- cancellation and configured terminal paths invoke lifecycle release outside graph topology;
+- script failures preserve existing recovery outcomes without executor branches on node ids;
+- account aliases are resource credential pins, not named-node expansion.
+
+The `PT30S` rule applies to the product catalog. The E2E fixture catalog uses exact `PT0.050S` with the topology
+parity proof owned by pipeline-test-coverage-v1; the product verifier does not accept it as production policy.
+
+Target static-policy families:
+
+| Rule | Target diagnostic |
+| --- | --- |
+| Required repository resource, mutable isolated workspace, and complete node access/capture declarations exist. | `DEFAULT_POLICY_RESOURCE_PLAN_MISSING` |
+| Every V2 script node declares complete `inputBindings` from dominating typed outputs or approved plan fields, and the resolved shape matches its pinned input schema. | `DEFAULT_POLICY_SCRIPT_INPUT_BINDING_INVALID` |
+| Change producers and consumers use split typed artifacts. | `DEFAULT_POLICY_TYPED_CHANGE_HANDOFF_MISSING` |
+| Readiness is followed by bounded choice/wait routing, recheck waits are exactly `PT30S`, and observation owns no mutation. | `DEFAULT_POLICY_READINESS_LOOP_INVALID` |
+| Mark-ready, thread writes, and merge are separate registered operations. | `DEFAULT_POLICY_GITHUB_EFFECT_SPLIT_MISSING` |
+| Plan and merge approvals consume provider-neutral subjects at exact revisions. | `DEFAULT_POLICY_APPROVAL_SUBJECT_MISSING` |
+| Merge subject and post-approval readiness refer to the same head revision. | `DEFAULT_POLICY_APPROVAL_REVISION_FENCE_MISSING` |
+| Merge script catches MUST NOT route to a terminal node; base-drift and head-guard failures remain recoverable. | `DEFAULT_POLICY_MERGE_FAILURE_TERMINAL` |
+| No `script:cleanupWorktree` or old script ref remains. | `DEFAULT_POLICY_LEGACY_EFFECT_PRESENT` |
+| No lifecycle path depends on a graph edge after merge/cancel/failure. | `DEFAULT_POLICY_LIFECYCLE_OWNERSHIP_INVALID` |
+
+Every shipped safeguard family has an explicit V2 fate:
+
+| Shipped V1 diagnostic | V2 requirement / diagnostic |
+| --- | --- |
+| `DEFAULT_POLICY_WRONG_PIPELINE` | Preserved for V2 `feature-development`. |
+| `DEFAULT_POLICY_CHANGE_HANDOFF_MISSING` | Replaced atomically by `DEFAULT_POLICY_TYPED_CHANGE_HANDOFF_MISSING`. |
+| `DEFAULT_POLICY_PR_FRESHNESS_WIRING_MISSING` | Re-expressed by readiness routing, terminal routing, and `DEFAULT_POLICY_APPROVAL_REVISION_FENCE_MISSING`. |
+| `DEFAULT_POLICY_LOOP_EXHAUSTION_ESCALATION_MISSING` | Preserved over explicit counters for readiness, plan review, and code review. |
+| `DEFAULT_POLICY_APPROVE_REVERIFY_MISSING` | Preserved by `DEFAULT_POLICY_APPROVAL_REVISION_FENCE_MISSING`; approved and override routes take a fresh snapshot. |
+| `DEFAULT_POLICY_MERGE_READINESS_FRESHNESS_MISSING` | Preserved by the same revision fence; merge consumes only the post-approval snapshot. |
+| `DEFAULT_POLICY_MERGE_RECHECK_ROUTE_MISSING` | Preserved over V2 operation refs and typed outputs. |
+| `DEFAULT_POLICY_REVIEW_CHANGES_ROUTE_MISSING` | Preserved over V2 readiness verdicts and typed evidence. |
+| `DEFAULT_POLICY_CI_CHANGES_ROUTE_MISSING` | Preserved, including bounded `ciLoop`. |
+| `DEFAULT_POLICY_BLOCKED_TERMINAL_MISSING` | Preserved; lifecycle applies `onBlocked` after terminal recording. |
+| `DEFAULT_POLICY_CANCELLED_TERMINAL_MISSING` | Preserved; lifecycle applies `onCancel` outside graph topology. |
+| `DEFAULT_POLICY_RECOVERABLE_CATCH_TERMINAL` | Preserved for every readiness and Git/GitHub mutation node. |
+| `DEFAULT_POLICY_CAP_EXHAUSTION_OFFRAMP_MISSING` | Preserved; exhaustion reaches a question/recovery gate. |
+| `DEFAULT_POLICY_CONFIRM_MERGE_FAILURE_TERMINAL` | Re-expressed as `DEFAULT_POLICY_MERGE_FAILURE_TERMINAL`. |
+| `DEFAULT_POLICY_POST_MERGE_CLEANUP_MISSING` | Retired only as graph shape and replaced by `DEFAULT_POLICY_LIFECYCLE_OWNERSHIP_INVALID`. |
+| `DEFAULT_POLICY_GATE_OUTCOMES_IMPLICIT` | Preserved for every V2 human gate and named outcome. |
+
+V2 additionally reports `DEFAULT_POLICY_PR_TERMINAL_ROUTE_MISSING` unless externally merged routes to the merged
+terminal and externally closed-unmerged routes to recovery. It reports `DEFAULT_POLICY_ZERO_CI_READINESS_ROUTE_MISSING`
+unless a mergeable PR with no registered checks may classify `clean` on the first snapshot.
+
+Definite-negative mergeability is an intentional named parity replacement: V1 `DIRTY`, `BLOCKED`, `BEHIND`, or
+`CONFLICTING` terminated at `blockedEnd`; V2 records `unclassifiable` and routes through `classifyRecovery` to a human
+`recoveryGate` with no merge edge. The parity golden MUST name and test this replacement rather than claim the old
+terminal route is preserved.
+
+V2 replaces V1 in one catalog/policy version. Mixed old/new script refs or both `schema:change` and split artifacts
+are invalid. There are no aliases, dual paths, historical-run migrations, or fallback behaviors.
+
+A parity golden enumerates every V1 diagnostic and requires its named V2 successor or the single explicit cleanup
+graph-shape retirement. It also proves bounded review/CI recovery, zero-CI readiness, externally merged/closed routing,
+explicit gate outcomes, and post-approval freshness. Production cutover cannot land while any entry is unmapped.
+
 ## Profile-Materialized Templates
 
 The verifier can also be applied to materialized templates produced from stored run profile data. A seeded consensus
@@ -113,6 +202,9 @@ contract: the verifier does not prove that GitHub/provider state was fresh at ru
 
 ## Changelog
 
+- 2026-07-12: Fixed V2 readiness waits at `PT30S` and required the durable adapter timer.
+- 2026-07-12: Added the Draft V2 atomic-cutover policy with named resources, typed artifacts, explicit operations,
+  provider-neutral approval subjects, and lifecycle-owned release.
 - 2026-07-11: Normalized Status metadata to the exact enum value; no contract change.
 - 2026-07-06: #273 — `script:pollPr` terminal verdicts now leave readiness loops explicitly:
   externally merged PRs route through `cleanupWorktree -> mergedEnd`, while externally closed unmerged PRs route to

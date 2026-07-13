@@ -14,4 +14,4 @@ export {
   type NewStep,
   type CostRecord,
 } from './steps.js';
-export { loadRole, loadModelProfile, type Role, type ModelProfile } from './definitions.js';
+export { loadRole, type Role } from './definitions.js';

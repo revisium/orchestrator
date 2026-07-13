@@ -2,7 +2,7 @@ import type { RunAgent } from './runner.js';
 
 export function createRunAgent(deps: { claudeCode: RunAgent; codex?: RunAgent; script?: RunAgent }): RunAgent {
   return async (args) => {
-    switch (args.role.runner) {
+    switch (args.binding.runner.runnerId) {
       case 'claude-code':
         return deps.claudeCode(args);
       case 'codex':
@@ -13,7 +13,7 @@ export function createRunAgent(deps: { claudeCode: RunAgent; codex?: RunAgent; s
         if (!deps.script) throw new Error('RUNNER_NOT_IMPLEMENTED: script runner not wired');
         return deps.script(args);
       default:
-        throw new Error(`RUNNER_NOT_IMPLEMENTED: unknown runner "${String(args.role.runner)}"`);
+        throw new Error(`RUNNER_NOT_IMPLEMENTED: unknown runner "${String(args.binding.runner.runnerId)}"`);
     }
   };
 }

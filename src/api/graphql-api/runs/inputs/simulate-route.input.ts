@@ -10,7 +10,7 @@ export class SimulateRouteInput {
   repo?: string;
 
   @Field(() => String)
-  pipeline!: string;
+  pipelineId!: string;
 
   @Field(() => String, { nullable: true })
   profileId?: string;

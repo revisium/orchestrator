@@ -84,7 +84,7 @@ details; the DBOS service hides workflow internals; Git/worktree adapters hide s
 | --- | --- | --- |
 | DBOS | Workflow progress, queues, waits, retries, checkpoint/replay | Product meaning, run projections, repository content |
 | Revo Prisma | `RevoProject`, runs, tasks, attempts, inbox, events, outputs, cost ledger, route pins, indexes | Versioned control-plane meaning, DBOS tables, source diffs |
-| Embedded Revisium engine | Committed/versioned playbook metadata, role/pipeline definitions, run/model profiles, routing policy; engine branch/revision/table primitives | Hot run lifecycle facts, workflow progress |
+| Embedded Revisium engine | Committed/versioned playbook metadata, role/pipeline definitions, exact run profiles, routing policy; engine branch/revision/table primitives | Hot run lifecycle facts, workflow progress |
 | Git/worktrees/files | Repository state, branches, worktrees, diffs, logs, and large artifacts | Routing cursor or accepted control-plane meaning |
 
 The Revo Prisma models and engine-required physical tables share the Revo product database in the current storage
@@ -104,18 +104,22 @@ The shipped product has two playbook-related surfaces that must not be conflated
    provide discovery, role sets, route gates, runner metadata, and execution-policy recommendations, but no executable
    graph. The shipped Revo importer cannot execute that package end to end.
 
-Current run creation stores a materialized template, its hash, profile snapshot/hash, materializer/policy versions,
-and resolved launch bindings in Prisma `TaskRun.routeDecision`. Recovery uses those route pins. The current pin is not
-yet the complete Draft `ExecutionPlan`: not every execution-affecting playbook document, capability, resource,
-script implementation, or accepted knowledge revision is resolved into one immutable object.
+Current run creation compiles a materialized template, exact profile bindings, runner-manifest snapshots, route gates,
+execution policy, and business parameters into canonical `execution-plan/v1` bytes/digest inside the Prisma
+`TaskRun.routeDecision` envelope. The bytes are persisted before DBOS enqueue. Start, replay, and recovery verify and
+consume that stored plan only. A decoded plan returned by MCP/GraphQL is a read-only view derived from the same bytes.
+The larger immutable installed-package/resource target remains Draft, but it cannot introduce a second execution
+authority.
 
 The built-in executable graph is bootstrap data, not a second canonical authoring source for
 `@revisium/agent-playbook`.
 
 ## Current run lifecycle
 
-1. A caller creates a run through MCP or GraphQL and selects a pipeline/profile or receives a confirmation request.
-2. Product services resolve the stored pipeline/profile and persist the route decision in Prisma.
+1. A caller creates a run through MCP or GraphQL and selects a pipeline plus exactly one stored/inline profile, or
+   receives a no-run pipeline-selection confirmation.
+2. Product services resolve the provider-neutral graph and exact profile, compile the plan, and persist the route
+   decision in Prisma.
 3. DBOS starts or reattaches the workflow by run id.
 4. `pipeline-core` emits one decision from the pinned materialized graph and reducer state.
 5. The adapter invokes a short-lived agent, a current product-owned script handler, a gate wait, a timer, a fork, or
@@ -191,9 +195,9 @@ The package must declare a machine-readable executable graph. Runtime LLM parsin
 execution contract. If executable graph/effect/artifact fields are added to the current authoring schema, the package
 schema version changes explicitly.
 
-The `ExecutionPlan` resolves all execution-affecting inputs, including graph, roles, runner capabilities, scripts,
-policies, resources, selected context, and version/hash pins. Workflow execution and recovery do not re-read mutable
-package HEAD, source checkouts, registries, or accepted-knowledge HEAD. Exact structure is owned by
+The `ExecutionPlan` resolves the current execution-affecting inputs, including graph, profile, runner manifest
+capabilities, scripts, policies, business parameters, and version/hash pins. Workflow execution and recovery do not
+re-read mutable profile/role meaning or a live runner mapping. Exact structure is owned by
 [execution-plan-v1.spec.md](./specs/execution-plan-v1.spec.md).
 
 This internal alpha redesign targets direct cutover: no legacy aliases, fallback reads, dual-write old/new models,

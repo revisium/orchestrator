@@ -55,7 +55,9 @@ export type RunAttemptMinAggregateOutputType = {
   iteration: number | null
   status: string | null
   idempotencyKey: string | null
-  modelProfile: string | null
+  runnerId: string | null
+  provider: string | null
+  modelId: string | null
   verdict: string | null
   inputTokens: number | null
   outputTokens: number | null
@@ -83,7 +85,9 @@ export type RunAttemptMaxAggregateOutputType = {
   iteration: number | null
   status: string | null
   idempotencyKey: string | null
-  modelProfile: string | null
+  runnerId: string | null
+  provider: string | null
+  modelId: string | null
   verdict: string | null
   inputTokens: number | null
   outputTokens: number | null
@@ -111,7 +115,9 @@ export type RunAttemptCountAggregateOutputType = {
   iteration: number
   status: number
   idempotencyKey: number
-  modelProfile: number
+  runnerId: number
+  provider: number
+  modelId: number
   verdict: number
   inputTokens: number
   outputTokens: number
@@ -159,7 +165,9 @@ export type RunAttemptMinAggregateInputType = {
   iteration?: true
   status?: true
   idempotencyKey?: true
-  modelProfile?: true
+  runnerId?: true
+  provider?: true
+  modelId?: true
   verdict?: true
   inputTokens?: true
   outputTokens?: true
@@ -187,7 +195,9 @@ export type RunAttemptMaxAggregateInputType = {
   iteration?: true
   status?: true
   idempotencyKey?: true
-  modelProfile?: true
+  runnerId?: true
+  provider?: true
+  modelId?: true
   verdict?: true
   inputTokens?: true
   outputTokens?: true
@@ -215,7 +225,9 @@ export type RunAttemptCountAggregateInputType = {
   iteration?: true
   status?: true
   idempotencyKey?: true
-  modelProfile?: true
+  runnerId?: true
+  provider?: true
+  modelId?: true
   verdict?: true
   inputTokens?: true
   outputTokens?: true
@@ -330,12 +342,14 @@ export type RunAttemptGroupByOutputType = {
   iteration: number
   status: string
   idempotencyKey: string
-  modelProfile: string
+  runnerId: string
+  provider: string
+  modelId: string
   verdict: string
-  inputTokens: number
-  outputTokens: number
-  costAmount: runtime.Decimal
-  currency: string
+  inputTokens: number | null
+  outputTokens: number | null
+  costAmount: runtime.Decimal | null
+  currency: string | null
   durationMs: number
   outputSummary: string
   artifactRef: string
@@ -381,12 +395,14 @@ export type RunAttemptWhereInput = {
   iteration?: Prisma.IntFilter<"RunAttempt"> | number
   status?: Prisma.StringFilter<"RunAttempt"> | string
   idempotencyKey?: Prisma.StringFilter<"RunAttempt"> | string
-  modelProfile?: Prisma.StringFilter<"RunAttempt"> | string
+  runnerId?: Prisma.StringFilter<"RunAttempt"> | string
+  provider?: Prisma.StringFilter<"RunAttempt"> | string
+  modelId?: Prisma.StringFilter<"RunAttempt"> | string
   verdict?: Prisma.StringFilter<"RunAttempt"> | string
-  inputTokens?: Prisma.IntFilter<"RunAttempt"> | number
-  outputTokens?: Prisma.IntFilter<"RunAttempt"> | number
-  costAmount?: Prisma.DecimalFilter<"RunAttempt"> | runtime.Decimal | runtime.DecimalJsLike | number | string
-  currency?: Prisma.StringFilter<"RunAttempt"> | string
+  inputTokens?: Prisma.IntNullableFilter<"RunAttempt"> | number | null
+  outputTokens?: Prisma.IntNullableFilter<"RunAttempt"> | number | null
+  costAmount?: Prisma.DecimalNullableFilter<"RunAttempt"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  currency?: Prisma.StringNullableFilter<"RunAttempt"> | string | null
   durationMs?: Prisma.IntFilter<"RunAttempt"> | number
   outputSummary?: Prisma.StringFilter<"RunAttempt"> | string
   artifactRef?: Prisma.StringFilter<"RunAttempt"> | string
@@ -410,12 +426,14 @@ export type RunAttemptOrderByWithRelationInput = {
   iteration?: Prisma.SortOrder
   status?: Prisma.SortOrder
   idempotencyKey?: Prisma.SortOrder
-  modelProfile?: Prisma.SortOrder
+  runnerId?: Prisma.SortOrder
+  provider?: Prisma.SortOrder
+  modelId?: Prisma.SortOrder
   verdict?: Prisma.SortOrder
-  inputTokens?: Prisma.SortOrder
-  outputTokens?: Prisma.SortOrder
-  costAmount?: Prisma.SortOrder
-  currency?: Prisma.SortOrder
+  inputTokens?: Prisma.SortOrderInput | Prisma.SortOrder
+  outputTokens?: Prisma.SortOrderInput | Prisma.SortOrder
+  costAmount?: Prisma.SortOrderInput | Prisma.SortOrder
+  currency?: Prisma.SortOrderInput | Prisma.SortOrder
   durationMs?: Prisma.SortOrder
   outputSummary?: Prisma.SortOrder
   artifactRef?: Prisma.SortOrder
@@ -443,12 +461,14 @@ export type RunAttemptWhereUniqueInput = Prisma.AtLeast<{
   iteration?: Prisma.IntFilter<"RunAttempt"> | number
   status?: Prisma.StringFilter<"RunAttempt"> | string
   idempotencyKey?: Prisma.StringFilter<"RunAttempt"> | string
-  modelProfile?: Prisma.StringFilter<"RunAttempt"> | string
+  runnerId?: Prisma.StringFilter<"RunAttempt"> | string
+  provider?: Prisma.StringFilter<"RunAttempt"> | string
+  modelId?: Prisma.StringFilter<"RunAttempt"> | string
   verdict?: Prisma.StringFilter<"RunAttempt"> | string
-  inputTokens?: Prisma.IntFilter<"RunAttempt"> | number
-  outputTokens?: Prisma.IntFilter<"RunAttempt"> | number
-  costAmount?: Prisma.DecimalFilter<"RunAttempt"> | runtime.Decimal | runtime.DecimalJsLike | number | string
-  currency?: Prisma.StringFilter<"RunAttempt"> | string
+  inputTokens?: Prisma.IntNullableFilter<"RunAttempt"> | number | null
+  outputTokens?: Prisma.IntNullableFilter<"RunAttempt"> | number | null
+  costAmount?: Prisma.DecimalNullableFilter<"RunAttempt"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  currency?: Prisma.StringNullableFilter<"RunAttempt"> | string | null
   durationMs?: Prisma.IntFilter<"RunAttempt"> | number
   outputSummary?: Prisma.StringFilter<"RunAttempt"> | string
   artifactRef?: Prisma.StringFilter<"RunAttempt"> | string
@@ -472,12 +492,14 @@ export type RunAttemptOrderByWithAggregationInput = {
   iteration?: Prisma.SortOrder
   status?: Prisma.SortOrder
   idempotencyKey?: Prisma.SortOrder
-  modelProfile?: Prisma.SortOrder
+  runnerId?: Prisma.SortOrder
+  provider?: Prisma.SortOrder
+  modelId?: Prisma.SortOrder
   verdict?: Prisma.SortOrder
-  inputTokens?: Prisma.SortOrder
-  outputTokens?: Prisma.SortOrder
-  costAmount?: Prisma.SortOrder
-  currency?: Prisma.SortOrder
+  inputTokens?: Prisma.SortOrderInput | Prisma.SortOrder
+  outputTokens?: Prisma.SortOrderInput | Prisma.SortOrder
+  costAmount?: Prisma.SortOrderInput | Prisma.SortOrder
+  currency?: Prisma.SortOrderInput | Prisma.SortOrder
   durationMs?: Prisma.SortOrder
   outputSummary?: Prisma.SortOrder
   artifactRef?: Prisma.SortOrder
@@ -508,12 +530,14 @@ export type RunAttemptScalarWhereWithAggregatesInput = {
   iteration?: Prisma.IntWithAggregatesFilter<"RunAttempt"> | number
   status?: Prisma.StringWithAggregatesFilter<"RunAttempt"> | string
   idempotencyKey?: Prisma.StringWithAggregatesFilter<"RunAttempt"> | string
-  modelProfile?: Prisma.StringWithAggregatesFilter<"RunAttempt"> | string
+  runnerId?: Prisma.StringWithAggregatesFilter<"RunAttempt"> | string
+  provider?: Prisma.StringWithAggregatesFilter<"RunAttempt"> | string
+  modelId?: Prisma.StringWithAggregatesFilter<"RunAttempt"> | string
   verdict?: Prisma.StringWithAggregatesFilter<"RunAttempt"> | string
-  inputTokens?: Prisma.IntWithAggregatesFilter<"RunAttempt"> | number
-  outputTokens?: Prisma.IntWithAggregatesFilter<"RunAttempt"> | number
-  costAmount?: Prisma.DecimalWithAggregatesFilter<"RunAttempt"> | runtime.Decimal | runtime.DecimalJsLike | number | string
-  currency?: Prisma.StringWithAggregatesFilter<"RunAttempt"> | string
+  inputTokens?: Prisma.IntNullableWithAggregatesFilter<"RunAttempt"> | number | null
+  outputTokens?: Prisma.IntNullableWithAggregatesFilter<"RunAttempt"> | number | null
+  costAmount?: Prisma.DecimalNullableWithAggregatesFilter<"RunAttempt"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  currency?: Prisma.StringNullableWithAggregatesFilter<"RunAttempt"> | string | null
   durationMs?: Prisma.IntWithAggregatesFilter<"RunAttempt"> | number
   outputSummary?: Prisma.StringWithAggregatesFilter<"RunAttempt"> | string
   artifactRef?: Prisma.StringWithAggregatesFilter<"RunAttempt"> | string
@@ -535,12 +559,14 @@ export type RunAttemptCreateInput = {
   iteration?: number
   status: string
   idempotencyKey?: string
-  modelProfile?: string
+  runnerId: string
+  provider: string
+  modelId: string
   verdict?: string
-  inputTokens?: number
-  outputTokens?: number
-  costAmount?: runtime.Decimal | runtime.DecimalJsLike | number | string
-  currency?: string
+  inputTokens?: number | null
+  outputTokens?: number | null
+  costAmount?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  currency?: string | null
   durationMs?: number
   outputSummary?: string
   artifactRef?: string
@@ -564,12 +590,14 @@ export type RunAttemptUncheckedCreateInput = {
   iteration?: number
   status: string
   idempotencyKey?: string
-  modelProfile?: string
+  runnerId: string
+  provider: string
+  modelId: string
   verdict?: string
-  inputTokens?: number
-  outputTokens?: number
-  costAmount?: runtime.Decimal | runtime.DecimalJsLike | number | string
-  currency?: string
+  inputTokens?: number | null
+  outputTokens?: number | null
+  costAmount?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  currency?: string | null
   durationMs?: number
   outputSummary?: string
   artifactRef?: string
@@ -591,12 +619,14 @@ export type RunAttemptUpdateInput = {
   iteration?: Prisma.IntFieldUpdateOperationsInput | number
   status?: Prisma.StringFieldUpdateOperationsInput | string
   idempotencyKey?: Prisma.StringFieldUpdateOperationsInput | string
-  modelProfile?: Prisma.StringFieldUpdateOperationsInput | string
+  runnerId?: Prisma.StringFieldUpdateOperationsInput | string
+  provider?: Prisma.StringFieldUpdateOperationsInput | string
+  modelId?: Prisma.StringFieldUpdateOperationsInput | string
   verdict?: Prisma.StringFieldUpdateOperationsInput | string
-  inputTokens?: Prisma.IntFieldUpdateOperationsInput | number
-  outputTokens?: Prisma.IntFieldUpdateOperationsInput | number
-  costAmount?: Prisma.DecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string
-  currency?: Prisma.StringFieldUpdateOperationsInput | string
+  inputTokens?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  outputTokens?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  costAmount?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  currency?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   durationMs?: Prisma.IntFieldUpdateOperationsInput | number
   outputSummary?: Prisma.StringFieldUpdateOperationsInput | string
   artifactRef?: Prisma.StringFieldUpdateOperationsInput | string
@@ -620,12 +650,14 @@ export type RunAttemptUncheckedUpdateInput = {
   iteration?: Prisma.IntFieldUpdateOperationsInput | number
   status?: Prisma.StringFieldUpdateOperationsInput | string
   idempotencyKey?: Prisma.StringFieldUpdateOperationsInput | string
-  modelProfile?: Prisma.StringFieldUpdateOperationsInput | string
+  runnerId?: Prisma.StringFieldUpdateOperationsInput | string
+  provider?: Prisma.StringFieldUpdateOperationsInput | string
+  modelId?: Prisma.StringFieldUpdateOperationsInput | string
   verdict?: Prisma.StringFieldUpdateOperationsInput | string
-  inputTokens?: Prisma.IntFieldUpdateOperationsInput | number
-  outputTokens?: Prisma.IntFieldUpdateOperationsInput | number
-  costAmount?: Prisma.DecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string
-  currency?: Prisma.StringFieldUpdateOperationsInput | string
+  inputTokens?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  outputTokens?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  costAmount?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  currency?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   durationMs?: Prisma.IntFieldUpdateOperationsInput | number
   outputSummary?: Prisma.StringFieldUpdateOperationsInput | string
   artifactRef?: Prisma.StringFieldUpdateOperationsInput | string
@@ -648,12 +680,14 @@ export type RunAttemptCreateManyInput = {
   iteration?: number
   status: string
   idempotencyKey?: string
-  modelProfile?: string
+  runnerId: string
+  provider: string
+  modelId: string
   verdict?: string
-  inputTokens?: number
-  outputTokens?: number
-  costAmount?: runtime.Decimal | runtime.DecimalJsLike | number | string
-  currency?: string
+  inputTokens?: number | null
+  outputTokens?: number | null
+  costAmount?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  currency?: string | null
   durationMs?: number
   outputSummary?: string
   artifactRef?: string
@@ -675,12 +709,14 @@ export type RunAttemptUpdateManyMutationInput = {
   iteration?: Prisma.IntFieldUpdateOperationsInput | number
   status?: Prisma.StringFieldUpdateOperationsInput | string
   idempotencyKey?: Prisma.StringFieldUpdateOperationsInput | string
-  modelProfile?: Prisma.StringFieldUpdateOperationsInput | string
+  runnerId?: Prisma.StringFieldUpdateOperationsInput | string
+  provider?: Prisma.StringFieldUpdateOperationsInput | string
+  modelId?: Prisma.StringFieldUpdateOperationsInput | string
   verdict?: Prisma.StringFieldUpdateOperationsInput | string
-  inputTokens?: Prisma.IntFieldUpdateOperationsInput | number
-  outputTokens?: Prisma.IntFieldUpdateOperationsInput | number
-  costAmount?: Prisma.DecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string
-  currency?: Prisma.StringFieldUpdateOperationsInput | string
+  inputTokens?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  outputTokens?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  costAmount?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  currency?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   durationMs?: Prisma.IntFieldUpdateOperationsInput | number
   outputSummary?: Prisma.StringFieldUpdateOperationsInput | string
   artifactRef?: Prisma.StringFieldUpdateOperationsInput | string
@@ -703,12 +739,14 @@ export type RunAttemptUncheckedUpdateManyInput = {
   iteration?: Prisma.IntFieldUpdateOperationsInput | number
   status?: Prisma.StringFieldUpdateOperationsInput | string
   idempotencyKey?: Prisma.StringFieldUpdateOperationsInput | string
-  modelProfile?: Prisma.StringFieldUpdateOperationsInput | string
+  runnerId?: Prisma.StringFieldUpdateOperationsInput | string
+  provider?: Prisma.StringFieldUpdateOperationsInput | string
+  modelId?: Prisma.StringFieldUpdateOperationsInput | string
   verdict?: Prisma.StringFieldUpdateOperationsInput | string
-  inputTokens?: Prisma.IntFieldUpdateOperationsInput | number
-  outputTokens?: Prisma.IntFieldUpdateOperationsInput | number
-  costAmount?: Prisma.DecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string
-  currency?: Prisma.StringFieldUpdateOperationsInput | string
+  inputTokens?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  outputTokens?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  costAmount?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  currency?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   durationMs?: Prisma.IntFieldUpdateOperationsInput | number
   outputSummary?: Prisma.StringFieldUpdateOperationsInput | string
   artifactRef?: Prisma.StringFieldUpdateOperationsInput | string
@@ -747,7 +785,9 @@ export type RunAttemptCountOrderByAggregateInput = {
   iteration?: Prisma.SortOrder
   status?: Prisma.SortOrder
   idempotencyKey?: Prisma.SortOrder
-  modelProfile?: Prisma.SortOrder
+  runnerId?: Prisma.SortOrder
+  provider?: Prisma.SortOrder
+  modelId?: Prisma.SortOrder
   verdict?: Prisma.SortOrder
   inputTokens?: Prisma.SortOrder
   outputTokens?: Prisma.SortOrder
@@ -784,7 +824,9 @@ export type RunAttemptMaxOrderByAggregateInput = {
   iteration?: Prisma.SortOrder
   status?: Prisma.SortOrder
   idempotencyKey?: Prisma.SortOrder
-  modelProfile?: Prisma.SortOrder
+  runnerId?: Prisma.SortOrder
+  provider?: Prisma.SortOrder
+  modelId?: Prisma.SortOrder
   verdict?: Prisma.SortOrder
   inputTokens?: Prisma.SortOrder
   outputTokens?: Prisma.SortOrder
@@ -812,7 +854,9 @@ export type RunAttemptMinOrderByAggregateInput = {
   iteration?: Prisma.SortOrder
   status?: Prisma.SortOrder
   idempotencyKey?: Prisma.SortOrder
-  modelProfile?: Prisma.SortOrder
+  runnerId?: Prisma.SortOrder
+  provider?: Prisma.SortOrder
+  modelId?: Prisma.SortOrder
   verdict?: Prisma.SortOrder
   inputTokens?: Prisma.SortOrder
   outputTokens?: Prisma.SortOrder
@@ -880,8 +924,16 @@ export type RunAttemptUncheckedUpdateManyWithoutRunNestedInput = {
   deleteMany?: Prisma.RunAttemptScalarWhereInput | Prisma.RunAttemptScalarWhereInput[]
 }
 
-export type DecimalFieldUpdateOperationsInput = {
-  set?: runtime.Decimal | runtime.DecimalJsLike | number | string
+export type NullableIntFieldUpdateOperationsInput = {
+  set?: number | null
+  increment?: number
+  decrement?: number
+  multiply?: number
+  divide?: number
+}
+
+export type NullableDecimalFieldUpdateOperationsInput = {
+  set?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
   increment?: runtime.Decimal | runtime.DecimalJsLike | number | string
   decrement?: runtime.Decimal | runtime.DecimalJsLike | number | string
   multiply?: runtime.Decimal | runtime.DecimalJsLike | number | string
@@ -898,12 +950,14 @@ export type RunAttemptCreateWithoutRunInput = {
   iteration?: number
   status: string
   idempotencyKey?: string
-  modelProfile?: string
+  runnerId: string
+  provider: string
+  modelId: string
   verdict?: string
-  inputTokens?: number
-  outputTokens?: number
-  costAmount?: runtime.Decimal | runtime.DecimalJsLike | number | string
-  currency?: string
+  inputTokens?: number | null
+  outputTokens?: number | null
+  costAmount?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  currency?: string | null
   durationMs?: number
   outputSummary?: string
   artifactRef?: string
@@ -925,12 +979,14 @@ export type RunAttemptUncheckedCreateWithoutRunInput = {
   iteration?: number
   status: string
   idempotencyKey?: string
-  modelProfile?: string
+  runnerId: string
+  provider: string
+  modelId: string
   verdict?: string
-  inputTokens?: number
-  outputTokens?: number
-  costAmount?: runtime.Decimal | runtime.DecimalJsLike | number | string
-  currency?: string
+  inputTokens?: number | null
+  outputTokens?: number | null
+  costAmount?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  currency?: string | null
   durationMs?: number
   outputSummary?: string
   artifactRef?: string
@@ -982,12 +1038,14 @@ export type RunAttemptScalarWhereInput = {
   iteration?: Prisma.IntFilter<"RunAttempt"> | number
   status?: Prisma.StringFilter<"RunAttempt"> | string
   idempotencyKey?: Prisma.StringFilter<"RunAttempt"> | string
-  modelProfile?: Prisma.StringFilter<"RunAttempt"> | string
+  runnerId?: Prisma.StringFilter<"RunAttempt"> | string
+  provider?: Prisma.StringFilter<"RunAttempt"> | string
+  modelId?: Prisma.StringFilter<"RunAttempt"> | string
   verdict?: Prisma.StringFilter<"RunAttempt"> | string
-  inputTokens?: Prisma.IntFilter<"RunAttempt"> | number
-  outputTokens?: Prisma.IntFilter<"RunAttempt"> | number
-  costAmount?: Prisma.DecimalFilter<"RunAttempt"> | runtime.Decimal | runtime.DecimalJsLike | number | string
-  currency?: Prisma.StringFilter<"RunAttempt"> | string
+  inputTokens?: Prisma.IntNullableFilter<"RunAttempt"> | number | null
+  outputTokens?: Prisma.IntNullableFilter<"RunAttempt"> | number | null
+  costAmount?: Prisma.DecimalNullableFilter<"RunAttempt"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  currency?: Prisma.StringNullableFilter<"RunAttempt"> | string | null
   durationMs?: Prisma.IntFilter<"RunAttempt"> | number
   outputSummary?: Prisma.StringFilter<"RunAttempt"> | string
   artifactRef?: Prisma.StringFilter<"RunAttempt"> | string
@@ -1009,12 +1067,14 @@ export type RunAttemptCreateManyRunInput = {
   iteration?: number
   status: string
   idempotencyKey?: string
-  modelProfile?: string
+  runnerId: string
+  provider: string
+  modelId: string
   verdict?: string
-  inputTokens?: number
-  outputTokens?: number
-  costAmount?: runtime.Decimal | runtime.DecimalJsLike | number | string
-  currency?: string
+  inputTokens?: number | null
+  outputTokens?: number | null
+  costAmount?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  currency?: string | null
   durationMs?: number
   outputSummary?: string
   artifactRef?: string
@@ -1036,12 +1096,14 @@ export type RunAttemptUpdateWithoutRunInput = {
   iteration?: Prisma.IntFieldUpdateOperationsInput | number
   status?: Prisma.StringFieldUpdateOperationsInput | string
   idempotencyKey?: Prisma.StringFieldUpdateOperationsInput | string
-  modelProfile?: Prisma.StringFieldUpdateOperationsInput | string
+  runnerId?: Prisma.StringFieldUpdateOperationsInput | string
+  provider?: Prisma.StringFieldUpdateOperationsInput | string
+  modelId?: Prisma.StringFieldUpdateOperationsInput | string
   verdict?: Prisma.StringFieldUpdateOperationsInput | string
-  inputTokens?: Prisma.IntFieldUpdateOperationsInput | number
-  outputTokens?: Prisma.IntFieldUpdateOperationsInput | number
-  costAmount?: Prisma.DecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string
-  currency?: Prisma.StringFieldUpdateOperationsInput | string
+  inputTokens?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  outputTokens?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  costAmount?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  currency?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   durationMs?: Prisma.IntFieldUpdateOperationsInput | number
   outputSummary?: Prisma.StringFieldUpdateOperationsInput | string
   artifactRef?: Prisma.StringFieldUpdateOperationsInput | string
@@ -1063,12 +1125,14 @@ export type RunAttemptUncheckedUpdateWithoutRunInput = {
   iteration?: Prisma.IntFieldUpdateOperationsInput | number
   status?: Prisma.StringFieldUpdateOperationsInput | string
   idempotencyKey?: Prisma.StringFieldUpdateOperationsInput | string
-  modelProfile?: Prisma.StringFieldUpdateOperationsInput | string
+  runnerId?: Prisma.StringFieldUpdateOperationsInput | string
+  provider?: Prisma.StringFieldUpdateOperationsInput | string
+  modelId?: Prisma.StringFieldUpdateOperationsInput | string
   verdict?: Prisma.StringFieldUpdateOperationsInput | string
-  inputTokens?: Prisma.IntFieldUpdateOperationsInput | number
-  outputTokens?: Prisma.IntFieldUpdateOperationsInput | number
-  costAmount?: Prisma.DecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string
-  currency?: Prisma.StringFieldUpdateOperationsInput | string
+  inputTokens?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  outputTokens?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  costAmount?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  currency?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   durationMs?: Prisma.IntFieldUpdateOperationsInput | number
   outputSummary?: Prisma.StringFieldUpdateOperationsInput | string
   artifactRef?: Prisma.StringFieldUpdateOperationsInput | string
@@ -1090,12 +1154,14 @@ export type RunAttemptUncheckedUpdateManyWithoutRunInput = {
   iteration?: Prisma.IntFieldUpdateOperationsInput | number
   status?: Prisma.StringFieldUpdateOperationsInput | string
   idempotencyKey?: Prisma.StringFieldUpdateOperationsInput | string
-  modelProfile?: Prisma.StringFieldUpdateOperationsInput | string
+  runnerId?: Prisma.StringFieldUpdateOperationsInput | string
+  provider?: Prisma.StringFieldUpdateOperationsInput | string
+  modelId?: Prisma.StringFieldUpdateOperationsInput | string
   verdict?: Prisma.StringFieldUpdateOperationsInput | string
-  inputTokens?: Prisma.IntFieldUpdateOperationsInput | number
-  outputTokens?: Prisma.IntFieldUpdateOperationsInput | number
-  costAmount?: Prisma.DecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string
-  currency?: Prisma.StringFieldUpdateOperationsInput | string
+  inputTokens?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  outputTokens?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  costAmount?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  currency?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   durationMs?: Prisma.IntFieldUpdateOperationsInput | number
   outputSummary?: Prisma.StringFieldUpdateOperationsInput | string
   artifactRef?: Prisma.StringFieldUpdateOperationsInput | string
@@ -1120,7 +1186,9 @@ export type RunAttemptSelect<ExtArgs extends runtime.Types.Extensions.InternalAr
   iteration?: boolean
   status?: boolean
   idempotencyKey?: boolean
-  modelProfile?: boolean
+  runnerId?: boolean
+  provider?: boolean
+  modelId?: boolean
   verdict?: boolean
   inputTokens?: boolean
   outputTokens?: boolean
@@ -1149,7 +1217,9 @@ export type RunAttemptSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Ex
   iteration?: boolean
   status?: boolean
   idempotencyKey?: boolean
-  modelProfile?: boolean
+  runnerId?: boolean
+  provider?: boolean
+  modelId?: boolean
   verdict?: boolean
   inputTokens?: boolean
   outputTokens?: boolean
@@ -1178,7 +1248,9 @@ export type RunAttemptSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Ex
   iteration?: boolean
   status?: boolean
   idempotencyKey?: boolean
-  modelProfile?: boolean
+  runnerId?: boolean
+  provider?: boolean
+  modelId?: boolean
   verdict?: boolean
   inputTokens?: boolean
   outputTokens?: boolean
@@ -1207,7 +1279,9 @@ export type RunAttemptSelectScalar = {
   iteration?: boolean
   status?: boolean
   idempotencyKey?: boolean
-  modelProfile?: boolean
+  runnerId?: boolean
+  provider?: boolean
+  modelId?: boolean
   verdict?: boolean
   inputTokens?: boolean
   outputTokens?: boolean
@@ -1224,7 +1298,7 @@ export type RunAttemptSelectScalar = {
   finishedAt?: boolean
 }
 
-export type RunAttemptOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "createdAt" | "updatedAt" | "runId" | "stepId" | "workerId" | "attemptNo" | "iteration" | "status" | "idempotencyKey" | "modelProfile" | "verdict" | "inputTokens" | "outputTokens" | "costAmount" | "currency" | "durationMs" | "outputSummary" | "artifactRef" | "stdoutTail" | "stderrTail" | "lesson" | "error" | "startedAt" | "finishedAt", ExtArgs["result"]["runAttempt"]>
+export type RunAttemptOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "createdAt" | "updatedAt" | "runId" | "stepId" | "workerId" | "attemptNo" | "iteration" | "status" | "idempotencyKey" | "runnerId" | "provider" | "modelId" | "verdict" | "inputTokens" | "outputTokens" | "costAmount" | "currency" | "durationMs" | "outputSummary" | "artifactRef" | "stdoutTail" | "stderrTail" | "lesson" | "error" | "startedAt" | "finishedAt", ExtArgs["result"]["runAttempt"]>
 export type RunAttemptInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   run?: boolean | Prisma.TaskRunDefaultArgs<ExtArgs>
 }
@@ -1251,12 +1325,14 @@ export type $RunAttemptPayload<ExtArgs extends runtime.Types.Extensions.Internal
     iteration: number
     status: string
     idempotencyKey: string
-    modelProfile: string
+    runnerId: string
+    provider: string
+    modelId: string
     verdict: string
-    inputTokens: number
-    outputTokens: number
-    costAmount: runtime.Decimal
-    currency: string
+    inputTokens: number | null
+    outputTokens: number | null
+    costAmount: runtime.Decimal | null
+    currency: string | null
     durationMs: number
     outputSummary: string
     artifactRef: string
@@ -1700,7 +1776,9 @@ export interface RunAttemptFieldRefs {
   readonly iteration: Prisma.FieldRef<"RunAttempt", 'Int'>
   readonly status: Prisma.FieldRef<"RunAttempt", 'String'>
   readonly idempotencyKey: Prisma.FieldRef<"RunAttempt", 'String'>
-  readonly modelProfile: Prisma.FieldRef<"RunAttempt", 'String'>
+  readonly runnerId: Prisma.FieldRef<"RunAttempt", 'String'>
+  readonly provider: Prisma.FieldRef<"RunAttempt", 'String'>
+  readonly modelId: Prisma.FieldRef<"RunAttempt", 'String'>
   readonly verdict: Prisma.FieldRef<"RunAttempt", 'String'>
   readonly inputTokens: Prisma.FieldRef<"RunAttempt", 'Int'>
   readonly outputTokens: Prisma.FieldRef<"RunAttempt", 'Int'>

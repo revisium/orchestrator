@@ -13,6 +13,7 @@ import { ControlPlaneError } from '../control-plane/errors.js';
 import { fnv1a64Hex } from '../control-plane/steps.js';
 import { redactSecrets } from '../control-plane/inbox.js';
 import { redactTokens } from '../runners/gh-identity.js';
+import type { CostRecord } from '../control-plane/steps.js';
 
 export type AppendEventInput = {
   runId: string;
@@ -33,13 +34,7 @@ export type AppendCostInput = {
   stepId: string;
   stepKey: string;
   attemptId: string;
-  cost: {
-    modelProfile: string;
-    inputTokens: number;
-    outputTokens: number;
-    costAmount: number;
-    currency?: string;
-  };
+  cost: CostRecord;
   index: number;
   recordedAt?: Date;
 };
@@ -97,12 +92,14 @@ export type AppendAttemptInput = {
   attemptNo: number;
   iteration: number;
   status: string;
-  modelProfile: string;
+  runnerId: string;
+  provider: string;
+  modelId: string;
   verdict: string;
-  inputTokens: number;
-  outputTokens: number;
-  costAmount: number;
-  currency?: string;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  costAmount: number | null;
+  currency: string | null;
   durationMs: number;
 
   output: unknown;
@@ -114,6 +111,11 @@ export type AppendAttemptInput = {
   startedAt?: Date;
   finishedAt?: Date;
 };
+
+function requiredProvenance(value: string, field: 'runnerId' | 'provider' | 'modelId'): string {
+  if (value.trim().length > 0) return value;
+  throw new ControlPlaneError('VALIDATION_FAILURE', `${field} must be a non-empty exact provenance value`);
+}
 
 
 const OUTPUT_SUMMARY_MAX = 4_000;
@@ -132,6 +134,9 @@ export async function appendRunAttempt(
   da: ControlPlaneDataAccess,
   input: AppendAttemptInput,
 ): Promise<void> {
+  const runnerId = requiredProvenance(input.runnerId, 'runnerId');
+  const provider = requiredProvenance(input.provider, 'provider');
+  const modelId = requiredProvenance(input.modelId, 'modelId');
   const summaryRaw = JSON.stringify(redactSecrets(input.output) ?? null);
   const outputSummary = redactTokens(summaryRaw).slice(0, OUTPUT_SUMMARY_MAX);
   const artifactRef = input.artifactRef ? redactTokens(input.artifactRef).slice(0, OUTPUT_SUMMARY_MAX) : '';
@@ -147,12 +152,14 @@ export async function appendRunAttempt(
       iteration: input.iteration,
       status: input.status,
       idempotency_key: input.attemptId,
-      model_profile: input.modelProfile,
+      runner_id: runnerId,
+      provider,
+      model_id: modelId,
       verdict: input.verdict,
       input_tokens: input.inputTokens,
       output_tokens: input.outputTokens,
       cost_amount: input.costAmount,
-      currency: input.currency ?? 'USD',
+      currency: input.currency,
       duration_ms: input.durationMs,
       output_summary: outputSummary,
       artifact_ref: artifactRef,
@@ -179,6 +186,9 @@ export async function appendRunCost(
   input: AppendCostInput,
 ): Promise<void> {
   const { runId, stepId, stepKey, attemptId, cost, index, recordedAt } = input;
+  const runnerId = requiredProvenance(cost.runnerId, 'runnerId');
+  const provider = requiredProvenance(cost.provider, 'provider');
+  const modelId = requiredProvenance(cost.modelId, 'modelId');
   const costKey = `${runId}|${stepKey}|${attemptId}|${index}`;
   const costId = `cost_${fnv1a64Hex(costKey)}`;
   const recordedAtIso = (recordedAt ?? new Date()).toISOString();
@@ -188,11 +198,13 @@ export async function appendRunCost(
       run_id: runId,
       step_id: stepId,
       attempt_id: attemptId,
-      model_profile: cost.modelProfile,
+      runner_id: runnerId,
+      provider,
+      model_id: modelId,
       input_tokens: cost.inputTokens,
       output_tokens: cost.outputTokens,
       cost_amount: cost.costAmount,
-      currency: cost.currency ?? 'USD',
+      currency: cost.currency,
       recorded_at: recordedAtIso,
     });
   } catch (e) {

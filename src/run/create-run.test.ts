@@ -246,12 +246,12 @@ test('role override applies to tasks.role_hint', async () => {
   assert.equal(byTable(rows, 'tasks').data.role_hint, 'developer');
 });
 
-test('omitting role defaults tasks.role_hint to architect', async () => {
+test('omitting role leaves tasks.role_hint empty; the exact binding is resolved by the plan', async () => {
   const { access, rows } = createFakeDataAccess();
 
   await createRunWorkflow(access, { ...baseInput, role: undefined });
 
-  assert.equal(byTable(rows, 'tasks').data.role_hint, 'architect');
+  assert.equal(byTable(rows, 'tasks').data.role_hint, '');
 });
 
 test('a charset-invalid bare role rejects before assertReady or writes', async () => {

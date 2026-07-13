@@ -3,7 +3,7 @@
 - **Status:** Draft
 - **Version:** v1
 - **Owners:** runner adapters (worker), DBOS adapter (pipeline), Revo Prisma runtime
-- **Related ADRs:** [ADR-0010](../adr/0010-acp-process-and-session-isolation.md),
+- **Related ADRs:** [ADR-0012](../adr/0012-acp-process-and-session-isolation.md),
   [ADR-0004](../adr/0004-runner-execution-contract.md),
   [ADR-0006](../adr/0006-run-profiles-and-provider-neutral-pipelines.md),
   [ADR-0007](../adr/0007-revo-storage-foundation.md)
@@ -332,4 +332,4 @@ Deferred beyond MVP v1:
 
 ## Changelog
 
-- 2026-07-10: Initial Draft aligned with ADR-0010 and the OpenCode ACP PoC.
+- 2026-07-10: Initial Draft aligned with ADR-0012 and the OpenCode ACP PoC.

@@ -25,19 +25,25 @@ export class RunAttemptModel {
   verdict!: string;
 
   @Field(() => String)
-  modelProfile!: string;
-
-  @Field(() => Int)
-  inputTokens!: number;
-
-  @Field(() => Int)
-  outputTokens!: number;
-
-  @Field(() => Float)
-  costAmount!: number;
+  runnerId!: string;
 
   @Field(() => String)
-  currency!: string;
+  provider!: string;
+
+  @Field(() => String)
+  modelId!: string;
+
+  @Field(() => Int, { nullable: true })
+  inputTokens!: number | null;
+
+  @Field(() => Int, { nullable: true })
+  outputTokens!: number | null;
+
+  @Field(() => Float, { nullable: true })
+  costAmount!: number | null;
+
+  @Field(() => String, { nullable: true })
+  currency!: string | null;
 
   @Field(() => Int)
   durationMs!: number;

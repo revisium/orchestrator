@@ -7,8 +7,10 @@
   `src/worker/codex-runner.ts`, `src/worker/runner-dispatch.ts`, `src/control-plane/definitions.ts`,
   `src/pipeline/pipeline.service.ts`
 - **Related ADRs:** [ADR-0004](../adr/0004-runner-execution-contract.md),
-  [ADR-0010](../adr/0010-acp-process-and-session-isolation.md),
-  [ADR-0002](../adr/0002-data-driven-pipeline-state-machine.md)
+  [ADR-0012](../adr/0012-acp-process-and-session-isolation.md), [ADR-0002](../adr/0002-data-driven-pipeline-state-machine.md)
+- **Related specs:** [execution plan v1](./execution-plan-v1.spec.md),
+  [resources, workspaces, and effects v1](./resources-workspaces-effects-v1.spec.md),
+  [script runtime v1](./script-runtime-v1.spec.md)
 
 ## Scope
 
@@ -22,9 +24,8 @@ consumer of this vocabulary. The manifest field schema and the StdoutParser/Perm
 
 The key words MUST, MUST NOT, SHOULD, SHOULD NOT, MAY are to be interpreted as in RFC 2119 / BCP 14.
 
-`kind` (`cli` | `api` | `gateway` | `deterministic-script`) is not a capability — it is the transport class and
-lives as a top-level manifest field. It is data, not a code-dispatch key, and appears exactly once, on the
-manifest, never under `capabilities`.
+`kind` (`cli` | `api` | `gateway`) is not a capability — it is the transport class and lives as a top-level manifest
+field. System scripts have their own definition/registry contract and are not deterministic runner manifests.
 
 Paths under `src/...` are relative to the `@revisium/orchestrator` package root.
 
@@ -49,55 +50,46 @@ native schema flag.
 
 ## Target Migration
 
-Each capability field is declarative manifest data. Current-vs-target: the branch functions above ship today;
-the `capabilities` block below is the proposal (ADR-0004 is Status: Draft).
+Each capability field is declarative manifest data. Current-vs-target: the branch functions above ship today; the
+`capabilities` block below is the proposal after composition with ADR-0010/0011. Runner manifests state ability.
+Portable pipeline resources and node requirements state desired access/capture; script manifests state operation
+effects. The target deletes runner-driven preflight/workspace/effect policy rather than encoding it as capability data.
 
 ### Capability fields
 
 | Field | Type | Meaning |
 |---|---|---|
 | `provider` | string | Provider family the runner targets (e.g. `anthropic`, `openai-compatible`, `provider-gateway`). Data; recorded in provenance. Keep concrete account/model names out (canonical-method discipline). |
-| `authMode` | enum `cli-session`\|`api-key`\|`gateway-token`\|`provider-config`\|`none` | How the runner authenticates. `provider-config` means a provider gateway such as OpenCode resolves credentials from its existing config for the pinned model profile. Feeds `needsLivePreflight` doctor checks. |
-| `privacyClass` | enum `external`\|`self-hosted`\|`local`\|`profile` | Data-egress class. `profile` means the effective class is resolved and pinned from the selected model profile rather than fixed by the runner. Lets routing/profile policy exclude external providers for sensitive runs. |
+| `authMode` | enum `cli-session`\|`api-key`\|`gateway-token`\|`provider-config`\|`none` | How the runner authenticates. `provider-config` means a provider gateway such as OpenCode resolves credentials from its existing config for the pinned model profile. Used by selection, host doctor, and explicit plan-compilation availability checks; it does not imply workspace policy. |
+| `privacyClass` | enum `external`\|`self-hosted`\|`local`\|`profile` | Data-egress class of the provider. `profile` means the effective class is resolved and pinned from the selected model profile rather than fixed by the runner. Lets routing/profile policy exclude external providers for sensitive runs. Consumed by selection (#170), not by this spec. |
 | `supportsWorkspaceWrite` | boolean | Whether the runner can write the worktree at all. Distinct from per-role permission: a read-only role on a write-capable runner is fine. Relates to Codex `sandbox-enum` (`src/worker/codex-runner.ts:144-155`). |
 | `supportsStructuredOutput` | enum `native-schema`\|`tool-call`\|`prompt-only` | The structured-output tier (not a boolean). Defined in [runner-result-envelope-v1.spec.md](./runner-result-envelope-v1.spec.md). Routing may require a minimum tier. |
-| `needsLivePreflight` | boolean | Whether the runner requires a live auth/binary/reachability probe before dispatch. |
-| `performsMerge` | boolean | Not used for built-in Git/GitHub scripts; script behavior is selected by the pipeline node `scriptRef`. |
-| `producesWorktreeChanges` | boolean | Whether a successful run is expected to leave file changes in the worktree (so the engine captures a `change` artifact). |
-
-`privacyClass: profile` is a route-resolution marker, not a value that may remain unresolved in a DBOS workflow.
-Before enqueue, route resolution MUST replace it with the concrete `external`, `self-hosted`, or `local` value from
-the selected model profile policy (`ModelProfile.params.privacyClass` for this Draft). Missing or unknown values MUST
-resolve conservatively to `external`. The concrete value, not the marker, is pinned for replay.
 
 ### One-to-one replacement of the hardcoded functions
 
 | Capability field | Replaces (hardcoded today) | Today's behavior to preserve |
 |---|---|---|
-| `needsLivePreflight` | `runnerNeedsLivePreflight(runnerId)` | `true` for `claude-code` and `codex`. |
-| `performsMerge` | Removed runner branch | Built-in Git/GitHub behavior is a system script selected by `scriptRef`, not by runner id. |
-| `producesWorktreeChanges` | `runnerProducesWorktreeChanges(runnerId)` (`src/pipeline/data-driven-task.workflow.ts:358-360`) | `true` for `claude-code`, `codex`. Consumed at `:1128` (change capture). |
+| Node access/capture declarations (resources-workspaces-effects-v1; not runner capabilities) | `runnerNeedsLivePreflight(runnerId)` and `runnerProducesWorktreeChanges(runnerId)` | Deleted in the target. Plan compilation validates selected runner ability against declared access; capture follows node declarations. |
+| Script definition manifests (script-runtime-v1; not runner capabilities) | Former merge/integrator/script branches | Deleted in the target. Git/GitHub effects are explicit script definitions. |
 | `stdoutParser` + `permissionStyle` (manifest ids, not under `capabilities`) → registry lookup | `dispatchRunnerId(runnerId)` switch (`src/pipeline/route-contract.ts:110-114`) consumed at `src/pipeline/pipeline.service.ts:470`, and `switch (role.runner)` (`src/worker/runner-dispatch.ts:8-20`) | `stub-agent`→`script`; `claude-code`/`codex`/`script` pass through; unknown ids remain unknown and fail at dispatch. After: resolve the manifest by `runner.id`, dispatch by its `(stdoutParser, permissionStyle)` pair. |
 | `constraints.allowedProviders` (manifest, see manifest spec) | `requireCompatibleProfile(profile)` throw (`src/worker/codex-runner.ts:179-186`, `isOpenAiCompatibleProvider` at `:109-112`) | Codex rejects a non-OpenAI-compatible provider. After: declarative provider match; a mismatch is a typed precondition failure routed to a lesson, not a hard throw inside the adapter. |
 | default-runner config id | literal `'claude-code'` default in `loadRole` (`src/control-plane/definitions.ts:112`) | A role row with no `runner_id`/`runner` defaults to `claude-code`. After: the default runner id is named config, not a literal in `loadRole`. |
 
 ## Validation
 
-- **One-to-one parity test.** A test asserts each capability field reproduces its hardcoded predecessor's behavior
-  for the live runner ids (e.g. `claude-code`/`codex` → `needsLivePreflight: true`,
-  built-in Git/GitHub script behavior is selected by `scriptRef`, `claude-code`/`codex` →
-  `producesWorktreeChanges: true`), so the migration is provably behavior-preserving.
-- **Capability fields are pinned for replay.** `needsLivePreflight` / `performsMerge` /
-  `producesWorktreeChanges` are consumed in the deterministic workflow body and MUST be snapshotted into the route
-  binding (see [runner-manifest-v1.spec.md](./runner-manifest-v1.spec.md) Replay model); a test asserts an
-  in-flight run reads them from the pin, not the registry.
+- **Boundary replacement test.** A test proves selected runner abilities reproduce the relevant adapter compatibility
+  behavior, while the removed hardcoded preflight/change-capture branches are replaced by execution-plan resource and
+  node declarations. Built-in Git/GitHub behavior is proven through script definitions, not runner fields.
+- **Ability fields are pinned for replay.** Provider/auth/privacy, workspace-write support, and structured-output tier
+  are part of the complete `runnerManifest` snapshot in the route binding (see runner-manifest-v1). A separate test
+  asserts node access/capture and script effects are read from the execution plan, not inferred from runner data.
 - **Unknown-id load error.** A manifest with an unmapped `stdoutParser`/`permissionStyle` is a load-time error
   (mirrors `RUNNER_NOT_IMPLEMENTED`, `src/worker/runner-dispatch.ts:12,16,19`).
 
 ## Compatibility
 
-`capabilities` is additive manifest data. Adding a new capability field is backward-compatible, and the engine
-MUST default a missing capability field conservatively (e.g. `producesWorktreeChanges: false`). The capability
+`capabilities` is additive manifest data. Adding a new optional ability field is backward-compatible only with an
+explicit conservative selection default. The capability
 vocabulary is a stable contract its primary consumer (#170 selection) reads; renaming or removing a field is a
 breaking change. This spec refines the [runner contract](../runner-contract.md) without contradicting it.
 
@@ -114,10 +106,7 @@ Grounded in the two live adapters. These are the `capabilities` objects only; `k
   "authMode": "cli-session",
   "privacyClass": "external",
   "supportsWorkspaceWrite": true,
-  "supportsStructuredOutput": "native-schema",   // --json-schema (claude-code-runner.ts:159)
-  "needsLivePreflight": true,                     // route-contract.ts:117
-  "performsMerge": false,                         // built-in Git/GitHub scripts are selected by scriptRef
-  "producesWorktreeChanges": true                 // data-driven-task.workflow.ts:359
+  "supportsStructuredOutput": "native-schema"    // --json-schema (claude-code-runner.ts:159)
 }
 ```
 
@@ -129,14 +118,11 @@ Grounded in the two live adapters. These are the `capabilities` objects only; `k
   "authMode": "cli-session",
   "privacyClass": "external",
   "supportsWorkspaceWrite": true,                 // sandbox-enum workspace-write (codex-runner.ts:144-155)
-  "supportsStructuredOutput": "native-schema",    // --output-schema (codex-runner.ts:161-162)
-  "needsLivePreflight": true,                     // route-contract.ts:117
-  "performsMerge": false,
-  "producesWorktreeChanges": true                 // data-driven-task.workflow.ts:359
+  "supportsStructuredOutput": "native-schema"     // --output-schema (codex-runner.ts:161-162)
 }
 ```
 
-### opencode-acp (anticipated — not yet implemented; `kind: "cli"` on the manifest)
+### opencode (anticipated — not yet implemented; `kind: "gateway"` on the manifest)
 
 ```jsonc
 {
@@ -144,46 +130,37 @@ Grounded in the two live adapters. These are the `capabilities` objects only; `k
   "authMode": "provider-config",
   "privacyClass": "profile",
   "supportsWorkspaceWrite": false,
-  "supportsStructuredOutput": "prompt-only",      // only "no --json-schema flag" is proven; tool-call unverified
-  "needsLivePreflight": true,
-  "performsMerge": false,
-  "producesWorktreeChanges": false
+  "supportsStructuredOutput": "prompt-only"       // only "no --json-schema flag" is proven; tool-call unverified
 }
 ```
 
-OpenCode ACP is classified `prompt-only` until tool-call support (forced `tool_choice` / a `submit_result`-style tool)
+`privacyClass: profile` is a route-resolution marker, not a value that may remain unresolved in a DBOS workflow.
+Before enqueue, route resolution MUST replace it with the concrete `external`, `self-hosted`, or `local` value from the
+selected model profile policy. Missing or unknown values MUST resolve conservatively to `external`. The concrete value,
+not the marker, is pinned for replay.
+
+OpenCode is classified `prompt-only` until tool-call support (forced `tool_choice` / a `submit_result`-style tool)
 is verified by a live probe; it is not asserted to be `tool-call` today. If a probe later confirms tool support,
 the tier is promoted to `tool-call`, which degrades to the `prompt-only` floor per
 [runner-result-envelope-v1.spec.md](./runner-result-envelope-v1.spec.md).
 
-> Informative: no `opencode`/ACP production code exists in the orchestrator today. The lifecycle, model selector,
-> protocol, and conformance target are defined in [acp-runner-session-v1.spec.md](./acp-runner-session-v1.spec.md).
+> Informative: no `opencode`/`acp` code exists in the orchestrator today, so these values are unverified against
+> source. They come from a live CLI probe (2026-06-29: `opencode run --format json`, no schema flag; `opencode
+> models` lists `provider/model`; a session model carries
+> `providerID`/`modelID`/`tokens{input,output,reasoning,cache}`/`cost`). Only "no schema flag" is proven.
 > `provider-config` and `privacyClass: profile` are required because the same OpenCode process can route a local model
-> or an external provider; the runner alone cannot truthfully pin either value.
-> Workspace write and expected worktree changes remain `false` until ACP permission allow/deny/tool-scope conformance
-> passes. Enabling them is a deliberate manifest capability change, not an assumption from the PoC.
+> or an external provider; the runner alone cannot truthfully pin either value. Workspace write remains disabled until
+> ACP permission allow/deny/tool-scope conformance passes.
 
-### script / stub-agent (deterministic; `kind: "deterministic-script"` on the manifest)
+### System scripts are not runner capabilities
 
-```jsonc
-{
-  "provider": "none",
-  "authMode": "none",
-  "privacyClass": "local",
-  "supportsWorkspaceWrite": true,                 // the real integrator writes git/gh
-  "supportsStructuredOutput": "native-schema",    // it emits a typed result directly
-  "needsLivePreflight": false,                    // script selection is separate from runner preflight
-  "performsMerge": false,                         // merge behavior is not selected by runner id
-  "producesWorktreeChanges": false                // integrator produces a PR, not worktree edits
-}
-```
-
-Built-in Git/GitHub scripts such as `script:integrator` and `script:confirmMerge` are selected by pipeline node
-`scriptRef`. Run profiles may bind script-node launch data, such as `accounts.github`, but they do not turn scripts
-into runners.
+Built-in Git/GitHub operations are `ScriptDefinition` values governed by script-runtime-v1. Run profiles bind
+runner/model choices for agents and credential aliases for named resources; they do not turn scripts into runners.
 
 ## Changelog
 
+- 2026-07-11: Removed target runner-driven preflight, capture, and merge policy; runner manifests now state ability,
+  while execution-plan node requirements and script definitions own desired behavior.
 - 2026-07-10: Corrected the OpenCode ACP transport to `kind: cli`, made provider auth/privacy profile-dependent, and
   kept workspace write disabled until permission conformance passes.
 - 2026-07-09: Clarified that built-in Git/GitHub behavior is selected by pipeline `scriptRef`, not by

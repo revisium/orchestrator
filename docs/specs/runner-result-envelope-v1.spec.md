@@ -6,7 +6,7 @@
 - **Source files:** `src/worker/result-envelope.ts`, `src/worker/codex-runner.ts`, `src/worker/runner.ts`,
   `src/pipeline/data-driven-task.workflow.ts`
 - **Related ADRs:** [ADR-0004](../adr/0004-runner-execution-contract.md),
-  [ADR-0010](../adr/0010-acp-process-and-session-isolation.md),
+  [ADR-0012](../adr/0012-acp-process-and-session-isolation.md),
   [ADR-0002](../adr/0002-data-driven-pipeline-state-machine.md)
 
 ## Scope

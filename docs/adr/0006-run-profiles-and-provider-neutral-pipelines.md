@@ -6,12 +6,13 @@
   current route pins have substantially landed; the full execution-plan/resource-capability boundary remains Draft.
 - **Specs:** [run profiles v1](../specs/run-profiles-v1.spec.md),
   [execution plan v1](../specs/execution-plan-v1.spec.md),
-  [resources, workspaces, and effects v1](../specs/resources-workspaces-effects-v1.spec.md),
-  [ACP runner session v1](../specs/acp-runner-session-v1.spec.md)
+  [resources, workspaces, and effects v1](../specs/resources-workspaces-effects-v1.spec.md)
+- **Refined by:** [ADR-0010](./0010-run-resources-and-workspace-planning.md),
+   [ADR-0011](./0011-system-script-runtime-and-trusted-extensions.md)
 - **Refines:** [ADR-0002](./0002-data-driven-pipeline-state-machine.md)
 - **Relates-to:** [ADR-0004](./0004-runner-execution-contract.md),
   [ADR-0005](./0005-versioned-playbook-storage-and-revo-materialization.md),
-  [ADR-0010](./0010-acp-process-and-session-isolation.md)
+  [ADR-0012](./0012-acp-process-and-session-isolation.md)
 
 ## Context
 
@@ -66,10 +67,14 @@ The Draft target adds the complete execution pin, generic resource/effect bindin
 relationship, and removal of domain-node expansion from generic runtime code. Acceptance requires the Draft specs and
 implementation to agree; landed subsets do not change this ADR's status.
 
-ADR-0010 and the ACP runner session spec require that complete pin to include the resolved model-profile snapshot
-before DBOS enqueue. An ACP replacement invocation must use the pinned provider, model, params, privacy, and pricing
-rather than re-read mutable model-profile meaning. ACP dispatch remains nonconformant until that execution-plan field
-and its runtime consumption land.
+ADR-0010/0011 fix the target binding shape without changing profile ownership: agent slots retain
+runner/model/permission/timeout bindings, while Git/GitHub credential aliases move from named script-node expansion to
+named resource bindings. Scripts are selected by versioned pipeline refs and do not receive runner bindings or account
+fields. The amended run-profile, execution-plan, resource, and script-runtime specs are authoritative for the atomic
+target.
+
+ADR-0012 adds the ACP-specific requirement that an interactive replacement invocation uses the exact provider, model,
+params, privacy, and pricing resolved before DBOS enqueue; it must not re-read mutable model-profile meaning.
 
 ## Direct Cutover
 

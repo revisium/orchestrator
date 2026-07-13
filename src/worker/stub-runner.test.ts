@@ -1,16 +1,32 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { stubRunAgent } from './stub-runner.js';
-import type { Role, ModelProfile } from '../control-plane/definitions.js';
+import type { Role } from '../control-plane/definitions.js';
+import type { ResolvedAgentBinding } from '../control-plane/run-profile-contract.js';
 import type { Step } from '../control-plane/steps.js';
 
-const PROFILE: ModelProfile = {
-  level: 'standard',
+const BINDING: ResolvedAgentBinding = {
+  runnerId: 'claude-code',
   provider: 'anthropic',
   modelId: 'claude-sonnet-4-6',
-  params: {},
-  costPerInput: 3,
-  costPerOutput: 15,
+  modelParams: {},
+  slotKey: 'node:architect',
+  nodeId: 'architect',
+  roleId: 'architect',
+  roleDocumentId: 'role-doc-architect',
+  permissionMode: 'default',
+  permissionSource: 'profile',
+  runner: {
+    runnerId: 'claude-code',
+    manifestVersion: '1',
+    manifestDigest: `sha256:${'a'.repeat(64)}`,
+    stdoutParserId: 'claude-json',
+    permissionStyleId: 'claude-permission-mode',
+    declaredDefaultPermissionMode: 'default',
+    capabilities: {},
+    constraints: {},
+    executionFields: {},
+  },
 };
 
 const STEP: Step = {
@@ -22,7 +38,6 @@ const STEP: Step = {
   status: 'running',
   input: { title: 'Build X' },
   output: null,
-  modelProfile: 'standard',
   runAfter: '',
   attemptCount: 1,
   maxAttempts: 3,
@@ -36,9 +51,6 @@ function makeRole(name: string): Role {
   return {
     name,
     systemPrompt: `You are the ${name}.`,
-    modelLevel: 'standard',
-    effort: 'high',
-    runner: 'claude-code',
     allowedTools: [],
     scopeRules: {},
   };
@@ -48,7 +60,7 @@ test('stubRunAgent: emits a top-level passing verdict regardless of role (generi
   for (const role of ['architect', 'developer', 'reviewer', 'integrator', 'tester']) {
     const result = await stubRunAgent({
       role: makeRole(role),
-      profile: PROFILE,
+      binding: BINDING,
       context: 'some context',
       attemptId: 'attempt-1',
       step: { ...STEP, role },
@@ -63,7 +75,7 @@ test('stubRunAgent: emits a top-level passing verdict regardless of role (generi
 test('stubRunAgent: returns zero costs', async () => {
   const result = await stubRunAgent({
     role: makeRole('architect'),
-    profile: PROFILE,
+    binding: BINDING,
     context: 'ctx',
     attemptId: 'attempt-1',
     step: STEP,
@@ -75,7 +87,7 @@ test('stubRunAgent: returns zero costs', async () => {
 test('stubRunAgent: needsHuman is false', async () => {
   const result = await stubRunAgent({
     role: makeRole('architect'),
-    profile: PROFILE,
+    binding: BINDING,
     context: 'ctx',
     attemptId: 'attempt-1',
     step: STEP,
@@ -87,7 +99,7 @@ test('stubRunAgent: needsHuman is false', async () => {
 test('stubRunAgent: echo output includes role name and step id', async () => {
   const result = await stubRunAgent({
     role: makeRole('architect'),
-    profile: PROFILE,
+    binding: BINDING,
     context: 'abcde',
     attemptId: 'attempt-1',
     step: STEP,

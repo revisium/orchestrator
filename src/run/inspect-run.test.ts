@@ -381,7 +381,20 @@ test('listRunEvents honors limit', async () => {
 
 test('listRunAttempts pushes limit into listRows before mapping', async () => {
   const listRowsArgs: Array<[RuntimeTable, ListRowsOptions | undefined]> = [];
-  const attempt = makeRow('attempt-a1', { id: 'attempt-a1', run_id: 'run-a', step_id: 'developer', status: 'succeeded', created_at: T1 });
+  const attempt = makeRow('attempt-a1', {
+    id: 'attempt-a1',
+    run_id: 'run-a',
+    step_id: 'developer',
+    status: 'succeeded',
+    runner_id: 'stub-agent',
+    provider: 'test',
+    model_id: 'test-model',
+    input_tokens: null,
+    output_tokens: null,
+    cost_amount: null,
+    currency: null,
+    created_at: T1,
+  });
   const da = createFakeDataAccess({ attempts: [attempt] }, { listRowsArgs });
 
   await listRunAttempts(da, 'run-a', { limit: 1 });
@@ -575,7 +588,9 @@ test('formatAttemptList renders per-attempt verdict/model/tokens/cost/duration',
       iteration: 1,
       status: 'succeeded',
       verdict: 'PASS',
-      modelProfile: 'standard',
+      runnerId: 'codex',
+      provider: 'openai',
+      modelId: 'gpt-test',
       inputTokens: 1200,
       outputTokens: 340,
       costAmount: 0.0123,
@@ -593,7 +608,7 @@ test('formatAttemptList renders per-attempt verdict/model/tokens/cost/duration',
   const out = formatAttemptList(attempts);
   assert.ok(out.includes('attempt_abc'), 'has attempt id');
   assert.ok(out.includes('verdict=PASS'), 'has verdict');
-  assert.ok(out.includes('model=standard'), 'has model');
+  assert.ok(out.includes('runner=codex provider=openai model=gpt-test'), 'has exact provenance');
   assert.ok(out.includes('1200in/340out'), 'has tokens');
   assert.ok(out.includes('4567ms'), 'has duration');
   assert.ok(out.includes('iter=1'), 'has iteration');
@@ -601,6 +616,9 @@ test('formatAttemptList renders per-attempt verdict/model/tokens/cost/duration',
   assert.ok(out.includes('stdout tail'), 'has stdout tail');
   assert.ok(out.includes('stderr tail'), 'has stderr tail');
   assert.ok(out.includes('(1 attempt)'), 'has summary');
+
+  const eur = formatAttemptList([{ ...attempts[0], costAmount: 1, currency: 'EUR' }]);
+  assert.ok(eur.includes('cost=1.00 EUR'), 'non-USD costs must not use a dollar symbol');
 });
 
 test('formatAttemptList: empty list', async () => {

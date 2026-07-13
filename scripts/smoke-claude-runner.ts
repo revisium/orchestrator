@@ -5,7 +5,7 @@
 // tokens and needs auth.
 //
 //   - Auth: requires a logged-in / API-keyed `claude` CLI on PATH (the operator's machine).
-//   - Cost: one real `standard`-profile call (a single trivial round-trip). Non-zero, small.
+//   - Usage: one real exact-model call (a single trivial round-trip).
 //
 // Run (only when validating, not in CI):
 //   ./bin/revo.js start
@@ -25,28 +25,32 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnExecutor, type ExecRequest, type ExecResult, type ProcessExecutor } from '../src/worker/process-executor.js';
 import { createClaudeCodeRunner } from '../src/worker/claude-code-runner.js';
-import type { Role, ModelProfile } from '../src/control-plane/definitions.js';
+import type { Role } from '../src/control-plane/definitions.js';
 import type { Step } from '../src/control-plane/steps.js';
+import { RUNNER_MANIFESTS } from '../src/runners/runner-manifest.js';
+import type { ResolvedAgentBinding } from '../src/control-plane/run-profile-contract.js';
 
 const workdir = mkdtempSync(join(tmpdir(), 'revo-claude-smoke-'));
 
 const role: Role = {
   name: 'architect',
   systemPrompt: 'You are the architect agent. Reply briefly. Do not use any tools.',
-  modelLevel: 'standard',
-  effort: 'high',
-  runner: 'claude-code',
   allowedTools: [], // text-only, no tools — matches the seed role
   scopeRules: {},
 };
 
-const profile: ModelProfile = {
-  level: 'standard',
+const binding: ResolvedAgentBinding = {
+  runnerId: 'claude-code',
   provider: 'anthropic',
   modelId: 'claude-sonnet-4-6',
-  params: {},
-  costPerInput: 3,
-  costPerOutput: 15,
+  modelParams: {},
+  permissionMode: 'acceptEdits',
+  permissionSource: 'profile',
+  slotKey: 'role:architect',
+  nodeId: 'architect',
+  roleId: 'architect',
+  roleDocumentId: 'smoke-role',
+  runner: RUNNER_MANIFESTS['claude-code']!,
 };
 
 const step: Step = {
@@ -58,7 +62,6 @@ const step: Step = {
   status: 'running',
   input: { title: 'Smoke: respond with a one-sentence summary.' },
   output: null,
-  modelProfile: 'standard',
   runAfter: '',
   attemptCount: 1,
   maxAttempts: 3,
@@ -100,7 +103,7 @@ const runner = createClaudeCodeRunner({
 const startedAt = Date.now();
 const result = await runner({
   role,
-  profile,
+  binding,
   context,
   attemptId: `attempt_smoke_${String(startedAt)}`,
   step,

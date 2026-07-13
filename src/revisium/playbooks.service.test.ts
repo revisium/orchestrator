@@ -96,9 +96,6 @@ test('PlaybooksService.listPipelines tolerates malformed JSON fields', async () 
       path: 'pipelines/feature-development/PIPELINE.md',
       status: 'active',
       triggers: ['new feature'],
-      required_roles: ['developer'],
-      alternative_roles_json: '{not json',
-      optional_roles: [],
       route_gates: ['plan'],
       execution_policy_json: '{not json',
     }),
@@ -108,7 +105,7 @@ test('PlaybooksService.listPipelines tolerates malformed JSON fields', async () 
 
   assert.equal(pipelines.length, 1);
   assert.equal(pipelines[0]?.pipelineId, 'feature-development');
-  assert.deepEqual(pipelines[0]?.alternativeRoles, []);
+  assert.deepEqual(pipelines[0]?.routeGates, ['plan']);
   assert.deepEqual(pipelines[0]?.executionPolicy, {});
 });
 
@@ -204,13 +201,13 @@ test('PlaybooksService.listRunProfiles filters profiles by playbook and pipeline
       schema_version: 2,
     }),
   ], [
-    makeRow('pb-feature-development-codex-standard', {
+    makeRow('pb-feature-development-codex-gpt-5-6-luna', {
       playbook_id: 'pb',
       pipeline_id: 'feature-development',
-      profile_id: 'codex-standard',
+      profile_id: 'codex-gpt-5-6-luna',
       schema_version: 'run-profile/v1',
       version: '1',
-      display_name: 'Codex standard',
+      display_name: 'Codex exact',
       summary: 'Codex launch profile.',
       profile_json: JSON.stringify({ schemaVersion: 'run-profile/v1', topology: { stages: {} }, bindings: { slots: {} } }),
       profile_hash: 'hash-1',
@@ -246,7 +243,7 @@ test('PlaybooksService.listRunProfiles filters profiles by playbook and pipeline
   const profiles = await svc.listRunProfiles({ playbookId: 'pb', pipelineId: 'feature-development' });
 
   assert.equal(profiles.length, 1);
-  assert.equal(profiles[0]?.profileId, 'codex-standard');
+  assert.equal(profiles[0]?.profileId, 'codex-gpt-5-6-luna');
   assert.deepEqual(profiles[0]?.profile, { schemaVersion: 'run-profile/v1', topology: { stages: {} }, bindings: { slots: {} } });
   assert.deepEqual(head.listCalls, [{
     table: 'run_profiles',
@@ -416,13 +413,13 @@ test('PlaybooksService.resolveRunProfile rejects scoped row ids as profileId', a
       schema_version: 2,
     }),
   ], [
-    makeRow('pb-feature-development-codex-standard', {
+    makeRow('pb-feature-development-codex-gpt-5-6-luna', {
       playbook_id: 'pb',
       pipeline_id: 'feature-development',
-      profile_id: 'codex-standard',
+      profile_id: 'codex-gpt-5-6-luna',
       schema_version: 'run-profile/v1',
       version: '1',
-      display_name: 'Codex standard',
+      display_name: 'Codex exact',
       summary: 'Codex launch profile.',
       profile_json: JSON.stringify({ schemaVersion: 'run-profile/v1', topology: { stages: {} }, bindings: { slots: {} } }),
       profile_hash: 'hash-1',
@@ -435,7 +432,7 @@ test('PlaybooksService.resolveRunProfile rejects scoped row ids as profileId', a
     () => svc.resolveRunProfile({
       playbookId: 'pb',
       pipelineId: 'feature-development',
-      profileId: 'pb-feature-development-codex-standard',
+      profileId: 'pb-feature-development-codex-gpt-5-6-luna',
     }),
     (err: ControlPlaneError) => err.code === 'ROW_NOT_FOUND',
   );
@@ -448,7 +445,7 @@ test('PlaybooksService.resolveRunProfile rejects scoped row ids as profileId', a
         AND: [
           { data: { path: 'playbook_id', equals: 'pb' } },
           { data: { path: 'pipeline_id', equals: 'feature-development' } },
-          { data: { path: 'profile_id', equals: 'pb-feature-development-codex-standard' } },
+          { data: { path: 'profile_id', equals: 'pb-feature-development-codex-gpt-5-6-luna' } },
           { data: { path: 'status', equals: 'active' } },
         ],
       },
@@ -636,25 +633,25 @@ test('PlaybooksService.createRunProfile writes a profile row and rejects duplica
   const created = await svc.createRunProfile({
     playbookId: 'pb',
     pipelineId: 'feature-development',
-    profileId: 'custom-standard',
-    displayName: 'Custom standard',
+    profileId: 'custom-exact',
+    displayName: 'Custom exact',
     summary: 'Custom launch profile',
     profile: EMPTY_PROFILE,
   });
 
-  assert.equal(created.profileId, 'custom-standard');
+  assert.equal(created.profileId, 'custom-exact');
   assert.equal(created.status, 'active');
   assert.equal(created.profileHash, runProfileHash(EMPTY_PROFILE, { pipelineId: 'feature-development', schemaVersion: 'run-profile/v1' }));
   assert.match(created.profileRevisionHash, /^[a-f0-9]{64}$/);
-  assert.equal(created.id, 'pb-19-feature-development-custom-standard');
+  assert.equal(created.id, 'pb-19-feature-development-custom-exact');
   assert.equal(head.invalidations, 1);
-  assert.ok(deps.calls.includes('createRow:run_profiles/pb-19-feature-development-custom-standard'));
-  assert.ok(deps.calls.includes('commit:Create run profile custom-standard'));
+  assert.ok(deps.calls.includes('createRow:run_profiles/pb-19-feature-development-custom-exact'));
+  assert.ok(deps.calls.includes('commit:Create run profile custom-exact'));
   await assert.rejects(
     () => svc.createRunProfile({
       playbookId: 'pb',
       pipelineId: 'feature-development',
-      profileId: 'custom-standard',
+      profileId: 'custom-exact',
       displayName: 'Duplicate',
       summary: 'Duplicate profile',
       profile: EMPTY_PROFILE,
@@ -672,8 +669,8 @@ test('PlaybooksService.createRunProfile rejects invalid public status values def
     () => svc.createRunProfile({
       playbookId: 'pb',
       pipelineId: 'feature-development',
-      profileId: 'custom-standard',
-      displayName: 'Custom standard',
+      profileId: 'custom-exact',
+      displayName: 'Custom exact',
       profile: EMPTY_PROFILE,
       status: 'removed' as never,
     }),
@@ -686,14 +683,14 @@ test('PlaybooksService.updateRunProfile overwrites the same row with expectedPro
   const existingProfile = {
     schemaVersion: 'run-profile/v1',
     topology: { stages: {} },
-    bindings: { slots: { developer: { runnerId: 'codex', modelLevel: 'codex-standard' } } },
+    bindings: { slots: { 'role:developer': { runnerId: 'codex', provider: 'openai', modelId: 'gpt-5.6-luna', modelParams: {} } } },
   };
   const updatedProfile = {
     schemaVersion: 'run-profile/v1',
     topology: { stages: {} },
-    bindings: { slots: { developer: { runnerId: 'claude-code', modelLevel: 'deep' } } },
+    bindings: { slots: { 'role:developer': { runnerId: 'claude-code', provider: 'anthropic', modelId: 'claude-sonnet-4', modelParams: {} } } },
   };
-  const existing = mutableProfile('custom-standard', existingProfile, 'catalog-hash');
+  const existing = mutableProfile('custom-exact', existingProfile, 'catalog-hash');
   const head = fakeInvalidatableHead();
   const deps = fakeWritableDeps([existing]);
   const svc = new PlaybooksService(head, deps.engine as never, deps.prisma as never);
@@ -703,7 +700,7 @@ test('PlaybooksService.updateRunProfile overwrites the same row with expectedPro
     () => svc.updateRunProfile({
       playbookId: 'pb',
       pipelineId: 'feature-development',
-      profileId: 'custom-standard',
+      profileId: 'custom-exact',
       expectedProfileRevisionHash: 'stale-hash',
       profile: updatedProfile,
     }),
@@ -714,7 +711,7 @@ test('PlaybooksService.updateRunProfile overwrites the same row with expectedPro
   const updated = await svc.updateRunProfile({
     playbookId: 'pb',
     pipelineId: 'feature-development',
-    profileId: 'custom-standard',
+    profileId: 'custom-exact',
     expectedProfileRevisionHash,
     displayName: 'Custom updated',
     summary: 'Updated profile',
@@ -722,7 +719,7 @@ test('PlaybooksService.updateRunProfile overwrites the same row with expectedPro
   });
 
   assert.equal(updated.id, existing.id);
-  assert.equal(updated.profileId, 'custom-standard');
+  assert.equal(updated.profileId, 'custom-exact');
   assert.equal(updated.displayName, 'Custom updated');
   assert.equal(updated.profileHash, runProfileHash(updatedProfile, { pipelineId: 'feature-development', schemaVersion: 'run-profile/v1' }));
   assert.notEqual(updated.profileRevisionHash, expectedProfileRevisionHash);
@@ -732,7 +729,7 @@ test('PlaybooksService.updateRunProfile overwrites the same row with expectedPro
 });
 
 test('PlaybooksService.updateRunProfile protects metadata-only edits with profileRevisionHash', async () => {
-  const existing = mutableProfile('custom-standard', EMPTY_PROFILE, 'catalog-hash');
+  const existing = mutableProfile('custom-exact', EMPTY_PROFILE, 'catalog-hash');
   const head = fakeInvalidatableHead();
   const deps = fakeWritableDeps([existing]);
   const svc = new PlaybooksService(head, deps.engine as never, deps.prisma as never);
@@ -741,7 +738,7 @@ test('PlaybooksService.updateRunProfile protects metadata-only edits with profil
   const updated = await svc.updateRunProfile({
     playbookId: 'pb',
     pipelineId: 'feature-development',
-    profileId: 'custom-standard',
+    profileId: 'custom-exact',
     expectedProfileRevisionHash,
     displayName: 'Renamed profile',
   });
@@ -752,7 +749,7 @@ test('PlaybooksService.updateRunProfile protects metadata-only edits with profil
     () => svc.updateRunProfile({
       playbookId: 'pb',
       pipelineId: 'feature-development',
-      profileId: 'custom-standard',
+      profileId: 'custom-exact',
       expectedProfileRevisionHash,
       summary: 'stale metadata edit',
     }),
@@ -761,7 +758,7 @@ test('PlaybooksService.updateRunProfile protects metadata-only edits with profil
 });
 
 test('PlaybooksService.updateRunProfile rejects rows without profileRevisionHash', async () => {
-  const existing = mutableProfile('custom-standard', EMPTY_PROFILE, 'catalog-hash');
+  const existing = mutableProfile('custom-exact', EMPTY_PROFILE, 'catalog-hash');
   delete existing.data?.profile_revision_hash;
   const head = fakeInvalidatableHead();
   const deps = fakeWritableDeps([existing]);
@@ -771,7 +768,7 @@ test('PlaybooksService.updateRunProfile rejects rows without profileRevisionHash
     () => svc.updateRunProfile({
       playbookId: 'pb',
       pipelineId: 'feature-development',
-      profileId: 'custom-standard',
+      profileId: 'custom-exact',
       expectedProfileRevisionHash: '',
       displayName: 'Should not update',
     }),
@@ -781,7 +778,7 @@ test('PlaybooksService.updateRunProfile rejects rows without profileRevisionHash
 });
 
 test('PlaybooksService.deprecateRunProfile hides profiles from default listing but keeps get readable', async () => {
-  const existing = mutableProfile('custom-standard', EMPTY_PROFILE, String(runProfileHash(EMPTY_PROFILE, { pipelineId: 'feature-development', schemaVersion: 'run-profile/v1' })));
+  const existing = mutableProfile('custom-exact', EMPTY_PROFILE, String(runProfileHash(EMPTY_PROFILE, { pipelineId: 'feature-development', schemaVersion: 'run-profile/v1' })));
   const playbooks = [
     makeRow('pb', {
       name: 'PB',
@@ -798,7 +795,7 @@ test('PlaybooksService.deprecateRunProfile hides profiles from default listing b
   const deprecated = await svc.deprecateRunProfile({
     playbookId: 'pb',
     pipelineId: 'feature-development',
-    profileId: 'custom-standard',
+    profileId: 'custom-exact',
     expectedProfileRevisionHash: String(existing.data?.profile_revision_hash),
   });
 
@@ -815,7 +812,7 @@ test('PlaybooksService.deprecateRunProfile hides profiles from default listing b
     (await readSvc.resolveRunProfile({
       playbookId: 'pb',
       pipelineId: 'feature-development',
-      profileId: 'custom-standard',
+      profileId: 'custom-exact',
       includeDeprecated: true,
     })).status,
     'deprecated',
