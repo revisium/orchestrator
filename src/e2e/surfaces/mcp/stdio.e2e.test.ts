@@ -34,6 +34,40 @@ function value<T>(result: Readonly<{ isError: boolean; text: string; data?: T }>
   return result.data as T;
 }
 
+function inlineConsensusProfile(role: 'analyst' | 'developer', permissionMode: 'read-only' | 'workspace-write') {
+  if (role === 'analyst') {
+    return {
+      schemaVersion: 'run-profile/v1',
+      topology: { stages: { analyst: { mode: 'consensus', branches: 2 } } },
+      bindings: {
+        slots: {
+          'node:analystPrimary': {
+            runnerId: 'codex', provider: 'openai', modelId: 'gpt-5.6-luna', modelParams: {}, permissionMode,
+          },
+          'node:analystSecondary': {
+            runnerId: 'claude-code', provider: 'anthropic', modelId: 'claude-opus-4-8', modelParams: {}, permissionMode: 'plan',
+          },
+        },
+      },
+    };
+  }
+  return {
+    schemaVersion: 'run-profile/v1',
+    topology: { stages: { [role]: { mode: 'consensus', branches: 2 } } },
+    bindings: {
+      slots: {
+        [`role:${role}`]: {
+          runnerId: 'codex',
+          provider: 'openai',
+          modelId: 'gpt-5.6-luna',
+          modelParams: {},
+          permissionMode,
+        },
+      },
+    },
+  };
+}
+
 async function expectGate(inboxId: string, topic: string, options: readonly string[]): Promise<void> {
   const gate = value(await mcp.gate(inboxId));
   assert.equal(gate.topic, topic);
@@ -65,6 +99,52 @@ test('H1: real stdio create/start/attention/get completes a local-change run', {
   } finally {
     if (runId) await mcp.cleanupRun(runId);
   }
+});
+
+test('H1b: real stdio simulate_route accepts analysis consensus and rejects developer consensus', { skip: e2eSkip }, async () => {
+  const analysis = await mcp.call<Record<string, unknown>>('simulate_route', {
+    title: 'MCP analysis consensus',
+    pipelineId: 'analysis-only',
+    profile: inlineConsensusProfile('analyst', 'read-only'),
+    includeDetails: true,
+  });
+  const analysisRoute = value(analysis) as {
+    executionPlan?: {
+      selection?: { requestedPipelineId?: string; basePipelineId?: string };
+      profile?: { source?: string; profileHash?: string; profileId?: string; profileVersion?: string };
+      pipeline?: { executableGraph?: Record<string, unknown>; graphDigest?: string; materializerVersion?: string };
+      agentBindings?: Array<Record<string, unknown>>;
+      executionPlanDigest?: string;
+    };
+    executionPlanBytes?: string;
+    executionPlanDigest?: string;
+  };
+  const analysisGraph = analysisRoute.executionPlan?.pipeline?.executableGraph;
+  assert.equal((analysisGraph as { entry?: string } | undefined)?.entry, 'analystFanout');
+  assert.deepEqual((analysisGraph as { nodes?: Record<string, { merge?: unknown }> } | undefined)?.nodes?.['analystJoin']?.merge, {
+    analysis: 'appendByBranchOrder',
+  });
+  assert.equal(analysisRoute.executionPlan?.selection?.requestedPipelineId, 'analysis-only');
+  assert.equal(analysisRoute.executionPlan?.selection?.basePipelineId, 'analysis-only');
+  assert.equal(analysisRoute.executionPlan?.profile?.source, 'inline');
+  assert.equal(analysisRoute.executionPlan?.profile?.profileId, undefined);
+  assert.equal(analysisRoute.executionPlan?.profile?.profileVersion, undefined);
+  assert.equal(analysisRoute.executionPlan?.pipeline?.materializerVersion, '2');
+  assert.deepEqual(analysisRoute.executionPlan?.agentBindings?.map((binding) => ({
+    slotKey: binding.slotKey, nodeId: binding.nodeId, roleId: binding.roleId, runnerId: binding.runnerId,
+    provider: binding.provider, modelId: binding.modelId, permissionMode: binding.permissionMode, permissionSource: binding.permissionSource,
+  })), [
+    { slotKey: 'node:analystPrimary', nodeId: 'analystPrimary', roleId: 'analyst', runnerId: 'codex', provider: 'openai', modelId: 'gpt-5.6-luna', permissionMode: 'read-only', permissionSource: 'profile' },
+    { slotKey: 'node:analystSecondary', nodeId: 'analystSecondary', roleId: 'analyst', runnerId: 'claude-code', provider: 'anthropic', modelId: 'claude-opus-4-8', permissionMode: 'plan', permissionSource: 'profile' },
+  ]);
+
+  const unsupported = await mcp.call('simulate_route', {
+    title: 'MCP developer consensus must be rejected',
+    pipelineId: 'local-change',
+    profile: inlineConsensusProfile('developer', 'workspace-write'),
+  });
+  assert.equal(unsupported.isError, true);
+  assert.equal(JSON.parse(unsupported.text).code, 'profile_topology_unsupported');
 });
 
 test('H2: real stdio drives plan and merge gates to a completed feature run', { skip: e2eSkip }, async () => {

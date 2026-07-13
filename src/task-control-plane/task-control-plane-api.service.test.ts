@@ -301,6 +301,7 @@ function makeApi(overrides: {
   const observabilityService = new AgentObservabilityService({
     artifactRoot,
     runExists: async (runId) => Boolean(await runService.getRun?.(runId)),
+    listAgentOutputStreamRegistrations: async (runId) => [{ runId, taskId: 'task-1', stepId: 'step-1', attemptId: 'attempt-1', sequence: 1 }],
     dbos: {
       getEvent: (workflowID, key, opts) => dbosService.getEvent!(workflowID, key, opts),
       readStream: (workflowID, key) => dbosService.readStream!(workflowID, key),
@@ -400,11 +401,12 @@ test('TaskControlPlaneApiService reads bounded agent output events through seale
     dbosService: {
       async *readStream<T>(workflowID: string, key: string): AsyncGenerator<T, void, unknown> {
         assert.equal(workflowID, 'run-1');
-        assert.equal(key, 'agent-output');
+        assert.equal(key, 'agent-output-v1:attempt-1');
         yield {
           cursor: 'cursor-1',
           runId: 'run-1',
           attemptId: 'attempt-1',
+          attemptSeq: 1,
           stepId: 'step-1',
           at: '2026-06-20T10:00:00.000Z',
           kind: 'output',
@@ -418,8 +420,9 @@ test('TaskControlPlaneApiService reads bounded agent output events through seale
   const page = await api.readAgentOutputEvents({ runId: 'run-1', limit: 1, timeoutMs: 1 });
 
   assert.equal(page.runId, 'run-1');
-  assert.equal(page.events[0]?.cursor, 'cursor-1');
-  assert.equal(page.nextCursor, 'cursor-1');
+  assert.notEqual(page.events[0]?.cursor, 'cursor-1');
+  assert.equal(page.events[0]?.attemptSeq, 1);
+  assert.equal(page.nextCursor, page.events[0]?.cursor);
   assert.equal(page.cursorExpired, false);
 });
 
@@ -3526,6 +3529,305 @@ test('TaskControlPlaneApiService requires pipelineId and exactly one exact profi
     () => api.simulateRoute({ title: 'Task', pipelineId: 'local-change', profileId: 'local', profile: LOCAL_CHANGE_PROFILE }),
     (error: unknown) => error instanceof ControlPlaneError && error.message.includes('exactly one of profileId or profile'),
   );
+});
+
+test('focused adapter: simulateRoute materializes analyst consensus at the route boundary', async () => {
+  let persistedRoute: RouteDecision | undefined;
+  const analystTemplate: Template = {
+    specVersion: '1.0',
+    pipelineId: 'analysis-only',
+    entry: 'analyst',
+    verdicts: { domain: ['approved'] },
+    nodes: {
+      analyst: {
+        id: 'analyst',
+        kind: 'agent',
+        roleRef: 'role:analyst',
+        next: 'done',
+        onFailure: 'abort',
+        resultSchema: 'schema:analysis',
+        produces: { name: 'analysis' },
+      },
+      done: { id: 'done', kind: 'terminal', status: 'succeeded' },
+    },
+  };
+  const api = makeApi({
+    runService: {
+      async createRun(input) {
+        persistedRoute = input.routeDecision as RouteDecision;
+        return { runId: 'run-analysis', taskId: 'task-analysis', stepId: 'step-analysis', eventId: 'event-analysis', status: 'ready' };
+      },
+    },
+    playbooksService: {
+      async resolvePipeline() {
+        return {
+          id: 'pb-analysis-only',
+          playbookId: 'pb',
+          pipelineId: 'analysis-only',
+          path: 'pipelines/analysis-only/PIPELINE.md',
+          triggers: [],
+          routeGates: [],
+          executionPolicy: { template_json: analystTemplate },
+        };
+      },
+    },
+    rolesService: {
+      async listRoles() {
+        return [{ playbookId: 'pb', playbookRoleId: 'analyst', id: 'pb-analyst', name: 'analyst', surface: '', rights: '' }];
+      },
+    },
+  });
+
+  const route = await api.simulateRoute({
+    title: 'Analyze this task',
+    pipelineId: 'analysis-only',
+    profile: {
+      schemaVersion: 'run-profile/v1',
+      topology: { stages: { analyst: { mode: 'consensus', branches: 2 } } },
+      bindings: {
+        slots: {
+          'node:analystPrimary': {
+            runnerId: 'codex',
+            provider: 'openai',
+            modelId: 'gpt-5.6-luna',
+            modelParams: {},
+            permissionMode: 'read-only',
+          },
+          'node:analystSecondary': {
+            runnerId: 'claude-code',
+            provider: 'anthropic',
+            modelId: 'claude-opus-4-8',
+            modelParams: {},
+            permissionMode: 'plan',
+          },
+        },
+      },
+    },
+  });
+  const graph = executionPlanFromRouteDecision(route).pipeline.executableGraph as Template;
+  const created = await api.createRun({
+    title: 'Analyze this task',
+    repo: '.',
+    pipelineId: 'analysis-only',
+    profile: {
+      schemaVersion: 'run-profile/v1',
+      topology: { stages: { analyst: { mode: 'consensus', branches: 2 } } },
+      bindings: {
+        slots: {
+          'node:analystPrimary': { runnerId: 'codex', provider: 'openai', modelId: 'gpt-5.6-luna', modelParams: {}, permissionMode: 'read-only' },
+          'node:analystSecondary': { runnerId: 'claude-code', provider: 'anthropic', modelId: 'claude-opus-4-8', modelParams: {}, permissionMode: 'plan' },
+        },
+      },
+    },
+    start: false,
+  });
+  assert.ok(persistedRoute);
+  assert.equal(route.executionPlanBytes, persistedRoute.executionPlanBytes);
+  assert.equal(route.executionPlanDigest, persistedRoute.executionPlanDigest);
+  assert.equal(created.route.executionPlanBytes, route.executionPlanBytes);
+  assert.equal(created.route.executionPlanDigest, route.executionPlanDigest);
+  const plan = executionPlanFromRouteDecision(route);
+  const createdPlan = executionPlanFromRouteDecision(persistedRoute);
+  assert.deepEqual(plan.pipeline.executableGraph, createdPlan.pipeline.executableGraph);
+  assert.equal(plan.pipeline.graphDigest, createdPlan.pipeline.graphDigest);
+  assert.equal(plan.pipeline.policyVersion, createdPlan.pipeline.policyVersion);
+  assert.equal(plan.profile.profileHash, createdPlan.profile.profileHash);
+  assert.equal(plan.pipeline.materializerVersion, '2');
+  assert.equal(plan.pipeline.materializerVersion, createdPlan.pipeline.materializerVersion);
+  assert.deepEqual(plan.selection.requestedPipelineId, 'analysis-only');
+  assert.deepEqual(plan.selection.basePipelineId, 'analysis-only');
+  assert.equal(plan.profile.source, 'inline');
+  assert.equal(plan.profile.profileId, undefined);
+  assert.equal(plan.profile.profileVersion, undefined);
+  assert.equal(plan.agentBindings.length, 2);
+  assert.equal(plan.agentBindings[0]?.roleDocumentId, plan.agentBindings[1]?.roleDocumentId);
+  assert.equal(plan.agentBindings[0]?.runner.runnerId, 'codex');
+  assert.equal(plan.agentBindings[1]?.runner.runnerId, 'claude-code');
+  assert.deepEqual(plan.agentBindings.map((binding) => ({
+    slotKey: binding.slotKey, nodeId: binding.nodeId, roleId: binding.roleId, runnerId: binding.runnerId,
+    provider: binding.provider, modelId: binding.modelId, permissionMode: binding.permissionMode, permissionSource: binding.permissionSource,
+  })), [
+    { slotKey: 'node:analystPrimary', nodeId: 'analystPrimary', roleId: 'analyst', runnerId: 'codex', provider: 'openai', modelId: 'gpt-5.6-luna', permissionMode: 'read-only', permissionSource: 'profile' },
+    { slotKey: 'node:analystSecondary', nodeId: 'analystSecondary', roleId: 'analyst', runnerId: 'claude-code', provider: 'anthropic', modelId: 'claude-opus-4-8', permissionMode: 'plan', permissionSource: 'profile' },
+  ]);
+
+  assert.equal(graph.entry, 'analystFanout');
+  assert.equal(graph.nodes['analyst'], undefined);
+  assert.deepEqual(graph.nodes['analystJoin'], {
+    id: 'analystJoin',
+    kind: 'join',
+    joinMode: { kind: 'all' },
+    merge: { analysis: 'appendByBranchOrder' },
+    next: 'done',
+  });
+  assert.equal('verdictReducer' in graph.nodes['analystJoin']!, false);
+});
+
+test('focused adapter: simulateRoute rejects developer consensus with a stable topology capability error', async () => {
+  const developerTemplate: Template = {
+    specVersion: '1.0',
+    pipelineId: 'local-change',
+    entry: 'developer',
+    verdicts: { domain: ['approved'] },
+    nodes: {
+      developer: {
+        id: 'developer',
+        kind: 'agent',
+        roleRef: 'role:developer',
+        next: 'done',
+        onFailure: 'abort',
+        resultSchema: 'schema:change',
+        produces: { name: 'change' },
+      },
+      done: { id: 'done', kind: 'terminal', status: 'succeeded' },
+    },
+  };
+  let persisted = false;
+  const unsupportedProfile = {
+    schemaVersion: 'run-profile/v1',
+    topology: { stages: { developer: { mode: 'consensus', branches: 2 } } },
+    bindings: {
+      slots: {
+        'role:developer': {
+          runnerId: 'codex', provider: 'openai', modelId: 'gpt-5.6-luna', modelParams: {}, permissionMode: 'workspace-write',
+        },
+      },
+    },
+  };
+  const api = makeApi({
+    runService: {
+      async createRun() {
+        persisted = true;
+        return { runId: 'run-1', taskId: 'task-1', stepId: 'step-1', eventId: 'event-1', status: 'ready' };
+      },
+    },
+    playbooksService: {
+      async resolvePipeline() {
+        return {
+          id: 'pb-local-change', playbookId: 'pb', pipelineId: 'local-change',
+          path: 'pipelines/local-change/PIPELINE.md', triggers: [], routeGates: [],
+          executionPolicy: { template_json: developerTemplate },
+        };
+      },
+    },
+    rolesService: {
+      async listRoles() {
+        return [{ playbookId: 'pb', playbookRoleId: 'developer', id: 'pb-developer', name: 'developer', surface: '', rights: '' }];
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => api.simulateRoute({
+      title: 'Unsupported developer consensus',
+      pipelineId: 'local-change',
+      profile: unsupportedProfile,
+    }),
+    (error: unknown) => error instanceof ControlPlaneError &&
+      (error.details as { code?: string } | undefined)?.code === 'profile_topology_unsupported' &&
+      error.message.includes('schema:analysis') && error.message.includes('schema:reviewVerdict'),
+  );
+
+  await assert.rejects(
+    () => api.createRun({
+      title: 'Unsupported developer consensus must not persist',
+      repo: '.',
+      pipelineId: 'local-change',
+      profile: unsupportedProfile,
+      start: false,
+    }),
+    (error: unknown) => error instanceof ControlPlaneError &&
+      (error.details as { code?: string } | undefined)?.code === 'profile_topology_unsupported',
+  );
+  assert.equal(persisted, false);
+
+  const nonAgentProfile = {
+    schemaVersion: 'run-profile/v1',
+    topology: { stages: { done: { mode: 'consensus', branches: 2 } } },
+    bindings: { slots: {} },
+  };
+  await assert.rejects(
+    () => api.createRun({
+      title: 'Unsupported non-agent consensus must not persist',
+      repo: '.',
+      pipelineId: 'local-change',
+      profile: nonAgentProfile,
+      start: false,
+    }),
+    (error: unknown) => error instanceof ControlPlaneError &&
+      (error.details as { code?: string } | undefined)?.code === 'profile_topology_unsupported' &&
+      error.message.includes('kind "terminal"'),
+  );
+  assert.equal(persisted, false);
+});
+
+test('simulateRoute and createRun reject the same invalid materialized graph before persistence', async () => {
+  let persisted = false;
+  const invalidTemplate: Template = {
+    specVersion: '1.0',
+    pipelineId: 'analysis-only',
+    entry: 'analyst',
+    verdicts: { domain: ['approved'] },
+    nodes: {
+      analyst: { id: 'analyst', kind: 'agent', roleRef: 'role:analyst', next: 'missing' },
+      done: { id: 'done', kind: 'terminal', status: 'succeeded' },
+    },
+  };
+  const api = makeApi({
+    runService: {
+      async createRun() {
+        persisted = true;
+        return { runId: 'run-1', taskId: 'task-1', stepId: 'step-1', eventId: 'event-1', status: 'ready' };
+      },
+    },
+    playbooksService: {
+      async resolvePipeline() {
+        return {
+          id: 'pb-analysis-only', playbookId: 'pb', pipelineId: 'analysis-only',
+          path: 'pipelines/analysis-only/PIPELINE.md', triggers: [], routeGates: [],
+          executionPolicy: { template_json: invalidTemplate },
+        };
+      },
+    },
+    rolesService: {
+      async listRoles() {
+        return [{ playbookId: 'pb', playbookRoleId: 'analyst', id: 'pb-analyst', name: 'analyst', surface: '', rights: '' }];
+      },
+    },
+  });
+
+  const profile = {
+    schemaVersion: 'run-profile/v1',
+    topology: { stages: { analyst: { mode: 'single' } } },
+    bindings: {
+      slots: {
+        'role:analyst': {
+          runnerId: 'codex', provider: 'openai', modelId: 'gpt-5.6-luna', modelParams: {}, permissionMode: 'read-only',
+        },
+      },
+    },
+  };
+  let simulateError: ControlPlaneError | undefined;
+  await assert.rejects(
+    () => api.simulateRoute({ title: 'Invalid graph', pipelineId: 'analysis-only', profile }),
+    (error: unknown) => (simulateError = error instanceof ControlPlaneError ? error : undefined) !== undefined &&
+      (simulateError.details as { code?: string } | undefined)?.code === 'execution_plan_invalid',
+  );
+  let createError: ControlPlaneError | undefined;
+  await assert.rejects(
+    () => api.createRun({
+      title: 'Invalid graph',
+      repo: '.',
+      pipelineId: 'analysis-only',
+      profile,
+      start: false,
+    }),
+    (error: unknown) => (createError = error instanceof ControlPlaneError ? error : undefined) !== undefined &&
+      (createError.details as { code?: string } | undefined)?.code === 'execution_plan_invalid',
+  );
+  assert.ok(simulateError && createError);
+  assert.deepEqual(simulateError.details, createError.details);
+  assert.equal(persisted, false);
 });
 
 test('simulateRoute and createRun share canonical plan bytes and createRun persists before start', async () => {

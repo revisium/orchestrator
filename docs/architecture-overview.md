@@ -256,6 +256,15 @@ Source: [assets/default-pipeline-example.mmd](./assets/default-pipeline-example.
 
 ## Later
 
+### Agent output observability (Current shipped behavior)
+
+Each physical agent attempt first records an immutable `agent_output_stream_registered` run event. The event binds
+the attempt to the DBOS stream `agent-output-v1:<attemptId>`; the runner then emits activity and terminal status
+events to that per-attempt stream. The public run view discovers registrations from the ordered event log and fans
+in the bounded per-attempt streams. A compact opaque cursor preserves the run binding, registration prefix, and
+per-attempt high-watermarks without exposing storage sequence numbers. Registration failure is fatal before runner
+dispatch; reporter write and flush failures remain observability-only.
+
 Reusable graph fragments and trusted custom scripts are later playbook capabilities. They follow, rather than define,
 the stable internal graph, script/effect, and execution-plan contracts. A public fragment/plugin API is not fixed yet.
 

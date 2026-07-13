@@ -224,7 +224,8 @@ changes the returned `profile_revision_hash` whenever the user-visible row state
 
 ## Topology V1
 
-The current v1 materializer supports consensus overlays for existing agent stages.
+The v1 materializer supports only pipeline-owned consensus capability points. A profile requests a topology mode;
+capability is derived from the selected pipeline's declared node semantics.
 
 Supported stage modes:
 
@@ -235,11 +236,31 @@ Current default stage keys:
 
 | Stage key | Base target node | Materialized base name |
 | --- | --- | --- |
+| `analyst` | `analyst` | `analyst` |
 | `planReviewer` | `planReviewer` | `planReview` |
 | `codeReview` | `codeReview` | `codeReview` |
 
 The materializer emits deterministic node ids such as `planReviewFanout`, `planReviewPrimary`,
 `planReviewSecondary`, and `planReviewJoin`.
+
+Consensus semantic compilation is closed over the selected pipeline template:
+
+- an agent with `resultSchema: "schema:analysis"` and `produces.name: "analysis"` is an analysis aggregation point;
+  its fanout join declares `merge: { analysis: "appendByBranchOrder" }` and has no verdict reducer. This declaration
+  is a graph-validation obligation: runtime retains each branch's output separately in deterministic declared order,
+  and does not synthesize a combined analysis artifact or an `analystJoin` output row;
+- an agent with `resultSchema: "schema:reviewVerdict"` and a declared `produces.name` is a review consensus point;
+  its fanout join preserves the existing `allIn` reviewer verdict reducer and declares the declared artifact merge
+  policy with `appendByBranchOrder`;
+- every other agent semantic, including `schema:change`, is unsupported for consensus and MUST fail with the stable
+  `profile_topology_unsupported` diagnostic before route persistence.
+
+The rule is based only on pipeline-declared `resultSchema` and `produces` fields. It MUST NOT infer topology
+capabilities from role references, node names, requested profile targets, or provider bindings. The final materialized
+template is fully validated after compilation; validation errors are actionable and are rejected before `create_run`
+writes a run. Unsupported semantic or non-agent targets use `profile_topology_unsupported`; other materialization
+diagnostics use `profile_schema_invalid`; invalid post-materialization graphs use `execution_plan_invalid`. These
+diagnostics are returned before persistence, and materialized plans carry `materializerVersion: "2"`.
 
 ## Binding V1
 
@@ -407,10 +428,10 @@ If `profileId` is present:
 2. resolve the selected pipeline;
 3. resolve `run_profiles` by the same playbook and pipeline;
 4. require a matching active `profile_id`;
-5. materialize the template from `profile_json.topology`;
+5. materialize the template from `profile_json.topology` using only pipeline-owned semantic capability points;
 6. convert `profile_json.bindings` into launch bindings;
-7. validate the effective launch profile against the selected pipeline;
-8. return/create a route with profile provenance pins.
+7. validate the fully materialized template and effective launch profile against the selected pipeline;
+8. return/create a route with profile provenance pins; invalid topology is rejected before persistence.
 
 If inline `profile` is present:
 
@@ -418,9 +439,10 @@ If inline `profile` is present:
 2. validate the inline profile against `run-profile/v1`;
 3. reject persisted identity, pipeline, display, lifecycle, and unknown fields in the inline body;
 4. run the same semantic validation as for a stored profile in the selected pipeline context;
-5. materialize topology and bindings from the inline profile;
-6. compute a stable inline profile hash using the selected pipeline as hash context;
-7. return/create a route with profile provenance pins.
+5. materialize topology and bindings from the inline profile using only pipeline-owned semantic capability points;
+6. validate the fully materialized template and effective launch profile;
+7. compute a stable inline profile hash using the selected pipeline as hash context;
+8. return/create a route with profile provenance pins; invalid topology is rejected before persistence.
 
 The service MUST reject storage row ids such as `revisium-default-19-feature-development-codex-standard` as `profileId`; callers use the
 catalog `profile_id` only.

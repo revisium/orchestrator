@@ -12,7 +12,20 @@ export type AgentActivityStatus =
   | 'failed';
 
 export const AGENT_ACTIVITY_EVENT_KEY = 'agent-activity';
-export const AGENT_OUTPUT_STREAM_KEY = 'agent-output';
+export const AGENT_OUTPUT_STREAM_PREFIX = 'agent-output-v1:';
+export const AGENT_OUTPUT_STREAM_EVENT_TYPE = 'agent_output_stream_registered';
+
+export function agentOutputStreamKey(attemptId: string): string {
+  return `${AGENT_OUTPUT_STREAM_PREFIX}${attemptId}`;
+}
+
+export type AgentOutputStreamRegistration = {
+  runId: string;
+  taskId: string;
+  stepId: string;
+  attemptId: string;
+  sequence: number;
+};
 
 export type AgentAttemptSummary = {
   runId: string;
@@ -135,7 +148,8 @@ export type AgentObservabilityErrorCode =
   | 'NO_AGENT_ATTEMPT_AVAILABLE'
   | 'VALIDATION_FAILURE'
   | 'DBOS_STREAM_UNAVAILABLE'
-  | 'STREAM_CURSOR_EXPIRED';
+  | 'STREAM_CURSOR_EXPIRED'
+  | 'OBSERVABILITY_CAPACITY_EXCEEDED';
 
 export class AgentObservabilityError extends Error {
   constructor(

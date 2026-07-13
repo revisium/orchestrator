@@ -9,6 +9,7 @@
  * 🟢 You can import this file directly.
  */
 export type * from './models/RevoProject.js'
+export type * from './models/RevoRepository.js'
 export type * from './models/TaskRun.js'
 export type * from './models/RunTask.js'
 export type * from './models/RunEvent.js'

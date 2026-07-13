@@ -31,11 +31,26 @@ model RevoProject {
   status    RevoProjectStatus @default(ACTIVE)
 
   revisiumBranches Branch[]
+  repositories     RevoRepository[]
   taskRuns         TaskRun[]
 
   @@index([status])
   @@index([kind, status])
   @@index([deletedAt])
+}
+
+model RevoRepository {
+  id            String      @id @default(cuid())
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  projectId     String
+  project       RevoProject @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  name          String
+  remoteUrl     String?
+  localPath     String?
+  defaultBranch String?
+
+  @@unique([projectId, name])
 }
 
 model TaskRun {

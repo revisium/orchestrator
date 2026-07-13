@@ -826,7 +826,6 @@ export function derivePipelineCoverageCatalog(
         profileId: profile.id,
         pipelineId: profile.pipelineId,
       }),
-      { allowlist: ['planReviewer', 'codeReview'] },
     );
     if (result.diagnostics.length > 0) {
       throw new Error(

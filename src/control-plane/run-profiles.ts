@@ -115,22 +115,10 @@ export function topologyStageTargetsFromRunProfile(profile: Record<string, unkno
 }
 
 function consensusToggle(target: string, branches: number): ConsensusToggle {
-  const baseName = target === 'planReviewer' ? 'planReview' : target;
-  const mergeKey = target === 'planReviewer' ? 'planReview' : 'review';
   return {
     target,
-    baseName,
+    baseName: target === 'planReviewer' ? 'planReview' : target,
     fanout: { branches },
-    join: {
-      joinMode: { kind: 'all' },
-      verdictReducer: {
-        kind: 'allIn',
-        pass: ['approved', 'clean'],
-        passVerdict: 'approved',
-        failVerdict: 'changes_requested',
-      },
-      merge: { [mergeKey]: 'appendByBranchOrder' },
-    },
   };
 }
 

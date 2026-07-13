@@ -385,6 +385,7 @@ type FieldRefInputType<Model, FieldType> = Model extends never ? never : FieldRe
 
 export const ModelName = {
   RevoProject: 'RevoProject',
+  RevoRepository: 'RevoRepository',
   TaskRun: 'TaskRun',
   RunTask: 'RunTask',
   RunEvent: 'RunEvent',
@@ -414,7 +415,7 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
     omit: GlobalOmitOptions
   }
   meta: {
-    modelProps: "revoProject" | "taskRun" | "runTask" | "runEvent" | "runAttempt" | "inboxItem" | "runOutput" | "costLedgerEntry" | "branch" | "revision" | "table" | "row" | "fileBlob" | "projectFileUsage" | "tableMigration"
+    modelProps: "revoProject" | "revoRepository" | "taskRun" | "runTask" | "runEvent" | "runAttempt" | "inboxItem" | "runOutput" | "costLedgerEntry" | "branch" | "revision" | "table" | "row" | "fileBlob" | "projectFileUsage" | "tableMigration"
     txIsolationLevel: TransactionIsolationLevel
   }
   model: {
@@ -489,6 +490,80 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         count: {
           args: Prisma.RevoProjectCountArgs<ExtArgs>
           result: runtime.Types.Utils.Optional<Prisma.RevoProjectCountAggregateOutputType> | number
+        }
+      }
+    }
+    RevoRepository: {
+      payload: Prisma.$RevoRepositoryPayload<ExtArgs>
+      fields: Prisma.RevoRepositoryFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.RevoRepositoryFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$RevoRepositoryPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.RevoRepositoryFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$RevoRepositoryPayload>
+        }
+        findFirst: {
+          args: Prisma.RevoRepositoryFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$RevoRepositoryPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.RevoRepositoryFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$RevoRepositoryPayload>
+        }
+        findMany: {
+          args: Prisma.RevoRepositoryFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$RevoRepositoryPayload>[]
+        }
+        create: {
+          args: Prisma.RevoRepositoryCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$RevoRepositoryPayload>
+        }
+        createMany: {
+          args: Prisma.RevoRepositoryCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        createManyAndReturn: {
+          args: Prisma.RevoRepositoryCreateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$RevoRepositoryPayload>[]
+        }
+        delete: {
+          args: Prisma.RevoRepositoryDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$RevoRepositoryPayload>
+        }
+        update: {
+          args: Prisma.RevoRepositoryUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$RevoRepositoryPayload>
+        }
+        deleteMany: {
+          args: Prisma.RevoRepositoryDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.RevoRepositoryUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateManyAndReturn: {
+          args: Prisma.RevoRepositoryUpdateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$RevoRepositoryPayload>[]
+        }
+        upsert: {
+          args: Prisma.RevoRepositoryUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$RevoRepositoryPayload>
+        }
+        aggregate: {
+          args: Prisma.RevoRepositoryAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateRevoRepository>
+        }
+        groupBy: {
+          args: Prisma.RevoRepositoryGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.RevoRepositoryGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.RevoRepositoryCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.RevoRepositoryCountAggregateOutputType> | number
         }
       }
     }
@@ -1585,6 +1660,20 @@ export const RevoProjectScalarFieldEnum = {
 export type RevoProjectScalarFieldEnum = (typeof RevoProjectScalarFieldEnum)[keyof typeof RevoProjectScalarFieldEnum]
 
 
+export const RevoRepositoryScalarFieldEnum = {
+  id: 'id',
+  createdAt: 'createdAt',
+  updatedAt: 'updatedAt',
+  projectId: 'projectId',
+  name: 'name',
+  remoteUrl: 'remoteUrl',
+  localPath: 'localPath',
+  defaultBranch: 'defaultBranch'
+} as const
+
+export type RevoRepositoryScalarFieldEnum = (typeof RevoRepositoryScalarFieldEnum)[keyof typeof RevoRepositoryScalarFieldEnum]
+
+
 export const TaskRunScalarFieldEnum = {
   id: 'id',
   createdAt: 'createdAt',
@@ -1885,6 +1974,18 @@ export const RevoProjectOrderByRelevanceFieldEnum = {
 } as const
 
 export type RevoProjectOrderByRelevanceFieldEnum = (typeof RevoProjectOrderByRelevanceFieldEnum)[keyof typeof RevoProjectOrderByRelevanceFieldEnum]
+
+
+export const RevoRepositoryOrderByRelevanceFieldEnum = {
+  id: 'id',
+  projectId: 'projectId',
+  name: 'name',
+  remoteUrl: 'remoteUrl',
+  localPath: 'localPath',
+  defaultBranch: 'defaultBranch'
+} as const
+
+export type RevoRepositoryOrderByRelevanceFieldEnum = (typeof RevoRepositoryOrderByRelevanceFieldEnum)[keyof typeof RevoRepositoryOrderByRelevanceFieldEnum]
 
 
 export const JsonNullValueFilter = {
@@ -2326,6 +2427,7 @@ export type PrismaClientOptions = ({
 }
 export type GlobalOmitConfig = {
   revoProject?: Prisma.RevoProjectOmit
+  revoRepository?: Prisma.RevoRepositoryOmit
   taskRun?: Prisma.TaskRunOmit
   runTask?: Prisma.RunTaskOmit
   runEvent?: Prisma.RunEventOmit

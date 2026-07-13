@@ -16,6 +16,8 @@ import { blockRun, type BlockRunResult } from '../run/block-run.js';
 import { appendRunEvent, appendRunCost, appendRunAttempt, type AppendEventInput, type AppendCostInput, type AppendAttemptInput } from '../run/append-event.js';
 import { createPrismaRuntimeDataAccess } from '../run/prisma-runtime-data-access.js';
 import { appendRunOutput as appendRunOutputRow, type RunOutputRow } from '../run/run-outputs.js';
+import { registerAgentOutputStream, listAgentOutputStreamRegistrations, type RegisterAgentOutputStreamInput } from '../run/register-agent-output-stream.js';
+import type { AgentOutputStreamRegistration } from '../observability/types.js';
 import type { IssueAction, IssueRef } from '../run/issue-ref.js';
 
 
@@ -210,6 +212,14 @@ export class RunService {
 
   appendEvent(input: AppendEventInput): Promise<void> {
     return appendRunEvent(this.da, input);
+  }
+
+  registerAgentOutputStream(input: RegisterAgentOutputStreamInput): Promise<void> {
+    return registerAgentOutputStream(this.da, input);
+  }
+
+  listAgentOutputStreamRegistrations(runId: string): Promise<AgentOutputStreamRegistration[]> {
+    return listAgentOutputStreamRegistrations(this.da, runId);
   }
 
 

@@ -1,4 +1,5 @@
 import { after, before, test } from "node:test";
+import assert from "node:assert/strict";
 import { nonDslPipelineCaseAttachment } from "../../testing/policy/non-dsl-ownership.js";
 import { RUN_REAL_E2E, e2eSkip } from "../support/env.js";
 import { expectEvent, expectTerminal } from "../support/pipeline-case.js";
@@ -60,6 +61,42 @@ test(
         consensus(["approved", "approved"], ["approved", "approved"]),
       ],
     });
+  },
+);
+
+test(
+  "observability: parallel attempts are discoverable through the public run view",
+  { skip: e2eSkip },
+  async () => {
+    const firstMarker = "PARALLEL-OBSERVABILITY-FIRST";
+    const secondMarker = "PARALLEL-OBSERVABILITY-SECOND";
+    pipeline.armAgentOutputFirstWriteBarrier(2);
+    const runId = await pipeline.execute({
+      coverage: nonDslPipelineCaseAttachment("N1"),
+      given: {
+        ...given([
+          { kind: "reporter", marker: firstMarker },
+          { kind: "reporter", marker: secondMarker },
+        ]),
+      },
+      when: [],
+      then: [
+        expectTerminal("completed"),
+        { check: "roleCallCount", role: "reviewer", count: { exact: 2 } },
+        consensus(["approved", "approved"], ["approved", "approved"]),
+      ],
+    });
+
+    const firstPage = await pipeline.readAgentOutputEvents({ runId, limit: 1 });
+    assert.equal(firstPage.events.length, 1);
+    assert.ok(firstPage.nextCursor);
+    const secondPage = await pipeline.readAgentOutputEvents({ runId, cursor: firstPage.nextCursor, limit: 100 });
+    const events = [...firstPage.events, ...secondPage.events];
+    const serialized = JSON.stringify(events);
+    assert.match(serialized, new RegExp(firstMarker));
+    assert.match(serialized, new RegExp(secondMarker));
+    assert.equal(new Set(events.map((event) => event.attemptId)).size, 2);
+    assert.equal(secondPage.cursorExpired, false);
   },
 );
 test(

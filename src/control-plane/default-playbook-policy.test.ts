@@ -54,7 +54,6 @@ function materializedProfile(profile: RunProfileCatalogEntry): Template {
   const { template, diagnostics } = materializeTemplate(
     base,
     topologyProfileFromRunProfile(profile as never),
-    { allowlist: ['planReviewer', 'codeReview'] },
   );
   assert.deepEqual(diagnostics, [], `materializeTemplate emitted diagnostics for ${profile.id}: ${JSON.stringify(diagnostics)}`);
   return template;
@@ -954,6 +953,46 @@ test('default playbook policy: seeded consensus run profile has zero policy viol
   const materialized = materializedConsensusProfile();
   const diags = diagnosticsFor(materialized);
   assert.deepEqual(diags, [], `seeded consensus profile must have zero policy violations; got: ${diags.map((d) => d.code).join(', ')}`);
+});
+
+test('default playbook policy: consensus materialization is closed over pipeline-declared semantics', () => {
+  const analysis = bundledPipelineTemplate('analysis-only');
+  const analysisResult = materializeTemplate(analysis, {
+    profileId: 'analysis-consensus',
+    pipelineId: 'analysis-only',
+    toggles: [{ target: 'analyst', fanout: { branches: 2 } }],
+  });
+  assert.deepEqual(analysisResult.diagnostics, []);
+  assert.equal(analysisResult.template.entry, 'analystFanout');
+  const analysisJoin = analysisResult.template.nodes['analystJoin'];
+  assert.ok(analysisJoin?.kind === 'join');
+  assert.deepEqual(analysisJoin.merge, { analysis: 'appendByBranchOrder' });
+  assert.equal(analysisJoin.verdictReducer, undefined);
+
+  const reviewer = bundledFeatureDevelopment();
+  const reviewerResult = materializeTemplate(reviewer, {
+    profileId: 'review-consensus',
+    pipelineId: 'feature-development',
+    toggles: [{ target: 'codeReview', fanout: { branches: 2 } }],
+  });
+  assert.deepEqual(reviewerResult.diagnostics, []);
+  const reviewerJoin = reviewerResult.template.nodes['codeReviewJoin'];
+  assert.ok(reviewerJoin?.kind === 'join');
+  assert.deepEqual(reviewerJoin.merge, { review: 'appendByBranchOrder' });
+  assert.deepEqual(reviewerJoin.verdictReducer, {
+    kind: 'allIn',
+    pass: ['approved', 'clean'],
+    passVerdict: 'approved',
+    failVerdict: 'changes_requested',
+  });
+
+  const developer = structuredClone(reviewer);
+  const unsupported = materializeTemplate(developer, {
+    profileId: 'developer-consensus',
+    pipelineId: 'feature-development',
+    toggles: [{ target: 'developer', fanout: { branches: 2 } }],
+  });
+  assert.deepEqual(unsupported.diagnostics.map((diagnostic) => diagnostic.code), ['MATERIALIZE_TOGGLE_UNSUPPORTED']);
 });
 
 for (const profile of runProfiles.filter((item) => item.pipelineId === 'feature-development')) {

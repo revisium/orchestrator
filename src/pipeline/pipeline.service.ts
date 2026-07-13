@@ -41,7 +41,7 @@ import {
   createAgentActivityReporter,
   type AgentActivityReporter,
 } from '../observability/agent-activity-reporter.js';
-import { AGENT_OUTPUT_STREAM_KEY, type AgentOutputEvent } from '../observability/types.js';
+import { agentOutputStreamKey, type AgentOutputEvent } from '../observability/types.js';
 import { makeAwaitHuman } from './await-human.js';
 import {
   makeDataDrivenTask,
@@ -131,6 +131,7 @@ export type RunStepDeps = {
   appendCost: RunService['appendCost'];
 
   appendAttempt: RunService['appendAttempt'];
+  registerAgentOutputStream?: RunService['registerAgentOutputStream'];
   runAgent: RunAgent;
   writeAgentOutputEvent?: (event: AgentOutputEvent) => Promise<void>;
 
@@ -403,6 +404,7 @@ export function makeRunStep(deps: RunStepDeps) {
     appendEvent,
     appendCost,
     appendAttempt,
+    registerAgentOutputStream,
     runAgent,
     writeAgentOutputEvent,
   } = deps;
@@ -454,6 +456,10 @@ export function makeRunStep(deps: RunStepDeps) {
         },
       });
       throw err;
+    }
+
+    if (registerAgentOutputStream) {
+      await registerAgentOutputStream({ runId, taskId: step.taskId, stepId: step.id, attemptId });
     }
 
     const effectiveRunner = binding.runner.runnerId;
@@ -558,7 +564,8 @@ export class PipelineService {
       appendCost: this.runService.appendCost.bind(this.runService),
       appendAttempt: this.runService.appendAttempt.bind(this.runService),
       runAgent: this.runAgent,
-      writeAgentOutputEvent: (event) => this.dbos.writeStream(AGENT_OUTPUT_STREAM_KEY, event),
+      registerAgentOutputStream: this.runService.registerAgentOutputStream.bind(this.runService),
+      writeAgentOutputEvent: (event) => this.dbos.writeStream(agentOutputStreamKey(event.attemptId), event),
     };
 
     this.runStepFn = this.dbos.registerStep(

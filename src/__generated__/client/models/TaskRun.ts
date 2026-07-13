@@ -689,10 +689,6 @@ export type IntFieldUpdateOperationsInput = {
   divide?: number
 }
 
-export type NullableStringFieldUpdateOperationsInput = {
-  set?: string | null
-}
-
 export type TaskRunCreateNestedOneWithoutTasksInput = {
   create?: Prisma.XOR<Prisma.TaskRunCreateWithoutTasksInput, Prisma.TaskRunUncheckedCreateWithoutTasksInput>
   connectOrCreate?: Prisma.TaskRunCreateOrConnectWithoutTasksInput

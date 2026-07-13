@@ -2,10 +2,12 @@ import { open, readdir, readFile, lstat, realpath } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { isAbsolute, join, relative, resolve, win32 } from 'node:path';
 import { TextDecoder } from 'node:util';
+import { fnv1a64Hex } from '../control-plane/steps.js';
 import { redactTokens } from '../runners/gh-identity.js';
 import {
   AGENT_ACTIVITY_EVENT_KEY,
-  AGENT_OUTPUT_STREAM_KEY,
+  agentOutputStreamKey,
+  type AgentOutputStreamRegistration,
   type AgentActivitySnapshot,
   type AgentActivityStatus,
   AgentObservabilityError,
@@ -23,6 +25,8 @@ import {
 export type AgentObservabilityServiceOptions = {
   artifactRoot: string;
   runExists?: (runId: string) => Promise<boolean> | boolean;
+  listAgentOutputStreamRegistrations?: (runId: string) => Promise<AgentOutputStreamRegistration[]>;
+  runStatus?: (runId: string) => Promise<string | undefined>;
   dbos?: AgentObservabilityDbos;
   idleThresholdMs?: number;
   now?: () => number;
@@ -64,6 +68,8 @@ const MAX_STREAM_EVENT_LIMIT = 1_000;
 const DEFAULT_STREAM_READ_TIMEOUT_MS = 250;
 const DEFAULT_IDLE_THRESHOLD_MS = 120_000;
 const MAX_STREAM_ACTIVITY_SCAN_EVENTS = 10_000;
+const MAX_REGISTRATIONS = 64;
+const FANIN_CURSOR_VERSION = 1;
 const SAFE_CURSOR_RE = /^[A-Za-z0-9_.:-]+$/;
 const OUTPUT_EVENT_KINDS = new Set<AgentOutputEvent['kind']>(['activity', 'output', 'parsed_event', 'status']);
 const ACTIVITY_STATUSES = new Set<AgentActivityStatus>([
@@ -133,6 +139,8 @@ type ActivitySnapshotFields = {
 export class AgentObservabilityService {
   private readonly artifactRoot: string;
   private readonly runExists?: (runId: string) => Promise<boolean> | boolean;
+  private readonly listRegistrations?: (runId: string) => Promise<AgentOutputStreamRegistration[]>;
+  private readonly runStatus?: (runId: string) => Promise<string | undefined>;
   private readonly dbos?: AgentObservabilityDbos;
   private readonly idleThresholdMs: number;
   private readonly now: () => number;
@@ -140,6 +148,8 @@ export class AgentObservabilityService {
   constructor(options: AgentObservabilityServiceOptions) {
     this.artifactRoot = resolve(options.artifactRoot);
     this.runExists = options.runExists;
+    this.listRegistrations = options.listAgentOutputStreamRegistrations;
+    this.runStatus = options.runStatus;
     this.dbos = options.dbos;
     this.idleThresholdMs = validateIdleThreshold(options.idleThresholdMs);
     this.now = options.now ?? (() => Date.now());
@@ -173,22 +183,48 @@ export class AgentObservabilityService {
       return { runId: safeRunId, events: [], cursorExpired: cursor !== undefined };
     }
 
-    const generator = this.dbos.readStream<AgentOutputEvent>(safeRunId, AGENT_OUTPUT_STREAM_KEY);
-    return withGeneratorCleanup(generator, async () => {
-      const page = await readBoundedOutputEvents({
-        generator,
-        runId: safeRunId,
-        cursor,
-        limit,
-        timeoutMs,
-      });
-      return {
-        runId: safeRunId,
-        events: page.events,
-        nextCursor: page.events.at(-1)?.cursor,
-        cursorExpired: hasExpiredCursor(cursor, page.cursorFound),
-      };
-    });
+    if (!this.listRegistrations) throw new AgentObservabilityError('DBOS_STREAM_UNAVAILABLE', 'agent output registration discovery is not configured');
+    const registrations = await this.listRegistrations(safeRunId);
+    if (registrations.length > MAX_REGISTRATIONS) {
+      throw new AgentObservabilityError('OBSERVABILITY_CAPACITY_EXCEEDED', 'agent output observability registration capacity exceeded');
+    }
+    const state = decodeFanInCursor(cursor, safeRunId, registrations);
+    let streams = registrations.map((registration, index) => new FiniteFanInStream(
+      safeRunId,
+      registration,
+      this.dbos!.readStream<AgentOutputEvent>(safeRunId, agentOutputStreamKey(registration.attemptId)),
+      state.slots[index]!.attemptSeq,
+      timeoutMs,
+    ));
+    const allStreams = streams;
+    const events: AgentOutputEvent[] = [];
+    try {
+      while (events.length < limit && streams.length > 0) {
+        const active = streams.slice(0, limit - events.length);
+        const results = await Promise.all(active.map((stream) => stream.next()));
+        const round: AgentOutputEvent[] = [];
+        const exhausted = new Set<FiniteFanInStream>();
+        for (const [index, event] of results.entries()) {
+          if (event) round.push(event);
+          else exhausted.add(active[index]!);
+        }
+        if (exhausted.size > 0) streams = streams.filter((stream) => !exhausted.has(stream));
+        if (round.length === 0) break;
+        for (const event of round) {
+          if (events.length >= limit) break;
+          const index = registrations.findIndex((registration) => registration.attemptId === event.attemptId);
+          if (index === -1) throw validationFailure('agent output event does not belong to a registered stream');
+          const slot = state.slots[index]!;
+          const nextState = { attemptSeq: event.attemptSeq!, terminal: slot.terminal || isTerminalStatus(event.statusHint) };
+          state.slots[index] = nextState;
+          events.push({ ...event, cursor: encodeFanInCursor(safeRunId, registrations, state.slots) });
+        }
+      }
+    } finally {
+      allStreams.forEach((stream) => stream.close());
+    }
+    const nextCursor = encodeFanInCursor(safeRunId, registrations, state.slots);
+    return { runId: safeRunId, events, nextCursor: events.length > 0 || cursor !== undefined || registrations.length > 0 ? nextCursor : undefined, cursorExpired: false };
   }
 
   async *watchAgentOutput(input: WatchAgentOutputInput): AsyncGenerator<AgentOutputEvent, void, unknown> {
@@ -197,25 +233,73 @@ export class AgentObservabilityService {
     if (!this.dbos) {
       throw new AgentObservabilityError('DBOS_STREAM_UNAVAILABLE', 'DBOS stream reader is not configured');
     }
-    let cursorFound = cursor === undefined;
-    let scannedBeforeCursor = 0;
-    for await (const raw of this.dbos.readStream<AgentOutputEvent>(safeRunId, AGENT_OUTPUT_STREAM_KEY)) {
-      if (!cursorFound) scannedBeforeCursor += 1;
-      const event = normalizeOutputEvent(safeRunId, raw);
-      if (!event) {
-        if (scannedBeforeCursor >= MAX_STREAM_EVENT_LIMIT) throw cursorExpiredError();
-        continue;
+    await this.assertRunExists(safeRunId);
+    if (!this.listRegistrations) throw new AgentObservabilityError('DBOS_STREAM_UNAVAILABLE', 'agent output registration discovery is not configured');
+    let registrations = await this.listRegistrations(safeRunId);
+    if (registrations.length > MAX_REGISTRATIONS) throw new AgentObservabilityError('OBSERVABILITY_CAPACITY_EXCEEDED', 'agent output observability registration capacity exceeded');
+    const state = decodeFanInCursor(cursor, safeRunId, registrations);
+    const streams = new Map<string, WatchFanInStream>();
+    const exhausted = new Set<string>();
+    let terminalSeen = false;
+    let emptyAfterTerminal = false;
+    let discoveredAt = 0;
+    try {
+      for (;;) {
+        const now = this.now();
+        if (now - discoveredAt >= DEFAULT_STREAM_READ_TIMEOUT_MS) {
+          discoveredAt = now;
+          const discovered = await this.listRegistrations(safeRunId);
+          if (discovered.length > MAX_REGISTRATIONS) throw new AgentObservabilityError('OBSERVABILITY_CAPACITY_EXCEEDED', 'agent output observability registration capacity exceeded');
+          for (let index = 0; index < discovered.length; index++) {
+            const registration = discovered[index]!;
+            if (streams.has(registration.attemptId) || exhausted.has(registration.attemptId)) continue;
+            const slot = state.slots[index] ?? { attemptSeq: 0, terminal: false };
+            if (index === state.slots.length) state.slots.push(slot);
+            streams.set(registration.attemptId, new WatchFanInStream(
+              safeRunId,
+              registration,
+              this.dbos!.readStream<AgentOutputEvent>(safeRunId, agentOutputStreamKey(registration.attemptId)),
+              slot.attemptSeq,
+              DEFAULT_STREAM_READ_TIMEOUT_MS,
+            ));
+          }
+          registrations = discovered;
+        }
+        const pending = [...streams.values()].filter((stream) => stream.active).map((stream) => stream.next());
+        const result = await Promise.race([
+          ...pending,
+          new Promise<typeof WATCH_TIMEOUT>((resolve) => setTimeout(() => resolve(WATCH_TIMEOUT), DEFAULT_STREAM_READ_TIMEOUT_MS)),
+        ]);
+        if (result !== WATCH_TIMEOUT) {
+          const { stream, event } = result;
+          if (!event) {
+            streams.delete(stream.attemptId);
+            exhausted.add(stream.attemptId);
+            stream.close();
+            continue;
+          }
+          stream.acknowledge(event);
+          const index = registrations.findIndex((registration) => registration.attemptId === stream.attemptId);
+          if (index === -1) throw validationFailure('agent output event does not belong to a registered stream');
+          const slot = state.slots[index] ?? { attemptSeq: 0, terminal: false };
+          const nextState = { attemptSeq: event.attemptSeq!, terminal: slot.terminal || isTerminalStatus(event.statusHint) };
+          state.slots[index] = nextState;
+          yield { ...event, cursor: encodeFanInCursor(safeRunId, registrations, state.slots) };
+          emptyAfterTerminal = false;
+          continue;
+        }
+        if (this.runStatus) {
+          const status = await this.runStatus(safeRunId);
+          // Persisted task-run writes use paused for the public blocked state.
+          terminalSeen ||= status === 'completed' || status === 'failed' || status === 'blocked' || status === 'paused' || status === 'cancelled';
+        }
+        if (terminalSeen) {
+          if (emptyAfterTerminal) return;
+          emptyAfterTerminal = true;
+        }
       }
-      if (cursorFound) {
-        yield event;
-        continue;
-      }
-      cursorFound = event.cursor === cursor;
-      if (cursorFound) continue;
-      if (scannedBeforeCursor >= MAX_STREAM_EVENT_LIMIT) throw cursorExpiredError();
-    }
-    if (hasExpiredCursor(cursor, cursorFound)) {
-      throw cursorExpiredError();
+    } finally {
+      streams.forEach((stream) => stream.close());
     }
   }
 
@@ -350,21 +434,33 @@ export class AgentObservabilityService {
   }
 
   private async readLatestAgentActivityFromStream(runId: string): Promise<AgentRunActivity | null> {
-    if (!this.dbos) return null;
-    const generator = this.dbos.readStream<AgentOutputEvent>(runId, AGENT_OUTPUT_STREAM_KEY);
     const snapshots = new Map<string, AgentActivitySnapshot>();
+    if (!this.dbos || !this.listRegistrations) return null;
     let scanned = 0;
-    await withGeneratorCleanup(generator, async () => {
-      while (scanned < MAX_STREAM_ACTIVITY_SCAN_EVENTS) {
-        const next = await nextWithTimeout(generator, DEFAULT_STREAM_READ_TIMEOUT_MS);
-        if (next === 'timeout' || next.done) break;
-        scanned += 1;
-        const event = normalizeOutputEvent(runId, next.value);
-        if (event?.snapshot) snapshots.set(event.attemptId, event.snapshot);
+    let registrations: AgentOutputStreamRegistration[];
+    try {
+      registrations = await this.listRegistrations(runId);
+      if (registrations.length > MAX_REGISTRATIONS) return null;
+      for (const registration of registrations) {
+        const generator = this.dbos.readStream<AgentOutputEvent>(runId, agentOutputStreamKey(registration.attemptId));
+        await withGeneratorCleanup(generator, async () => {
+          let previousSeq = 0;
+          while (scanned < MAX_STREAM_ACTIVITY_SCAN_EVENTS) {
+            const next = await nextWithTimeout(generator, DEFAULT_STREAM_READ_TIMEOUT_MS);
+            if (next === 'timeout' || next.done) break;
+            scanned += 1;
+            const event = normalizeStrictStreamEvent(runId, registration, next.value, previousSeq);
+            previousSeq = event.attemptSeq!;
+            if (event.snapshot) snapshots.set(event.attemptId, event.snapshot);
+          }
+        });
+        if (scanned >= MAX_STREAM_ACTIVITY_SCAN_EVENTS) return null;
       }
-    });
-    if (scanned >= MAX_STREAM_ACTIVITY_SCAN_EVENTS) return null;
-    if (snapshots.size === 0) return null;
+    } catch (error) {
+      if (error instanceof AgentObservabilityError && (error.code === 'OBSERVABILITY_CAPACITY_EXCEEDED' || error.code === 'STREAM_CURSOR_EXPIRED' || error.code === 'VALIDATION_FAILURE')) return null;
+      throw error;
+    }
+    if (scanned >= MAX_STREAM_ACTIVITY_SCAN_EVENTS || snapshots.size === 0) return null;
     return this.buildRunActivity(runId, [...snapshots.values()]);
   }
 
@@ -567,83 +663,205 @@ function validateCursor(value: string): string {
   return value;
 }
 
-type BoundedOutputEventsInput = {
-  generator: AsyncGenerator<AgentOutputEvent, void, unknown>;
-  runId: string;
-  cursor?: string;
-  limit: number;
-  timeoutMs: number;
-};
-
-type BoundedOutputEventsResult = {
-  events: AgentOutputEvent[];
-  cursorFound: boolean;
-};
-
-async function readBoundedOutputEvents(input: BoundedOutputEventsInput): Promise<BoundedOutputEventsResult> {
-  const events: AgentOutputEvent[] = [];
-  let cursorFound = input.cursor === undefined;
-  let scannedBeforeCursor = 0;
-
-  while (events.length < input.limit) {
-    const next = await nextWithTimeout(input.generator, input.timeoutMs);
-    if (next === 'timeout' || next.done) break;
-    const state = processOutputEventCandidate(input.runId, input.cursor, next.value, cursorFound, scannedBeforeCursor);
-    cursorFound = state.cursorFound;
-    scannedBeforeCursor = state.scannedBeforeCursor;
-    if (state.event) events.push(state.event);
-    if (state.stop) break;
-  }
-
-  return { events, cursorFound };
-}
-
-type OutputEventCandidateState = {
-  event?: AgentOutputEvent;
-  cursorFound: boolean;
-  scannedBeforeCursor: number;
-  stop: boolean;
-};
-
-function processOutputEventCandidate(
-  runId: string,
-  cursor: string | undefined,
-  value: unknown,
-  cursorFound: boolean,
-  scannedBeforeCursor: number,
-): OutputEventCandidateState {
-  const nextScanned = cursorFound ? scannedBeforeCursor : scannedBeforeCursor + 1;
-  const event = normalizeOutputEvent(runId, value);
-  if (event) {
-    if (cursorFound) return { event, cursorFound, scannedBeforeCursor: nextScanned, stop: false };
-
-    const found = event.cursor === cursor;
-    return {
-      cursorFound: found,
-      scannedBeforeCursor: nextScanned,
-      stop: cursorMissedScanLimit(found, nextScanned),
-    };
-  }
-
-  return {
-    cursorFound,
-    scannedBeforeCursor: nextScanned,
-    stop: cursor !== undefined && cursorFound === false && nextScanned >= MAX_STREAM_EVENT_LIMIT,
-  };
-}
-
-function hasExpiredCursor(cursor: string | undefined, cursorFound: boolean): boolean {
-  return typeof cursor === 'string' && cursorFound === false;
-}
-
 function cursorExpiredError(): AgentObservabilityError {
   return new AgentObservabilityError('STREAM_CURSOR_EXPIRED', 'stream cursor was not found before the scan limit');
 }
 
-function cursorMissedScanLimit(cursorFound: boolean, scannedBeforeCursor: number): boolean {
-  if (cursorFound) return false;
-  return scannedBeforeCursor >= MAX_STREAM_EVENT_LIMIT;
+type FanInSlot = { attemptSeq: number; terminal: boolean };
+type FanInState = { slots: FanInSlot[] };
+
+function isTerminalStatus(status: AgentActivityStatus | undefined): boolean {
+  return status === 'exited' || status === 'failed' || status === 'timed_out' || status === 'cancelled';
 }
+
+function digestHex(value: string): Buffer {
+  return Buffer.from(fnv1a64Hex(value), 'hex');
+}
+
+function fanInPrefix(registrations: AgentOutputStreamRegistration[]): string {
+  return registrations.map((registration) => registration.attemptId).join('|');
+}
+
+function encodeFanInCursor(runId: string, registrations: AgentOutputStreamRegistration[], slots: FanInSlot[]): string {
+  const buffer = Buffer.alloc(1 + 8 + 8 + 1 + slots.length * 5);
+  let offset = 0;
+  buffer.writeUInt8(FANIN_CURSOR_VERSION, offset++);
+  digestHex(runId).copy(buffer, offset); offset += 8;
+  digestHex(fanInPrefix(registrations)).copy(buffer, offset); offset += 8;
+  buffer.writeUInt8(slots.length, offset++);
+  for (const slot of slots) {
+    buffer.writeUInt32BE(slot.attemptSeq, offset); offset += 4;
+    buffer.writeUInt8(slot.terminal ? 1 : 0, offset++);
+  }
+  return buffer.toString('base64url');
+}
+
+function decodeFanInCursor(cursor: string | undefined, runId: string, registrations: AgentOutputStreamRegistration[]): FanInState {
+  if (cursor === undefined) return { slots: registrations.map(() => ({ attemptSeq: 0, terminal: false })) };
+  let buffer: Buffer;
+  try { buffer = Buffer.from(cursor, 'base64url'); } catch { throw validationFailure('invalid cursor encoding'); }
+  if (buffer.length < 18 || buffer.readUInt8(0) !== FANIN_CURSOR_VERSION) throw validationFailure('invalid cursor version');
+  const count = buffer.readUInt8(17);
+  if (count > MAX_REGISTRATIONS || buffer.length !== 18 + count * 5) throw validationFailure('invalid cursor slot values');
+  if (!digestHex(runId).equals(buffer.subarray(1, 9))) throw validationFailure('cursor is bound to another run');
+  const prefix = registrations.slice(0, count);
+  if (registrations.length < count || !digestHex(fanInPrefix(prefix)).equals(buffer.subarray(9, 17))) {
+    throw new AgentObservabilityError('STREAM_CURSOR_EXPIRED', 'stream cursor prefix is no longer available');
+  }
+  const slots: FanInSlot[] = registrations.map(() => ({ attemptSeq: 0, terminal: false }));
+  let offset = 18;
+  for (let index = 0; index < count; index++) {
+    const attemptSeq = buffer.readUInt32BE(offset); offset += 4;
+    const terminal = buffer.readUInt8(offset++);
+    if (terminal > 1) throw validationFailure('invalid cursor terminal bit');
+    slots[index] = { attemptSeq, terminal: terminal === 1 };
+  }
+  return { slots };
+}
+
+function normalizeStrictStreamEvent(
+  runId: string,
+  registration: AgentOutputStreamRegistration,
+  value: unknown,
+  previousSeq: number,
+): AgentOutputEvent {
+  const event = normalizeOutputEvent(runId, value);
+  if (!event || event.attemptId !== registration.attemptId || event.attemptSeq === undefined ||
+      event.attemptSeq <= previousSeq) throw validationFailure('malformed or reordered agent output stream event');
+  return event;
+}
+
+class FiniteFanInStream {
+  private scanned = 0;
+  private previousSeq = 0;
+  private reachedCursor: boolean;
+  private progressedBeyondCursor = false;
+
+  constructor(
+    private readonly runId: string,
+    private readonly registration: AgentOutputStreamRegistration,
+    private readonly generator: AsyncGenerator<AgentOutputEvent, void, unknown>,
+    private readonly cursorSeq: number,
+    private readonly timeoutMs: number,
+  ) {
+    this.previousSeq = 0;
+    this.reachedCursor = cursorSeq === 0;
+  }
+
+  async next(): Promise<AgentOutputEvent | null> {
+    while (this.scanned < MAX_STREAM_EVENT_LIMIT) {
+      const result = await nextWithTimeout(this.generator, this.timeoutMs);
+      if (result === 'timeout' || result.done) {
+        if (this.cursorSeq > 0 && !this.reachedCursor) throw cursorExpiredError();
+        return null;
+      }
+      this.scanned += 1;
+      const event = normalizeStrictStreamEvent(this.runId, this.registration, result.value, this.previousSeq);
+      this.previousSeq = event.attemptSeq!;
+      if (!this.reachedCursor) {
+        if (event.attemptSeq! < this.cursorSeq) continue;
+        this.reachedCursor = true;
+        if (event.attemptSeq! === this.cursorSeq) continue;
+      }
+      this.progressedBeyondCursor = true;
+      return event;
+    }
+    if (this.cursorSeq > 0 && !this.progressedBeyondCursor) throw cursorExpiredError();
+    return null;
+  }
+
+  close(): void {
+    closeGeneratorBestEffort(this.generator);
+  }
+}
+
+class WatchFanInStream {
+  private pending?: Promise<AgentOutputEvent | null | typeof WATCH_SKIP>;
+  private pendingFailure?: unknown;
+  private ready?: AgentOutputEvent;
+  private scanned = 0;
+  private done = false;
+  private previousSeq = 0;
+  private reachedCursor: boolean;
+
+  constructor(
+    private readonly runId: string,
+    private readonly registration: AgentOutputStreamRegistration,
+    private readonly generator: AsyncGenerator<AgentOutputEvent, void, unknown>,
+    private readonly cursorSeq: number,
+    private readonly timeoutMs: number,
+  ) {
+    this.reachedCursor = cursorSeq === 0;
+  }
+
+  get attemptId(): string {
+    return this.registration.attemptId;
+  }
+
+  get active(): boolean {
+    return !this.done;
+  }
+
+  acknowledge(event: AgentOutputEvent): void {
+    if (this.ready === event) this.ready = undefined;
+  }
+
+  async next(): Promise<{ stream: WatchFanInStream; event?: AgentOutputEvent }> {
+    if (this.done) return { stream: this };
+    for (;;) {
+      if (this.ready) {
+        return { stream: this, event: this.ready };
+      }
+      const result = await this.nextResult();
+      if (result === null) {
+        this.done = true;
+        return { stream: this };
+      }
+      if (result === WATCH_SKIP) continue;
+      return { stream: this, event: result };
+    }
+  }
+
+  private nextResult(): Promise<AgentOutputEvent | null | typeof WATCH_SKIP> {
+    if (this.pendingFailure !== undefined) return Promise.reject(this.pendingFailure);
+    if (!this.pending) {
+      this.pending = this.generator.next().then((result) => {
+        if (result.done) {
+          if (!this.reachedCursor && this.cursorSeq > 0) throw cursorExpiredError();
+          return null;
+        }
+        this.scanned += 1;
+        if (this.scanned > MAX_STREAM_EVENT_LIMIT && !this.reachedCursor) throw cursorExpiredError();
+        const event = normalizeStrictStreamEvent(this.runId, this.registration, result.value, this.previousSeq);
+        this.previousSeq = event.attemptSeq!;
+        if (!this.reachedCursor) {
+          if (event.attemptSeq! < this.cursorSeq) return WATCH_SKIP;
+          this.reachedCursor = true;
+          if (event.attemptSeq! === this.cursorSeq) return WATCH_SKIP;
+        }
+        this.ready = event;
+        return event;
+      }, (error: unknown) => {
+        throw error;
+      }).then((result) => {
+        this.pending = undefined;
+        return result;
+      }, (error: unknown) => {
+        this.pending = undefined;
+        this.pendingFailure = error;
+        throw error;
+      });
+    }
+    return this.pending;
+  }
+
+  close(): void {
+    closeGeneratorBestEffort(this.generator);
+  }
+}
+
+const WATCH_SKIP = Symbol('watch skip');
+const WATCH_TIMEOUT = Symbol('watch timeout');
 
 async function nextWithTimeout<T>(
   generator: AsyncGenerator<T, void, unknown>,
@@ -676,17 +894,27 @@ async function withGeneratorCleanup<T>(
     primaryError = error;
   }
 
-  let cleanupError: unknown;
-  try {
-    await generator.return(undefined);
-  } catch (error) {
-    cleanupError = error;
-  }
+  closeGeneratorBestEffort(generator);
 
   if (primaryError !== undefined) throw primaryError;
-  if (cleanupError !== undefined) throw cleanupError;
   if (hasResult) return result as T;
   throw validationFailure('stream reader did not produce a result');
+}
+
+const GENERATOR_CLOSE_TIMEOUT_MS = 25;
+
+function closeGeneratorBestEffort(generator: AsyncGenerator<unknown, void, unknown>): void {
+  let closing: Promise<IteratorResult<unknown, void>> | undefined;
+  try {
+    closing = generator.return?.(undefined);
+  } catch {
+    return;
+  }
+  if (!closing) return;
+  void Promise.race([
+    closing,
+    new Promise<void>((resolve) => setTimeout(resolve, GENERATOR_CLOSE_TIMEOUT_MS)),
+  ]).catch(() => undefined);
 }
 
 function normalizeOutputEvent(runId: string, value: unknown): AgentOutputEvent | null {
