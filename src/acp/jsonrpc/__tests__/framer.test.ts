@@ -261,3 +261,11 @@ test('framer latches a failure originating from finish', () => {
   assert.throws(() => framer.push(encoder.encode('{}\n')), (error) => error === original);
   assert.throws(() => framer.finish(), (error) => error === original);
 });
+
+test('framer push and finish preserve their receiver when invoked detached', () => {
+  const framer = createJsonRpcFramer();
+  const { push, finish } = framer;
+
+  assert.deepEqual(push(encoder.encode('{"jsonrpc":"2.0","method":"detached","id":1}')), []);
+  assert.deepEqual(finish(), [{ jsonrpc: '2.0', method: 'detached', id: 1 }]);
+});

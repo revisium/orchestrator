@@ -46,15 +46,15 @@ class JsonRpcFramerImpl implements JsonRpcFramer {
     );
   }
 
-  push(chunk: Uint8Array): JsonRpcMessage[] {
+  readonly push = (chunk: Uint8Array): JsonRpcMessage[] => {
     return this.#run(() => {
       this.#account(chunk);
       this.#text += this.#decode(chunk, true);
       return this.#drainLines();
     });
-  }
+  };
 
-  finish(): JsonRpcMessage[] {
+  readonly finish = (): JsonRpcMessage[] => {
     return this.#run(() => {
       this.#text += this.#decode(new Uint8Array(), false);
       const messages = this.#drainLines();
@@ -64,7 +64,7 @@ class JsonRpcFramerImpl implements JsonRpcFramer {
       if (finalMessage) messages.push(finalMessage);
       return messages;
     });
-  }
+  };
 
   #ensureOpen(): void {
     if (this.#failure) throw this.#failure;
