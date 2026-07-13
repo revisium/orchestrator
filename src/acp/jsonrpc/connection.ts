@@ -1,4 +1,3 @@
-import type { AcpTransportWrite } from '../types/execution.js';
 import { JsonRpcProtocolError } from './errors.js';
 import {
   isJsonRpcNotification,
@@ -20,6 +19,8 @@ import type {
 export type JsonRpcServerRequestOutcome =
   | { kind: 'result'; value: JsonRpcValue }
   | { kind: 'error'; error: JsonRpcErrorObject };
+
+export type AcpTransportWrite = (chunk: Uint8Array) => Promise<void>;
 
 export type JsonRpcConnectionDeps = {
   write: AcpTransportWrite;
