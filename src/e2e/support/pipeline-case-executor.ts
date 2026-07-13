@@ -14,10 +14,8 @@ import { waitForGate, waitState } from "./drive.js";
 import { assertCaseExpectations } from "./pipeline-case-evidence.js";
 import {
   stubDefaultAgentProfile,
-  stubDefaultFullProfile,
   stubFixtureAgentProfile,
-  stubFixtureFullProfile,
-  stubFixtureIntegratorProfile,
+  stubFixturePipelineProfile,
   type E2eRunProfile,
 } from "./run-profiles.js";
 import {
@@ -65,9 +63,9 @@ function repoPath(
 
 function runProfile(profile: PipelineProfile, pipelineId: string): E2eRunProfile {
   if (profile === "default-agent") return stubDefaultAgentProfile(pipelineId);
-  if (profile === "default-full") return stubDefaultFullProfile(pipelineId);
-  if (profile === "fixture-full") return stubFixtureFullProfile(pipelineId);
-  if (profile === "fixture-integrator") return stubFixtureIntegratorProfile(pipelineId);
+  if (profile === "default-full") return stubDefaultAgentProfile(pipelineId);
+  if (profile === "fixture-full") return stubFixtureAgentProfile(pipelineId);
+  if (profile === "fixture-integrator") return stubFixturePipelineProfile(pipelineId);
   return stubFixtureAgentProfile(pipelineId);
 }
 

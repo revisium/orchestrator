@@ -1232,6 +1232,13 @@ test('claude-code runner: defaults command to "claude"', async () => {
   assert.equal(captured[0]?.command, 'claude');
 });
 
+test('claude-code runner: invokes the command pinned by the runner manifest', async () => {
+  const captured: ExecRequest[] = [];
+  const runner = createClaudeCodeRunner({ executor: fakeExecutor(ok(structuredTransport()), captured), resolveCwd: async () => '/w' });
+  await runner({ role: makeRole('architect'), binding: { ...BINDING, runner: { ...BINDING.runner, executionFields: { command: 'claude-pinned' } } }, context: 'ctx', attemptId: ATTEMPT_ID, step: BASE_STEP });
+  assert.equal(captured[0]?.command, 'claude-pinned');
+});
+
 // NOTE: per-STEP worktree lifecycle was removed in plan 0017 — the runner no longer owns worktree
 // create/release. Per-RUN worktree isolation is owned by the workflow adapter (see
 // data-driven-task.workflow.ts) and covered by git-worktree-manager.test.ts + the concurrency e2e.

@@ -235,6 +235,13 @@ test('codex runner: builds documented codex exec invocation and writes schema fi
   });
 });
 
+test('codex runner: invokes the command pinned by the runner manifest', async () => {
+  const captured: ExecRequest[] = [];
+  const runner = createCodexRunner({ executor: fakeExecutor(ok(jsonl({ type: 'turn.completed', usage: {}, final_output: finalResult() })), captured), resolveCwd: async () => '/w', artifactStore: createArtifactStore(mkdtempSync(join(tmpdir(), 'revo-codex-command-'))) });
+  await runner({ role: makeRole('developer'), binding: { ...BINDING, runner: { ...BINDING.runner, executionFields: { command: 'codex-pinned' } } }, context: 'ctx', attemptId: ATTEMPT_ID, step: BASE_STEP });
+  assert.equal(captured[0]?.command, 'codex-pinned');
+});
+
 test('codex runner: writes accepted verdicts into the output schema enum and prompt note', async () => {
   await withTempRoot(async (root) => {
     const captured: ExecRequest[] = [];

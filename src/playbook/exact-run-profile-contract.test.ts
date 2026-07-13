@@ -36,7 +36,7 @@ test('catalog and inline profile entry points accept the same exact binding shap
   }, 'runProfiles[0]'));
 });
 
-test('catalog profile validation exposes stable structural and semantic codes', () => {
+test('profile validation exposes stable structural and semantic codes', () => {
   assert.throws(
     () => assertValidInlineRunProfile({
       ...exactProfile,

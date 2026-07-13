@@ -73,7 +73,10 @@ test('run-profile contract requires exact agent fields and rejects model-level a
       ...profile,
       bindings: { slots: { 'role:developer': { accounts: { github: 'profile-bot' } } } },
     }), {
-      nodes: [{ id: 'developer', kind: 'agent', roleRef: 'role:developer' }],
+      nodes: [
+        { id: 'developer', kind: 'agent', roleRef: 'role:developer' },
+        { id: 'integrator', kind: 'script', scriptRef: 'script:integrator' },
+      ],
       roleDocuments: { developer: { roleDocumentId: 'role-doc-developer' } },
       runnerManifests: { codex: manifest },
     }),
@@ -100,6 +103,37 @@ test('run-profile contract uses canonical node slots before role slots and keeps
     scriptRef: 'script:integrator',
     accountAliases: { github: 'profile-bot' },
   }]);
+});
+
+test('execution plans normalize JSON business params and reject non-JSON values', () => {
+  const base = {
+    selection: { playbookId: 'pb', pipelineId: 'local-change', pipelineRowId: 'row', source: 'explicit' as const },
+    businessParams: { nested: { keep: true } },
+    profile: { source: 'inline' as const, profileHash: 'sha256:' + '0'.repeat(64) },
+    pipeline: { executableGraph: {}, graphDigest: 'sha256:' + '1'.repeat(64), materializerVersion: '1', policyVersion: '1', routeGates: [], executionPolicy: {} },
+    agentBindings: [],
+    scriptBindings: [],
+  };
+  const compiled = compileExecutionPlan({ ...base, businessParams: { nested: { keep: true } } });
+  assert.deepEqual(compiled.plan.businessParams, { nested: { keep: true } });
+  for (const value of [undefined, Number.NaN, Number.POSITIVE_INFINITY, 1n]) {
+    assert.throws(() => compileExecutionPlan({ ...base, businessParams: { nested: { value } } }), /must contain JSON values/);
+  }
+});
+
+test('runner manifest snapshots reject secret-bearing execution fields', () => {
+  const secretManifest = { ...manifestSnapshot, executionFields: { command: 'codex', apiToken: 'secret' } };
+  assert.throws(
+    () => resolveGraphBindings(validateRunProfile(profile), {
+      nodes: [
+        { id: 'developer', kind: 'agent', roleRef: 'role:developer' },
+        { id: 'integrator', kind: 'script', scriptRef: 'script:integrator' },
+      ],
+      roleDocuments: { developer: { roleDocumentId: 'role-doc-developer' } },
+      runnerManifests: { codex: { ...secretManifest, manifestDigest: runnerManifestDigest({ ...secretManifest, manifestDigest: '' }) } },
+    }),
+    (error: unknown) => (error as { code?: string; path?: string }).code === 'runner_manifest_unresolved' && (error as { path?: string }).path?.includes('apiToken') === true,
+  );
 });
 
 test('run-profile contract rejects unbound and non-obligation slots without fallback', () => {

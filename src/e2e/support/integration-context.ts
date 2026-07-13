@@ -24,7 +24,7 @@ import {
   type ExpectedGateResolution,
 } from './drive.js';
 import { DEFAULT_PLAYBOOK_ID, PLAYBOOK_ID, givenInstalledPlaybook } from './scenarios.js';
-import { stubDefaultFullProfile, stubFixtureAgentProfile } from './run-profiles.js';
+import { stubDefaultAgentProfile, stubFixtureAgentProfile } from './run-profiles.js';
 import { createTargetRepo, git, type TargetRepo, type TargetRepoState } from './git-target-repo.js';
 
 export type IntegrationGhScenario = GhScenario;
@@ -79,7 +79,7 @@ function integrationRepoPath(repo: 'workspace' | IntegrationTarget): string {
 }
 
 function integrationProfile(profile: IntegrationProfile | undefined, pipelineId: string) {
-  if (profile === 'default-full') return stubDefaultFullProfile();
+  if (profile === 'default-full') return stubDefaultAgentProfile();
   return stubFixtureAgentProfile(pipelineId);
 }
 

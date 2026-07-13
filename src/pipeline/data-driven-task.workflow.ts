@@ -43,7 +43,7 @@ import {
 } from '../pipeline-core/index.js';
 import type { AttemptResult } from '../worker/runner.js';
 import type { RouteDecision } from './route-contract.js';
-import { executionPlanFromRouteDecision } from './route-contract.js';
+import { executionPlanFromRouteDecision, scriptBindingForNode } from './route-contract.js';
 import type { ResolvedAgentBinding, ResolvedScriptBinding } from '../control-plane/run-profile-contract.js';
 import type {
   IntegratorInput,
@@ -981,11 +981,11 @@ function mergeOverrideEventPayload(result: MergeOverrideOutput): Record<string, 
   };
 }
 
-function scriptGithubAccount(
+export function scriptGithubAccount(
   decision: Extract<Decision, { type: 'invokeScript' }>,
   scriptBindings: ResolvedScriptBinding[] | undefined,
 ): string | undefined {
-  return scriptBindings?.find((binding) => binding.nodeId === decision.nodeId)?.accountAliases.github;
+  return scriptBindingForNode({ scriptBindings: scriptBindings ?? [] }, decision.nodeId).accountAliases.github;
 }
 
 export function buildSystemScriptRegistry(deps: ScriptRegistryDeps): Map<string, SystemScriptHandler> {

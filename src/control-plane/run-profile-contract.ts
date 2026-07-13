@@ -435,6 +435,7 @@ function normalizeManifest(
     constraints,
     executionFields: jsonObject(manifest.executionFields, `${path}.executionFields`, errorCode),
   };
+  secretFree(normalized.executionFields, `${path}.executionFields`, errorCode);
   if (!SHA256_DIGEST.test(normalized.manifestDigest)) {
     fail(errorCode, `${path}.manifestDigest`, 'must be a lowercase sha256 digest');
   }
@@ -542,8 +543,8 @@ export function resolveGraphBindings(
   for (const slot of Object.keys(slots)) {
     if (!consumed.has(slot)) fail('profile_slot_unknown', `/bindings/slots.${slot}`, 'does not identify a materialized executable obligation');
   }
-  agentBindings.sort((left, right) => left.nodeId.localeCompare(right.nodeId));
-  scriptBindings.sort((left, right) => left.nodeId.localeCompare(right.nodeId));
+  agentBindings.sort((left, right) => codeUnitCompare(left.nodeId, right.nodeId));
+  scriptBindings.sort((left, right) => codeUnitCompare(left.nodeId, right.nodeId));
   return { agentBindings, scriptBindings };
 }
 
@@ -553,11 +554,15 @@ function stableStringify(value: unknown): string {
     const record = value as Record<string, unknown>;
     return `{${Object.keys(record)
       .filter((key) => record[key] !== undefined)
-      .sort((left, right) => left.localeCompare(right))
+      .sort(codeUnitCompare)
       .map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`)
       .join(',')}}`;
   }
   return JSON.stringify(value);
+}
+
+function codeUnitCompare(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
 }
 
 function digest(value: unknown): string {
@@ -641,10 +646,11 @@ export function compileExecutionPlan(input: Omit<ExecutionPlan, 'schemaVersion' 
   if (!isRecord(input.businessParams)) {
     throw new RunProfileContractError('execution_plan_invalid', '/businessParams', 'businessParams must be an object');
   }
+  const businessParams = jsonObject(input.businessParams, '/businessParams', 'execution_plan_invalid');
   const base = {
     schemaVersion: EXECUTION_PLAN_SCHEMA_VERSION,
     selection: input.selection,
-    businessParams: input.businessParams,
+    businessParams,
     profile: input.profile,
     pipeline: input.pipeline,
     agentBindings: input.agentBindings,

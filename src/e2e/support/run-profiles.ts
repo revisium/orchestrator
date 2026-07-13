@@ -67,7 +67,7 @@ function stubProfile(
       provider: 'openai',
       modelId: 'gpt-5.6-luna',
       modelParams: {},
-      permissionMode: role === 'developer' ? 'workspace-write' : 'read-only',
+      permissionMode: role.startsWith('developer') ? 'workspace-write' : 'read-only',
     };
   }
   for (const nodeId of scriptNodes) {
@@ -89,19 +89,12 @@ export function stubDefaultAgentProfile(pipelineId = 'feature-development'): E2e
   return stubProfile(graph.roles, graph.scripts);
 }
 
-export function stubDefaultFullProfile(pipelineId = 'feature-development'): E2eRunProfile {
-  return stubDefaultAgentProfile(pipelineId);
-}
-
 export function stubFixtureAgentProfile(pipelineId = 'feature-development'): E2eRunProfile {
   const graph = FIXTURE_PIPELINE_BINDINGS[pipelineId] ?? { roles: FIXTURE_AGENT_ROLES, scripts: [] };
   return stubProfile(graph.roles, graph.scripts);
 }
 
-export function stubFixtureFullProfile(pipelineId = 'feature-development'): E2eRunProfile {
-  return stubFixtureAgentProfile(pipelineId);
-}
-
-export function stubFixtureIntegratorProfile(pipelineId = 'feature-pr-watch'): E2eRunProfile {
+/** Full materialized fixture profile, including every agent and script obligation for the pipeline. */
+export function stubFixturePipelineProfile(pipelineId = 'feature-pr-watch'): E2eRunProfile {
   return stubFixtureAgentProfile(pipelineId);
 }

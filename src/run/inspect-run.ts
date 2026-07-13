@@ -381,6 +381,12 @@ function fmtUsd(amount: number | null): string {
   return amount > 0 && amount < 0.01 ? `$${amount.toFixed(4)}` : `$${amount.toFixed(2)}`;
 }
 
+function fmtCost(amount: number | null, currency: string | null): string {
+  if (amount === null) return '?';
+  if (currency === 'USD' || currency === null) return fmtUsd(amount);
+  return amount > 0 && amount < 0.01 ? amount.toFixed(4) : amount.toFixed(2);
+}
+
 
 
 export function formatAttemptList(attempts: AttemptSummary[]): string {
@@ -389,7 +395,7 @@ export function formatAttemptList(attempts: AttemptSummary[]): string {
     const lines = [
       `attempt  ${a.attemptId}  step=${a.stepId}`,
       `  iter=${a.iteration}  status=${a.status}  verdict=${a.verdict || '-'}  runner=${a.runnerId || '-'} provider=${a.provider || '-'} model=${a.modelId || '-'}`,
-      `  tokens=${a.inputTokens ?? '?'}in/${a.outputTokens ?? '?'}out  cost=${fmtUsd(a.costAmount)} ${a.currency ?? ''}`.trimEnd() + `  duration=${a.durationMs}ms`,
+      `  tokens=${a.inputTokens ?? '?'}in/${a.outputTokens ?? '?'}out  cost=${fmtCost(a.costAmount, a.currency)}${a.currency ? ` ${a.currency}` : ''}  duration=${a.durationMs}ms`,
     ];
     if (a.artifactRef) lines.push(`  artifact ${a.artifactRef}`);
     if (a.outputSummary) lines.push(`  output   ${a.outputSummary}`);

@@ -616,6 +616,9 @@ test('formatAttemptList renders per-attempt verdict/model/tokens/cost/duration',
   assert.ok(out.includes('stdout tail'), 'has stdout tail');
   assert.ok(out.includes('stderr tail'), 'has stderr tail');
   assert.ok(out.includes('(1 attempt)'), 'has summary');
+
+  const eur = formatAttemptList([{ ...attempts[0], costAmount: 1, currency: 'EUR' }]);
+  assert.ok(eur.includes('cost=1.00 EUR'), 'non-USD costs must not use a dollar symbol');
 });
 
 test('formatAttemptList: empty list', async () => {

@@ -45,5 +45,5 @@ test('the real E2E command uses recursive discovery and preserves execution boun
   assert.match(command, /REVO_DEV_TASKS_POLL_INTERVAL_MS=25/);
 
   const ci = readFileSync(resolve(repositoryRoot, '.github/workflows/ci.yml'), 'utf8');
-  assert.match(ci, /REVO_E2E_FILE_CONCURRENCY:\s*2/);
+  assert.match(ci, /REVO_E2E_FILE_CONCURRENCY:\s*1/);
 });

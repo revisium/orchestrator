@@ -343,7 +343,7 @@ test("pipeline context rejects a registered attachment bound to another profile 
         given: {
           repo: "workspace",
           playbook: "default",
-          profileId: "claude-opus-sonnet",
+          profileId: "claude-opus-4-8-sonnet-4-6",
           developerWrite: false,
         },
         when: [],
@@ -511,13 +511,14 @@ test("pipeline context rejects every graph presentation drift before mutation", 
 });
 
 test("pipeline context rejects Stage B route template and provenance drift before lifecycle mutation", async () => {
+  const validRoute = testRoute();
   const routes = [
     {
-      ...testRoute(),
-      projection: { ...testRoute().projection, materializedTemplateHash: "wrong-hash" },
+      ...validRoute,
+      projection: { ...validRoute.projection, materializedTemplateHash: "wrong-hash" },
     },
     {
-      ...testRoute(),
+      ...validRoute,
       projection: {
         ...testRoute().projection,
         profileSource: "stored" as const,

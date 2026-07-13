@@ -299,7 +299,7 @@ function unit(
 }
 
 const SINGLE_REVIEW_PROFILE_TAGS = [
-  profileSignature('claude-opus-sonnet', 'single-review'),
+  profileSignature('claude-opus-4-8-sonnet-4-6', 'single-review'),
   profileSignature('codex-gpt-5-6-luna', 'single-review'),
 ] as const;
 
@@ -320,7 +320,7 @@ const ANALYSIS_ONLY_PROFILE_TAGS = [
 
 const FEATURE_CLAUDE_STANDARD_MATERIALIZED = {
   pipelineId: 'feature-development',
-  profileId: 'claude-opus-sonnet',
+  profileId: 'claude-opus-4-8-sonnet-4-6',
 } as const;
 const FEATURE_CODEX_STANDARD_MATERIALIZED = {
   pipelineId: 'feature-development',
@@ -689,7 +689,7 @@ const PIPELINE_COVERAGE_OWNERSHIP: readonly PipelineCoverageOwnershipDeclaration
     ...nodeCatches(['cleanupWorktree']),
   ]),
   unit('src/control-plane/run-profiles.test.ts', [SINGLE_REVIEW_PROFILE_TAGS[0]], [SINGLE_REVIEW_PROFILE_TAGS[0]], [
-    { pipelineId: 'feature-development', profileId: 'claude-opus-sonnet' },
+    { pipelineId: 'feature-development', profileId: 'claude-opus-4-8-sonnet-4-6' },
   ]),
   unit('src/control-plane/run-profiles.test.ts', [CONSENSUS_PROFILE_TAGS[1]], [CONSENSUS_PROFILE_TAGS[1]], [
     { pipelineId: 'feature-development', profileId: 'claude-opus-4-8-codex-gpt-5-6-luna-consensus' },

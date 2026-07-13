@@ -186,6 +186,9 @@ test('runs query handlers delegate and shape run data', async () => {
   const attempts = await new GetRunAttemptsHandler(api).execute(new GetRunAttemptsQuery({ runId: 'run_1' }));
   assert.equal(attempts.edges[0]?.node.id, 'attempt_1');
   assert.equal(attempts.edges[0]?.node.currency, 'USD');
+  assert.equal(attempts.edges[0]?.node.runnerId, 'codex');
+  assert.equal(attempts.edges[0]?.node.provider, 'openai');
+  assert.equal(attempts.edges[0]?.node.modelId, 'gpt-test');
   const activity = await new GetAgentActivityHandler(api).execute(new GetAgentActivityQuery({ runId: 'run_1' }));
   assert.equal(activity?.attempts[0]?.lastStream, 'agent_jsonl');
   assert.equal(activity?.latestActivityAt.toISOString(), '2026-06-20T10:00:10.000Z');

@@ -155,7 +155,8 @@ test('registry: script:integrator uses real fn without runner binding', async ()
   const registry = buildSystemScriptRegistry(deps);
   const handler = registry.get('script:integrator')!;
 
-  const result = await handler({ runId: RUN_ID, decision: makeDecision('script:integrator'), ctx: CTX, bindingByNode: new Map(), stepKey: 'integrator', inputs: {} });
+  const decision = makeDecision('script:integrator');
+  const result = await handler({ runId: RUN_ID, decision, ctx: CTX, scriptBindings: [scriptBinding(decision.nodeId, decision.scriptRef)], bindingByNode: new Map(), stepKey: 'integrator', inputs: {} });
 
   assert.ok(realCalled, 'real integrateFn was invoked');
   assert.equal(result.outcome, 'ok');
@@ -190,7 +191,8 @@ test('registry: script:integrator emits foreign_pr_adopted for foreign noop adop
   const handler = registry.get('script:integrator')!;
   const bindings = makeBindings();
 
-  const result = await handler({ runId: RUN_ID, decision: makeDecision('script:integrator'), ctx: CTX, bindingByNode: bindings, stepKey: 'integrator', inputs: {} });
+  const decision = makeDecision('script:integrator');
+  const result = await handler({ runId: RUN_ID, decision, ctx: CTX, scriptBindings: [scriptBinding(decision.nodeId, decision.scriptRef)], bindingByNode: bindings, stepKey: 'integrator', inputs: {} });
 
   assert.equal(result.outcome, 'ok');
   assert.equal(events.length, 1);
@@ -217,7 +219,8 @@ test('registry: script:integrator does not switch to stub through runner binding
   const handler = registry.get('script:integrator')!;
   const bindings = makeBindings();
 
-  const result = await handler({ runId: RUN_ID, decision: makeDecision('script:integrator'), ctx: CTX, bindingByNode: bindings, stepKey: 'integrator', inputs: {} });
+  const decision = makeDecision('script:integrator');
+  const result = await handler({ runId: RUN_ID, decision, ctx: CTX, scriptBindings: [scriptBinding(decision.nodeId, decision.scriptRef)], bindingByNode: bindings, stepKey: 'integrator', inputs: {} });
 
   assert.ok(realCalled, 'real integrateFn was invoked');
   assert.equal(result.outcome, 'ok');
@@ -326,7 +329,8 @@ test('registry: script:integrator needsHuman → pipeline_blocked at stepKey pip
   const handler = registry.get('script:integrator')!;
   const bindings = makeBindings();
 
-  const result = await handler({ runId: RUN_ID, decision: makeDecision('script:integrator', 'intNode'), ctx: CTX, bindingByNode: bindings, stepKey: 'integrator', inputs: {} });
+  const decision = makeDecision('script:integrator', 'intNode');
+  const result = await handler({ runId: RUN_ID, decision, ctx: CTX, scriptBindings: [scriptBinding(decision.nodeId, decision.scriptRef)], bindingByNode: bindings, stepKey: 'integrator', inputs: {} });
 
   assert.equal(result.outcome, 'blocked');
   assert.equal(events.length, 1);
@@ -345,7 +349,8 @@ test('registry: script:integrator throwing fn → step_failed at node stepKey �
   const handler = registry.get('script:integrator')!;
   const bindings = makeBindings();
 
-  const result = await handler({ runId: RUN_ID, decision: makeDecision('script:integrator'), ctx: CTX, bindingByNode: bindings, stepKey: 'integrator', inputs: {} });
+  const decision = makeDecision('script:integrator');
+  const result = await handler({ runId: RUN_ID, decision, ctx: CTX, scriptBindings: [scriptBinding(decision.nodeId, decision.scriptRef)], bindingByNode: bindings, stepKey: 'integrator', inputs: {} });
 
   assert.equal(result.outcome, 'failed');
   assert.equal(events.length, 1);
@@ -369,7 +374,8 @@ test('registry: script:confirmMerge success emits merge_confirmed with correct s
   const handler = registry.get('script:confirmMerge')!;
   const bindings = makeBindings();
 
-  const result = await handler({ runId: RUN_ID, decision: makeDecision('script:confirmMerge'), ctx: CTX, bindingByNode: bindings, stepKey: 'confirmMerge', inputs: {} });
+  const decision = makeDecision('script:confirmMerge');
+  const result = await handler({ runId: RUN_ID, decision, ctx: CTX, scriptBindings: [scriptBinding(decision.nodeId, decision.scriptRef)], bindingByNode: bindings, stepKey: 'confirmMerge', inputs: {} });
 
   assert.equal(result.outcome, 'ok');
   assert.equal(events[0].type, 'merge_confirmed');
@@ -390,7 +396,8 @@ test('registry: script:confirmMerge needsHuman → pipeline_blocked with reason=
   const handler = registry.get('script:confirmMerge')!;
   const bindings = makeBindings();
 
-  const result = await handler({ runId: RUN_ID, decision: makeDecision('script:confirmMerge', 'cmNode'), ctx: CTX, bindingByNode: bindings, stepKey: 'confirmMerge', inputs: {} });
+  const decision = makeDecision('script:confirmMerge', 'cmNode');
+  const result = await handler({ runId: RUN_ID, decision, ctx: CTX, scriptBindings: [scriptBinding(decision.nodeId, decision.scriptRef)], bindingByNode: bindings, stepKey: 'confirmMerge', inputs: {} });
 
   assert.equal(result.outcome, 'blocked');
   const payload = events[0].payload as Record<string, unknown>;
@@ -412,7 +419,8 @@ test('registry: script:pollPr propagates verdict from PrFeedback', async () => {
   const handler = registry.get('script:pollPr')!;
   const bindings = makeBindings();
 
-  const result = await handler({ runId: RUN_ID, decision: makeDecision('script:pollPr'), ctx: CTX, bindingByNode: bindings, stepKey: 'pollPr', inputs: {} });
+  const decision = makeDecision('script:pollPr');
+  const result = await handler({ runId: RUN_ID, decision, ctx: CTX, scriptBindings: [scriptBinding(decision.nodeId, decision.scriptRef)], bindingByNode: bindings, stepKey: 'pollPr', inputs: {} });
 
   assert.equal(result.outcome, 'ok');
   assert.equal((result as { outcome: 'ok'; verdict?: string }).verdict, 'ci_changes');
@@ -433,7 +441,8 @@ test('registry: script:pollPr needsHuman → pipeline_blocked with reason=poll-p
   const handler = registry.get('script:pollPr')!;
   const bindings = makeBindings();
 
-  const result = await handler({ runId: RUN_ID, decision: makeDecision('script:pollPr', 'ppNode'), ctx: CTX, bindingByNode: bindings, stepKey: 'pollPr', inputs: {} });
+  const decision = makeDecision('script:pollPr', 'ppNode');
+  const result = await handler({ runId: RUN_ID, decision, ctx: CTX, scriptBindings: [scriptBinding(decision.nodeId, decision.scriptRef)], bindingByNode: bindings, stepKey: 'pollPr', inputs: {} });
 
   assert.equal(result.outcome, 'blocked');
   assert.equal(events[0].stepKey, 'pipeline');
@@ -476,7 +485,8 @@ test('registry: script:overrideMerge accepted event preserves normalized audit f
   const handler = registry.get('script:overrideMerge')!;
   const bindings = makeBindings();
 
-  const result = await handler({ runId: RUN_ID, decision: makeDecision('script:overrideMerge'), ctx: CTX, bindingByNode: bindings, stepKey: 'overrideMerge', inputs: {} });
+  const decision = makeDecision('script:overrideMerge');
+  const result = await handler({ runId: RUN_ID, decision, ctx: CTX, scriptBindings: [scriptBinding(decision.nodeId, decision.scriptRef)], bindingByNode: bindings, stepKey: 'overrideMerge', inputs: {} });
 
   assert.equal(result.outcome, 'ok');
   assert.equal(events[0].type, 'threads_responded');
@@ -528,7 +538,8 @@ test('registry: script:overrideMerge refused event preserves audit fields and re
   const handler = registry.get('script:overrideMerge')!;
   const bindings = makeBindings();
 
-  const result = await handler({ runId: RUN_ID, decision: makeDecision('script:overrideMerge'), ctx: CTX, bindingByNode: bindings, stepKey: 'overrideMerge', inputs: {} });
+  const decision = makeDecision('script:overrideMerge');
+  const result = await handler({ runId: RUN_ID, decision, ctx: CTX, scriptBindings: [scriptBinding(decision.nodeId, decision.scriptRef)], bindingByNode: bindings, stepKey: 'overrideMerge', inputs: {} });
 
   assert.equal(result.outcome, 'ok');
   assert.equal(events[0].type, 'merge_override_refused');
@@ -561,7 +572,8 @@ test('registry: script:respondThreads success emits threads_responded with point
   const handler = registry.get('script:respondThreads')!;
   const bindings = makeBindings();
 
-  const result = await handler({ runId: RUN_ID, decision: makeDecision('script:respondThreads'), ctx: CTX, bindingByNode: bindings, stepKey: 'respondThreads', inputs: {} });
+  const decision = makeDecision('script:respondThreads');
+  const result = await handler({ runId: RUN_ID, decision, ctx: CTX, scriptBindings: [scriptBinding(decision.nodeId, decision.scriptRef)], bindingByNode: bindings, stepKey: 'respondThreads', inputs: {} });
 
   assert.equal(result.outcome, 'ok');
   assert.equal(events[0].type, 'threads_responded');
@@ -579,7 +591,8 @@ test('registry: script:respondThreads needsHuman → pipeline_blocked with reaso
   const handler = registry.get('script:respondThreads')!;
   const bindings = makeBindings();
 
-  const result = await handler({ runId: RUN_ID, decision: makeDecision('script:respondThreads', 'rtNode'), ctx: CTX, bindingByNode: bindings, stepKey: 'respondThreads', inputs: {} });
+  const decision = makeDecision('script:respondThreads', 'rtNode');
+  const result = await handler({ runId: RUN_ID, decision, ctx: CTX, scriptBindings: [scriptBinding(decision.nodeId, decision.scriptRef)], bindingByNode: bindings, stepKey: 'respondThreads', inputs: {} });
 
   assert.equal(result.outcome, 'blocked');
   assert.equal(events[0].stepKey, 'pipeline');
@@ -589,7 +602,7 @@ test('registry: script:respondThreads needsHuman → pipeline_blocked with reaso
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
-test('registry: script handlers execute without script:integrator binding fallback', async () => {
+test('registry: script handlers fail closed without a pinned script binding', async () => {
   const events: AppendEventInput[] = [];
   let realCalled = false;
   const deps = buildDeps(events, {
@@ -600,9 +613,11 @@ test('registry: script handlers execute without script:integrator binding fallba
 
   const bindings = makeBindings();
 
-  await handler({ runId: RUN_ID, decision: makeDecision('script:confirmMerge'), ctx: CTX, bindingByNode: bindings, stepKey: 'confirmMerge', inputs: {} });
-
-  assert.ok(realCalled, 'script handler uses its own real fn');
+  await assert.rejects(
+    () => handler({ runId: RUN_ID, decision: makeDecision('script:confirmMerge'), ctx: CTX, bindingByNode: bindings, stepKey: 'confirmMerge', inputs: {} }),
+    /execution_plan_binding_unresolved/,
+  );
+  assert.equal(realCalled, false, 'script handler must not execute without its pinned binding');
 });
 
 test('registry: unknown script refs are not integrator aliases', () => {

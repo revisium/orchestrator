@@ -11,7 +11,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { makeDataDrivenTask, resolveRunnerTransientRetryPolicy, type DataDrivenProgressCursor, type DataDrivenTaskDeps, type GateSummary, type RunnerTransientRetryPolicy } from './data-driven-task.workflow.js';
+import { makeDataDrivenTask, resolveRunnerTransientRetryPolicy, scriptGithubAccount, type DataDrivenProgressCursor, type DataDrivenTaskDeps, type GateSummary, type RunnerTransientRetryPolicy } from './data-driven-task.workflow.js';
 import { templateFromExecutionPolicy } from './data-driven-template.js';
 import { featureDevelopment, featureDevelopmentPrReview, confirmMergeFlow, localChange } from '../pipeline-core/kit/fixtures.js';
 import { hashTemplate, materializeTemplate } from '../pipeline-core/materialize.js';
@@ -39,6 +39,13 @@ import { RUNNER_IDLE_TIMEOUT_KIND, RUNNER_WALL_CLOCK_LIMIT_KIND } from '../worke
 import type { IssueAction, IssueRef } from '../run/issue-ref.js';
 
 const RUN_ID = 'run-dd-001';
+
+test('script execution fails closed when its pinned binding is absent', () => {
+  assert.throws(
+    () => scriptGithubAccount({ type: 'invokeScript', nodeId: 'integrator', scriptRef: 'script:integrator' } as never, []),
+    /execution_plan_binding_unresolved: script node integrator has no pinned binding/,
+  );
+});
 
 type PipelineCatalogEntry = {
   id: string;
@@ -106,6 +113,7 @@ function exactRouteForTemplate(template: Template): RouteDecision {
     scriptBindings,
   }));
 }
+
 
 function defaultConsensusProfileTemplate(): Template {
   const pipeline = defaultPlaybookPipelines.find((candidate) => candidate.id === 'feature-development');

@@ -19,7 +19,7 @@ export const RUNNER_MANIFESTS: Readonly<Record<string, RunnerManifest>> = {
   codex: {
     runnerId: 'codex',
     manifestVersion: '1',
-    manifestDigest: 'sha256:0aef3f3d585202d3747b4b4c6eb45079dbc99e6c9d30a348f2078d8bce279d9a',
+    manifestDigest: 'sha256:621c0adb53a6562e095f000ee2d19afaa875d33f970e10e8ed682877ca54f6c6',
     stdoutParserId: 'codex-jsonl',
     permissionStyleId: 'codex-sandbox',
     declaredDefaultPermissionMode: 'read-only',
@@ -27,7 +27,7 @@ export const RUNNER_MANIFESTS: Readonly<Record<string, RunnerManifest>> = {
     constraints: {
       allowedProviders: ['openai'],
       permissionModes: ['read-only', 'workspace-write'],
-      modelParamKeys: ['maxTurns'],
+      modelParamKeys: [],
     },
     executionFields: { command: 'codex' },
   },

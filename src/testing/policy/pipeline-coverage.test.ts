@@ -496,7 +496,7 @@ test('pipeline coverage registry: registered attachments reject the wrong select
 
   for (const wrong of [
     { ...selected, pipelineId: 'local-change' },
-    { ...selected, profileId: 'claude-opus-sonnet' },
+    { ...selected, profileId: 'claude-opus-4-8-sonnet-4-6' },
     { ...selected, materializedTemplateHash: '0'.repeat(64) },
     { ...selected, routingSignature: 'wrong-signature' },
   ]) {
@@ -661,7 +661,7 @@ test('pipeline coverage registry: DSL ownership does not transfer to a sibling m
     candidate.materialized.pipelineId === 'feature-development' &&
     candidate.materialized.profileId === 'base' &&
     candidate.primaryTags.includes(tag));
-  const sibling = materializedIdentity('feature-development', 'claude-opus-sonnet');
+  const sibling = materializedIdentity('feature-development', 'claude-opus-4-8-sonnet-4-6');
   const siblingCellId = pipelineCoverageCellId(sibling, tag);
   assert.ok(scenario);
   assert.deepEqual(

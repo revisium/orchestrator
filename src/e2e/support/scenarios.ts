@@ -6,7 +6,6 @@ import type { TargetRepo } from './git-target-repo.js';
 import { waitForGate } from './drive.js';
 import {
   stubFixtureAgentProfile,
-  stubFixtureFullProfile,
 } from './run-profiles.js';
 
 /** Playbook id installed by {@link givenInstalledPlaybook}. */
@@ -46,7 +45,7 @@ export async function givenInstalledPlaybook(h: HostFixture): Promise<void> {
 }
 
 /** Create + start a `local-change` run (developer-only, stub agent). Returns the started run. */
-export async function startLocalChangeRun(h: HostFixture, repo: string = process.cwd()) {
+export async function startLocalChangeRun(h: HostFixture, repo: string = process.cwd(), start = true) {
   const created = await h.api.createRun({
     repo,
     title: 'E2E local-change deterministic agent',
@@ -58,7 +57,7 @@ export async function startLocalChangeRun(h: HostFixture, repo: string = process
     start: false,
   });
   h.casePlans.register(created.taskId, { title: 'fixture local-change' });
-  const workflow = await h.api.startRun({ runId: created.runId });
+  const workflow = start ? await h.api.startRun({ runId: created.runId }) : undefined;
   return { ...created, workflow };
 }
 
@@ -92,7 +91,7 @@ export async function startStubbedFeatureRun(h: HostFixture, target: TargetRepo)
     scope: 'recovery e2e',
     playbookId: PLAYBOOK_ID,
     pipelineId: 'feature-development',
-    profile: stubFixtureFullProfile('feature-development'),
+    profile: stubFixtureAgentProfile('feature-development'),
     start: false,
   });
   h.casePlans.register(created.taskId, { title: 'runtime recovery feature run', developerWrite: target.worktree });
@@ -122,7 +121,7 @@ export async function startDataDrivenRun(
     scope: 'data-driven e2e',
     playbookId: PLAYBOOK_ID,
     pipelineId: DATA_DRIVEN_PIPELINE,
-    profile: stubFixtureFullProfile('feature-development-dd'),
+    profile: stubFixtureAgentProfile('feature-development-dd'),
     start: false,
   });
   h.casePlans.register(created.taskId, {

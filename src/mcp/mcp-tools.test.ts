@@ -100,6 +100,26 @@ test('MCP tool errors do not expose generic error messages', async () => {
   assert.equal(JSON.stringify(payload).includes(credential), false);
 });
 
+test('MCP local validation errors preserve stable actionable codes and paths', async () => {
+  const { server, tools } = makeServer();
+  registerRevoMcpTools(server as never, {} as McpFacadeService);
+  const logTool = tools.find((registered) => registered.name === 'get_agent_log');
+  assert.ok(logTool);
+  const logResult = await logTool.handler({ runId: 'r1', stream: 'combined', tailBytes: 10, limitBytes: 10 } as never) as { content: Array<{ text: string }> };
+  assert.deepEqual(JSON.parse(logResult.content[0]?.text ?? '{}'), {
+    code: 'agent_log_range_invalid',
+    message: 'tailBytes cannot be combined with offsetBytes or limitBytes',
+    path: '/tailBytes',
+  });
+
+  const gateTool = tools.find((registered) => registered.name === 'resolve_gate');
+  assert.ok(gateTool);
+  const gateResult = await gateTool.handler({ inboxId: 'i1', outcome: 'override_merge', mergeOverrideAudit: {} } as never) as { content: Array<{ text: string }> };
+  const payload = JSON.parse(gateResult.content[0]?.text ?? '{}') as Record<string, unknown>;
+  assert.equal(payload.code, 'gate_override_audit_invalid');
+  assert.equal(payload.path, '/mergeOverrideAudit');
+});
+
 test('registerRevoMcpTools registers agent observability tools', () => {
   const { server, tools } = makeServer();
 

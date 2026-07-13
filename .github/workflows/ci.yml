@@ -109,7 +109,10 @@ jobs:
       - name: Run E2E (REVO_E2E_REAL=1)
         run: pnpm run test:e2e
         env:
-          REVO_E2E_FILE_CONCURRENCY: 2
+          # Each file boots a real DBOS host against the shared embedded Postgres. The J1
+          # worker-burst test needs the pool to itself; serial files are the smallest
+          # deterministic isolation that avoids connection starvation on hosted runners.
+          REVO_E2E_FILE_CONCURRENCY: 1
 
   # SonarCloud analysis. Automatic Analysis is DISABLED in the SonarCloud project, so this CI scan is the
   # sole analysis path (it uploads the lcov from `verify`). Non-required (not in `checks`): the SonarCloud

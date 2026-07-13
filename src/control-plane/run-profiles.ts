@@ -1,7 +1,5 @@
 import { createHash } from 'node:crypto';
 import type { ConsensusToggle, TopologyProfile } from '../pipeline-core/materialize.js';
-import {
-} from './run-profile-contract.js';
 
 type StageConfig = {
   mode?: string;
@@ -55,7 +53,7 @@ function stableStringify(value: unknown): string {
     const record = value as Record<string, unknown>;
     const entries = Object.keys(record)
       .filter((key) => record[key] !== undefined)
-      .sort((left, right) => left.localeCompare(right))
+      .sort((left, right) => left < right ? -1 : left > right ? 1 : 0)
       .map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`);
     return `{${entries.join(',')}}`;
   }

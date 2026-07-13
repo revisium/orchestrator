@@ -545,9 +545,12 @@ export function createCodexRunner(deps: CodexRunnerDeps): RunAgent {
     idleTimeoutMs: deps.idleTimeoutMs,
     wallClockLimitMs: deps.timeoutMs,
   });
-  const command = deps.command ?? DEFAULT_COMMAND;
+  const defaultCommand = deps.command ?? DEFAULT_COMMAND;
 
   return async ({ role, binding, context, attemptId, step, reporter, acceptedVerdicts }) => {
+    const command = typeof binding.runner.executionFields.command === 'string'
+      ? binding.runner.executionFields.command
+      : defaultCommand;
     let processArtifact: ReturnType<ArtifactStore['startProcess']> | undefined;
     let processActivity: RunnerActivityTracker | undefined;
     try {

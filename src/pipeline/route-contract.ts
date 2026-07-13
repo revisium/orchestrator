@@ -3,7 +3,6 @@ import {
   parseExecutionPlan,
   type CompiledExecutionPlan,
   type ExecutionPlan,
-  type ResolvedAgentBinding,
   type ResolvedScriptBinding,
 } from '../control-plane/run-profile-contract.js';
 
@@ -60,13 +59,7 @@ export function executionPlanFromRouteDecision(route: RouteDecision): ExecutionP
   return parseExecutionPlan(route.executionPlanBytes, route.executionPlanDigest);
 }
 
-export function agentBindingForNode(plan: ExecutionPlan, nodeId: string): ResolvedAgentBinding {
-  const binding = plan.agentBindings.find((candidate) => candidate.nodeId === nodeId);
-  if (!binding) throw new Error(`execution_plan_binding_unresolved: agent node ${nodeId} has no pinned binding`);
-  return binding;
-}
-
-export function scriptBindingForNode(plan: ExecutionPlan, nodeId: string): ResolvedScriptBinding {
+export function scriptBindingForNode(plan: Pick<ExecutionPlan, 'scriptBindings'>, nodeId: string): ResolvedScriptBinding {
   const binding = plan.scriptBindings.find((candidate) => candidate.nodeId === nodeId);
   if (!binding) throw new Error(`execution_plan_binding_unresolved: script node ${nodeId} has no pinned binding`);
   return binding;

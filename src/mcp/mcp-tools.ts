@@ -4,6 +4,7 @@ import { MAX_WATCH_CURSOR_CHARS } from '../task-control-plane/run-watch.service.
 import { OPERATOR_MONITORING_PROTOCOL } from './monitoring-directive.js';
 import type { McpFacadeService } from './mcp-facade.service.js';
 import { serializeMcpToolError } from './mcp-tool-result.js';
+import { ControlPlaneError } from '../control-plane/errors.js';
 
 function json(value: unknown) {
   return {
@@ -98,7 +99,9 @@ const prReadinessInputSchema = {
 
 function assertValidAgentLogRange(input: { offsetBytes?: number; limitBytes?: number; tailBytes?: number }): void {
   if (input.tailBytes !== undefined && (input.offsetBytes !== undefined || input.limitBytes !== undefined)) {
-    throw new Error('VALIDATION_FAILURE: tailBytes cannot be combined with offsetBytes or limitBytes');
+    throw new ControlPlaneError('VALIDATION_FAILURE', 'tailBytes cannot be combined with offsetBytes or limitBytes', {
+      details: { code: 'agent_log_range_invalid', path: '/tailBytes' },
+    });
   }
 }
 
@@ -106,14 +109,18 @@ function assertValidResolveGateInput(input: { outcome: string; adoptionAudit?: u
   if (input.outcome.trim() === 'adopt_patch_manually') {
     const parsed = manualAdoptionAuditSchema.safeParse(input.adoptionAudit);
     if (!parsed.success) {
-      throw new Error(`VALIDATION_FAILURE: adopt_patch_manually requires complete adoptionAudit (${parsed.error.issues[0]?.message ?? 'invalid'})`);
+      throw new ControlPlaneError('VALIDATION_FAILURE', `adopt_patch_manually requires complete adoptionAudit (${parsed.error.issues[0]?.message ?? 'invalid'})`, {
+        details: { code: 'gate_adoption_audit_invalid', path: '/adoptionAudit' },
+      });
     }
     return;
   }
   if (input.outcome.trim() === 'override_merge') {
     const parsed = mergeOverrideAuditSchema.safeParse(input.mergeOverrideAudit);
     if (!parsed.success) {
-      throw new Error(`VALIDATION_FAILURE: override_merge requires complete mergeOverrideAudit (${parsed.error.issues[0]?.message ?? 'invalid'})`);
+      throw new ControlPlaneError('VALIDATION_FAILURE', `override_merge requires complete mergeOverrideAudit (${parsed.error.issues[0]?.message ?? 'invalid'})`, {
+        details: { code: 'gate_override_audit_invalid', path: '/mergeOverrideAudit' },
+      });
     }
   }
 }

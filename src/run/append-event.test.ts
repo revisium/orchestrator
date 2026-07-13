@@ -292,6 +292,10 @@ test('appendRunAttempt: persists the attempt with attemptId as the row id (deter
   });
   assert.equal(rows.length, 1);
   assert.equal(rows[0]?.rowId, 'attempt_deadbeef');
+  assert.equal(rows[0]?.data.runner_id, 'codex');
+  assert.equal(rows[0]?.data.provider, 'openai');
+  assert.equal(rows[0]?.data.model_id, 'gpt-test');
+  assert.equal(rows[0]?.data.currency, 'USD');
   assert.equal(rows[0]?.data.verdict, 'PASS');
   assert.equal(rows[0]?.data.iteration, 1);
   assert.equal(rows[0]?.data.duration_ms, 1234);
