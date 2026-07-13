@@ -1,6 +1,6 @@
 import {
   canonicalizeJsonRpcValue,
-  isolateInheritedJsonHook,
+  isolateInheritedRuntimeHooks,
   snapshotJsonRpcRecord,
 } from './canonicalizer.js';
 import { JsonRpcProtocolError } from './errors.js';
@@ -44,7 +44,7 @@ function parseErrorObject(value: unknown): JsonRpcErrorObject {
   if (hasData && data === undefined) {
     throw invalidMessage('JSON-RPC error data must be a JSON value', record.data);
   }
-  return isolateInheritedJsonHook({
+  return isolateInheritedRuntimeHooks({
     code: record.code as number,
     message: record.message,
     ...(hasData ? { data: data! } : {}),
@@ -65,9 +65,9 @@ function parseRequest(value: Record<string, unknown>): JsonRpcRequest | JsonRpcN
     method: value.method,
     ...(hasParams ? { params: params! } : {}),
   };
-  if (!hasOwn(value, 'id')) return isolateInheritedJsonHook(base);
+  if (!hasOwn(value, 'id')) return isolateInheritedRuntimeHooks(base);
   if (!isJsonRpcId(value.id)) throw invalidMessage('JSON-RPC request id must be a string or safe integer', value.id);
-  return isolateInheritedJsonHook({ ...base, id: value.id });
+  return isolateInheritedRuntimeHooks({ ...base, id: value.id });
 }
 
 function parseResponse(value: Record<string, unknown>): JsonRpcSuccessResponse | JsonRpcErrorResponse {
@@ -80,17 +80,17 @@ function parseResponse(value: Record<string, unknown>): JsonRpcSuccessResponse |
     if (!isJsonRpcId(value.id) || result === undefined) {
       throw invalidMessage('JSON-RPC success response requires a correlatable id and JSON result', value);
     }
-    return isolateInheritedJsonHook({ jsonrpc: '2.0', id: value.id, result });
+    return isolateInheritedRuntimeHooks({ jsonrpc: '2.0', id: value.id, result });
   }
   const error = parseErrorObject(value.error);
   if (value.id === null) {
     if (error.code !== -32700 && error.code !== -32600) {
       throw invalidMessage('Null response id is only valid for parse or invalid-request errors', value);
     }
-    return isolateInheritedJsonHook({ jsonrpc: '2.0', id: null, error });
+    return isolateInheritedRuntimeHooks({ jsonrpc: '2.0', id: null, error });
   }
   if (!isJsonRpcId(value.id)) throw invalidMessage('JSON-RPC error response id must be null, string, or safe integer');
-  return isolateInheritedJsonHook({ jsonrpc: '2.0', id: value.id, error });
+  return isolateInheritedRuntimeHooks({ jsonrpc: '2.0', id: value.id, error });
 }
 
 export function parseJsonRpcMessage(value: unknown): JsonRpcMessage {

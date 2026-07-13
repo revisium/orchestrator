@@ -623,3 +623,66 @@ test('connection classifies result, method, and id by own properties', async () 
     assert.deepEqual(Object.getOwnPropertyDescriptor(Object.prototype, 'id'), id);
   }
 });
+
+test('connection handlers receive own undefined params when prototypes provide params', async () => {
+  const originalDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, 'params');
+  const inherited = { polluted: true };
+  Object.defineProperty(Object.prototype, 'params', {
+    configurable: true,
+    value: inherited,
+  });
+  try {
+    const handled: object[] = [];
+    const connection = createJsonRpcConnection({
+      write: async () => {},
+      onRequest: async (request) => {
+        handled.push(request);
+        return { kind: 'result', value: null };
+      },
+      onNotification: async (notification) => {
+        handled.push(notification);
+      },
+    });
+    await connection.receive({ jsonrpc: '2.0', method: 'request', id: 1 });
+    await connection.receive({ jsonrpc: '2.0', method: 'notification' });
+    assert.equal(handled.length, 2);
+    for (const input of handled) {
+      assert.equal(Object.prototype.hasOwnProperty.call(input, 'params'), true);
+      assert.equal(Reflect.get(input, 'params'), undefined);
+    }
+  } finally {
+    restoreOwnProperty(Object.prototype, 'params', originalDescriptor);
+    assert.deepEqual(Object.getOwnPropertyDescriptor(Object.prototype, 'params'), originalDescriptor);
+  }
+});
+
+test('connection resolves object and array results without invoking inherited then hooks', async () => {
+  const originalObjectDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, 'then');
+  const originalArrayDescriptor = Object.getOwnPropertyDescriptor(Array.prototype, 'then');
+  let calls = 0;
+  const pollutedThen = (resolve: (value: string) => void) => {
+    calls += 1;
+    resolve('attacker');
+  };
+  Object.defineProperty(Object.prototype, 'then', { configurable: true, value: pollutedThen });
+  Object.defineProperty(Array.prototype, 'then', { configurable: true, value: pollutedThen });
+  try {
+    const connection = createJsonRpcConnection({ write: async () => {} });
+    const expectedObject = { ok: true };
+    const expectedArray = ['ok'];
+    const objectResult = connection.request('object');
+    await connection.receive({ jsonrpc: '2.0', id: 1, result: expectedObject });
+    const arrayResult = connection.request('array');
+    await connection.receive({ jsonrpc: '2.0', id: 2, result: expectedArray });
+    const resolvedObject = await objectResult;
+    const resolvedArray = await arrayResult;
+    assert.equal(calls, 0);
+    assert.deepEqual(resolvedObject, expectedObject);
+    assert.deepEqual(resolvedArray, expectedArray);
+  } finally {
+    restoreOwnProperty(Array.prototype, 'then', originalArrayDescriptor);
+    restoreOwnProperty(Object.prototype, 'then', originalObjectDescriptor);
+    assert.deepEqual(Object.getOwnPropertyDescriptor(Array.prototype, 'then'), originalArrayDescriptor);
+    assert.deepEqual(Object.getOwnPropertyDescriptor(Object.prototype, 'then'), originalObjectDescriptor);
+  }
+});

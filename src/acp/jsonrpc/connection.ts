@@ -156,7 +156,12 @@ class JsonRpcConnectionImpl implements JsonRpcConnection {
     let chunk: Uint8Array;
     try {
       const outcome: JsonRpcServerRequestOutcome = this.deps.onRequest
-        ? await this.deps.onRequest(message)
+        ? await this.deps.onRequest({
+          jsonrpc: message.jsonrpc,
+          method: message.method,
+          params: Object.prototype.hasOwnProperty.call(message, 'params') ? message.params : undefined,
+          id: message.id,
+        })
         : { kind: 'error', error: { code: -32601, message: 'Method not found' } };
       const response = outcome.kind === 'result'
         ? parseJsonRpcMessage({ jsonrpc: '2.0', id: message.id, result: outcome.value })
@@ -177,7 +182,7 @@ class JsonRpcConnectionImpl implements JsonRpcConnection {
     try {
       await this.deps.onNotification({
         method: message.method,
-        ...('params' in message ? { params: message.params } : {}),
+        params: Object.prototype.hasOwnProperty.call(message, 'params') ? message.params : undefined,
       });
     } catch (error) {
       throw new JsonRpcProtocolError('handler_failed', 'JSON-RPC notification handler failed', error);

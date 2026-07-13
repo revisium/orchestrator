@@ -8,8 +8,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return prototype === Object.prototype || prototype === null;
 }
 
-export function isolateInheritedJsonHook<T extends object>(value: T): T {
+export function isolateInheritedRuntimeHooks<T extends object>(value: T): T {
   Object.defineProperty(value, 'toJSON', {
+    configurable: true,
+    enumerable: false,
+    value: undefined,
+    writable: true,
+  });
+  Object.defineProperty(value, 'then', {
     configurable: true,
     enumerable: false,
     value: undefined,
@@ -18,19 +24,19 @@ export function isolateInheritedJsonHook<T extends object>(value: T): T {
   return value;
 }
 
-function isJsonHookSentinel(key: PropertyKey, descriptor: PropertyDescriptor | undefined): boolean {
-  return key === 'toJSON' && descriptor !== undefined && !descriptor.enumerable &&
+function isRuntimeHookSentinel(key: PropertyKey, descriptor: PropertyDescriptor | undefined): boolean {
+  return (key === 'toJSON' || key === 'then') && descriptor !== undefined && !descriptor.enumerable &&
     descriptor.configurable === true && descriptor.writable === true && descriptor.value === undefined;
 }
 
 export function snapshotJsonRpcRecord(value: unknown): Record<string, unknown> | undefined {
   try {
     if (!isRecord(value)) return undefined;
-    const snapshot = isolateInheritedJsonHook<Record<string, unknown>>({});
+    const snapshot = isolateInheritedRuntimeHooks<Record<string, unknown>>({});
     for (const key of Reflect.ownKeys(value)) {
       if (typeof key !== 'string') return undefined;
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (isJsonHookSentinel(key, descriptor)) continue;
+      if (isRuntimeHookSentinel(key, descriptor)) continue;
       if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) return undefined;
       Object.defineProperty(snapshot, key, {
         configurable: true,
@@ -64,8 +70,10 @@ function jsonContainerEntries(value: object): JsonContainerEntries | undefined {
     for (const key of keys) {
       if (typeof key !== 'string') return undefined;
       if (key === 'length') continue;
-      const descriptor = key === 'toJSON' ? Object.getOwnPropertyDescriptor(value, key) : undefined;
-      if (isJsonHookSentinel(key, descriptor)) continue;
+      const descriptor = key === 'toJSON' || key === 'then'
+        ? Object.getOwnPropertyDescriptor(value, key)
+        : undefined;
+      if (isRuntimeHookSentinel(key, descriptor)) continue;
       const index = Number(key);
       if (!Number.isSafeInteger(index) || index < 0 || index >= length || String(index) !== key) {
         return undefined;
@@ -87,7 +95,7 @@ function jsonContainerEntries(value: object): JsonContainerEntries | undefined {
   for (const key of Reflect.ownKeys(value)) {
     if (typeof key !== 'string') return undefined;
     const descriptor = Object.getOwnPropertyDescriptor(value, key);
-    if (isJsonHookSentinel(key, descriptor)) continue;
+    if (isRuntimeHookSentinel(key, descriptor)) continue;
     if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) return undefined;
     entries.push({ key, value: descriptor.value });
   }
@@ -142,8 +150,8 @@ export function canonicalizeJsonRpcValue(value: unknown): JsonRpcValue | undefin
       const containerEntries = jsonContainerEntries(current);
       if (!containerEntries || ancestors.has(current)) return undefined;
       const canonical: Container = containerEntries.kind === 'array'
-        ? isolateInheritedJsonHook<JsonRpcValue[]>([])
-        : isolateInheritedJsonHook<{ [key: string]: JsonRpcValue }>({});
+        ? isolateInheritedRuntimeHooks<JsonRpcValue[]>([])
+        : isolateInheritedRuntimeHooks<{ [key: string]: JsonRpcValue }>({});
       assign(frame, canonical);
       ancestors.add(current);
       stack.push({ kind: 'leave', value: current });
