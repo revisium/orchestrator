@@ -301,6 +301,7 @@ function makeApi(overrides: {
   const observabilityService = new AgentObservabilityService({
     artifactRoot,
     runExists: async (runId) => Boolean(await runService.getRun?.(runId)),
+    listAgentOutputStreamRegistrations: async (runId) => [{ runId, taskId: 'task-1', stepId: 'step-1', attemptId: 'attempt-1', sequence: 1 }],
     dbos: {
       getEvent: (workflowID, key, opts) => dbosService.getEvent!(workflowID, key, opts),
       readStream: (workflowID, key) => dbosService.readStream!(workflowID, key),
@@ -400,11 +401,12 @@ test('TaskControlPlaneApiService reads bounded agent output events through seale
     dbosService: {
       async *readStream<T>(workflowID: string, key: string): AsyncGenerator<T, void, unknown> {
         assert.equal(workflowID, 'run-1');
-        assert.equal(key, 'agent-output');
+        assert.equal(key, 'agent-output-v1:attempt-1');
         yield {
           cursor: 'cursor-1',
           runId: 'run-1',
           attemptId: 'attempt-1',
+          attemptSeq: 1,
           stepId: 'step-1',
           at: '2026-06-20T10:00:00.000Z',
           kind: 'output',
@@ -418,8 +420,9 @@ test('TaskControlPlaneApiService reads bounded agent output events through seale
   const page = await api.readAgentOutputEvents({ runId: 'run-1', limit: 1, timeoutMs: 1 });
 
   assert.equal(page.runId, 'run-1');
-  assert.equal(page.events[0]?.cursor, 'cursor-1');
-  assert.equal(page.nextCursor, 'cursor-1');
+  assert.notEqual(page.events[0]?.cursor, 'cursor-1');
+  assert.equal(page.events[0]?.attemptSeq, 1);
+  assert.equal(page.nextCursor, page.events[0]?.cursor);
   assert.equal(page.cursorExpired, false);
 });
 

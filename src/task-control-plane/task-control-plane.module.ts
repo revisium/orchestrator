@@ -21,6 +21,11 @@ import { TaskControlPlaneApiService } from './task-control-plane-api.service.js'
         new AgentObservabilityService({
           artifactRoot: join(getConfig().dataDir, 'run-artifacts'),
           runExists: async (id) => Boolean(await runs.getRun(id)),
+          listAgentOutputStreamRegistrations: (id) => runs.listAgentOutputStreamRegistrations(id),
+          runStatus: async (id) => {
+            const run = await runs.getRun(id);
+            return typeof run?.data.status === 'string' ? run.data.status : undefined;
+          },
           dbos: {
             getEvent: (workflowID, key, opts) => dbos.getEvent(workflowID, key, opts),
             readStream: (workflowID, key) => dbos.readStream(workflowID, key),
