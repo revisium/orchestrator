@@ -113,6 +113,7 @@ jobs:
           # worker-burst test needs the pool to itself; serial files are the smallest
           # deterministic isolation that avoids connection starvation on hosted runners.
           REVO_E2E_FILE_CONCURRENCY: 1
+          REVO_DEV_TASKS_CONCURRENCY: 1
 
   # SonarCloud analysis. Automatic Analysis is DISABLED in the SonarCloud project, so this CI scan is the
   # sole analysis path (it uploads the lcov from `verify`). Non-required (not in `checks`): the SonarCloud
