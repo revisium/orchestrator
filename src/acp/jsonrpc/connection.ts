@@ -1,3 +1,4 @@
+import { Injectable, Scope } from '@nestjs/common';
 import { JsonRpcProtocolError } from './errors.js';
 import { parseJsonRpcMessage } from './parser.js';
 import type {
@@ -71,8 +72,9 @@ function hasOwnResult(
   return Object.hasOwn(message, 'result');
 }
 
-class JsonRpcConnectionImpl implements JsonRpcConnection {
-  private readonly deps: JsonRpcConnectionDeps;
+@Injectable({ scope: Scope.TRANSIENT })
+export class AcpJsonRpcConnection implements JsonRpcConnection {
+  private deps: JsonRpcConnectionDeps | undefined;
   private readonly pending = new Map<JsonRpcId, PendingRequest>();
   private readonly recentResponses = new Set<JsonRpcId>();
   private readonly writeQueue: QueuedWrite[] = [];
@@ -80,8 +82,14 @@ class JsonRpcConnectionImpl implements JsonRpcConnection {
   private closed = false;
   private writing = false;
 
-  constructor(deps: JsonRpcConnectionDeps) {
+  bind(deps: JsonRpcConnectionDeps): void {
+    if (this.deps) throw new Error('ACP JSON-RPC connection is already bound');
     this.deps = deps;
+  }
+
+  private runtime(): JsonRpcConnectionDeps {
+    if (!this.deps) throw new Error('ACP JSON-RPC connection is not bound');
+    return this.deps;
   }
 
   private ensureOpen(): void {
@@ -103,7 +111,7 @@ class JsonRpcConnectionImpl implements JsonRpcConnection {
 
   private async sendQueuedWrite(queued: QueuedWrite): Promise<void> {
     try {
-      await this.deps.write(queued.chunk);
+      await this.runtime().write(queued.chunk);
       queued.resolve();
     } catch (error) {
       queued.reject(new JsonRpcProtocolError('send_failed', 'JSON-RPC transport write failed', error));
@@ -150,8 +158,9 @@ class JsonRpcConnectionImpl implements JsonRpcConnection {
   private async receiveRequest(message: JsonRpcRequest): Promise<void> {
     let chunk: Uint8Array;
     try {
-      const outcome: JsonRpcServerRequestOutcome = this.deps.onRequest
-        ? await this.deps.onRequest({
+      const deps = this.runtime();
+      const outcome: JsonRpcServerRequestOutcome = deps.onRequest
+        ? await deps.onRequest({
           jsonrpc: message.jsonrpc,
           method: message.method,
           params: Object.hasOwn(message, 'params') ? message.params : undefined,
@@ -173,9 +182,10 @@ class JsonRpcConnectionImpl implements JsonRpcConnection {
   }
 
   private async receiveNotification(message: Extract<JsonRpcMessage, { method: string }>): Promise<void> {
-    if (!this.deps.onNotification) return;
+    const deps = this.runtime();
+    if (!deps.onNotification) return;
     try {
-      await this.deps.onNotification({
+      await deps.onNotification({
         method: message.method,
         params: Object.hasOwn(message, 'params') ? message.params : undefined,
       });
@@ -242,5 +252,7 @@ class JsonRpcConnectionImpl implements JsonRpcConnection {
 }
 
 export function createJsonRpcConnection(deps: JsonRpcConnectionDeps): JsonRpcConnection {
-  return new JsonRpcConnectionImpl(deps);
+  const connection = new AcpJsonRpcConnection();
+  connection.bind(deps);
+  return connection;
 }

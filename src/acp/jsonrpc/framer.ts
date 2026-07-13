@@ -1,3 +1,4 @@
+import { Injectable, Scope } from '@nestjs/common';
 import { JsonRpcProtocolError } from './errors.js';
 import { parseJsonRpcMessage } from './parser.js';
 import type { JsonRpcMessage } from './types.js';
@@ -31,19 +32,26 @@ function parseLine(line: string): JsonRpcMessage | undefined {
   return parseJsonRpcMessage(value);
 }
 
-class JsonRpcFramerImpl implements JsonRpcFramer {
-  private readonly maxFrameBytes: number;
+@Injectable({ scope: Scope.TRANSIENT })
+export class AcpJsonRpcFramer implements JsonRpcFramer {
+  private maxFrameBytes: number | undefined;
   private readonly decoder = new TextDecoder('utf-8', { fatal: true });
   private text = '';
   private encodedFrameBytes = 0;
   private finished = false;
   private failure: JsonRpcProtocolError | undefined;
 
-  constructor(options: JsonRpcFramerOptions) {
+  bind(options: JsonRpcFramerOptions = {}): void {
+    if (this.maxFrameBytes !== undefined) throw new Error('ACP JSON-RPC framer is already bound');
     this.maxFrameBytes = positiveSafeInteger(
       options.maxFrameBytes ?? DEFAULT_MAX_FRAME_BYTES,
       'maxFrameBytes',
     );
+  }
+
+  private options(): number {
+    if (this.maxFrameBytes === undefined) throw new Error('ACP JSON-RPC framer is not bound');
+    return this.maxFrameBytes;
   }
 
   readonly push = (chunk: Uint8Array): JsonRpcMessage[] => {
@@ -92,16 +100,17 @@ class JsonRpcFramerImpl implements JsonRpcFramer {
   }
 
   private account(chunk: Uint8Array): void {
+    const maxFrameBytes = this.options();
     for (const byte of chunk) {
       if (byte === 0x0a) {
         this.encodedFrameBytes = 0;
         continue;
       }
       this.encodedFrameBytes += 1;
-      if (this.encodedFrameBytes > this.maxFrameBytes) {
+      if (this.encodedFrameBytes > maxFrameBytes) {
         throw new JsonRpcProtocolError(
           'overflow',
-          `JSON-RPC frame exceeds ${String(this.maxFrameBytes)} bytes`,
+          `JSON-RPC frame exceeds ${String(maxFrameBytes)} bytes`,
         );
       }
     }
@@ -131,5 +140,7 @@ class JsonRpcFramerImpl implements JsonRpcFramer {
 }
 
 export function createJsonRpcFramer(options: JsonRpcFramerOptions = {}): JsonRpcFramer {
-  return new JsonRpcFramerImpl(options);
+  const framer = new AcpJsonRpcFramer();
+  framer.bind(options);
+  return framer;
 }

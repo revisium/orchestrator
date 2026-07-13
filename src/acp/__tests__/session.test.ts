@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { AcpSessionError, createAcpSession } from '../session.js';
+import { AcpSession, AcpSessionError, createAcpSession } from '../session.js';
 import type { JsonRpcConnection } from '../jsonrpc/connection.js';
 import type { JsonRpcParams, JsonRpcValue } from '../jsonrpc/types.js';
 
@@ -57,6 +57,20 @@ function createSession(
     ...options,
   });
 }
+
+test('transient session accepts exactly one invocation binding', () => {
+  const session = new AcpSession();
+  const deps = {
+    connection: createFakeConnection({}),
+    configure: async () => {},
+    onUpdate: async () => {},
+    onDiagnostic: () => {},
+  };
+  session.bind(deps);
+
+  assert.throws(() => session.bind(deps));
+  assert.equal(session.sessionId(), null);
+});
 
 async function assertSessionFailure(
   code: AcpSessionError['code'],

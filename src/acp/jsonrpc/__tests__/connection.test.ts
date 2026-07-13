@@ -1,10 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createJsonRpcConnection } from '../connection.js';
+import { AcpJsonRpcConnection, createJsonRpcConnection } from '../connection.js';
 import { JsonRpcProtocolError } from '../errors.js';
 import type { JsonRpcMessage } from '../types.js';
 
 const decoder = new TextDecoder();
+
+test('transient connection accepts exactly one runtime binding', () => {
+  const connection = new AcpJsonRpcConnection();
+  connection.bind({ async write() {} });
+
+  assert.throws(() => connection.bind({ async write() {} }));
+});
 
 function decodeWrite(chunk: Uint8Array): JsonRpcMessage {
   return JSON.parse(decoder.decode(chunk).trim()) as JsonRpcMessage;

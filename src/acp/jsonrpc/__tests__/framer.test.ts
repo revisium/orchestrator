@@ -1,9 +1,25 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { JsonRpcProtocolError } from '../errors.js';
-import { createJsonRpcFramer } from '../framer.js';
+import { AcpJsonRpcFramer, createJsonRpcFramer } from '../framer.js';
 
 const encoder = new TextEncoder();
+
+test('transient framer requires one binding and retains no state from another instance', () => {
+  const first = new AcpJsonRpcFramer();
+  const second = new AcpJsonRpcFramer();
+  first.bind({ maxFrameBytes: 64 });
+  second.bind({ maxFrameBytes: 64 });
+
+  assert.throws(() => first.bind({ maxFrameBytes: 64 }));
+  assert.deepEqual(first.push(encoder.encode('{"jsonrpc":"2.0"')), []);
+  assert.deepEqual(second.push(encoder.encode('{"jsonrpc":"2.0","method":"second"}\n')), [
+    { jsonrpc: '2.0', method: 'second' },
+  ]);
+  assert.deepEqual(first.push(encoder.encode(',"method":"first"}\n')), [
+    { jsonrpc: '2.0', method: 'first' },
+  ]);
+});
 
 function assertFailure(code: JsonRpcProtocolError['code'], run: () => unknown): void {
   assert.throws(run, (error: unknown) => error instanceof JsonRpcProtocolError && error.code === code);
