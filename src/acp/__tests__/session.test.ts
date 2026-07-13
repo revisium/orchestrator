@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { AcpSessionError, createAcpSession } from '../session.js';
-import type { JsonRpcConnection } from '../jsonrpc/connection.js';
+import { AcpSession, createAcpSession } from '../session.js';
+import { AcpSessionError } from '../session.errors.js';
+import type { JsonRpcConnection } from '../jsonrpc/connection.types.js';
 import type { JsonRpcParams, JsonRpcValue } from '../jsonrpc/types.js';
 
 type Request = { method: string; params: JsonRpcParams | undefined };
@@ -58,6 +59,19 @@ function createSession(
   });
 }
 
+test('transient session accepts exactly one invocation binding', () => {
+  const session = new AcpSession();
+  const deps = {
+    connection: createFakeConnection({}),
+    configure: async () => {},
+    onUpdate: async () => {},
+    onDiagnostic: () => {},
+  };
+  session.bindDependencies(deps);
+
+  assert.throws(() => session.bindDependencies(deps));
+  assert.equal(session.getSessionId(), null);
+});
 async function assertSessionFailure(
   code: AcpSessionError['code'],
   run: () => Promise<unknown>,
@@ -95,10 +109,10 @@ test('creates exactly one session after protocol v1 initialize', async () => {
   });
   const session = createSession(connection);
 
-  assert.equal(session.sessionId(), null);
+  assert.equal(session.getSessionId(), null);
   await session.initialize();
   assert.equal(await session.create(), 'session-A');
-  assert.equal(session.sessionId(), 'session-A');
+  assert.equal(session.getSessionId(), 'session-A');
   assert.deepEqual(connection.requests, [
     { method: 'initialize', params: { protocolVersion: 1 } },
     { method: 'session/new', params: undefined },
@@ -110,7 +124,7 @@ test('rejects an incompatible initialize response before session/new', async () 
   const session = createSession(connection);
 
   await assertSessionFailure('invalid_protocol_version', () => session.initialize());
-  assert.equal(session.sessionId(), null);
+  assert.equal(session.getSessionId(), null);
   assert.deepEqual(connection.requests, [{ method: 'initialize', params: { protocolVersion: 1 } }]);
   await assertSessionFailure('failed', () => session.create());
 });
@@ -128,7 +142,7 @@ test('requires an own nonempty string session id and preserves null provenance o
     await session.initialize();
 
     await assertSessionFailure('invalid_session_id', () => session.create());
-    assert.equal(session.sessionId(), null);
+    assert.equal(session.getSessionId(), null);
     await assertSessionFailure('failed', () => session.configure());
     await assertSessionFailure('failed', () => session.prompt('never'));
   }
@@ -322,7 +336,7 @@ test('fails closed after raw initialize, configure, and prompt errors', async ()
   const creating = createSession(creatingConnection);
   await creating.initialize();
   await assertRawFailure(createError, () => creating.create());
-  assert.equal(creating.sessionId(), null);
+  assert.equal(creating.getSessionId(), null);
   await assertSessionFailure('failed', () => creating.create());
   await assertSessionFailure('failed', () => creating.configure());
   await assertSessionFailure('failed', () => creating.prompt('never'));
@@ -335,7 +349,7 @@ test('fails closed after raw initialize, configure, and prompt errors', async ()
   }), { configure: async () => { throw configureError; } });
   await establish(configured);
   await assertRawFailure(configureError, () => configured.configure());
-  assert.equal(configured.sessionId(), 'configured');
+  assert.equal(configured.getSessionId(), 'configured');
   await assertSessionFailure('failed', () => configured.prompt('never'));
 
   const promptError = new Error('prompt transport failed');
@@ -347,7 +361,7 @@ test('fails closed after raw initialize, configure, and prompt errors', async ()
   await establish(prompted);
   await prompted.configure();
   await assertRawFailure(promptError, () => prompted.prompt('run'));
-  assert.equal(prompted.sessionId(), 'prompted');
+  assert.equal(prompted.getSessionId(), 'prompted');
   await assertSessionFailure('failed', () => prompted.receiveUpdate({ sessionId: 'prompted', update: true }));
 });
 
