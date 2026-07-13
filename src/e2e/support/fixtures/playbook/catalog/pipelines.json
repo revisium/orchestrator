@@ -48,7 +48,10 @@
             "roleRef": "role:analyst",
             "next": "analystRouter",
             "onFailure": "abort",
-            "resultSchema": "schema:plan"
+            "resultSchema": "schema:analysis",
+            "produces": {
+              "name": "analysis"
+            }
           },
           "analystRouter": {
             "id": "analystRouter",

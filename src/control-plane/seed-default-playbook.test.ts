@@ -198,7 +198,6 @@ test('default playbook: materialized consensus profile fans out plan + code revi
   const { template: materialized, diagnostics } = materializeTemplate(
     base as never,
     topologyProfileFromRunProfile(profile as never),
-    { allowlist: ['planReviewer', 'codeReview'] },
   );
   assert.deepEqual(diagnostics, [], 'materializeTemplate must emit no diagnostics');
 
