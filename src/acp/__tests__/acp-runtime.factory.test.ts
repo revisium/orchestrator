@@ -3,7 +3,7 @@ import test from 'node:test';
 import { NestFactory } from '@nestjs/core';
 import { AcpModule } from '../acp.module.js';
 import { AcpRuntimeFactory } from '../acp-runtime.factory.js';
-import type { JsonRpcConnection } from '../jsonrpc/connection.js';
+import type { JsonRpcConnection } from '../jsonrpc/connection.types.js';
 import type { JsonRpcParams, JsonRpcValue } from '../jsonrpc/types.js';
 
 type Request = { method: string; params: JsonRpcParams | undefined };
@@ -71,8 +71,8 @@ test('singleton runtime factory resolves fresh bound transient ACP objects', asy
   });
   await Promise.all([firstSession.initialize(), secondSession.initialize()]);
   await Promise.all([firstSession.create(), secondSession.create()]);
-  assert.equal(firstSession.sessionId(), 'first');
-  assert.equal(secondSession.sessionId(), 'second');
+  assert.equal(firstSession.getSessionId(), 'first');
+  assert.equal(secondSession.getSessionId(), 'second');
   assert.deepEqual(firstSessionConnection.requests.map(({ method }) => method), ['initialize', 'session/new']);
   assert.deepEqual(secondSessionConnection.requests.map(({ method }) => method), ['initialize', 'session/new']);
 });

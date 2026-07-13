@@ -1,16 +1,57 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { AcpJsonRpcConnection, createJsonRpcConnection } from '../connection.js';
+import type {
+  JsonRpcConnection,
+  JsonRpcConnectionDeps,
+  JsonRpcServerRequestOutcome,
+} from '../connection.types.js';
 import { JsonRpcProtocolError } from '../errors.js';
+import {
+  isJsonRpcMethodMessage,
+  isJsonRpcRequestMessage,
+  isJsonRpcSuccessResponse,
+} from '../connection.helpers.js';
 import type { JsonRpcMessage } from '../types.js';
 
 const decoder = new TextDecoder();
 
+test('connection support modules expose the runtime contract independently from the stateful class', () => {
+  const deps: JsonRpcConnectionDeps = { async write() {} };
+  const connection: JsonRpcConnection = createJsonRpcConnection(deps);
+  const outcome: JsonRpcServerRequestOutcome = { kind: 'result', value: true };
+
+  assert.equal(typeof connection.request, 'function');
+  assert.deepEqual(outcome, { kind: 'result', value: true });
+  connection.close();
+});
+
+test('message shape helpers narrow only own JSON-RPC discriminators', () => {
+  const request: JsonRpcMessage = { jsonrpc: '2.0', method: 'run', id: 1 };
+  const notification: JsonRpcMessage = { jsonrpc: '2.0', method: 'updated' };
+  const success: JsonRpcMessage = { jsonrpc: '2.0', id: 1, result: true };
+  const failure: JsonRpcMessage = { jsonrpc: '2.0', id: 1, error: { code: -32000, message: 'Failed' } };
+  const inheritedMethod = Object.create({ method: 'polluted' }) as JsonRpcMessage;
+  const inheritedId = Object.create({ id: 1 }) as JsonRpcMessage;
+  const inheritedResult = Object.create({ result: true }) as JsonRpcMessage;
+
+  assert.equal(isJsonRpcMethodMessage(request), true);
+  assert.equal(isJsonRpcMethodMessage(notification), true);
+  assert.equal(isJsonRpcMethodMessage(success), false);
+  assert.equal(isJsonRpcMethodMessage(inheritedMethod), false);
+  assert.equal(isJsonRpcRequestMessage(request), true);
+  assert.equal(isJsonRpcRequestMessage(notification), false);
+  assert.equal(isJsonRpcRequestMessage(inheritedId), false);
+  assert.equal(isJsonRpcSuccessResponse(success), true);
+  assert.equal(isJsonRpcSuccessResponse(failure), false);
+  assert.equal(isJsonRpcSuccessResponse(inheritedResult), false);
+});
+
 test('transient connection accepts exactly one runtime binding', () => {
   const connection = new AcpJsonRpcConnection();
-  connection.bind({ async write() {} });
+  connection.bindDependencies({ async write() {} });
 
-  assert.throws(() => connection.bind({ async write() {} }));
+  assert.throws(() => connection.bindDependencies({ async write() {} }));
 });
 
 function decodeWrite(chunk: Uint8Array): JsonRpcMessage {

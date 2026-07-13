@@ -8,10 +8,10 @@ const encoder = new TextEncoder();
 test('transient framer requires one binding and retains no state from another instance', () => {
   const first = new AcpJsonRpcFramer();
   const second = new AcpJsonRpcFramer();
-  first.bind({ maxFrameBytes: 64 });
-  second.bind({ maxFrameBytes: 64 });
+  first.bindDependencies({ maxFrameBytes: 64 });
+  second.bindDependencies({ maxFrameBytes: 64 });
 
-  assert.throws(() => first.bind({ maxFrameBytes: 64 }));
+  assert.throws(() => first.bindDependencies({ maxFrameBytes: 64 }));
   assert.deepEqual(first.push(encoder.encode('{"jsonrpc":"2.0"')), []);
   assert.deepEqual(second.push(encoder.encode('{"jsonrpc":"2.0","method":"second"}\n')), [
     { jsonrpc: '2.0', method: 'second' },
