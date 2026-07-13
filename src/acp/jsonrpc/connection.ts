@@ -72,79 +72,79 @@ function hasOwnResult(
 }
 
 class JsonRpcConnectionImpl implements JsonRpcConnection {
-  readonly #deps: JsonRpcConnectionDeps;
-  readonly #pending = new Map<JsonRpcId, PendingRequest>();
-  readonly #recentResponses = new Set<JsonRpcId>();
-  readonly #writeQueue: QueuedWrite[] = [];
-  #nextId = 1;
-  #closed = false;
-  #writing = false;
+  private readonly deps: JsonRpcConnectionDeps;
+  private readonly pending = new Map<JsonRpcId, PendingRequest>();
+  private readonly recentResponses = new Set<JsonRpcId>();
+  private readonly writeQueue: QueuedWrite[] = [];
+  private nextId = 1;
+  private closed = false;
+  private writing = false;
 
   constructor(deps: JsonRpcConnectionDeps) {
-    this.#deps = deps;
+    this.deps = deps;
   }
 
-  #ensureOpen(): void {
-    if (this.#closed) throw new JsonRpcProtocolError('closed', 'JSON-RPC connection is closed');
+  private ensureOpen(): void {
+    if (this.closed) throw new JsonRpcProtocolError('closed', 'JSON-RPC connection is closed');
   }
 
-  #drainWrites(): void {
-    if (this.#writing) return;
-    const queued = this.#writeQueue.shift();
+  private drainWrites(): void {
+    if (this.writing) return;
+    const queued = this.writeQueue.shift();
     if (!queued) return;
-    if (this.#closed) {
+    if (this.closed) {
       queued.reject(new JsonRpcProtocolError('closed', 'JSON-RPC connection is closed'));
-      this.#drainWrites();
+      this.drainWrites();
       return;
     }
-    this.#writing = true;
+    this.writing = true;
     let sent: Promise<void>;
     try {
-      sent = this.#deps.write(queued.chunk);
+      sent = this.deps.write(queued.chunk);
     } catch (error) {
       sent = Promise.reject(error);
     }
     void sent.then(
       () => {
         queued.resolve();
-        this.#writing = false;
-        this.#drainWrites();
+        this.writing = false;
+        this.drainWrites();
       },
       (error: unknown) => {
         queued.reject(new JsonRpcProtocolError('send_failed', 'JSON-RPC transport write failed', error));
-        this.#writing = false;
-        this.#drainWrites();
+        this.writing = false;
+        this.drainWrites();
       },
     );
   }
 
-  #write(chunk: Uint8Array): Promise<void> {
-    this.#ensureOpen();
+  private write(chunk: Uint8Array): Promise<void> {
+    this.ensureOpen();
     const operation = new Promise<void>((resolve, reject) => {
-      this.#writeQueue.push({ chunk, resolve, reject });
+      this.writeQueue.push({ chunk, resolve, reject });
     });
-    this.#drainWrites();
+    this.drainWrites();
     return operation;
   }
 
-  #rememberResponse(id: JsonRpcId): void {
-    this.#recentResponses.add(id);
-    if (this.#recentResponses.size <= 1_024) return;
-    const oldest = this.#recentResponses.values().next().value as JsonRpcId;
-    this.#recentResponses.delete(oldest);
+  private rememberResponse(id: JsonRpcId): void {
+    this.recentResponses.add(id);
+    if (this.recentResponses.size <= 1_024) return;
+    const oldest = this.recentResponses.values().next().value as JsonRpcId;
+    this.recentResponses.delete(oldest);
   }
 
-  #receiveResponse(message: JsonRpcSuccessResponse | JsonRpcErrorResponse): void {
+  private receiveResponse(message: JsonRpcSuccessResponse | JsonRpcErrorResponse): void {
     if (message.id === null) {
       throw new JsonRpcProtocolError('uncorrelated_null_response', 'Null JSON-RPC response id cannot be correlated');
     }
-    const call = this.#pending.get(message.id);
+    const call = this.pending.get(message.id);
     if (!call) {
-      const code = this.#recentResponses.has(message.id) ? 'duplicate_response_id' : 'unknown_response_id';
+      const code = this.recentResponses.has(message.id) ? 'duplicate_response_id' : 'unknown_response_id';
       throw new JsonRpcProtocolError(code, `Unexpected JSON-RPC response id ${String(message.id)}`);
     }
-    this.#pending.delete(message.id);
-    this.#rememberResponse(message.id);
+    this.pending.delete(message.id);
+    this.rememberResponse(message.id);
     if (hasOwnResult(message)) {
       call.resolve(message.result);
       return;
@@ -152,11 +152,11 @@ class JsonRpcConnectionImpl implements JsonRpcConnection {
     call.reject(new JsonRpcProtocolError('remote_error', message.error.message, message.error));
   }
 
-  async #receiveRequest(message: JsonRpcRequest): Promise<void> {
+  private async receiveRequest(message: JsonRpcRequest): Promise<void> {
     let chunk: Uint8Array;
     try {
-      const outcome: JsonRpcServerRequestOutcome = this.#deps.onRequest
-        ? await this.#deps.onRequest(message)
+      const outcome: JsonRpcServerRequestOutcome = this.deps.onRequest
+        ? await this.deps.onRequest(message)
         : { kind: 'error', error: { code: -32601, message: 'Method not found' } };
       const response = outcome.kind === 'result'
         ? parseJsonRpcMessage({ jsonrpc: '2.0', id: message.id, result: outcome.value })
@@ -169,13 +169,13 @@ class JsonRpcConnectionImpl implements JsonRpcConnection {
         error: { code: -32603, message: 'Internal error' },
       }));
     }
-    await this.#write(chunk);
+    await this.write(chunk);
   }
 
-  async #receiveNotification(message: Extract<JsonRpcMessage, { method: string }>): Promise<void> {
-    if (!this.#deps.onNotification) return;
+  private async receiveNotification(message: Extract<JsonRpcMessage, { method: string }>): Promise<void> {
+    if (!this.deps.onNotification) return;
     try {
-      await this.#deps.onNotification({
+      await this.deps.onNotification({
         method: message.method,
         ...('params' in message ? { params: message.params } : {}),
       });
@@ -185,21 +185,21 @@ class JsonRpcConnectionImpl implements JsonRpcConnection {
   }
 
   request(method: string, params?: JsonRpcParams): Promise<JsonRpcValue> {
-    this.#ensureOpen();
-    if (!Number.isSafeInteger(this.#nextId)) {
+    this.ensureOpen();
+    if (!Number.isSafeInteger(this.nextId)) {
       throw new JsonRpcProtocolError('request_id_exhausted', 'JSON-RPC request id space is exhausted');
     }
-    const id = this.#nextId;
+    const id = this.nextId;
     const message = requestMessage(method, params, id);
     const chunk = encode(message);
-    this.#nextId += 1;
+    this.nextId += 1;
     const result = new Promise<JsonRpcValue>((resolve, reject) => {
-      this.#pending.set(id, { resolve, reject });
+      this.pending.set(id, { resolve, reject });
     });
-    void this.#write(chunk).catch((error: unknown) => {
-      const call = this.#pending.get(id);
+    void this.write(chunk).catch((error: unknown) => {
+      const call = this.pending.get(id);
       if (call) {
-        this.#pending.delete(id);
+        this.pending.delete(id);
         call.reject(error);
       }
     });
@@ -207,37 +207,37 @@ class JsonRpcConnectionImpl implements JsonRpcConnection {
   }
 
   async notify(method: string, params?: JsonRpcParams): Promise<void> {
-    this.#ensureOpen();
+    this.ensureOpen();
     const message = parseJsonRpcMessage({
       jsonrpc: '2.0',
       method,
       ...(params === undefined ? {} : { params }),
     });
-    await this.#write(encode(message));
+    await this.write(encode(message));
   }
 
   async receive(message: JsonRpcMessage): Promise<void> {
-    this.#ensureOpen();
+    this.ensureOpen();
     const valid = parseJsonRpcMessage(message);
     if (!hasOwnMethod(valid)) {
-      this.#receiveResponse(valid);
+      this.receiveResponse(valid);
       return;
     }
     if (hasOwnId(valid)) {
-      await this.#receiveRequest(valid);
+      await this.receiveRequest(valid);
       return;
     }
-    await this.#receiveNotification(valid);
+    await this.receiveNotification(valid);
   }
 
   close(): void {
-    if (this.#closed) return;
-    this.#closed = true;
+    if (this.closed) return;
+    this.closed = true;
     const error = new JsonRpcProtocolError('closed', 'JSON-RPC connection is closed');
-    for (const call of this.#pending.values()) call.reject(error);
-    this.#pending.clear();
-    this.#recentResponses.clear();
-    for (const queued of this.#writeQueue.splice(0)) queued.reject(error);
+    for (const call of this.pending.values()) call.reject(error);
+    this.pending.clear();
+    this.recentResponses.clear();
+    for (const queued of this.writeQueue.splice(0)) queued.reject(error);
   }
 }
 

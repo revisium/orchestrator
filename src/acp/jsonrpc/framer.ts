@@ -32,47 +32,47 @@ function parseLine(line: string): JsonRpcMessage | undefined {
 }
 
 class JsonRpcFramerImpl implements JsonRpcFramer {
-  readonly #maxFrameBytes: number;
-  readonly #decoder = new TextDecoder('utf-8', { fatal: true });
-  #text = '';
-  #encodedFrameBytes = 0;
-  #finished = false;
-  #failure: JsonRpcProtocolError | undefined;
+  private readonly maxFrameBytes: number;
+  private readonly decoder = new TextDecoder('utf-8', { fatal: true });
+  private text = '';
+  private encodedFrameBytes = 0;
+  private finished = false;
+  private failure: JsonRpcProtocolError | undefined;
 
   constructor(options: JsonRpcFramerOptions) {
-    this.#maxFrameBytes = positiveSafeInteger(
+    this.maxFrameBytes = positiveSafeInteger(
       options.maxFrameBytes ?? DEFAULT_MAX_FRAME_BYTES,
       'maxFrameBytes',
     );
   }
 
   readonly push = (chunk: Uint8Array): JsonRpcMessage[] => {
-    return this.#run(() => {
-      this.#account(chunk);
-      this.#text += this.#decode(chunk, true);
-      return this.#drainLines();
+    return this.run(() => {
+      this.account(chunk);
+      this.text += this.decode(chunk, true);
+      return this.drainLines();
     });
   };
 
   readonly finish = (): JsonRpcMessage[] => {
-    return this.#run(() => {
-      this.#text += this.#decode(new Uint8Array(), false);
-      const messages = this.#drainLines();
-      const finalMessage = parseLine(this.#text);
-      this.#text = '';
-      this.#finished = true;
+    return this.run(() => {
+      this.text += this.decode(new Uint8Array(), false);
+      const messages = this.drainLines();
+      const finalMessage = parseLine(this.text);
+      this.text = '';
+      this.finished = true;
       if (finalMessage) messages.push(finalMessage);
       return messages;
     });
   };
 
-  #ensureOpen(): void {
-    if (this.#failure) throw this.#failure;
-    if (this.#finished) throw new JsonRpcProtocolError('closed', 'JSON-RPC framer is finished');
+  private ensureOpen(): void {
+    if (this.failure) throw this.failure;
+    if (this.finished) throw new JsonRpcProtocolError('closed', 'JSON-RPC framer is finished');
   }
 
-  #run<T>(operation: () => T): T {
-    this.#ensureOpen();
+  private run<T>(operation: () => T): T {
+    this.ensureOpen();
     try {
       return operation();
     } catch (error) {
@@ -83,48 +83,48 @@ class JsonRpcFramerImpl implements JsonRpcFramer {
           error.code === 'invalid_json' ||
           error.code === 'invalid_message')
       ) {
-        this.#failure = error;
-        this.#text = '';
-        this.#encodedFrameBytes = 0;
+        this.failure = error;
+        this.text = '';
+        this.encodedFrameBytes = 0;
       }
       throw error;
     }
   }
 
-  #account(chunk: Uint8Array): void {
+  private account(chunk: Uint8Array): void {
     for (const byte of chunk) {
       if (byte === 0x0a) {
-        this.#encodedFrameBytes = 0;
+        this.encodedFrameBytes = 0;
         continue;
       }
-      this.#encodedFrameBytes += 1;
-      if (this.#encodedFrameBytes > this.#maxFrameBytes) {
+      this.encodedFrameBytes += 1;
+      if (this.encodedFrameBytes > this.maxFrameBytes) {
         throw new JsonRpcProtocolError(
           'overflow',
-          `JSON-RPC frame exceeds ${String(this.#maxFrameBytes)} bytes`,
+          `JSON-RPC frame exceeds ${String(this.maxFrameBytes)} bytes`,
         );
       }
     }
   }
 
-  #decode(chunk: Uint8Array, stream: boolean): string {
+  private decode(chunk: Uint8Array, stream: boolean): string {
     try {
-      return this.#decoder.decode(chunk, { stream });
+      return this.decoder.decode(chunk, { stream });
     } catch (error) {
       throw new JsonRpcProtocolError('invalid_utf8', 'JSON-RPC stream contains invalid UTF-8', error);
     }
   }
 
-  #drainLines(): JsonRpcMessage[] {
+  private drainLines(): JsonRpcMessage[] {
     const messages: JsonRpcMessage[] = [];
-    let newline = this.#text.indexOf('\n');
+    let newline = this.text.indexOf('\n');
     while (newline >= 0) {
-      const rawLine = this.#text.slice(0, newline);
-      this.#text = this.#text.slice(newline + 1);
+      const rawLine = this.text.slice(0, newline);
+      this.text = this.text.slice(newline + 1);
       const line = rawLine.endsWith('\r') ? rawLine.slice(0, -1) : rawLine;
       const message = parseLine(line);
       if (message) messages.push(message);
-      newline = this.#text.indexOf('\n');
+      newline = this.text.indexOf('\n');
     }
     return messages;
   }
