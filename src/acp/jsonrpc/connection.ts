@@ -58,17 +58,17 @@ function requestMessage(method: string, params: JsonRpcParams | undefined, id: J
 }
 
 function hasOwnMethod(message: JsonRpcMessage): message is JsonRpcRequest | JsonRpcNotification {
-  return Object.prototype.hasOwnProperty.call(message, 'method');
+  return Object.hasOwn(message, 'method');
 }
 
 function hasOwnId(message: JsonRpcRequest | JsonRpcNotification): message is JsonRpcRequest {
-  return Object.prototype.hasOwnProperty.call(message, 'id');
+  return Object.hasOwn(message, 'id');
 }
 
 function hasOwnResult(
   message: JsonRpcSuccessResponse | JsonRpcErrorResponse,
 ): message is JsonRpcSuccessResponse {
-  return Object.prototype.hasOwnProperty.call(message, 'result');
+  return Object.hasOwn(message, 'result');
 }
 
 class JsonRpcConnectionImpl implements JsonRpcConnection {
@@ -98,24 +98,19 @@ class JsonRpcConnectionImpl implements JsonRpcConnection {
       return;
     }
     this.writing = true;
-    let sent: Promise<void>;
+    void this.sendQueuedWrite(queued);
+  }
+
+  private async sendQueuedWrite(queued: QueuedWrite): Promise<void> {
     try {
-      sent = this.deps.write(queued.chunk);
+      await this.deps.write(queued.chunk);
+      queued.resolve();
     } catch (error) {
-      sent = Promise.reject(error);
+      queued.reject(new JsonRpcProtocolError('send_failed', 'JSON-RPC transport write failed', error));
+    } finally {
+      this.writing = false;
+      this.drainWrites();
     }
-    void sent.then(
-      () => {
-        queued.resolve();
-        this.writing = false;
-        this.drainWrites();
-      },
-      (error: unknown) => {
-        queued.reject(new JsonRpcProtocolError('send_failed', 'JSON-RPC transport write failed', error));
-        this.writing = false;
-        this.drainWrites();
-      },
-    );
   }
 
   private write(chunk: Uint8Array): Promise<void> {
@@ -159,7 +154,7 @@ class JsonRpcConnectionImpl implements JsonRpcConnection {
         ? await this.deps.onRequest({
           jsonrpc: message.jsonrpc,
           method: message.method,
-          params: Object.prototype.hasOwnProperty.call(message, 'params') ? message.params : undefined,
+          params: Object.hasOwn(message, 'params') ? message.params : undefined,
           id: message.id,
         })
         : { kind: 'error', error: { code: -32601, message: 'Method not found' } };
@@ -182,7 +177,7 @@ class JsonRpcConnectionImpl implements JsonRpcConnection {
     try {
       await this.deps.onNotification({
         method: message.method,
-        params: Object.prototype.hasOwnProperty.call(message, 'params') ? message.params : undefined,
+        params: Object.hasOwn(message, 'params') ? message.params : undefined,
       });
     } catch (error) {
       throw new JsonRpcProtocolError('handler_failed', 'JSON-RPC notification handler failed', error);

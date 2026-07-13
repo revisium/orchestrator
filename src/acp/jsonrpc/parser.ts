@@ -16,7 +16,7 @@ import type {
 } from './types.js';
 
 function hasOwn(value: object, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(value, key);
+  return Object.hasOwn(value, key);
 }
 
 function isJsonRpcId(value: unknown): value is JsonRpcId {
