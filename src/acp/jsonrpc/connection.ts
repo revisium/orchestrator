@@ -1,10 +1,5 @@
 import { JsonRpcProtocolError } from './errors.js';
-import {
-  isJsonRpcNotification,
-  isJsonRpcRequest,
-  isJsonRpcResponse,
-  parseJsonRpcMessage,
-} from './parser.js';
+import { parseJsonRpcMessage } from './parser.js';
 import type {
   JsonRpcErrorObject,
   JsonRpcErrorResponse,
@@ -209,15 +204,15 @@ class JsonRpcConnectionImpl implements JsonRpcConnection {
   async receive(message: JsonRpcMessage): Promise<void> {
     this.#ensureOpen();
     const valid = parseJsonRpcMessage(message);
-    if (isJsonRpcResponse(valid)) {
+    if (!('method' in valid)) {
       this.#receiveResponse(valid);
       return;
     }
-    if (isJsonRpcRequest(valid)) {
+    if ('id' in valid) {
       await this.#receiveRequest(valid);
       return;
     }
-    if (isJsonRpcNotification(valid)) await this.#receiveNotification(valid);
+    await this.#receiveNotification(valid);
   }
 
   close(): void {
