@@ -3,7 +3,6 @@
 
 
 import { Module } from '@nestjs/common';
-import { AcpModule } from '../acp/acp.module.js';
 import { RevisiumModule } from '../revisium/revisium.module.js';
 import { ClaudeCodeService } from './claude-code.service.js';
 import { CodexService } from './codex.service.js';
@@ -15,7 +14,7 @@ import { stubRunAgent } from '../worker/stub-runner.js';
 import { createRunAgent } from '../worker/runner-dispatch.js';
 
 @Module({
-  imports: [AcpModule, RevisiumModule],
+  imports: [RevisiumModule],
   providers: [
     ClaudeCodeService,
     CodexService,
