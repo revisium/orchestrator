@@ -692,7 +692,7 @@ export async function executeCase(
   h: HostFixture,
   casePlan: PipelineCase,
   targets: WeakMap<object, TargetRepo>,
-): Promise<void> {
+): Promise<string> {
   const prepared = validateCasePreflight(casePlan, targets);
   const given = prepared.casePlan.given;
   const { created, catalog } = await createCase(h, prepared);
@@ -727,4 +727,5 @@ export async function executeCase(
   await executeActions(h, prepared, catalog, visits, runCase);
   const terminal = await waitState(h.api, created.runId);
   await assertCaseExpectations(h, prepared.casePlan, runCase, terminal, visits);
+  return created.runId;
 }

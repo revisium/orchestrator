@@ -28,9 +28,17 @@ export class PipelineContext {
     this.#host = host;
   }
 
-  execute(casePlan: PipelineCase): Promise<void> {
+  execute(casePlan: PipelineCase): Promise<string> {
     deepFreezeCase(casePlan, new WeakSet<object>(), targetHandles);
     return executeCase(this.#host, casePlan, targetRepos);
+  }
+
+  readAgentOutputEvents(input: Parameters<HostFixture['api']['readAgentOutputEvents']>[0]) {
+    return this.#host.api.readAgentOutputEvents(input);
+  }
+
+  armAgentOutputFirstWriteBarrier(parties = 2): void {
+    this.#host.armAgentOutputFirstWriteBarrier(parties);
   }
 
   target(): PipelineTarget {

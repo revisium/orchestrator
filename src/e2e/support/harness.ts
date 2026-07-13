@@ -17,6 +17,7 @@ import { RevisiumModule } from '../../revisium/revisium.module.js';
 import { RevoPrismaService } from '../../storage/revo-prisma.service.js';
 import { ensureStorage } from '../../storage/ensure-storage.js';
 import { PipelineService } from '../../pipeline/pipeline.service.js';
+import { AGENT_OUTPUT_STREAM_PREFIX, type AgentOutputEvent } from '../../observability/types.js';
 import { WorktreeService } from '../../runners/worktree.service.js';
 import { worktreePathFor } from '../../control-plane/resolve-cwd.js';
 import { TaskControlPlaneApiService } from '../../task-control-plane/task-control-plane-api.service.js';
@@ -39,6 +40,7 @@ export type HostFixture = {
   casePlans: CasePlanRegistry;
   agentCalls: AgentCall[];
   ghCalls: string[][];
+  armAgentOutputFirstWriteBarrier: (parties?: number) => void;
   /**
    * Shut the file-local DBOS runtime down. The suite-level host daemon owns embedded Postgres.
    * `keepWorkflowsParked` skips the DBOS-level workflow cancel sweep — only for tests whose
@@ -61,6 +63,74 @@ export async function createHostFixture(opts: HostFixtureOptions = {}): Promise<
     await bootstrapEngineControlPlane(engine, prisma);
   }
   const dbos = new DbosService();
+  const realWriteStream = dbos.writeStream.bind(dbos);
+  type PendingWrite = {
+    key: string;
+    value: AgentOutputEvent;
+    resolve: () => void;
+    reject: (error: unknown) => void;
+  };
+  type WriteBarrier = {
+    parties: number;
+    pending: Map<string, PendingWrite>;
+    timer: ReturnType<typeof setTimeout>;
+  };
+  let writeBarrier: WriteBarrier | undefined;
+  const armAgentOutputFirstWriteBarrier = (parties = 2): void => {
+    if (!Number.isInteger(parties) || parties < 1) throw new Error(`invalid agent output barrier parties: ${parties}`);
+    if (writeBarrier) throw new Error('agent output first-write barrier is already armed');
+    const pending = new Map<string, PendingWrite>();
+    const timer = setTimeout(() => {
+      const barrier = writeBarrier;
+      if (!barrier) return;
+      writeBarrier = undefined;
+      const error = new Error(
+        `agent output first-write barrier timed out after 7500ms: received ${barrier.pending.size}/${barrier.parties} distinct attempts`,
+      );
+      for (const entry of barrier.pending.values()) entry.reject(error);
+    }, 7500);
+    writeBarrier = { parties, pending, timer };
+  };
+  dbos.writeStream = async <T>(key: string, value: T): Promise<void> => {
+    const barrier = writeBarrier;
+    const event = value as AgentOutputEvent;
+    if (
+      !barrier ||
+      !(key === 'agent-output' || key.startsWith(AGENT_OUTPUT_STREAM_PREFIX) || key === 'agent-output-v1') ||
+      event?.attemptSeq !== 1 ||
+      typeof event.attemptId !== 'string'
+    ) {
+      return realWriteStream(key, value);
+    }
+    const existing = barrier.pending.get(event.attemptId);
+    if (existing) {
+      return new Promise<void>((resolve, reject) => {
+        const originalResolve = existing.resolve;
+        const originalReject = existing.reject;
+        existing.resolve = () => {
+          originalResolve();
+          resolve();
+        };
+        existing.reject = (error) => {
+          originalReject(error);
+          reject(error);
+        };
+      });
+    }
+    const promise = new Promise<void>((resolve, reject) => {
+      barrier.pending.set(event.attemptId, { key, value: event, resolve, reject });
+    });
+    if (barrier.pending.size === barrier.parties) {
+      writeBarrier = undefined;
+      clearTimeout(barrier.timer);
+      const writes = [...barrier.pending.values()].map((entry) => realWriteStream(entry.key, entry.value));
+      Promise.all(writes).then(
+        () => barrier.pending.forEach((entry) => entry.resolve()),
+        (error) => barrier.pending.forEach((entry) => entry.reject(error)),
+      );
+    }
+    return promise;
+  };
   const lifecycle = new HostLifecycle(dbos);
   const roles = context.get(RolesService, { strict: false });
   const runs = context.get(RunService, { strict: false });
@@ -92,6 +162,11 @@ export async function createHostFixture(opts: HostFixtureOptions = {}): Promise<
   const observability = new AgentObservabilityService({
     artifactRoot: join(getConfig().dataDir, 'run-artifacts'),
     runExists: async (id) => Boolean(await runs.getRun(id)),
+    listAgentOutputStreamRegistrations: (id) => runs.listAgentOutputStreamRegistrations(id),
+    runStatus: async (id) => {
+      const run = await runs.getRun(id);
+      return typeof run?.data.status === 'string' ? run.data.status : undefined;
+    },
     dbos: {
       getEvent: (workflowID, key, opts) => dbos.getEvent(workflowID, key, opts),
       readStream: (workflowID, key) => dbos.readStream(workflowID, key),
@@ -116,6 +191,7 @@ export async function createHostFixture(opts: HostFixtureOptions = {}): Promise<
     casePlans,
     agentCalls,
     ghCalls,
+    armAgentOutputFirstWriteBarrier,
     close: async (opts?: { keepWorkflowsParked?: boolean }): Promise<void> => {
       if (closed) return;
       closed = true;

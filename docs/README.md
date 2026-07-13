@@ -53,6 +53,7 @@ There is no internal archive of obsolete plans. Git history is the archive.
 | Script/effect registration or execution | [script runtime v1](./specs/script-runtime-v1.spec.md) | Current: `src/pipeline/data-driven-task.workflow.ts`, `src/runners/integrator.ts`; Draft target: `src/system-scripts/**`, pipeline script refs, runtime effect adapter |
 | Repository, worktree, or resource lifecycle | [resources, workspaces, and effects v1](./specs/resources-workspaces-effects-v1.spec.md) | Current: `src/worker/git-worktree-manager.ts`; Draft target: `src/run-resources/**`, `src/workspaces/**`, pipeline declarations, artifact refs |
 | Context compression or prompt inputs | [context-budget.md](./context-budget.md) | `src/worker/build-context.ts`, run output references, role prompt composition |
+| Agent output registration, per-attempt streams, fan-in, or observability cursors | [agent output observability v1](./specs/agent-output-observability-v1.spec.md), [ADR-0013](./adr/0013-agent-output-observability-fan-in.md) | `src/run/register-agent-output-stream.ts`, `src/observability/**`, pipeline registration wiring |
 
 ## Diagrams
 
@@ -75,6 +76,7 @@ generated PNG diagrams unless the asset is genuinely visual and cannot be repres
 | [ADR-0010](./adr/0010-run-resources-and-workspace-planning.md) | Draft | Named run resources, isolated workspaces, and immutable execution-plan compilation |
 | [ADR-0011](./adr/0011-system-script-runtime-and-trusted-extensions.md) | Draft | Bounded script definitions, explicit registration, and trusted startup extensions |
 | [ADR-0012](./adr/0012-acp-process-and-session-isolation.md) | Accepted | ACP process and session isolation for MVP v1 |
+| [ADR-0013](./adr/0013-agent-output-observability-fan-in.md) | Accepted | Per-attempt agent output registration and bounded fan-in |
 
 ADR-0001 and ADR-0002 are immutable historical decisions. Their Revisium runtime-storage descriptions do not reflect
 shipped ownership; current facts live in [control-plane-schema.md](./control-plane-schema.md) and

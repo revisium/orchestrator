@@ -4,7 +4,7 @@ import { getConfig } from '../../config.js';
 import { worktreeMarkerFor, worktreePathFor } from '../../control-plane/resolve-cwd.js';
 import { branchName } from '../../runners/integrator.js';
 import { taskBranchPrefix } from '../../runners/integrator-branch-naming.js';
-import { AGENT_OUTPUT_STREAM_KEY, type AgentOutputEvent } from '../../observability/types.js';
+import type { AgentOutputEvent } from '../../observability/types.js';
 import type { AgentSpec } from './agents.js';
 import { executionPlanFromRouteDecision, type RouteDecision } from '../../pipeline/route-contract.js';
 import {
@@ -416,8 +416,12 @@ export class IntegrationRun {
 
   async expectAgentOutput(marker: string): Promise<void> {
     const events: AgentOutputEvent[] = [];
-    for await (const event of this.#host.dbos.readStream<AgentOutputEvent>(this.runId, AGENT_OUTPUT_STREAM_KEY)) {
-      events.push(event);
+    let cursor: string | undefined;
+    for (;;) {
+      const page = await this.#host.api.readAgentOutputEvents({ runId: this.runId, cursor, limit: 100 });
+      events.push(...page.events);
+      if (page.events.length === 0 || !page.nextCursor) break;
+      cursor = page.nextCursor;
     }
     assert.ok(events.length > 0, 'agent output stream must contain reporter events');
     assert.ok(events.some((event) => JSON.stringify(event).includes(marker)));

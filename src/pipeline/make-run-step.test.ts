@@ -119,6 +119,7 @@ function makeLoadPipelineContext(taskId = 'task-001') {
 
 type Harness = {
   loadRoleArgs: string[];
+  registerArgs: Array<{ runId: string; taskId: string; stepId: string; attemptId: string }>;
   appendEventArgs: AppendEventInput[];
   appendCostInputs: AppendCostInput[];
   appendAttemptInputs: AppendAttemptInput[];
@@ -134,7 +135,7 @@ function buildRunStepDeps(opts: { roles?: Map<string, Role> } = {}): {
   harness: Harness;
   throwingClaudeCode: RunAgent;
 } {
-  const harness: Harness = { loadRoleArgs: [], appendEventArgs: [], appendCostInputs: [], appendAttemptInputs: [] };
+  const harness: Harness = { loadRoleArgs: [], registerArgs: [], appendEventArgs: [], appendCostInputs: [], appendAttemptInputs: [] };
 
   const roles = opts.roles ?? new Map<string, Role>([
     ['role-doc-architect', makeRole('architect')],
@@ -160,6 +161,9 @@ function buildRunStepDeps(opts: { roles?: Map<string, Role> } = {}): {
     },
     appendAttempt: async (input: AppendAttemptInput): Promise<void> => {
       harness.appendAttemptInputs.push(input);
+    },
+    registerAgentOutputStream: async (input) => {
+      harness.registerArgs.push(input);
     },
     runAgent: createRunAgent({ claudeCode: throwingClaudeCode, script: stubRunAgent }),
   };
@@ -432,6 +436,23 @@ test('params.planPath context error fails before launching the agent', async () 
 
   assert.equal(launched, false, 'agent must not launch without required context');
   assert.equal(harness.appendEventArgs.at(-1)?.type, 'step_failed');
+  assert.equal(harness.registerArgs.length, 0, 'stream registration must follow successful context construction');
+});
+
+test('stream registration is durable before runner invocation', async () => {
+  const { deps, harness } = buildRunStepDeps();
+  const order: string[] = [];
+  deps.registerAgentOutputStream = async (input) => {
+    order.push('register');
+    harness.registerArgs.push(input);
+  };
+  deps.runAgent = async () => {
+    order.push('runner');
+    return { output: 'ok', verdict: 'approved', nextSteps: [], costs: [], needsHuman: false };
+  };
+  await makeRunStep(deps)('run-register', 'developer', 'developer', {}, BINDING);
+  assert.deepEqual(order, ['register', 'runner']);
+  assert.equal(harness.registerArgs[0]?.attemptId.startsWith('attempt_'), true);
 });
 
 test('per-role runner threading: a resolved stub runner dispatches via the stub (never the throwing claude-code)', async () => {
