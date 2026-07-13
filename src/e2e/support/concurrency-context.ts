@@ -131,14 +131,7 @@ export class ConcurrencyContext {
   }
 
   async startLocalChanges(count: number): Promise<readonly ConcurrentRun[]> {
-    const runs: Awaited<ReturnType<typeof startLocalChangeRun>>[] = [];
-    // Compile and persist each plan serially, then submit the durable workflows together. This
-    // preserves the worker-queue burst J1 exercises without making ten route compilations compete
-    // for the shared embedded-Postgres pool during setup.
-    for (let index = 0; index < count; index += 1) {
-      runs.push(await startLocalChangeRun(this.#host, process.cwd(), false));
-    }
-    await Promise.all(runs.map((run) => this.#host.api.startRun({ runId: run.runId })));
+    const runs = await Promise.all(Array.from({ length: count }, () => startLocalChangeRun(this.#host)));
     return runs.map((run) => new ConcurrentRun(this.#host, run));
   }
 

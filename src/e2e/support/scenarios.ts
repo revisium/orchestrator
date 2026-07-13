@@ -45,7 +45,7 @@ export async function givenInstalledPlaybook(h: HostFixture): Promise<void> {
 }
 
 /** Create + start a `local-change` run (developer-only, stub agent). Returns the started run. */
-export async function startLocalChangeRun(h: HostFixture, repo: string = process.cwd(), start = true) {
+export async function startLocalChangeRun(h: HostFixture, repo: string = process.cwd()) {
   const created = await h.api.createRun({
     repo,
     title: 'E2E local-change deterministic agent',
@@ -57,7 +57,7 @@ export async function startLocalChangeRun(h: HostFixture, repo: string = process
     start: false,
   });
   h.casePlans.register(created.taskId, { title: 'fixture local-change' });
-  const workflow = start ? await h.api.startRun({ runId: created.runId }) : undefined;
+  const workflow = await h.api.startRun({ runId: created.runId });
   return { ...created, workflow };
 }
 
