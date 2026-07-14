@@ -119,4 +119,32 @@ test('singleton runtime factory resolves fresh bound transient ACP objects', asy
   assert.deepEqual(secondPermissionRequests.map(({ sessionId, toolCallId }) => ({ sessionId, toolCallId })), [
     { sessionId: 'permission-second', toolCallId: 'tool-second' },
   ]);
+
+  const firstOutcomeCollector = await factory.createOutcomeCollector({
+    expectedSessionId: 'outcome-first',
+  });
+  const secondOutcomeCollector = await factory.createOutcomeCollector({
+    expectedSessionId: 'outcome-second',
+  });
+  assert.notStrictEqual(firstOutcomeCollector, secondOutcomeCollector);
+  assert.deepEqual(firstOutcomeCollector.collect({
+    kind: 'agent-text',
+    sessionId: 'outcome-first',
+    text: 'first',
+  }), { outcome: 'accepted' });
+  assert.deepEqual(secondOutcomeCollector.collect({
+    kind: 'agent-text',
+    sessionId: 'outcome-second',
+    text: 'second',
+  }), { outcome: 'accepted' });
+  assert.deepEqual(firstOutcomeCollector.snapshot(), {
+    sessionId: 'outcome-first',
+    text: 'first',
+    diagnostics: [],
+  });
+  assert.deepEqual(secondOutcomeCollector.snapshot(), {
+    sessionId: 'outcome-second',
+    text: 'second',
+    diagnostics: [],
+  });
 });
