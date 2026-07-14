@@ -11,11 +11,11 @@ import {
 import {
   AcpPromptOutcomeCollector,
   type AcpPromptOutcomeCollectorDeps,
-} from './interaction/prompt-outcome-collector.js';
+} from './prompt-execution/prompt-outcome-collector.js';
 import {
   AcpRequestPermissionHandler,
   type AcpRequestPermissionHandlerDeps,
-} from './interaction/request-permission-handler.js';
+} from './prompt-execution/request-permission-handler.js';
 import { AcpSession } from './session.js';
 import type { CreateAcpSessionDependencies } from './session.types.js';
 

@@ -5,7 +5,7 @@ import { AcpModule } from '../acp.module.js';
 import { AcpRuntimeFactory } from '../acp-runtime.factory.js';
 import type { JsonRpcConnection } from '../jsonrpc/connection.types.js';
 import type { JsonRpcParams, JsonRpcValue } from '../jsonrpc/types.js';
-import type { PermissionResolutionRequest } from '../interaction/request-permission-handler.js';
+import type { PermissionResolutionRequest } from '../prompt-execution/request-permission-handler.js';
 
 type Request = { method: string; params: JsonRpcParams | undefined };
 
