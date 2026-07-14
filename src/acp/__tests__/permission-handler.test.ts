@@ -119,6 +119,60 @@ test('cancels a permission request whose params are not a record', async () => {
   assert.equal(resolverCalls, 0);
 });
 
+test('contains hostile permission request shapes as malformed requests', async () => {
+  let resolverCalls = 0;
+  const handler = new AcpPermissionHandler();
+  handler.bind({
+    expectedSessionId: 'session-1',
+    async resolvePermission() {
+      resolverCalls += 1;
+      return { outcome: 'select', optionKind: 'allow_once' };
+    },
+  });
+  const validParams = {
+    sessionId: 'session-1',
+    toolCall: { toolCallId: 'tool-1' },
+    options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }],
+  };
+  const accessorParams = {
+    get sessionId(): string { throw new Error('hostile session accessor'); },
+    toolCall: validParams.toolCall,
+    options: validParams.options,
+  };
+  const trappedParams = new Proxy(validParams, {
+    ownKeys() { throw new Error('hostile request proxy'); },
+  });
+  const revokedParams = Proxy.revocable(validParams, {});
+  revokedParams.revoke();
+  const pollutedParams = Object.assign(Object.create({ polluted: true }), validParams);
+  const accessorOption = {
+    get optionId(): string { throw new Error('hostile option accessor'); },
+    name: 'Allow',
+    kind: 'allow_once',
+  };
+  const trappedOptions = new Proxy(validParams.options, {
+    ownKeys() { throw new Error('hostile options proxy'); },
+  });
+  const cases: unknown[] = [
+    accessorParams,
+    trappedParams,
+    revokedParams.proxy,
+    pollutedParams,
+    { ...validParams, options: [accessorOption] },
+    { ...validParams, options: trappedOptions },
+  ];
+
+  for (const params of cases) {
+    assert.deepEqual(await handler.handle(params), {
+      outcome: 'cancelled',
+      reason: 'malformed-request',
+      response: { outcome: { outcome: 'cancelled' } },
+      diagnostics: [{ severity: 'error', reason: 'malformed-request', message: 'Permission request is malformed' }],
+    });
+  }
+  assert.equal(resolverCalls, 0);
+});
+
 test('cancels permission requests without an own string sessionId', async () => {
   let resolverCalls = 0;
   const handler = new AcpPermissionHandler();
@@ -436,6 +490,68 @@ test('cancels an invalid resolver decision', async () => {
     diagnostics: [{ severity: 'error', reason: 'invalid-decision', message: 'Permission resolver returned an invalid decision' }],
   });
   assert.equal(resolverCalls, 1);
+});
+
+test('contains hostile resolver decisions as invalid decisions', async () => {
+  const validParams = {
+    sessionId: 'session-1',
+    toolCall: { toolCallId: 'tool-1' },
+    options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }],
+  };
+  const accessorDecision = {
+    get outcome(): string { throw new Error('hostile decision accessor'); },
+  };
+  const trappedDecision = new Proxy({ outcome: 'cancel' }, {
+    ownKeys() { throw new Error('hostile decision proxy'); },
+  });
+  const pollutedDecision = Object.assign(Object.create({ polluted: true }), { outcome: 'cancel' });
+  const decisions: unknown[] = [
+    accessorDecision,
+    trappedDecision,
+    pollutedDecision,
+  ];
+
+  for (const rawDecision of decisions) {
+    const handler = new AcpPermissionHandler();
+    handler.bind({
+      expectedSessionId: 'session-1',
+      resolvePermission: (async () => rawDecision) as PermissionResolver,
+    });
+
+    assert.deepEqual(await handler.handle(validParams), {
+      outcome: 'cancelled',
+      reason: 'invalid-decision',
+      response: { outcome: { outcome: 'cancelled' } },
+      diagnostics: [{
+        severity: 'error',
+        reason: 'invalid-decision',
+        message: 'Permission resolver returned an invalid decision',
+      }],
+    });
+  }
+});
+
+test('contains a revoked resolver result as a resolver failure', async () => {
+  const revokedDecision = Proxy.revocable({ outcome: 'cancel' }, {});
+  revokedDecision.revoke();
+  const handler = new AcpPermissionHandler();
+  handler.bind({
+    expectedSessionId: 'session-1',
+    resolvePermission: (async () => revokedDecision.proxy) as PermissionResolver,
+  });
+
+  const result = await handler.handle({
+    sessionId: 'session-1',
+    toolCall: { toolCallId: 'tool-1' },
+    options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }],
+  });
+
+  assert.deepEqual(result, {
+    outcome: 'cancelled',
+    reason: 'resolver-failed',
+    response: { outcome: { outcome: 'cancelled' } },
+    diagnostics: [{ severity: 'error', reason: 'resolver-failed', message: 'Permission resolver failed' }],
+  });
 });
 
 test('contains resolver failure without exposing the thrown message', async () => {

@@ -1,6 +1,6 @@
 import { Injectable, Scope } from '@nestjs/common';
 import type { AcpInteractionDiagnostic } from './interaction-diagnostic.types.js';
-import { canonicalizeJsonRpcValue } from './jsonrpc/canonicalizer.js';
+import { canonicalizeJsonRpcValue, snapshotJsonRpcRecord } from './jsonrpc/canonicalizer.js';
 import type { JsonRpcValue } from './jsonrpc/types.js';
 
 export type PermissionOptionKind =
@@ -75,10 +75,6 @@ type ParsedPermissionRequest =
   | Readonly<{ outcome: 'valid'; request: PermissionResolutionRequest }>
   | Readonly<{ outcome: 'invalid' }>;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
 function isPermissionOptionKind(value: unknown): value is PermissionOptionKind {
   return value === 'allow_once' ||
     value === 'allow_always' ||
@@ -87,13 +83,12 @@ function isPermissionOptionKind(value: unknown): value is PermissionOptionKind {
 }
 
 function parsePermissionOption(value: unknown): PermissionOption | undefined {
-  if (!isRecord(value)) return undefined;
-  const rawOptionId = value.optionId;
-  const rawName = value.name;
-  const rawKind = value.kind;
-  if (!Object.hasOwn(value, 'optionId') || typeof rawOptionId !== 'string') return undefined;
-  if (!Object.hasOwn(value, 'name') || typeof rawName !== 'string') return undefined;
-  if (!Object.hasOwn(value, 'kind') || !isPermissionOptionKind(rawKind)) return undefined;
+  const snapshot = snapshotJsonRpcRecord(value);
+  if (!snapshot) return undefined;
+  const { optionId: rawOptionId, name: rawName, kind: rawKind } = snapshot;
+  if (!Object.hasOwn(snapshot, 'optionId') || typeof rawOptionId !== 'string') return undefined;
+  if (!Object.hasOwn(snapshot, 'name') || typeof rawName !== 'string') return undefined;
+  if (!Object.hasOwn(snapshot, 'kind') || !isPermissionOptionKind(rawKind)) return undefined;
   return { optionId: rawOptionId, name: rawName, kind: rawKind };
 }
 
@@ -102,18 +97,13 @@ function invalidPermissionRequest(): ParsedPermissionRequest {
 }
 
 function parsePermissionRequest(value: unknown): ParsedPermissionRequest {
-  if (!isRecord(value)) return invalidPermissionRequest();
-  const rawSessionId = value.sessionId;
-  if (!Object.hasOwn(value, 'sessionId') || typeof rawSessionId !== 'string') {
+  const snapshot = snapshotJsonRpcRecord(value);
+  if (!snapshot) return invalidPermissionRequest();
+  const { sessionId: rawSessionId, toolCall: rawToolCall, options: rawOptions } = snapshot;
+  if (!Object.hasOwn(snapshot, 'sessionId') || typeof rawSessionId !== 'string') {
     return invalidPermissionRequest();
   }
-  const rawToolCall = value.toolCall;
-  if (
-    !Object.hasOwn(value, 'toolCall') ||
-    rawToolCall === null ||
-    typeof rawToolCall !== 'object' ||
-    Array.isArray(rawToolCall)
-  ) {
+  if (!Object.hasOwn(snapshot, 'toolCall')) {
     return invalidPermissionRequest();
   }
   const canonicalToolCall = canonicalizeJsonRpcValue(rawToolCall);
@@ -133,12 +123,13 @@ function parsePermissionRequest(value: unknown): ParsedPermissionRequest {
   ) {
     return invalidPermissionRequest();
   }
-  const rawOptions = value.options;
-  if (!Object.hasOwn(value, 'options') || !Array.isArray(rawOptions)) {
+  if (!Object.hasOwn(snapshot, 'options')) {
     return invalidPermissionRequest();
   }
+  const canonicalOptions = canonicalizeJsonRpcValue(rawOptions);
+  if (!Array.isArray(canonicalOptions)) return invalidPermissionRequest();
   const options: PermissionOption[] = [];
-  for (const rawOption of rawOptions) {
+  for (const rawOption of canonicalOptions) {
     const option = parsePermissionOption(rawOption);
     if (!option) return invalidPermissionRequest();
     options.push(option);
@@ -165,12 +156,12 @@ function copyResolutionRequest(request: PermissionResolutionRequest): Permission
 }
 
 function parseResolutionDecision(value: unknown): PermissionResolutionDecision | undefined {
-  if (!isRecord(value) || !Object.hasOwn(value, 'outcome')) return undefined;
-  const rawOutcome = value.outcome;
+  const snapshot = snapshotJsonRpcRecord(value);
+  if (!snapshot || !Object.hasOwn(snapshot, 'outcome')) return undefined;
+  const { outcome: rawOutcome, optionKind: rawOptionKind } = snapshot;
   if (rawOutcome === 'cancel') return { outcome: 'cancel' };
   if (rawOutcome !== 'select') return undefined;
-  const rawOptionKind = value.optionKind;
-  if (!Object.hasOwn(value, 'optionKind') || !isPermissionOptionKind(rawOptionKind)) return undefined;
+  if (!Object.hasOwn(snapshot, 'optionKind') || !isPermissionOptionKind(rawOptionKind)) return undefined;
   return { outcome: 'select', optionKind: rawOptionKind };
 }
 
