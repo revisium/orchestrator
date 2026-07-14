@@ -5,6 +5,7 @@ import { AcpModule } from '../acp.module.js';
 import { AcpRuntimeFactory } from '../acp-runtime.factory.js';
 import type { JsonRpcConnection } from '../jsonrpc/connection.types.js';
 import type { JsonRpcParams, JsonRpcValue } from '../jsonrpc/types.js';
+import type { PermissionResolutionRequest } from '../permission-handler.js';
 
 type Request = { method: string; params: JsonRpcParams | undefined };
 
@@ -75,4 +76,47 @@ test('singleton runtime factory resolves fresh bound transient ACP objects', asy
   assert.equal(secondSession.getSessionId(), 'second');
   assert.deepEqual(firstSessionConnection.requests.map(({ method }) => method), ['initialize', 'session/new']);
   assert.deepEqual(secondSessionConnection.requests.map(({ method }) => method), ['initialize', 'session/new']);
+
+  const firstPermissionRequests: PermissionResolutionRequest[] = [];
+  const secondPermissionRequests: PermissionResolutionRequest[] = [];
+  const firstPermissionHandler = await factory.createPermissionHandler({
+    expectedSessionId: 'permission-first',
+    async resolvePermission(request) {
+      firstPermissionRequests.push(request);
+      return { outcome: 'select', optionKind: 'allow_once' };
+    },
+  });
+  const secondPermissionHandler = await factory.createPermissionHandler({
+    expectedSessionId: 'permission-second',
+    async resolvePermission(request) {
+      secondPermissionRequests.push(request);
+      return { outcome: 'select', optionKind: 'reject_once' };
+    },
+  });
+  assert.notStrictEqual(firstPermissionHandler, secondPermissionHandler);
+
+  const firstPermissionResult = await firstPermissionHandler.handle({
+    sessionId: 'permission-first',
+    toolCall: { toolCallId: 'tool-first' },
+    options: [{ optionId: 'allow-first', name: 'Allow first', kind: 'allow_once' }],
+  });
+  const secondPermissionResult = await secondPermissionHandler.handle({
+    sessionId: 'permission-second',
+    toolCall: { toolCallId: 'tool-second' },
+    options: [{ optionId: 'reject-second', name: 'Reject second', kind: 'reject_once' }],
+  });
+  assert.deepEqual(firstPermissionResult, {
+    outcome: 'selected',
+    response: { outcome: { outcome: 'selected', optionId: 'allow-first' } },
+  });
+  assert.deepEqual(secondPermissionResult, {
+    outcome: 'selected',
+    response: { outcome: { outcome: 'selected', optionId: 'reject-second' } },
+  });
+  assert.deepEqual(firstPermissionRequests.map(({ sessionId, toolCallId }) => ({ sessionId, toolCallId })), [
+    { sessionId: 'permission-first', toolCallId: 'tool-first' },
+  ]);
+  assert.deepEqual(secondPermissionRequests.map(({ sessionId, toolCallId }) => ({ sessionId, toolCallId })), [
+    { sessionId: 'permission-second', toolCallId: 'tool-second' },
+  ]);
 });

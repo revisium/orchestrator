@@ -8,6 +8,7 @@ import {
   AcpJsonRpcFramer,
   type JsonRpcFramerOptions,
 } from './jsonrpc/framer.js';
+import { AcpPermissionHandler, type AcpPermissionHandlerDeps } from './permission-handler.js';
 import { AcpSession } from './session.js';
 import type { CreateAcpSessionDependencies } from './session.types.js';
 
@@ -31,5 +32,13 @@ export class AcpRuntimeFactory {
     const session = await this.moduleRef.resolve(AcpSession);
     session.bindDependencies(deps);
     return session;
+  }
+
+  async createPermissionHandler(
+    deps: AcpPermissionHandlerDeps,
+  ): Promise<AcpPermissionHandler> {
+    const handler = await this.moduleRef.resolve(AcpPermissionHandler);
+    handler.bind(deps);
+    return handler;
   }
 }
