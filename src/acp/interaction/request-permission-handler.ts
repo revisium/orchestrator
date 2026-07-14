@@ -1,7 +1,7 @@
 import { Injectable, Scope } from '@nestjs/common';
-import type { AcpInteractionDiagnostic } from './interaction-diagnostic.types.js';
-import { canonicalizeJsonRpcValue, snapshotJsonRpcRecord } from './jsonrpc/canonicalizer.js';
-import type { JsonRpcValue } from './jsonrpc/types.js';
+import type { AcpInteractionDiagnostic } from './diagnostic.js';
+import { canonicalizeJsonRpcValue, snapshotJsonRpcRecord } from '../jsonrpc/canonicalizer.js';
+import type { JsonRpcValue } from '../jsonrpc/types.js';
 
 export type PermissionOptionKind =
   | 'allow_once'
@@ -32,7 +32,7 @@ export type PermissionResolver = (
   request: PermissionResolutionRequest,
 ) => Promise<PermissionResolutionDecision>;
 
-export type AcpPermissionHandlerDeps = Readonly<{
+export type AcpRequestPermissionHandlerDeps = Readonly<{
   expectedSessionId: string;
   resolvePermission: PermissionResolver;
 }>;
@@ -188,10 +188,10 @@ function cancelPermission(reason: PermissionCancellationReason): PermissionHandl
 }
 
 @Injectable({ scope: Scope.TRANSIENT })
-export class AcpPermissionHandler {
-  private deps: AcpPermissionHandlerDeps | undefined;
+export class AcpRequestPermissionHandler {
+  private deps: AcpRequestPermissionHandlerDeps | undefined;
 
-  bind(deps: AcpPermissionHandlerDeps): void {
+  bind(deps: AcpRequestPermissionHandlerDeps): void {
     if (this.deps) throw new Error('ACP permission handler is already bound');
     this.deps = deps;
   }
@@ -225,7 +225,7 @@ export class AcpPermissionHandler {
     };
   }
 
-  private requireDeps(): AcpPermissionHandlerDeps {
+  private requireDeps(): AcpRequestPermissionHandlerDeps {
     if (!this.deps) throw new Error('ACP permission handler is not bound');
     return this.deps;
   }

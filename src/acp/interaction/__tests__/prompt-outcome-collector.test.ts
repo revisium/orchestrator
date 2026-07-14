@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { AcpOutcomeCollector, type AcpStopReason } from '../outcome-collector.js';
+import { AcpPromptOutcomeCollector, type AcpStopReason } from '../prompt-outcome-collector.js';
 
 const STOP_REASONS: readonly AcpStopReason[] = [
   'end_turn',
@@ -11,7 +11,7 @@ const STOP_REASONS: readonly AcpStopReason[] = [
 ];
 
 test('collects text in arrival order and completes with a stop reason', () => {
-  const collector = new AcpOutcomeCollector();
+  const collector = new AcpPromptOutcomeCollector();
   collector.bind({ expectedSessionId: 'session-1' });
 
   assert.deepEqual(collector.collect({
@@ -37,7 +37,7 @@ test('collects text in arrival order and completes with a stop reason', () => {
 });
 
 test('returns a fresh accepted result for every call', () => {
-  const collector = new AcpOutcomeCollector();
+  const collector = new AcpPromptOutcomeCollector();
   collector.bind({ expectedSessionId: 'session-1' });
 
   const first = collector.collect({
@@ -55,7 +55,7 @@ test('returns a fresh accepted result for every call', () => {
 });
 
 test('rejects every public operation before binding', () => {
-  const collector = new AcpOutcomeCollector();
+  const collector = new AcpPromptOutcomeCollector();
   const expected = new Error('ACP outcome collector is not bound');
 
   assert.throws(() => collector.collect({
@@ -71,7 +71,7 @@ test('rejects every public operation before binding', () => {
 });
 
 test('rejects binding dependencies more than once', () => {
-  const collector = new AcpOutcomeCollector();
+  const collector = new AcpPromptOutcomeCollector();
   collector.bind({ expectedSessionId: 'session-1' });
 
   assert.throws(
@@ -81,7 +81,7 @@ test('rejects binding dependencies more than once', () => {
 });
 
 test('preserves normalized diagnostics in arrival order', () => {
-  const collector = new AcpOutcomeCollector();
+  const collector = new AcpPromptOutcomeCollector();
   collector.bind({ expectedSessionId: 'session-1' });
   const first = { severity: 'warning' as const, reason: 'first', message: 'First' };
   const second = { severity: 'error' as const, reason: 'second', message: 'Second' };
@@ -93,7 +93,7 @@ test('preserves normalized diagnostics in arrival order', () => {
 });
 
 test('isolates diagnostics from input and returned snapshot mutation', () => {
-  const collector = new AcpOutcomeCollector();
+  const collector = new AcpPromptOutcomeCollector();
   collector.bind({ expectedSessionId: 'session-1' });
   const diagnostic = { severity: 'warning' as const, reason: 'stable', message: 'Stable' };
 
@@ -116,7 +116,7 @@ test('isolates diagnostics from input and returned snapshot mutation', () => {
 });
 
 test('preserves reported usage and cost', () => {
-  const collector = new AcpOutcomeCollector();
+  const collector = new AcpPromptOutcomeCollector();
   collector.bind({ expectedSessionId: 'session-1' });
 
   collector.collect({
@@ -137,7 +137,7 @@ test('preserves reported usage and cost', () => {
 });
 
 test('isolates reported usage and cost from input and snapshot mutation', () => {
-  const collector = new AcpOutcomeCollector();
+  const collector = new AcpPromptOutcomeCollector();
   collector.bind({ expectedSessionId: 'session-1' });
   const reportedCost = { amount: 2.5, currency: 'EUR' };
 
@@ -169,7 +169,7 @@ test('isolates reported usage and cost from input and snapshot mutation', () => 
 });
 
 test('replaces usage while preserving the last reported cost when omitted', () => {
-  const collector = new AcpOutcomeCollector();
+  const collector = new AcpPromptOutcomeCollector();
   collector.bind({ expectedSessionId: 'session-1' });
   collector.collect({
     kind: 'usage',
@@ -191,7 +191,7 @@ test('replaces usage while preserving the last reported cost when omitted', () =
 });
 
 test('keeps optional snapshot properties absent before they are reported', () => {
-  const collector = new AcpOutcomeCollector();
+  const collector = new AcpPromptOutcomeCollector();
   collector.bind({ expectedSessionId: 'session-1' });
 
   const snapshot = collector.snapshot();
@@ -214,7 +214,7 @@ test('rejects every foreign-session event without changing state', () => {
   ] as const;
 
   for (const event of events) {
-    const collector = new AcpOutcomeCollector();
+    const collector = new AcpPromptOutcomeCollector();
     collector.bind({ expectedSessionId: 'session-1' });
     collector.collect({ kind: 'agent-text', sessionId: 'session-1', text: 'kept' });
     const before = collector.snapshot();
@@ -234,7 +234,7 @@ test('rejects every foreign-session event without changing state', () => {
 });
 
 test('rejects a duplicate terminal and preserves the first stop reason', () => {
-  const collector = new AcpOutcomeCollector();
+  const collector = new AcpPromptOutcomeCollector();
   collector.bind({ expectedSessionId: 'session-1' });
   collector.complete({ sessionId: 'session-1', stopReason: 'end_turn' });
 
@@ -264,7 +264,7 @@ test('rejects every stream update after terminal without changing state', () => 
   ] as const;
 
   for (const event of events) {
-    const collector = new AcpOutcomeCollector();
+    const collector = new AcpPromptOutcomeCollector();
     collector.bind({ expectedSessionId: 'session-1' });
     collector.collect({ kind: 'agent-text', sessionId: 'session-1', text: 'kept' });
     collector.complete({ sessionId: 'session-1', stopReason: 'end_turn' });
@@ -284,7 +284,7 @@ test('rejects every stream update after terminal without changing state', () => 
 });
 
 test('keeps all nested snapshot values isolated together', () => {
-  const collector = new AcpOutcomeCollector();
+  const collector = new AcpPromptOutcomeCollector();
   collector.bind({ expectedSessionId: 'session-1' });
   collector.collect({
     kind: 'diagnostic',
@@ -317,7 +317,7 @@ test('keeps all nested snapshot values isolated together', () => {
 });
 
 test('returns a fresh rejection and diagnostics for every rejected event', () => {
-  const collector = new AcpOutcomeCollector();
+  const collector = new AcpPromptOutcomeCollector();
   collector.bind({ expectedSessionId: 'session-1' });
   const event = { kind: 'agent-text' as const, sessionId: 'foreign', text: 'ignored' };
 
@@ -345,7 +345,7 @@ test('returns a fresh rejection and diagnostics for every rejected event', () =>
 
 test('preserves every ACP stop reason exactly', () => {
   for (const stopReason of STOP_REASONS) {
-    const collector = new AcpOutcomeCollector();
+    const collector = new AcpPromptOutcomeCollector();
     collector.bind({ expectedSessionId: 'session-1' });
     collector.complete({ sessionId: 'session-1', stopReason });
     assert.equal(collector.snapshot().stopReason, stopReason);

@@ -2,8 +2,8 @@ import { Module } from '@nestjs/common';
 import { AcpRuntimeFactory } from './acp-runtime.factory.js';
 import { AcpJsonRpcConnection } from './jsonrpc/connection.js';
 import { AcpJsonRpcFramer } from './jsonrpc/framer.js';
-import { AcpOutcomeCollector } from './outcome-collector.js';
-import { AcpPermissionHandler } from './permission-handler.js';
+import { AcpPromptOutcomeCollector } from './interaction/prompt-outcome-collector.js';
+import { AcpRequestPermissionHandler } from './interaction/request-permission-handler.js';
 import { AcpSession } from './session.js';
 
 @Module({
@@ -12,8 +12,8 @@ import { AcpSession } from './session.js';
     AcpJsonRpcFramer,
     AcpJsonRpcConnection,
     AcpSession,
-    AcpPermissionHandler,
-    AcpOutcomeCollector,
+    AcpRequestPermissionHandler,
+    AcpPromptOutcomeCollector,
   ],
   exports: [AcpRuntimeFactory],
 })

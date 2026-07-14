@@ -1,5 +1,5 @@
 import { Injectable, Scope } from '@nestjs/common';
-import type { AcpInteractionDiagnostic } from './interaction-diagnostic.types.js';
+import type { AcpInteractionDiagnostic } from './diagnostic.js';
 
 export type AcpStopReason =
   | 'end_turn'
@@ -53,7 +53,7 @@ export type OutcomeCollectionResult =
       diagnostics: readonly AcpInteractionDiagnostic[];
     }>;
 
-export type AcpOutcomeCollectorDeps = Readonly<{ expectedSessionId: string }>;
+export type AcpPromptOutcomeCollectorDeps = Readonly<{ expectedSessionId: string }>;
 
 function acceptOutcome(): OutcomeCollectionResult {
   return { outcome: 'accepted' };
@@ -84,7 +84,7 @@ function rejectOutcome(reason: OutcomeCollectionRejectionReason): OutcomeCollect
 }
 
 @Injectable({ scope: Scope.TRANSIENT })
-export class AcpOutcomeCollector {
+export class AcpPromptOutcomeCollector {
   private expectedSessionId: string | undefined;
   private readonly textChunks: string[] = [];
   private readonly diagnostics: AcpInteractionDiagnostic[] = [];
@@ -92,7 +92,7 @@ export class AcpOutcomeCollector {
   private reportedCost: AcpReportedCost | undefined;
   private terminal: Readonly<{ stopReason: AcpStopReason }> | undefined;
 
-  bind(deps: AcpOutcomeCollectorDeps): void {
+  bind(deps: AcpPromptOutcomeCollectorDeps): void {
     if (this.expectedSessionId !== undefined) {
       throw new Error('ACP outcome collector is already bound');
     }

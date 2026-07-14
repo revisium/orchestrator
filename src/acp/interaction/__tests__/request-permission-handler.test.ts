@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  AcpPermissionHandler,
+  AcpRequestPermissionHandler,
   type PermissionHandlingResult,
   type PermissionResolver,
   type PermissionResolutionRequest,
   type RequestPermissionResponse,
-} from '../permission-handler.js';
+} from '../request-permission-handler.js';
 
 function requestPermissionResponse(
   outcome: RequestPermissionResponse['outcome'],
@@ -26,7 +26,7 @@ function assertPermissionResultNarrowing(result: PermissionHandlingResult): void
 
 test('selects the first offered option of the resolver-required kind', async () => {
   const requests: PermissionResolutionRequest[] = [];
-  const handler = new AcpPermissionHandler();
+  const handler = new AcpRequestPermissionHandler();
   handler.bind({
     expectedSessionId: 'session-1',
     async resolvePermission(request) {
@@ -65,7 +65,7 @@ test('selects the first offered option of the resolver-required kind', async () 
 });
 
 test('rejects handle before dependencies are bound', async () => {
-  const handler = new AcpPermissionHandler();
+  const handler = new AcpRequestPermissionHandler();
 
   await assert.rejects(
     handler.handle({
@@ -78,7 +78,7 @@ test('rejects handle before dependencies are bound', async () => {
 });
 
 test('rejects binding dependencies more than once', () => {
-  const handler = new AcpPermissionHandler();
+  const handler = new AcpRequestPermissionHandler();
   handler.bind({
     expectedSessionId: 'session-1',
     async resolvePermission() { return { outcome: 'cancel' }; },
@@ -95,7 +95,7 @@ test('rejects binding dependencies more than once', () => {
 
 test('cancels a permission request whose params are not a record', async () => {
   let resolverCalls = 0;
-  const handler = new AcpPermissionHandler();
+  const handler = new AcpRequestPermissionHandler();
   handler.bind({
     expectedSessionId: 'session-1',
     async resolvePermission() {
@@ -121,7 +121,7 @@ test('cancels a permission request whose params are not a record', async () => {
 
 test('contains hostile permission request shapes as malformed requests', async () => {
   let resolverCalls = 0;
-  const handler = new AcpPermissionHandler();
+  const handler = new AcpRequestPermissionHandler();
   handler.bind({
     expectedSessionId: 'session-1',
     async resolvePermission() {
@@ -175,7 +175,7 @@ test('contains hostile permission request shapes as malformed requests', async (
 
 test('cancels permission requests without an own string sessionId', async () => {
   let resolverCalls = 0;
-  const handler = new AcpPermissionHandler();
+  const handler = new AcpRequestPermissionHandler();
   handler.bind({
     expectedSessionId: 'session-1',
     async resolvePermission() {
@@ -208,7 +208,7 @@ test('cancels permission requests without an own string sessionId', async () => 
 
 test('cancels permission requests without an own object toolCall', async () => {
   let resolverCalls = 0;
-  const handler = new AcpPermissionHandler();
+  const handler = new AcpRequestPermissionHandler();
   handler.bind({
     expectedSessionId: 'session-1',
     async resolvePermission() {
@@ -237,7 +237,7 @@ test('cancels permission requests without an own object toolCall', async () => {
 
 test('cancels permission requests without an own non-empty string toolCallId', async () => {
   let resolverCalls = 0;
-  const handler = new AcpPermissionHandler();
+  const handler = new AcpRequestPermissionHandler();
   handler.bind({
     expectedSessionId: 'session-1',
     async resolvePermission() {
@@ -265,7 +265,7 @@ test('cancels permission requests without an own non-empty string toolCallId', a
 
 test('isolates nested tool-call values before resolving permission', async () => {
   let capturedRequest: PermissionResolutionRequest | undefined;
-  const handler = new AcpPermissionHandler();
+  const handler = new AcpRequestPermissionHandler();
   handler.bind({
     expectedSessionId: 'session-1',
     async resolvePermission(request) {
@@ -295,7 +295,7 @@ test('isolates nested tool-call values before resolving permission', async () =>
 
 test('cancels a non-JSON nested tool-call value', async () => {
   let resolverCalls = 0;
-  const handler = new AcpPermissionHandler();
+  const handler = new AcpRequestPermissionHandler();
   handler.bind({
     expectedSessionId: 'session-1',
     async resolvePermission() {
@@ -324,7 +324,7 @@ test('cancels a non-JSON nested tool-call value', async () => {
 
 test('cancels a permission request whose options are not an array', async () => {
   let resolverCalls = 0;
-  const handler = new AcpPermissionHandler();
+  const handler = new AcpRequestPermissionHandler();
   handler.bind({
     expectedSessionId: 'session-1',
     async resolvePermission() {
@@ -350,7 +350,7 @@ test('cancels a permission request whose options are not an array', async () => 
 
 test('cancels permission requests containing malformed options', async () => {
   let resolverCalls = 0;
-  const handler = new AcpPermissionHandler();
+  const handler = new AcpRequestPermissionHandler();
   handler.bind({
     expectedSessionId: 'session-1',
     async resolvePermission(request) {
@@ -385,7 +385,7 @@ test('cancels permission requests containing malformed options', async () => {
 
 test('cancels a case-sensitive foreign session before resolving permission', async () => {
   let resolverCalls = 0;
-  const handler = new AcpPermissionHandler();
+  const handler = new AcpRequestPermissionHandler();
   handler.bind({
     expectedSessionId: 'Session-1',
     async resolvePermission() {
@@ -411,7 +411,7 @@ test('cancels a case-sensitive foreign session before resolving permission', asy
 
 test('returns resolver-cancelled when the resolver cancels', async () => {
   let resolverCalls = 0;
-  const handler = new AcpPermissionHandler();
+  const handler = new AcpRequestPermissionHandler();
   handler.bind({
     expectedSessionId: 'session-1',
     async resolvePermission() {
@@ -437,7 +437,7 @@ test('returns resolver-cancelled when the resolver cancels', async () => {
 
 test('cancels without fallback when the required option kind was not offered', async () => {
   let resolverCalls = 0;
-  const handler = new AcpPermissionHandler();
+  const handler = new AcpRequestPermissionHandler();
   handler.bind({
     expectedSessionId: 'session-1',
     async resolvePermission() {
@@ -467,7 +467,7 @@ test('cancels without fallback when the required option kind was not offered', a
 
 test('cancels an invalid resolver decision', async () => {
   let resolverCalls = 0;
-  const handler = new AcpPermissionHandler();
+  const handler = new AcpRequestPermissionHandler();
   const resolvePermission = (async () => {
     resolverCalls += 1;
     return { outcome: 'select', optionKind: 'unknown' };
@@ -512,7 +512,7 @@ test('contains hostile resolver decisions as invalid decisions', async () => {
   ];
 
   for (const rawDecision of decisions) {
-    const handler = new AcpPermissionHandler();
+    const handler = new AcpRequestPermissionHandler();
     handler.bind({
       expectedSessionId: 'session-1',
       resolvePermission: (async () => rawDecision) as PermissionResolver,
@@ -534,7 +534,7 @@ test('contains hostile resolver decisions as invalid decisions', async () => {
 test('contains a revoked resolver result as a resolver failure', async () => {
   const revokedDecision = Proxy.revocable({ outcome: 'cancel' }, {});
   revokedDecision.revoke();
-  const handler = new AcpPermissionHandler();
+  const handler = new AcpRequestPermissionHandler();
   handler.bind({
     expectedSessionId: 'session-1',
     resolvePermission: (async () => revokedDecision.proxy) as PermissionResolver,
@@ -556,7 +556,7 @@ test('contains a revoked resolver result as a resolver failure', async () => {
 
 test('contains resolver failure without exposing the thrown message', async () => {
   let resolverCalls = 0;
-  const handler = new AcpPermissionHandler();
+  const handler = new AcpRequestPermissionHandler();
   handler.bind({
     expectedSessionId: 'session-1',
     async resolvePermission() {
@@ -583,7 +583,7 @@ test('contains resolver failure without exposing the thrown message', async () =
 
 test('creates isolated cancellation responses and diagnostics', async () => {
   let resolverCalls = 0;
-  const handler = new AcpPermissionHandler();
+  const handler = new AcpRequestPermissionHandler();
   handler.bind({
     expectedSessionId: 'session-1',
     async resolvePermission() {

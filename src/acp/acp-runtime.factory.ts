@@ -9,13 +9,13 @@ import {
   type JsonRpcFramerOptions,
 } from './jsonrpc/framer.js';
 import {
-  AcpOutcomeCollector,
-  type AcpOutcomeCollectorDeps,
-} from './outcome-collector.js';
+  AcpPromptOutcomeCollector,
+  type AcpPromptOutcomeCollectorDeps,
+} from './interaction/prompt-outcome-collector.js';
 import {
-  AcpPermissionHandler,
-  type AcpPermissionHandlerDeps,
-} from './permission-handler.js';
+  AcpRequestPermissionHandler,
+  type AcpRequestPermissionHandlerDeps,
+} from './interaction/request-permission-handler.js';
 import { AcpSession } from './session.js';
 import type { CreateAcpSessionDependencies } from './session.types.js';
 
@@ -41,18 +41,18 @@ export class AcpRuntimeFactory {
     return session;
   }
 
-  async createPermissionHandler(
-    deps: AcpPermissionHandlerDeps,
-  ): Promise<AcpPermissionHandler> {
-    const handler = await this.moduleRef.resolve(AcpPermissionHandler);
+  async createRequestPermissionHandler(
+    deps: AcpRequestPermissionHandlerDeps,
+  ): Promise<AcpRequestPermissionHandler> {
+    const handler = await this.moduleRef.resolve(AcpRequestPermissionHandler);
     handler.bind(deps);
     return handler;
   }
 
-  async createOutcomeCollector(
-    deps: AcpOutcomeCollectorDeps,
-  ): Promise<AcpOutcomeCollector> {
-    const collector = await this.moduleRef.resolve(AcpOutcomeCollector);
+  async createPromptOutcomeCollector(
+    deps: AcpPromptOutcomeCollectorDeps,
+  ): Promise<AcpPromptOutcomeCollector> {
+    const collector = await this.moduleRef.resolve(AcpPromptOutcomeCollector);
     collector.bind(deps);
     return collector;
   }

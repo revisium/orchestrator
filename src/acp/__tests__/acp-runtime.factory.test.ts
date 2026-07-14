@@ -5,7 +5,7 @@ import { AcpModule } from '../acp.module.js';
 import { AcpRuntimeFactory } from '../acp-runtime.factory.js';
 import type { JsonRpcConnection } from '../jsonrpc/connection.types.js';
 import type { JsonRpcParams, JsonRpcValue } from '../jsonrpc/types.js';
-import type { PermissionResolutionRequest } from '../permission-handler.js';
+import type { PermissionResolutionRequest } from '../interaction/request-permission-handler.js';
 
 type Request = { method: string; params: JsonRpcParams | undefined };
 
@@ -79,28 +79,28 @@ test('singleton runtime factory resolves fresh bound transient ACP objects', asy
 
   const firstPermissionRequests: PermissionResolutionRequest[] = [];
   const secondPermissionRequests: PermissionResolutionRequest[] = [];
-  const firstPermissionHandler = await factory.createPermissionHandler({
+  const firstRequestPermissionHandler = await factory.createRequestPermissionHandler({
     expectedSessionId: 'permission-first',
     async resolvePermission(request) {
       firstPermissionRequests.push(request);
       return { outcome: 'select', optionKind: 'allow_once' };
     },
   });
-  const secondPermissionHandler = await factory.createPermissionHandler({
+  const secondRequestPermissionHandler = await factory.createRequestPermissionHandler({
     expectedSessionId: 'permission-second',
     async resolvePermission(request) {
       secondPermissionRequests.push(request);
       return { outcome: 'select', optionKind: 'reject_once' };
     },
   });
-  assert.notStrictEqual(firstPermissionHandler, secondPermissionHandler);
+  assert.notStrictEqual(firstRequestPermissionHandler, secondRequestPermissionHandler);
 
-  const firstPermissionResult = await firstPermissionHandler.handle({
+  const firstPermissionResult = await firstRequestPermissionHandler.handle({
     sessionId: 'permission-first',
     toolCall: { toolCallId: 'tool-first' },
     options: [{ optionId: 'allow-first', name: 'Allow first', kind: 'allow_once' }],
   });
-  const secondPermissionResult = await secondPermissionHandler.handle({
+  const secondPermissionResult = await secondRequestPermissionHandler.handle({
     sessionId: 'permission-second',
     toolCall: { toolCallId: 'tool-second' },
     options: [{ optionId: 'reject-second', name: 'Reject second', kind: 'reject_once' }],
@@ -120,29 +120,29 @@ test('singleton runtime factory resolves fresh bound transient ACP objects', asy
     { sessionId: 'permission-second', toolCallId: 'tool-second' },
   ]);
 
-  const firstOutcomeCollector = await factory.createOutcomeCollector({
+  const firstPromptOutcomeCollector = await factory.createPromptOutcomeCollector({
     expectedSessionId: 'outcome-first',
   });
-  const secondOutcomeCollector = await factory.createOutcomeCollector({
+  const secondPromptOutcomeCollector = await factory.createPromptOutcomeCollector({
     expectedSessionId: 'outcome-second',
   });
-  assert.notStrictEqual(firstOutcomeCollector, secondOutcomeCollector);
-  assert.deepEqual(firstOutcomeCollector.collect({
+  assert.notStrictEqual(firstPromptOutcomeCollector, secondPromptOutcomeCollector);
+  assert.deepEqual(firstPromptOutcomeCollector.collect({
     kind: 'agent-text',
     sessionId: 'outcome-first',
     text: 'first',
   }), { outcome: 'accepted' });
-  assert.deepEqual(secondOutcomeCollector.collect({
+  assert.deepEqual(secondPromptOutcomeCollector.collect({
     kind: 'agent-text',
     sessionId: 'outcome-second',
     text: 'second',
   }), { outcome: 'accepted' });
-  assert.deepEqual(firstOutcomeCollector.snapshot(), {
+  assert.deepEqual(firstPromptOutcomeCollector.snapshot(), {
     sessionId: 'outcome-first',
     text: 'first',
     diagnostics: [],
   });
-  assert.deepEqual(secondOutcomeCollector.snapshot(), {
+  assert.deepEqual(secondPromptOutcomeCollector.snapshot(), {
     sessionId: 'outcome-second',
     text: 'second',
     diagnostics: [],
