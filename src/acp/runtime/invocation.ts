@@ -12,7 +12,7 @@ import { ACP_METHODS, buildAcpPermissionResult } from "../protocol/methods.js";
 import {
   parseAcpPeerNotification,
   parseAcpPeerRequest,
-} from "../protocol/parser.js";
+} from "../protocol/index.js";
 import type { AcpSessionNotification } from "../protocol/values.js";
 import { AcpSessionError } from "../session/error.js";
 import { AcpSession } from "../session/session.js";

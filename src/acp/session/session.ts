@@ -13,7 +13,7 @@ import {
   parseAcpPromptResponse,
   parseAcpSessionNewResponse,
   parseAcpSetSessionConfigOptionResponse,
-} from '../protocol/parser.js';
+} from '../protocol/index.js';
 import type {
   AcpInitializeRequest,
   AcpInitializeResponse,

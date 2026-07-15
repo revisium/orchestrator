@@ -24,7 +24,7 @@ import {
   parseAcpPromptResponse,
   parseAcpSessionNewResponse,
   parseAcpSetSessionConfigOptionResponse,
-} from '../parser.js';
+} from '../index.js';
 
 const UPDATE_DISCRIMINATORS: readonly AcpSessionUpdateDiscriminator[] = [
   'user_message_chunk', 'agent_message_chunk', 'agent_thought_chunk',

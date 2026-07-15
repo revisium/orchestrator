@@ -3,7 +3,7 @@ import test from 'node:test';
 import type { JsonRpcConnection } from '../../jsonrpc/connection.types.js';
 import type { JsonRpcParams, JsonRpcValue } from '../../jsonrpc/types.js';
 import { ACP_METHODS } from '../../protocol/methods.js';
-import { parseAcpPeerNotification } from '../../protocol/parser.js';
+import { parseAcpPeerNotification } from '../../protocol/index.js';
 import type {
   AcpInitializeRequest,
   AcpPermissionRequest,
