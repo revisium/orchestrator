@@ -80,14 +80,12 @@ test('singleton runtime factory resolves fresh bound transient ACP objects', asy
   const firstPermissionRequests: AcpPermissionResolutionRequest[] = [];
   const secondPermissionRequests: AcpPermissionResolutionRequest[] = [];
   const firstRequestPermissionHandler = await factory.createRequestPermissionHandler({
-    expectedSessionId: 'permission-first',
     async resolvePermission(request) {
       firstPermissionRequests.push(request);
       return { outcome: 'select', optionKind: 'allow_once' };
     },
   });
   const secondRequestPermissionHandler = await factory.createRequestPermissionHandler({
-    expectedSessionId: 'permission-second',
     async resolvePermission(request) {
       secondPermissionRequests.push(request);
       return { outcome: 'select', optionKind: 'reject_once' };

@@ -1,14 +1,9 @@
+import type {
+  AcpReportedCost,
+  AcpReportedUsage,
+  AcpStopReason,
+} from '../protocol/values.js';
 import type { AcpPromptExecutionDiagnostic } from './diagnostic.js';
-
-export type AcpStopReason =
-  | 'end_turn'
-  | 'max_tokens'
-  | 'max_turn_requests'
-  | 'refusal'
-  | 'cancelled';
-
-export type AcpReportedUsage = Readonly<{ used: number; size: number }>;
-export type AcpReportedCost = Readonly<{ amount: number; currency: string }>;
 
 export type AcpPromptExecutionEvent =
   | Readonly<{ kind: 'agent-text'; sessionId: string; text: string }>
@@ -30,10 +25,19 @@ export type AcpPromptTerminalEvent = Readonly<{
   stopReason: AcpStopReason;
 }>;
 
-export type AcpPromptOutcome = Readonly<{
+export type AcpPromptProgress = Readonly<{
   sessionId: string;
   text: string;
   stopReason?: AcpStopReason;
+  usage?: AcpReportedUsage;
+  reportedCost?: AcpReportedCost;
+  diagnostics: readonly AcpPromptExecutionDiagnostic[];
+}>;
+
+export type AcpPromptOutcome = Readonly<{
+  sessionId: string;
+  text: string;
+  stopReason: AcpStopReason;
   usage?: AcpReportedUsage;
   reportedCost?: AcpReportedCost;
   diagnostics: readonly AcpPromptExecutionDiagnostic[];
@@ -51,6 +55,10 @@ export type AcpPromptCollectionResult =
       reason: AcpPromptCollectionRejectionReason;
       diagnostics: readonly AcpPromptExecutionDiagnostic[];
     }>;
+
+export type AcpPromptOutcomeResult =
+  | Readonly<{ outcome: 'available'; value: AcpPromptOutcome }>
+  | Readonly<{ outcome: 'unavailable'; reason: 'terminal-not-received' }>;
 
 export type AcpPromptOutcomeCollectorDeps = Readonly<{ expectedSessionId: string }>;
 
@@ -135,7 +143,7 @@ export class AcpPromptOutcomeCollector {
     return acceptOutcome();
   }
 
-  snapshot(): AcpPromptOutcome {
+  snapshot(): AcpPromptProgress {
     const expectedSessionId = this.requireSessionId();
     return {
       sessionId: expectedSessionId,
@@ -146,6 +154,24 @@ export class AcpPromptOutcomeCollector {
         : {}),
       ...(this.reportedCost ? { reportedCost: copyReportedCost(this.reportedCost) } : {}),
       diagnostics: this.diagnostics.map(copyDiagnostic),
+    };
+  }
+
+  outcome(): AcpPromptOutcomeResult {
+    const progress = this.snapshot();
+    if (!this.terminal) {
+      return { outcome: 'unavailable', reason: 'terminal-not-received' };
+    }
+    return {
+      outcome: 'available',
+      value: {
+        sessionId: progress.sessionId,
+        text: progress.text,
+        stopReason: this.terminal.stopReason,
+        ...(progress.usage === undefined ? {} : { usage: progress.usage }),
+        ...(progress.reportedCost === undefined ? {} : { reportedCost: progress.reportedCost }),
+        diagnostics: progress.diagnostics,
+      },
     };
   }
 
