@@ -27,7 +27,7 @@ import type {
   AcpSetSessionConfigOptionResponse,
 } from '../protocol/values.js';
 import { AcpSessionError } from './error.js';
-import { createDeferredPromise, snapshotSessionError } from './helpers.js';
+import { createDeferredPromise, snapshotSessionError } from './session.helpers.js';
 import type {
   AcpSessionController,
   AcpSessionDependencies,
