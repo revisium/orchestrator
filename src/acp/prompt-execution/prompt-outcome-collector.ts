@@ -1,22 +1,17 @@
 import { Injectable, Scope } from '@nestjs/common';
-import type { AcpInteractionDiagnostic } from './diagnostic.js';
+import type {
+  AcpReportedCost,
+  AcpReportedUsage,
+  AcpStopReason,
+} from '../protocol/values.js';
+import type { AcpPromptExecutionDiagnostic } from './diagnostic.js';
 
-export type AcpStopReason =
-  | 'end_turn'
-  | 'max_tokens'
-  | 'max_turn_requests'
-  | 'refusal'
-  | 'cancelled';
-
-export type AcpReportedUsage = Readonly<{ used: number; size: number }>;
-export type AcpReportedCost = Readonly<{ amount: number; currency: string }>;
-
-export type OutcomeStreamEvent =
+export type AcpPromptExecutionEvent =
   | Readonly<{ kind: 'agent-text'; sessionId: string; text: string }>
   | Readonly<{
       kind: 'diagnostic';
       sessionId: string;
-      diagnostic: AcpInteractionDiagnostic;
+      diagnostic: AcpPromptExecutionDiagnostic;
     }>
   | Readonly<{
       kind: 'usage';
@@ -26,42 +21,55 @@ export type OutcomeStreamEvent =
       reportedCost?: AcpReportedCost;
     }>;
 
-export type PromptTerminalEvent = Readonly<{
+export type AcpPromptTerminalEvent = Readonly<{
   sessionId: string;
   stopReason: AcpStopReason;
 }>;
 
-export type NeutralOutcome = Readonly<{
+export type AcpPromptProgress = Readonly<{
   sessionId: string;
   text: string;
   stopReason?: AcpStopReason;
   usage?: AcpReportedUsage;
   reportedCost?: AcpReportedCost;
-  diagnostics: readonly AcpInteractionDiagnostic[];
+  diagnostics: readonly AcpPromptExecutionDiagnostic[];
 }>;
 
-export type OutcomeCollectionRejectionReason =
+export type AcpPromptOutcome = Readonly<{
+  sessionId: string;
+  text: string;
+  stopReason: AcpStopReason;
+  usage?: AcpReportedUsage;
+  reportedCost?: AcpReportedCost;
+  diagnostics: readonly AcpPromptExecutionDiagnostic[];
+}>;
+
+export type AcpPromptCollectionRejectionReason =
   | 'foreign-session'
   | 'duplicate-terminal'
   | 'update-after-terminal';
 
-export type OutcomeCollectionResult =
+export type AcpPromptCollectionResult =
   | Readonly<{ outcome: 'accepted' }>
   | Readonly<{
       outcome: 'rejected';
-      reason: OutcomeCollectionRejectionReason;
-      diagnostics: readonly AcpInteractionDiagnostic[];
+      reason: AcpPromptCollectionRejectionReason;
+      diagnostics: readonly AcpPromptExecutionDiagnostic[];
     }>;
+
+export type AcpPromptOutcomeResult =
+  | Readonly<{ outcome: 'available'; value: AcpPromptOutcome }>
+  | Readonly<{ outcome: 'unavailable'; reason: 'terminal-not-received' }>;
 
 export type AcpPromptOutcomeCollectorDeps = Readonly<{ expectedSessionId: string }>;
 
-function acceptOutcome(): OutcomeCollectionResult {
+function acceptOutcome(): AcpPromptCollectionResult {
   return { outcome: 'accepted' };
 }
 
 function copyDiagnostic(
-  { severity, reason, message }: AcpInteractionDiagnostic,
-): AcpInteractionDiagnostic {
+  { severity, reason, message }: AcpPromptExecutionDiagnostic,
+): AcpPromptExecutionDiagnostic {
   return { severity, reason, message };
 }
 
@@ -69,13 +77,13 @@ function copyReportedCost({ amount, currency }: AcpReportedCost): AcpReportedCos
   return { amount, currency };
 }
 
-const rejectionMessages: Record<OutcomeCollectionRejectionReason, string> = {
+const rejectionMessages: Record<AcpPromptCollectionRejectionReason, string> = {
   'foreign-session': 'Outcome event belongs to another session',
   'duplicate-terminal': 'Prompt outcome is already terminal',
   'update-after-terminal': 'Outcome stream event arrived after terminal',
 };
 
-function rejectOutcome(reason: OutcomeCollectionRejectionReason): OutcomeCollectionResult {
+function rejectOutcome(reason: AcpPromptCollectionRejectionReason): AcpPromptCollectionResult {
   return {
     outcome: 'rejected',
     reason,
@@ -87,7 +95,7 @@ function rejectOutcome(reason: OutcomeCollectionRejectionReason): OutcomeCollect
 export class AcpPromptOutcomeCollector {
   private expectedSessionId: string | undefined;
   private readonly textChunks: string[] = [];
-  private readonly diagnostics: AcpInteractionDiagnostic[] = [];
+  private readonly diagnostics: AcpPromptExecutionDiagnostic[] = [];
   private usage: AcpReportedUsage | undefined;
   private reportedCost: AcpReportedCost | undefined;
   private terminal: Readonly<{ stopReason: AcpStopReason }> | undefined;
@@ -100,7 +108,7 @@ export class AcpPromptOutcomeCollector {
     this.expectedSessionId = expectedSessionId;
   }
 
-  collect(event: OutcomeStreamEvent): OutcomeCollectionResult {
+  collect(event: AcpPromptExecutionEvent): AcpPromptCollectionResult {
     const expectedSessionId = this.requireSessionId();
     const { sessionId: eventSessionId } = event;
     if (eventSessionId !== expectedSessionId) return rejectOutcome('foreign-session');
@@ -128,7 +136,7 @@ export class AcpPromptOutcomeCollector {
     }
   }
 
-  complete(event: PromptTerminalEvent): OutcomeCollectionResult {
+  complete(event: AcpPromptTerminalEvent): AcpPromptCollectionResult {
     const expectedSessionId = this.requireSessionId();
     const { sessionId: eventSessionId, stopReason } = event;
     if (eventSessionId !== expectedSessionId) return rejectOutcome('foreign-session');
@@ -137,7 +145,7 @@ export class AcpPromptOutcomeCollector {
     return acceptOutcome();
   }
 
-  snapshot(): NeutralOutcome {
+  snapshot(): AcpPromptProgress {
     const expectedSessionId = this.requireSessionId();
     return {
       sessionId: expectedSessionId,
@@ -148,6 +156,24 @@ export class AcpPromptOutcomeCollector {
         : {}),
       ...(this.reportedCost ? { reportedCost: copyReportedCost(this.reportedCost) } : {}),
       diagnostics: this.diagnostics.map(copyDiagnostic),
+    };
+  }
+
+  outcome(): AcpPromptOutcomeResult {
+    const progress = this.snapshot();
+    if (!this.terminal) {
+      return { outcome: 'unavailable', reason: 'terminal-not-received' };
+    }
+    return {
+      outcome: 'available',
+      value: {
+        sessionId: progress.sessionId,
+        text: progress.text,
+        stopReason: this.terminal.stopReason,
+        ...(progress.usage === undefined ? {} : { usage: progress.usage }),
+        ...(progress.reportedCost === undefined ? {} : { reportedCost: progress.reportedCost }),
+        diagnostics: progress.diagnostics,
+      },
     };
   }
 

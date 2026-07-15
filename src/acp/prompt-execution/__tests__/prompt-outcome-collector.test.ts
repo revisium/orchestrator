@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { AcpPromptOutcomeCollector, type AcpStopReason } from '../prompt-outcome-collector.js';
+import type { AcpStopReason } from '../../protocol/values.js';
+import { AcpPromptOutcomeCollector } from '../prompt-outcome-collector.js';
 
 const STOP_REASONS: readonly AcpStopReason[] = [
   'end_turn',
@@ -34,6 +35,52 @@ test('collects text in arrival order and completes with a stop reason', () => {
     stopReason: 'end_turn',
     diagnostics: [],
   });
+  assert.deepEqual(collector.outcome(), {
+    outcome: 'available',
+    value: {
+      sessionId: 'session-1',
+      text: 'one two',
+      stopReason: 'end_turn',
+      diagnostics: [],
+    },
+  });
+});
+
+test('exposes progress before terminal but no outcome', () => {
+  const collector = new AcpPromptOutcomeCollector();
+  collector.bind({ expectedSessionId: 'session-1' });
+  collector.collect({ kind: 'agent-text', sessionId: 'session-1', text: 'partial' });
+
+  const progress = collector.snapshot();
+  assert.deepEqual(progress, {
+    sessionId: 'session-1', text: 'partial', diagnostics: [],
+  });
+  assert.equal(Object.hasOwn(progress, 'stopReason'), false);
+  assert.deepEqual(collector.outcome(), {
+    outcome: 'unavailable', reason: 'terminal-not-received',
+  });
+});
+
+test('freezes the first terminal outcome against duplicate terminal and later update', () => {
+  const collector = new AcpPromptOutcomeCollector();
+  collector.bind({ expectedSessionId: 'session-1' });
+  collector.collect({ kind: 'agent-text', sessionId: 'session-1', text: 'kept' });
+  assert.deepEqual(collector.complete({
+    sessionId: 'session-1', stopReason: 'end_turn',
+  }), { outcome: 'accepted' });
+  const first = collector.outcome();
+  assert.deepEqual(collector.complete({
+    sessionId: 'session-1', stopReason: 'refusal',
+  }), {
+    outcome: 'rejected', reason: 'duplicate-terminal',
+    diagnostics: [{
+      severity: 'error', reason: 'duplicate-terminal', message: 'Prompt outcome is already terminal',
+    }],
+  });
+  assert.equal(collector.collect({
+    kind: 'agent-text', sessionId: 'session-1', text: 'ignored',
+  }).outcome, 'rejected');
+  assert.deepEqual(collector.outcome(), first);
 });
 
 test('returns a fresh accepted result for every call', () => {
@@ -68,6 +115,7 @@ test('rejects every public operation before binding', () => {
     stopReason: 'end_turn',
   }), expected);
   assert.throws(() => collector.snapshot(), expected);
+  assert.throws(() => collector.outcome(), expected);
 });
 
 test('rejects binding dependencies more than once', () => {

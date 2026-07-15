@@ -1,4 +1,3 @@
-import { Injectable, Scope } from '@nestjs/common';
 import { JsonRpcProtocolError } from './errors.js';
 import { parseJsonRpcLine } from './parser.js';
 import type { JsonRpcFramer, JsonRpcFramerOptions } from './framer.types.js';
@@ -8,7 +7,6 @@ export type { JsonRpcFramer, JsonRpcFramerOptions } from './framer.types.js';
 
 const DEFAULT_MAX_FRAME_BYTES = 1_048_576;
 
-@Injectable({ scope: Scope.TRANSIENT })
 export class AcpJsonRpcFramer implements JsonRpcFramer {
   private maxFrameBytes: number | undefined;
   private readonly decoder = new TextDecoder('utf-8', { fatal: true });

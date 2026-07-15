@@ -1,4 +1,3 @@
-import { Injectable, Scope } from '@nestjs/common';
 import { JsonRpcProtocolError } from './errors.js';
 import {
   createJsonRpcRequest,
@@ -34,7 +33,6 @@ type QueuedTransportWrite = {
   reject(error: unknown): void;
 };
 
-@Injectable({ scope: Scope.TRANSIENT })
 export class AcpJsonRpcConnection implements JsonRpcConnection {
   private deps: JsonRpcConnectionDeps | undefined;
   private readonly pendingRequests = new Map<JsonRpcId, PendingJsonRpcRequest>();
