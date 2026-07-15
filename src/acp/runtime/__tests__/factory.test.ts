@@ -60,18 +60,31 @@ test('singleton runtime factory resolves fresh bound transient ACP objects', asy
   const secondSessionConnection = fakeConnection({ initialize: { protocolVersion: 1 }, 'session/new': { sessionId: 'second' } });
   const firstSession = await factory.createSession({
     connection: firstSessionConnection,
-    configure: async () => {},
     onUpdate: async () => {},
     onDiagnostic: () => {},
   });
   const secondSession = await factory.createSession({
     connection: secondSessionConnection,
-    configure: async () => {},
     onUpdate: async () => {},
     onDiagnostic: () => {},
   });
-  await Promise.all([firstSession.initialize(), secondSession.initialize()]);
-  await Promise.all([firstSession.create(), secondSession.create()]);
+  const initializeRequest = {
+    protocolVersion: 1,
+    clientCapabilities: {
+      fs: { readTextFile: false, writeTextFile: false },
+      session: { configOptions: { boolean: {} } },
+      terminal: false,
+    },
+    clientInfo: { name: 'revo', version: '1.0.0' },
+  } as const;
+  await Promise.all([
+    firstSession.initialize(initializeRequest),
+    secondSession.initialize(initializeRequest),
+  ]);
+  await Promise.all([
+    firstSession.create({ cwd: '/first', mcpServers: [] }),
+    secondSession.create({ cwd: '/second', mcpServers: [] }),
+  ]);
   assert.equal(firstSession.getSessionId(), 'first');
   assert.equal(secondSession.getSessionId(), 'second');
   assert.deepEqual(firstSessionConnection.requests.map(({ method }) => method), ['initialize', 'session/new']);
