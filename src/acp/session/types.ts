@@ -1,5 +1,5 @@
-import type { JsonRpcConnection } from './jsonrpc/connection.types.js';
-import type { JsonRpcValue } from './jsonrpc/types.js';
+import type { JsonRpcConnection } from '../jsonrpc/connection.types.js';
+import type { JsonRpcValue } from '../jsonrpc/types.js';
 
 export type AcpSessionFailureCode =
   | 'invalid_protocol_version'
@@ -43,7 +43,7 @@ export type AcpSessionController = {
   getSessionId(): string | null;
 };
 
-export type CreateAcpSessionDependencies = {
+export type AcpSessionDependencies = {
   connection: JsonRpcConnection;
   configure: (sessionId: string) => Promise<void>;
   onUpdate: (update: AcpSessionUpdate) => Promise<void>;

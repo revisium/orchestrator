@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { NestFactory } from '@nestjs/core';
-import { AcpModule } from '../acp.module.js';
-import { AcpRuntimeFactory } from '../acp-runtime.factory.js';
-import type { JsonRpcConnection } from '../jsonrpc/connection.types.js';
-import type { JsonRpcParams, JsonRpcValue } from '../jsonrpc/types.js';
-import type { PermissionResolutionRequest } from '../prompt-execution/request-permission-handler.js';
+import { AcpModule } from '../../acp.module.js';
+import { AcpRuntimeFactory } from '../factory.js';
+import type { JsonRpcConnection } from '../../jsonrpc/connection.types.js';
+import type { JsonRpcParams, JsonRpcValue } from '../../jsonrpc/types.js';
+import type { AcpPermissionResolutionRequest } from '../../prompt-execution/permission-request-handler.js';
 
 type Request = { method: string; params: JsonRpcParams | undefined };
 
@@ -77,8 +77,8 @@ test('singleton runtime factory resolves fresh bound transient ACP objects', asy
   assert.deepEqual(firstSessionConnection.requests.map(({ method }) => method), ['initialize', 'session/new']);
   assert.deepEqual(secondSessionConnection.requests.map(({ method }) => method), ['initialize', 'session/new']);
 
-  const firstPermissionRequests: PermissionResolutionRequest[] = [];
-  const secondPermissionRequests: PermissionResolutionRequest[] = [];
+  const firstPermissionRequests: AcpPermissionResolutionRequest[] = [];
+  const secondPermissionRequests: AcpPermissionResolutionRequest[] = [];
   const firstRequestPermissionHandler = await factory.createRequestPermissionHandler({
     expectedSessionId: 'permission-first',
     async resolvePermission(request) {

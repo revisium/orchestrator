@@ -1,4 +1,4 @@
-import type { JsonRpcValue } from './jsonrpc/types.js';
+import type { JsonRpcValue } from '../jsonrpc/types.js';
 
 export function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;

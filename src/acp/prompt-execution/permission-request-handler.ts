@@ -1,43 +1,42 @@
-import { Injectable, Scope } from '@nestjs/common';
-import type { AcpInteractionDiagnostic } from './diagnostic.js';
+import type { AcpPromptExecutionDiagnostic } from './diagnostic.js';
 import { canonicalizeJsonRpcValue, snapshotJsonRpcRecord } from '../jsonrpc/canonicalizer.js';
 import type { JsonRpcValue } from '../jsonrpc/types.js';
 
-export type PermissionOptionKind =
+export type AcpPermissionOptionKind =
   | 'allow_once'
   | 'allow_always'
   | 'reject_once'
   | 'reject_always';
 
-export type PermissionOption = Readonly<{
+export type AcpPermissionOption = Readonly<{
   optionId: string;
   name: string;
-  kind: PermissionOptionKind;
+  kind: AcpPermissionOptionKind;
 }>;
 
-export type PermissionToolCallSnapshot = Readonly<Record<string, JsonRpcValue>>;
+export type AcpPermissionToolCallSnapshot = Readonly<Record<string, JsonRpcValue>>;
 
-export type PermissionResolutionRequest = Readonly<{
+export type AcpPermissionResolutionRequest = Readonly<{
   sessionId: string;
   toolCallId: string;
-  toolCallSnapshot: PermissionToolCallSnapshot;
-  options: readonly PermissionOption[];
+  toolCallSnapshot: AcpPermissionToolCallSnapshot;
+  options: readonly AcpPermissionOption[];
 }>;
 
-export type PermissionResolutionDecision =
-  | Readonly<{ outcome: 'select'; optionKind: PermissionOptionKind }>
+export type AcpPermissionResolutionDecision =
+  | Readonly<{ outcome: 'select'; optionKind: AcpPermissionOptionKind }>
   | Readonly<{ outcome: 'cancel' }>;
 
-export type PermissionResolver = (
-  request: PermissionResolutionRequest,
-) => Promise<PermissionResolutionDecision>;
+export type AcpPermissionResolver = (
+  request: AcpPermissionResolutionRequest,
+) => Promise<AcpPermissionResolutionDecision>;
 
-export type AcpRequestPermissionHandlerDeps = Readonly<{
+export type AcpPermissionRequestHandlerDeps = Readonly<{
   expectedSessionId: string;
-  resolvePermission: PermissionResolver;
+  resolvePermission: AcpPermissionResolver;
 }>;
 
-export type PermissionCancellationReason =
+export type AcpPermissionCancellationReason =
   | 'malformed-request'
   | 'foreign-session'
   | 'resolver-cancelled'
@@ -45,44 +44,44 @@ export type PermissionCancellationReason =
   | 'invalid-decision'
   | 'resolver-failed';
 
-export type RequestPermissionResponse = Readonly<{
+export type AcpPermissionResponse = Readonly<{
   outcome:
     | Readonly<{ outcome: 'selected'; optionId: string }>
     | Readonly<{ outcome: 'cancelled' }>;
 }>;
 
 type SelectedPermissionResponse = Readonly<{
-  outcome: Extract<RequestPermissionResponse['outcome'], { outcome: 'selected' }>;
+  outcome: Extract<AcpPermissionResponse['outcome'], { outcome: 'selected' }>;
 }>;
 
 type CancelledPermissionResponse = Readonly<{
-  outcome: Extract<RequestPermissionResponse['outcome'], { outcome: 'cancelled' }>;
+  outcome: Extract<AcpPermissionResponse['outcome'], { outcome: 'cancelled' }>;
 }>;
 
-export type PermissionHandlingResult =
+export type AcpPermissionHandlingResult =
   | Readonly<{
       outcome: 'selected';
       response: SelectedPermissionResponse;
     }>
   | Readonly<{
       outcome: 'cancelled';
-      reason: PermissionCancellationReason;
+      reason: AcpPermissionCancellationReason;
       response: CancelledPermissionResponse;
-      diagnostics: readonly AcpInteractionDiagnostic[];
+      diagnostics: readonly AcpPromptExecutionDiagnostic[];
     }>;
 
 type ParsedPermissionRequest =
-  | Readonly<{ outcome: 'valid'; request: PermissionResolutionRequest }>
+  | Readonly<{ outcome: 'valid'; request: AcpPermissionResolutionRequest }>
   | Readonly<{ outcome: 'invalid' }>;
 
-function isPermissionOptionKind(value: unknown): value is PermissionOptionKind {
+function isPermissionOptionKind(value: unknown): value is AcpPermissionOptionKind {
   return value === 'allow_once' ||
     value === 'allow_always' ||
     value === 'reject_once' ||
     value === 'reject_always';
 }
 
-function parsePermissionOption(value: unknown): PermissionOption | undefined {
+function parsePermissionOption(value: unknown): AcpPermissionOption | undefined {
   const snapshot = snapshotJsonRpcRecord(value);
   if (!snapshot) return undefined;
   const { optionId: rawOptionId, name: rawName, kind: rawKind } = snapshot;
@@ -128,7 +127,7 @@ function parsePermissionRequest(value: unknown): ParsedPermissionRequest {
   }
   const canonicalOptions = canonicalizeJsonRpcValue(rawOptions);
   if (!Array.isArray(canonicalOptions)) return invalidPermissionRequest();
-  const options: PermissionOption[] = [];
+  const options: AcpPermissionOption[] = [];
   for (const rawOption of canonicalOptions) {
     const option = parsePermissionOption(rawOption);
     if (!option) return invalidPermissionRequest();
@@ -145,7 +144,7 @@ function parsePermissionRequest(value: unknown): ParsedPermissionRequest {
   };
 }
 
-function copyResolutionRequest(request: PermissionResolutionRequest): PermissionResolutionRequest {
+function copyResolutionRequest(request: AcpPermissionResolutionRequest): AcpPermissionResolutionRequest {
   const { sessionId, toolCallId, toolCallSnapshot, options } = request;
   return {
     sessionId,
@@ -155,7 +154,7 @@ function copyResolutionRequest(request: PermissionResolutionRequest): Permission
   };
 }
 
-function parseResolutionDecision(value: unknown): PermissionResolutionDecision | undefined {
+function parseResolutionDecision(value: unknown): AcpPermissionResolutionDecision | undefined {
   const snapshot = snapshotJsonRpcRecord(value);
   if (!snapshot || !Object.hasOwn(snapshot, 'outcome')) return undefined;
   const { outcome: rawOutcome, optionKind: rawOptionKind } = snapshot;
@@ -165,7 +164,7 @@ function parseResolutionDecision(value: unknown): PermissionResolutionDecision |
   return { outcome: 'select', optionKind: rawOptionKind };
 }
 
-const cancellationMessages: Record<PermissionCancellationReason, string> = {
+const cancellationMessages: Record<AcpPermissionCancellationReason, string> = {
   'malformed-request': 'Permission request is malformed',
   'foreign-session': 'Permission request belongs to another session',
   'resolver-cancelled': 'Permission resolver cancelled the request',
@@ -178,7 +177,7 @@ function createCancelledResponse(): CancelledPermissionResponse {
   return { outcome: { outcome: 'cancelled' } };
 }
 
-function cancelPermission(reason: PermissionCancellationReason): PermissionHandlingResult {
+function cancelPermission(reason: AcpPermissionCancellationReason): AcpPermissionHandlingResult {
   return {
     outcome: 'cancelled',
     reason,
@@ -187,16 +186,15 @@ function cancelPermission(reason: PermissionCancellationReason): PermissionHandl
   };
 }
 
-@Injectable({ scope: Scope.TRANSIENT })
-export class AcpRequestPermissionHandler {
-  private deps: AcpRequestPermissionHandlerDeps | undefined;
+export class AcpPermissionRequestHandler {
+  private deps: AcpPermissionRequestHandlerDeps | undefined;
 
-  bind(deps: AcpRequestPermissionHandlerDeps): void {
+  bind(deps: AcpPermissionRequestHandlerDeps): void {
     if (this.deps) throw new Error('ACP permission handler is already bound');
     this.deps = deps;
   }
 
-  async handle(params: unknown): Promise<PermissionHandlingResult> {
+  async handle(params: unknown): Promise<AcpPermissionHandlingResult> {
     const deps = this.requireDeps();
     const { expectedSessionId } = deps;
     const parsed = parsePermissionRequest(params);
@@ -225,7 +223,7 @@ export class AcpRequestPermissionHandler {
     };
   }
 
-  private requireDeps(): AcpRequestPermissionHandlerDeps {
+  private requireDeps(): AcpPermissionRequestHandlerDeps {
     if (!this.deps) throw new Error('ACP permission handler is not bound');
     return this.deps;
   }

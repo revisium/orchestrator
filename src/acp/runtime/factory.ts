@@ -2,22 +2,22 @@ import { Inject, Injectable } from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
 import {
   AcpJsonRpcConnection,
-} from './jsonrpc/connection.js';
-import type { JsonRpcConnectionDeps } from './jsonrpc/connection.types.js';
+} from '../jsonrpc/connection.js';
+import type { JsonRpcConnectionDeps } from '../jsonrpc/connection.types.js';
 import {
   AcpJsonRpcFramer,
   type JsonRpcFramerOptions,
-} from './jsonrpc/framer.js';
+} from '../jsonrpc/framer.js';
 import {
   AcpPromptOutcomeCollector,
   type AcpPromptOutcomeCollectorDeps,
-} from './prompt-execution/prompt-outcome-collector.js';
+} from '../prompt-execution/prompt-outcome-collector.js';
 import {
-  AcpRequestPermissionHandler,
-  type AcpRequestPermissionHandlerDeps,
-} from './prompt-execution/request-permission-handler.js';
-import { AcpSession } from './session.js';
-import type { CreateAcpSessionDependencies } from './session.types.js';
+  AcpPermissionRequestHandler,
+  type AcpPermissionRequestHandlerDeps,
+} from '../prompt-execution/permission-request-handler.js';
+import { AcpSession } from '../session/session.js';
+import type { AcpSessionDependencies } from '../session/types.js';
 
 @Injectable()
 export class AcpRuntimeFactory {
@@ -35,16 +35,16 @@ export class AcpRuntimeFactory {
     return connection;
   }
 
-  async createSession(deps: CreateAcpSessionDependencies): Promise<AcpSession> {
+  async createSession(deps: AcpSessionDependencies): Promise<AcpSession> {
     const session = await this.moduleRef.resolve(AcpSession);
-    session.bindDependencies(deps);
+    session.bind(deps);
     return session;
   }
 
   async createRequestPermissionHandler(
-    deps: AcpRequestPermissionHandlerDeps,
-  ): Promise<AcpRequestPermissionHandler> {
-    const handler = await this.moduleRef.resolve(AcpRequestPermissionHandler);
+    deps: AcpPermissionRequestHandlerDeps,
+  ): Promise<AcpPermissionRequestHandler> {
+    const handler = await this.moduleRef.resolve(AcpPermissionRequestHandler);
     handler.bind(deps);
     return handler;
   }

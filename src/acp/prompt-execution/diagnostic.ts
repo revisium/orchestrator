@@ -1,4 +1,4 @@
-export type AcpInteractionDiagnostic = Readonly<{
+export type AcpPromptExecutionDiagnostic = Readonly<{
   severity: 'info' | 'warning' | 'error';
   reason: string;
   message: string;

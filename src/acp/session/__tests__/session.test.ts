@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { AcpSession, createAcpSession } from '../session.js';
-import { AcpSessionError } from '../session.errors.js';
-import type { JsonRpcConnection } from '../jsonrpc/connection.types.js';
-import type { JsonRpcParams, JsonRpcValue } from '../jsonrpc/types.js';
+import { AcpSessionError } from '../error.js';
+import type { JsonRpcConnection } from '../../jsonrpc/connection.types.js';
+import type { JsonRpcParams, JsonRpcValue } from '../../jsonrpc/types.js';
 
 type Request = { method: string; params: JsonRpcParams | undefined };
 type Deferred<T> = { promise: Promise<T>; resolve(value: T): void; reject(error: unknown): void };
@@ -67,9 +67,9 @@ test('transient session accepts exactly one invocation binding', () => {
     onUpdate: async () => {},
     onDiagnostic: () => {},
   };
-  session.bindDependencies(deps);
+  session.bind(deps);
 
-  assert.throws(() => session.bindDependencies(deps));
+  assert.throws(() => session.bind(deps));
   assert.equal(session.getSessionId(), null);
 });
 async function assertSessionFailure(

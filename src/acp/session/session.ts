@@ -1,12 +1,11 @@
-import { Injectable, Scope } from '@nestjs/common';
-import type { JsonRpcValue } from './jsonrpc/types.js';
-import { AcpSessionError } from './session.errors.js';
-import { createDeferredPromise, isJsonRpcValue, isPlainRecord } from './session.helpers.js';
+import type { JsonRpcValue } from '../jsonrpc/types.js';
+import { AcpSessionError } from './error.js';
+import { createDeferredPromise, isJsonRpcValue, isPlainRecord } from './helpers.js';
 import type {
   AcpSessionController,
   AcpSessionDiagnosticCode,
-  CreateAcpSessionDependencies,
-} from './session.types.js';
+  AcpSessionDependencies,
+} from './types.js';
 
 type State =
   | 'new'
@@ -20,9 +19,8 @@ type State =
   | 'closing'
   | 'closed';
 
-@Injectable({ scope: Scope.TRANSIENT })
 export class AcpSession implements AcpSessionController {
-  private deps: CreateAcpSessionDependencies | undefined;
+  private deps: AcpSessionDependencies | undefined;
   private state: State = 'new';
   private createdSessionId: string | null = null;
   private updateFailure: AcpSessionError | null = null;
@@ -31,12 +29,12 @@ export class AcpSession implements AcpSessionController {
   private closeOperation: Promise<void> | null = null;
   private closeWireOperation: Promise<void> | null = null;
 
-  bindDependencies(deps: CreateAcpSessionDependencies): void {
+  bind(deps: AcpSessionDependencies): void {
     if (this.deps) throw new Error('ACP session is already bound');
     this.deps = deps;
   }
 
-  private getDependencies(): CreateAcpSessionDependencies {
+  private getDependencies(): AcpSessionDependencies {
     if (!this.deps) throw new Error('ACP session is not bound');
     return this.deps;
   }
@@ -211,8 +209,8 @@ export class AcpSession implements AcpSessionController {
   }
 }
 
-export function createAcpSession(deps: CreateAcpSessionDependencies): AcpSessionController {
+export function createAcpSession(deps: AcpSessionDependencies): AcpSessionController {
   const session = new AcpSession();
-  session.bindDependencies(deps);
+  session.bind(deps);
   return session;
 }

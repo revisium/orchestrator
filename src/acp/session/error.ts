@@ -1,4 +1,4 @@
-import type { AcpSessionFailureCode } from './session.types.js';
+import type { AcpSessionFailureCode } from './types.js';
 
 export class AcpSessionError extends Error {
   readonly code: AcpSessionFailureCode;
