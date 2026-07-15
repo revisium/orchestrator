@@ -1,161 +1,196 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { NestFactory } from '@nestjs/core';
-import { AcpModule } from '../../acp.module.js';
-import { AcpRuntimeFactory } from '../factory.js';
-import type { JsonRpcConnection } from '../../jsonrpc/connection.types.js';
-import type { JsonRpcParams, JsonRpcValue } from '../../jsonrpc/types.js';
-import type { AcpPermissionResolutionRequest } from '../../prompt-execution/permission-request-handler.js';
+import { AcpJsonRpcConnection } from '../../jsonrpc/connection.js';
+import { AcpJsonRpcFramer } from '../../jsonrpc/framer.js';
+import { AcpPermissionRequestHandler } from '../../prompt-execution/permission-request-handler.js';
+import { AcpPromptOutcomeCollector } from '../../prompt-execution/prompt-outcome-collector.js';
+import { AcpSession } from '../../session/session.js';
+import { AcpModule, AcpRuntimeFactory, runAcpInvocation } from '../../index.js';
+import type {
+  AcpAgentCapabilities,
+  AcpBooleanConfigOptionCapabilities,
+  AcpCanonicalObject,
+  AcpConnector,
+  AcpConnectorContext,
+  AcpDiagnosticDetails,
+  AcpDiagnosticScalar,
+  AcpInboundHandlers,
+  AcpInboundNotification,
+  AcpImplementation,
+  AcpInvocationDependencies,
+  AcpInvocationDiagnostic,
+  AcpInvocationProtocolDiagnosticCode,
+  AcpInvocationRequest,
+  AcpInvocationRuntimeDiagnosticCode,
+  AcpInvocationSessionDiagnosticCode,
+  AcpInitializeResponse,
+  AcpNewSessionResponse,
+  AcpOpenConnection,
+  AcpOpenedConnection,
+  AcpPermissionOption,
+  AcpPermissionOptionKind,
+  AcpPermissionResolutionDecision,
+  AcpPermissionResolutionRequest,
+  AcpPermissionResolver,
+  AcpPermissionToolCallSnapshot,
+  AcpPromptExecutionDiagnostic,
+  AcpPromptOutcome,
+  AcpPromptProgress,
+  AcpReportedCost,
+  AcpReportedUsage,
+  AcpSessionActivityDiscriminator,
+  AcpSessionActivitySnapshot,
+  AcpSessionCapabilities,
+  AcpSessionCloseCapabilities,
+  AcpSessionConfigBooleanOptionState,
+  AcpSessionConfigOption,
+  AcpSessionConfigOptionBase,
+  AcpSessionConfigOptionCategory,
+  AcpSessionConfigSelectGroup,
+  AcpSessionConfigSelectOption,
+  AcpSessionConfigSelectOptions,
+  AcpSessionConfigSelectOptionState,
+  AcpSessionNotification,
+  AcpSessionUpdate,
+  AcpSessionUpdateDiscriminator,
+  AcpSetSessionConfigBooleanRequest,
+  AcpSetSessionConfigOptionRequest,
+  AcpSetSessionConfigOptionResponse,
+  AcpSetSessionConfigSelectRequest,
+  AcpStopReason,
+  JsonRpcConnection,
+  JsonRpcErrorObject,
+  JsonRpcErrorResponse,
+  JsonRpcId,
+  JsonRpcMessage,
+  JsonRpcNotification,
+  JsonRpcParams,
+  JsonRpcPrimitive,
+  JsonRpcRequest,
+  JsonRpcServerRequestOutcome,
+  JsonRpcSuccessResponse,
+  JsonRpcValue,
+} from '../../index.js';
 
-type Request = { method: string; params: JsonRpcParams | undefined };
+const publicConnector: AcpConnector = {
+  async configure(context: AcpConnectorContext) {
+    const { session, setConfigOption } = context;
+    await setConfigOption({
+      sessionId: session.sessionId,
+      configId: 'model',
+      value: 'provider/model',
+    });
+  },
+};
+const publicResolver: AcpPermissionResolver = async (
+  _request: AcpPermissionResolutionRequest,
+): Promise<AcpPermissionResolutionDecision> => ({ outcome: 'cancel' });
+const publicScalar: AcpDiagnosticScalar = null;
+const publicDetails: AcpDiagnosticDetails = { stable: publicScalar };
 
-function fakeConnection(responses: Record<string, JsonRpcValue>): JsonRpcConnection & { requests: Request[] } {
-  const requests: Request[] = [];
-  return {
-    requests,
-    request(method, params) {
-      requests.push({ method, params });
-      const response = responses[method];
-      if (response === undefined) return Promise.reject(new Error(`missing response for ${method}`));
-      return Promise.resolve(response);
-    },
-    async notify() {},
-    async receive() {},
-    close() {},
-  };
-}
+type PublicContractClosure = Readonly<{
+  connector: AcpConnector;
+  connectorContext: AcpConnectorContext;
+  diagnostics: readonly [
+    AcpDiagnosticDetails,
+    AcpDiagnosticScalar,
+    AcpInvocationDiagnostic,
+    AcpInvocationProtocolDiagnosticCode,
+    AcpInvocationRuntimeDiagnosticCode,
+    AcpInvocationSessionDiagnosticCode,
+    AcpPromptExecutionDiagnostic,
+  ];
+  invocation: readonly [
+    AcpInboundHandlers,
+    AcpInboundNotification,
+    AcpInvocationDependencies,
+    AcpInvocationRequest,
+    AcpOpenConnection,
+    AcpOpenedConnection,
+    AcpPromptOutcome,
+    AcpPromptProgress,
+  ];
+  permission: readonly [
+    AcpPermissionOption,
+    AcpPermissionOptionKind,
+    AcpPermissionResolutionDecision,
+    AcpPermissionResolutionRequest,
+    AcpPermissionResolver,
+    AcpPermissionToolCallSnapshot,
+  ];
+  protocol: readonly [
+    AcpAgentCapabilities,
+    AcpBooleanConfigOptionCapabilities,
+    AcpCanonicalObject,
+    AcpImplementation,
+    AcpInitializeResponse,
+    AcpNewSessionResponse,
+    AcpReportedCost,
+    AcpReportedUsage,
+    AcpSessionActivityDiscriminator,
+    AcpSessionActivitySnapshot,
+    AcpSessionCapabilities,
+    AcpSessionCloseCapabilities,
+    AcpSessionConfigBooleanOptionState,
+    AcpSessionConfigOption,
+    AcpSessionConfigOptionBase,
+    AcpSessionConfigOptionCategory,
+    AcpSessionConfigSelectGroup,
+    AcpSessionConfigSelectOption,
+    AcpSessionConfigSelectOptions,
+    AcpSessionConfigSelectOptionState,
+    AcpSessionNotification,
+    AcpSessionUpdate,
+    AcpSessionUpdateDiscriminator,
+    AcpSetSessionConfigBooleanRequest,
+    AcpSetSessionConfigOptionRequest,
+    AcpSetSessionConfigOptionResponse,
+    AcpSetSessionConfigSelectRequest,
+    AcpStopReason,
+  ];
+  jsonRpc: readonly [
+    JsonRpcConnection,
+    JsonRpcErrorObject,
+    JsonRpcErrorResponse,
+    JsonRpcId,
+    JsonRpcMessage,
+    JsonRpcNotification,
+    JsonRpcParams,
+    JsonRpcPrimitive,
+    JsonRpcRequest,
+    JsonRpcServerRequestOutcome,
+    JsonRpcSuccessResponse,
+    JsonRpcValue,
+  ];
+}>;
 
-test('singleton runtime factory resolves fresh bound transient ACP objects', async (context) => {
+const publicContractKey: keyof PublicContractClosure = 'connector';
+
+test('registers only the Nest ACP adapter and leaves core classes unmanaged', async (context) => {
   const application = await NestFactory.createApplicationContext(AcpModule, { logger: false });
   context.after(async () => { await application.close(); });
+
   const factory = application.get(AcpRuntimeFactory);
-  assert.strictEqual(application.get(AcpRuntimeFactory), factory);
+  assert.ok(factory instanceof AcpRuntimeFactory);
+  assert.equal(typeof factory.runInvocation, 'function');
+  for (const coreToken of [
+    AcpJsonRpcFramer,
+    AcpJsonRpcConnection,
+    AcpSession,
+    AcpPermissionRequestHandler,
+    AcpPromptOutcomeCollector,
+  ]) {
+    assert.throws(() => application.get(coreToken));
+  }
+});
 
-  const firstFramer = await factory.createFramer();
-  const secondFramer = await factory.createFramer();
-  const encoder = new TextEncoder();
-  assert.deepEqual(firstFramer.push(encoder.encode('{"jsonrpc":"2.0"')), []);
-  assert.deepEqual(secondFramer.push(encoder.encode('{"jsonrpc":"2.0","method":"second"}\n')), [
-    { jsonrpc: '2.0', method: 'second' },
-  ]);
-  assert.deepEqual(firstFramer.push(encoder.encode(',"method":"first"}\n')), [
-    { jsonrpc: '2.0', method: 'first' },
-  ]);
-
-  const firstWrites: Uint8Array[] = [];
-  const secondWrites: Uint8Array[] = [];
-  const firstConnection = await factory.createConnection({ async write(chunk) { firstWrites.push(chunk); } });
-  const secondConnection = await factory.createConnection({ async write(chunk) { secondWrites.push(chunk); } });
-  const firstRequest = firstConnection.request('first');
-  const secondRequest = secondConnection.request('second');
-  await Promise.resolve();
-  assert.equal(JSON.parse(new TextDecoder().decode(firstWrites[0]!).trim()).id, 1);
-  assert.equal(JSON.parse(new TextDecoder().decode(secondWrites[0]!).trim()).id, 1);
-  await firstConnection.receive({ jsonrpc: '2.0', id: 1, result: 'one' });
-  await secondConnection.receive({ jsonrpc: '2.0', id: 1, result: 'two' });
-  assert.equal(await firstRequest, 'one');
-  assert.equal(await secondRequest, 'two');
-
-  const firstSessionConnection = fakeConnection({ initialize: { protocolVersion: 1 }, 'session/new': { sessionId: 'first' } });
-  const secondSessionConnection = fakeConnection({ initialize: { protocolVersion: 1 }, 'session/new': { sessionId: 'second' } });
-  const firstSession = await factory.createSession({
-    connection: firstSessionConnection,
-    onUpdate: async () => {},
-    onDiagnostic: () => {},
-  });
-  const secondSession = await factory.createSession({
-    connection: secondSessionConnection,
-    onUpdate: async () => {},
-    onDiagnostic: () => {},
-  });
-  const initializeRequest = {
-    protocolVersion: 1,
-    clientCapabilities: {
-      fs: { readTextFile: false, writeTextFile: false },
-      session: { configOptions: { boolean: {} } },
-      terminal: false,
-    },
-    clientInfo: { name: 'revo', version: '1.0.0' },
-  } as const;
-  await Promise.all([
-    firstSession.initialize(initializeRequest),
-    secondSession.initialize(initializeRequest),
-  ]);
-  await Promise.all([
-    firstSession.create({ cwd: '/first', mcpServers: [] }),
-    secondSession.create({ cwd: '/second', mcpServers: [] }),
-  ]);
-  assert.equal(firstSession.getSessionId(), 'first');
-  assert.equal(secondSession.getSessionId(), 'second');
-  assert.deepEqual(firstSessionConnection.requests.map(({ method }) => method), ['initialize', 'session/new']);
-  assert.deepEqual(secondSessionConnection.requests.map(({ method }) => method), ['initialize', 'session/new']);
-
-  const firstPermissionRequests: AcpPermissionResolutionRequest[] = [];
-  const secondPermissionRequests: AcpPermissionResolutionRequest[] = [];
-  const firstRequestPermissionHandler = await factory.createRequestPermissionHandler({
-    async resolvePermission(request) {
-      firstPermissionRequests.push(request);
-      return { outcome: 'select', optionKind: 'allow_once' };
-    },
-  });
-  const secondRequestPermissionHandler = await factory.createRequestPermissionHandler({
-    async resolvePermission(request) {
-      secondPermissionRequests.push(request);
-      return { outcome: 'select', optionKind: 'reject_once' };
-    },
-  });
-  assert.notStrictEqual(firstRequestPermissionHandler, secondRequestPermissionHandler);
-
-  const firstPermissionResult = await firstRequestPermissionHandler.handle({
-    sessionId: 'permission-first',
-    toolCall: { toolCallId: 'tool-first' },
-    options: [{ optionId: 'allow-first', name: 'Allow first', kind: 'allow_once' }],
-  });
-  const secondPermissionResult = await secondRequestPermissionHandler.handle({
-    sessionId: 'permission-second',
-    toolCall: { toolCallId: 'tool-second' },
-    options: [{ optionId: 'reject-second', name: 'Reject second', kind: 'reject_once' }],
-  });
-  assert.deepEqual(firstPermissionResult, {
-    outcome: 'selected',
-    response: { outcome: { outcome: 'selected', optionId: 'allow-first' } },
-  });
-  assert.deepEqual(secondPermissionResult, {
-    outcome: 'selected',
-    response: { outcome: { outcome: 'selected', optionId: 'reject-second' } },
-  });
-  assert.deepEqual(firstPermissionRequests.map(({ sessionId, toolCallId }) => ({ sessionId, toolCallId })), [
-    { sessionId: 'permission-first', toolCallId: 'tool-first' },
-  ]);
-  assert.deepEqual(secondPermissionRequests.map(({ sessionId, toolCallId }) => ({ sessionId, toolCallId })), [
-    { sessionId: 'permission-second', toolCallId: 'tool-second' },
-  ]);
-
-  const firstPromptOutcomeCollector = await factory.createPromptOutcomeCollector({
-    expectedSessionId: 'outcome-first',
-  });
-  const secondPromptOutcomeCollector = await factory.createPromptOutcomeCollector({
-    expectedSessionId: 'outcome-second',
-  });
-  assert.notStrictEqual(firstPromptOutcomeCollector, secondPromptOutcomeCollector);
-  assert.deepEqual(firstPromptOutcomeCollector.collect({
-    kind: 'agent-text',
-    sessionId: 'outcome-first',
-    text: 'first',
-  }), { outcome: 'accepted' });
-  assert.deepEqual(secondPromptOutcomeCollector.collect({
-    kind: 'agent-text',
-    sessionId: 'outcome-second',
-    text: 'second',
-  }), { outcome: 'accepted' });
-  assert.deepEqual(firstPromptOutcomeCollector.snapshot(), {
-    sessionId: 'outcome-first',
-    text: 'first',
-    diagnostics: [],
-  });
-  assert.deepEqual(secondPromptOutcomeCollector.snapshot(), {
-    sessionId: 'outcome-second',
-    text: 'second',
-    diagnostics: [],
-  });
+test('exposes a transitively closed root-only public API', () => {
+  assert.equal(typeof AcpModule, 'function');
+  assert.equal(typeof AcpRuntimeFactory, 'function');
+  assert.equal(typeof runAcpInvocation, 'function');
+  assert.equal(publicConnector.configure instanceof Function, true);
+  assert.equal(publicResolver instanceof Function, true);
+  assert.deepEqual(publicDetails, { stable: null });
+  assert.equal(publicContractKey, 'connector');
 });
