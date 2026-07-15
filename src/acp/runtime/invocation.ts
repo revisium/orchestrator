@@ -160,7 +160,7 @@ function normalizeRecord(
         typeof key === "string" &&
         Object.getOwnPropertyDescriptor(input, key)?.enumerable === true,
     )
-    .sort();
+    .sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
   if (enumerable.length > MAX_DIAGNOSTIC_ENTRIES)
     return { kind: "truncated", reason: "entries" };
   const normalized: Record<string, AcpDiagnosticDetails> = {};
@@ -209,13 +209,16 @@ function asError(error: unknown): Error {
   } catch {}
   return new Error("ACP operation failed with a non-Error value");
 }
+async function rejectFailure(error: Error): Promise<never> {
+  throw error;
+}
 function raceFailure<T>(
   operation: Promise<T>,
   latch: FailureLatch,
 ): Promise<T> {
   return Promise.race([
     operation,
-    latch.signal.then((error) => Promise.reject(error)),
+    latch.signal.then(rejectFailure),
   ]);
 }
 

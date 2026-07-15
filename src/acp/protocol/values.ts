@@ -29,7 +29,6 @@ export type AcpInitializeResponse = Readonly<{
 }>;
 export type AcpNewSessionRequest = Readonly<{ cwd: string; mcpServers: readonly [] }>;
 
-export type AcpSessionConfigOptionCategory = string;
 export type AcpSessionConfigSelectOption = Readonly<{
   value: string; name: string; description?: string | null;
 }>;
@@ -42,6 +41,7 @@ export type AcpSessionConfigSelectOptions =
 export type AcpSessionConfigOptionBase = Readonly<{
   id: string; name: string; description?: string | null; category?: string | null;
 }>;
+export type AcpSessionConfigOptionCategory = NonNullable<AcpSessionConfigOptionBase['category']>;
 export type AcpSessionConfigSelectOptionState = AcpSessionConfigOptionBase & Readonly<{
   type: 'select'; currentValue: string; options: AcpSessionConfigSelectOptions;
 }>;
