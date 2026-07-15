@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { NestFactory } from '@nestjs/core';
+import { ModuleRef, NestFactory } from '@nestjs/core';
 import { AcpJsonRpcConnection } from '../../jsonrpc/connection.js';
 import { AcpJsonRpcFramer } from '../../jsonrpc/framer.js';
 import { AcpPermissionRequestHandler } from '../../prompt-execution/permission-request-handler.js';
 import { AcpPromptOutcomeCollector } from '../../prompt-execution/prompt-outcome-collector.js';
 import { AcpSession } from '../../session/session.js';
 import { AcpModule, AcpRuntimeFactory, runAcpInvocation } from '../../index.js';
+import { AcpInvocation } from '../invocation.js';
 import type {
   AcpAgentCapabilities,
   AcpBooleanConfigOptionCapabilities,
@@ -167,22 +168,55 @@ type PublicContractClosure = Readonly<{
 
 const publicContractKey: keyof PublicContractClosure = 'connector';
 
-test('registers only the Nest ACP adapter and leaves core classes unmanaged', async (context) => {
-  const application = await NestFactory.createApplicationContext(AcpModule, { logger: false });
-  context.after(async () => { await application.close(); });
+test('resolves isolated invocation graphs for sequential and overlapping factory calls', async (context) => {
+  const module = await NestFactory.createApplicationContext(AcpModule, { logger: false });
+  context.after(async () => { await module.close(); });
 
-  const factory = application.get(AcpRuntimeFactory);
-  assert.ok(factory instanceof AcpRuntimeFactory);
-  assert.equal(typeof factory.runInvocation, 'function');
-  for (const coreToken of [
-    AcpJsonRpcFramer,
-    AcpJsonRpcConnection,
-    AcpSession,
-    AcpPermissionRequestHandler,
-    AcpPromptOutcomeCollector,
-  ]) {
-    assert.throws(() => application.get(coreToken));
+  const factory = module.get(AcpRuntimeFactory);
+  const moduleRef = module.get(ModuleRef);
+  const resolved: AcpInvocation[] = [];
+  const originalResolve = moduleRef.resolve.bind(moduleRef);
+  moduleRef.resolve = (async (...args: Parameters<ModuleRef['resolve']>) => {
+    const invocation = await originalResolve<AcpInvocation>(...args) as AcpInvocation;
+    resolved.push(invocation);
+    return invocation;
+  }) as ModuleRef['resolve'];
+
+  const request = { cwd: '/tmp', prompt: 'prompt', clientInfo: { name: 'test', version: '1' } };
+  const failure = new Error('boundary probe');
+  const deps = {
+    openConnection: async () => { throw failure; },
+    connector: publicConnector,
+    resolvePermission: publicResolver,
+    onDiagnostic() {},
+  };
+
+  await Promise.all([
+    assert.rejects(factory.runInvocation(request, deps), failure),
+    assert.rejects(factory.runInvocation(request, deps), failure),
+  ]);
+  await assert.rejects(factory.runInvocation(request, deps), failure);
+
+  assert.equal(resolved.length, 3);
+  const graphs = resolved.map((invocation) => ({
+    invocation,
+    session: Reflect.get(invocation, 'session'),
+    permissionHandler: Reflect.get(invocation, 'permissionHandler'),
+    outcomeCollector: Reflect.get(invocation, 'outcomeCollector'),
+  }));
+  for (const graph of graphs) {
+    assert.ok(graph.session instanceof AcpSession);
+    assert.ok(graph.permissionHandler instanceof AcpPermissionRequestHandler);
+    assert.ok(graph.outcomeCollector instanceof AcpPromptOutcomeCollector);
   }
+  for (const [left, right] of [[0, 1], [0, 2], [1, 2]] as const) {
+    assert.notEqual(graphs[left]!.invocation, graphs[right]!.invocation);
+    assert.notEqual(graphs[left]!.session, graphs[right]!.session);
+    assert.notEqual(graphs[left]!.permissionHandler, graphs[right]!.permissionHandler);
+    assert.notEqual(graphs[left]!.outcomeCollector, graphs[right]!.outcomeCollector);
+  }
+  assert.throws(() => module.get(AcpJsonRpcFramer));
+  assert.throws(() => module.get(AcpJsonRpcConnection));
 });
 
 test('exposes a transitively closed root-only public API', () => {

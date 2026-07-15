@@ -1,3 +1,4 @@
+import { Injectable, Scope } from '@nestjs/common';
 import {
   ACP_METHODS,
   buildAcpCloseSessionParams,
@@ -47,6 +48,7 @@ type AcpSessionState =
   | 'closing'
   | 'closed';
 
+@Injectable({ scope: Scope.TRANSIENT })
 export class AcpSession implements AcpSessionController {
   private deps: AcpSessionDependencies | undefined;
   private state: AcpSessionState = 'new';

@@ -1,3 +1,4 @@
+import { Injectable, Scope } from '@nestjs/common';
 import type {
   AcpCanonicalObject,
   AcpPermissionOption,
@@ -109,6 +110,7 @@ function cancelPermission(
   };
 }
 
+@Injectable({ scope: Scope.TRANSIENT })
 export class AcpPermissionRequestHandler {
   private deps: AcpPermissionRequestHandlerDeps | undefined;
 

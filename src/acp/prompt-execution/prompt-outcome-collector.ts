@@ -1,3 +1,4 @@
+import { Injectable, Scope } from '@nestjs/common';
 import type {
   AcpReportedCost,
   AcpReportedUsage,
@@ -90,6 +91,7 @@ function rejectOutcome(reason: AcpPromptCollectionRejectionReason): AcpPromptCol
   };
 }
 
+@Injectable({ scope: Scope.TRANSIENT })
 export class AcpPromptOutcomeCollector {
   private expectedSessionId: string | undefined;
   private readonly textChunks: string[] = [];
