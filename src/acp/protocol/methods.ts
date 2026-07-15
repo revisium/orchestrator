@@ -114,10 +114,12 @@ export function buildAcpInitializeParams(request: AcpInitializeRequest): JsonRpc
     requireOwn(clientSession, 'configOptions', 'initialize.clientCapabilities.session'),
     'initialize.clientCapabilities.session.configOptions',
   );
-  const booleanCapabilities = requireRecord(
-    requireOwn(configOptions, 'boolean', 'initialize.clientCapabilities.session.configOptions'),
-    'initialize.clientCapabilities.session.configOptions.boolean',
-  );
+  const booleanCapabilities = Object.hasOwn(configOptions, 'boolean')
+    ? requireRecord(
+        configOptions['boolean'],
+        'initialize.clientCapabilities.session.configOptions.boolean',
+      )
+    : undefined;
   if (requireOwn(clientCapabilities, 'terminal', 'initialize.clientCapabilities') !== false) {
     invalidBuilderValue('initialize.clientCapabilities.terminal');
   }
@@ -131,10 +133,12 @@ export function buildAcpInitializeParams(request: AcpInitializeRequest): JsonRpc
       fs: { readTextFile: false, writeTextFile: false },
       session: {
         configOptions: {
-          boolean: { ...copyOptionalMeta(
-            booleanCapabilities,
-            'initialize.clientCapabilities.session.configOptions.boolean',
-          ) },
+          ...(booleanCapabilities === undefined
+            ? {}
+            : { boolean: copyOptionalMeta(
+                booleanCapabilities,
+                'initialize.clientCapabilities.session.configOptions.boolean',
+              ) }),
         },
       },
       terminal: false,

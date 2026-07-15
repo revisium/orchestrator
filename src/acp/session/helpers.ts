@@ -1,20 +1,34 @@
-import type { JsonRpcValue } from '../jsonrpc/types.js';
+import type { AcpCanonicalObject } from '../protocol/values.js';
 
-export function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
-  const prototype = Object.getPrototypeOf(value);
-  return prototype === Object.prototype || prototype === null;
-}
+export type DeferredPromise<T> = Readonly<{
+  promise: Promise<T>;
+  resolve(value: T): void;
+}>;
 
-export function isJsonRpcValue(value: unknown): value is JsonRpcValue {
-  if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
-  if (typeof value === 'number') return Number.isFinite(value);
-  if (Array.isArray(value)) return value.every(isJsonRpcValue);
-  return isPlainRecord(value) && Object.values(value).every(isJsonRpcValue);
-}
-
-export function createDeferredPromise(): { promise: Promise<void>; resolve(): void } {
-  let resolve!: () => void;
-  const promise = new Promise<void>((nextResolve) => { resolve = nextResolve; });
+export function createDeferredPromise<T>(): DeferredPromise<T> {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((nextResolve) => {
+    resolve = nextResolve;
+  });
   return { promise, resolve };
+}
+
+function ownString(value: object, key: 'name' | 'message'): string | undefined {
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor && 'value' in descriptor && typeof descriptor.value === 'string'
+      ? descriptor.value
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export function snapshotSessionError(error: unknown): AcpCanonicalObject {
+  if (typeof error !== 'object' || error === null) {
+    return { name: 'Error', message: 'ACP session operation failed' };
+  }
+  const name = ownString(error, 'name') ?? 'Error';
+  const message = ownString(error, 'message') ?? 'ACP session operation failed';
+  return { name, message };
 }
