@@ -527,14 +527,3 @@ export class AcpInvocation {
     });
   }
 }
-
-export function runAcpInvocation(
-  request: AcpInvocationRequest,
-  deps: AcpInvocationDependencies,
-): Promise<AcpPromptOutcome> {
-  return runAcpInvocationWithComponents(request, deps, {
-    session: new AcpSession(),
-    permissionHandler: new AcpPermissionRequestHandler(),
-    outcomeCollector: new AcpPromptOutcomeCollector(),
-  });
-}

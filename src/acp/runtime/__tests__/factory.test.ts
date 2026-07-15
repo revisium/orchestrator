@@ -6,7 +6,8 @@ import { AcpJsonRpcFramer } from '../../jsonrpc/framer.js';
 import { AcpPermissionRequestHandler } from '../../prompt-execution/permission-request-handler.js';
 import { AcpPromptOutcomeCollector } from '../../prompt-execution/prompt-outcome-collector.js';
 import { AcpSession } from '../../session/session.js';
-import { AcpModule, AcpRuntimeFactory, runAcpInvocation } from '../../index.js';
+import * as publicAcp from '../../index.js';
+import { AcpModule, AcpRuntimeFactory } from '../../index.js';
 import { AcpInvocation } from '../invocation.js';
 import type {
   AcpAgentCapabilities,
@@ -220,9 +221,9 @@ test('resolves isolated invocation graphs for sequential and overlapping factory
 });
 
 test('exposes a transitively closed root-only public API', () => {
+  assert.deepEqual(Object.keys(publicAcp).sort(), ['AcpModule', 'AcpRuntimeFactory']);
   assert.equal(typeof AcpModule, 'function');
   assert.equal(typeof AcpRuntimeFactory, 'function');
-  assert.equal(typeof runAcpInvocation, 'function');
   assert.equal(publicConnector.configure instanceof Function, true);
   assert.equal(publicResolver instanceof Function, true);
   assert.deepEqual(publicDetails, { stable: null });

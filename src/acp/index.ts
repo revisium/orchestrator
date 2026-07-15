@@ -1,6 +1,5 @@
 export { AcpModule } from './acp.module.js';
 export { AcpRuntimeFactory } from './runtime/factory.js';
-export { runAcpInvocation } from './runtime/invocation.js';
 
 export type { AcpConnector, AcpConnectorContext } from './runtime/connector.js';
 export type {

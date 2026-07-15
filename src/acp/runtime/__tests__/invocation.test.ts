@@ -10,12 +10,14 @@ import type {
   JsonRpcValue,
 } from '../../jsonrpc/types.js';
 import { AcpPermissionRequestHandler } from '../../prompt-execution/permission-request-handler.js';
-import { AcpPromptOutcomeCollector } from '../../prompt-execution/prompt-outcome-collector.js';
+import {
+  AcpPromptOutcomeCollector,
+  type AcpPromptOutcome,
+} from '../../prompt-execution/prompt-outcome-collector.js';
 import { AcpSession } from '../../session/session.js';
 import {
   AcpInvocationError,
   normalizeAcpDiagnosticDetails,
-  runAcpInvocation,
   runAcpInvocationWithComponents,
   type AcpInvocationComponents,
   type AcpInvocationDependencies,
@@ -23,6 +25,17 @@ import {
   type AcpInvocationRequest,
   type AcpOpenConnection,
 } from '../invocation.js';
+
+function runInvocation(
+  request: AcpInvocationRequest,
+  deps: AcpInvocationDependencies,
+): Promise<AcpPromptOutcome> {
+  return runAcpInvocationWithComponents(request, deps, {
+    session: new AcpSession(),
+    permissionHandler: new AcpPermissionRequestHandler(),
+    outcomeCollector: new AcpPromptOutcomeCollector(),
+  });
+}
 
 type JsonRpcResponse = JsonRpcSuccessResponse | JsonRpcErrorResponse;
 type ScriptedInboundFrame = Readonly<{
@@ -352,7 +365,7 @@ function createActivationProbe(peer: ScriptedPeer): Readonly<{
 test('runs one exact lifecycle through real JSON-RPC receive and correlation', async () => {
   const peer = createScriptedPeer();
   scriptSuccessfulLifecycle(peer, 'session-1');
-  const outcome = await runAcpInvocation(REQUEST_ONE, dependenciesFor(peer));
+  const outcome = await runInvocation(REQUEST_ONE, dependenciesFor(peer));
   await peer.waitForIdle();
   assert.deepEqual(peer.outboundRequests().map(({ method }) => method), [
     'initialize', 'session/new', 'session/set_config_option', 'session/prompt', 'session/close',
@@ -396,7 +409,7 @@ test('consumes inbound failure and binds components before one start', async () 
 test('does not let a prompt response overtake the previous update', async () => {
   const peer = createScriptedPeer();
   scriptSuccessfulLifecycle(peer, 'session-fifo');
-  const outcome = await runAcpInvocation(REQUEST_ONE, dependenciesFor(peer));
+  const outcome = await runInvocation(REQUEST_ONE, dependenciesFor(peer));
   assert.equal(outcome.text, 'hello from agent');
   assert.equal(outcome.stopReason, 'end_turn');
   assert.equal(peer.maxConcurrentReceive(), 1);
@@ -407,7 +420,7 @@ test('rejects a failure accepted before the completion marker cutoff', async () 
   scriptSuccessfulLifecycle(peer, 'session-pre-marker', {
     afterPromptResponse() { peer.queueInbound({ jsonrpc: '2.0', id: 999, result: null }); },
   });
-  await assert.rejects(runAcpInvocation(REQUEST_ONE, dependenciesFor(peer)), (error: unknown) => {
+  await assert.rejects(runInvocation(REQUEST_ONE, dependenciesFor(peer)), (error: unknown) => {
     assert.equal((error as { code?: unknown }).code, 'unknown_response_id');
     return true;
   });
@@ -422,7 +435,7 @@ test('does not let a gated frame accepted after barrier invocation delay or fail
   peer.setOnCompletionBarrier(() => {
     peer.queueInbound({ jsonrpc: '2.0', id: 999, result: null }, postBarrierGate);
   });
-  const invocation = runAcpInvocation(REQUEST_ONE, dependenciesFor(peer, diagnostics));
+  const invocation = runInvocation(REQUEST_ONE, dependenciesFor(peer, diagnostics));
   const settled = await Promise.race([
     invocation.then((outcome) => ({ kind: 'outcome' as const, outcome })),
     new Promise<Readonly<{ kind: 'test-timeout' }>>((resolve) => {
@@ -509,7 +522,7 @@ test('routes valid selected and cancelled permission requests through JSON-RPC r
       });
       },
     });
-    const invocation = runAcpInvocation(REQUEST_ONE, deps);
+    const invocation = runInvocation(REQUEST_ONE, deps);
     await invocation;
     await peer.waitForIdle();
     assert.deepEqual(outboundResponse(peer, scenario.id), {
@@ -548,7 +561,7 @@ test('routes malformed and unknown requests through runtime and latches their ex
         peer.queueInbound({ jsonrpc: '2.0', id: scenario.id, method: scenario.method, params: scenario.params });
       },
     });
-    await assert.rejects(runAcpInvocation(REQUEST_ONE, {
+    await assert.rejects(runInvocation(REQUEST_ONE, {
       ...dependenciesFor(peer),
       resolvePermission: async () => { resolverCalls += 1; return { outcome: 'cancel' }; },
     }), (error: unknown) => (error as { code?: unknown }).code === scenario.failure);
@@ -608,7 +621,7 @@ test('cancels before-session, foreign-session, and post-terminal permissions wit
       }
     });
     await assert.rejects(
-      runAcpInvocation(REQUEST_ONE, {
+      runInvocation(REQUEST_ONE, {
         ...dependenciesFor(peer),
         resolvePermission: async () => { resolverCalls += 1; return { outcome: 'cancel' }; },
       }),
@@ -666,7 +679,7 @@ test('rejects malformed, unsupported, foreign, and post-terminal notifications w
       },
     });
     await assert.rejects(
-      runAcpInvocation(REQUEST_ONE, dependenciesFor(peer)),
+      runInvocation(REQUEST_ONE, dependenciesFor(peer)),
       (error) => {
         assert.equal((error as { code?: unknown }).code, expectedCode);
         return true;
@@ -686,7 +699,7 @@ test('preserves the first inbound failure across initialize, create, configure, 
       if (request.method === 'session/new') peer.queueInbound(responseFor(request, { sessionId: `session-failure-${method}`, configOptions: [{ id: 'thinking', name: 'Thinking', type: 'boolean', currentValue: false }] }));
       if (request.method === 'session/set_config_option') peer.queueInbound(responseFor(request, { configOptions: [{ id: 'thinking', name: 'Thinking', type: 'boolean', currentValue: true }] }));
     });
-    await assert.rejects(runAcpInvocation(REQUEST_ONE, dependenciesFor(peer)), (error) => error === first);
+    await assert.rejects(runInvocation(REQUEST_ONE, dependenciesFor(peer)), (error) => error === first);
     peer.rejectInboundFailure(new Error('second failure'));
   }
 });
@@ -710,7 +723,7 @@ test('preserves rejected inbound failures in every lifecycle phase without unhan
         if (request.method === 'session/new') peer.queueInbound(responseFor(request, { sessionId: `session-rejection-${method}`, configOptions: [{ id: 'thinking', name: 'Thinking', type: 'boolean', currentValue: false }] }));
         if (request.method === 'session/set_config_option') peer.queueInbound(responseFor(request, { configOptions: [{ id: 'thinking', name: 'Thinking', type: 'boolean', currentValue: true }] }));
       });
-      await assert.rejects(runAcpInvocation(REQUEST_ONE, dependenciesFor(peer)), (error) => error === first);
+      await assert.rejects(runInvocation(REQUEST_ONE, dependenciesFor(peer)), (error) => error === first);
     }
     await new Promise<void>((resolve) => setImmediate(resolve));
     assert.deepEqual(unhandled, []);
@@ -723,7 +736,7 @@ test('keeps invocation outbound request rejection primary over a later inbound f
   const peer = createScriptedPeer();
   const inboundFailure = new Error('later inbound failure');
   peer.rejectNextWrite(new Error('initialize write failed'));
-  const invocation = runAcpInvocation(REQUEST_ONE, dependenciesFor(peer));
+  const invocation = runInvocation(REQUEST_ONE, dependenciesFor(peer));
   queueMicrotask(() => peer.rejectInboundFailure(inboundFailure));
   await assert.rejects(invocation, (error: unknown) => {
     assert.equal((error as { code?: unknown }).code, 'send_failed');
@@ -748,7 +761,7 @@ test('rejects duplicate prompt response and out-of-order post-response update be
         }
       },
     });
-    await assert.rejects(runAcpInvocation(REQUEST_ONE, dependenciesFor(peer)), (error: unknown) => {
+    await assert.rejects(runInvocation(REQUEST_ONE, dependenciesFor(peer)), (error: unknown) => {
       assert.equal((error as { code?: unknown }).code,
         scenario === 'duplicate-response' ? 'duplicate_response_id' : 'session_update_after_terminal');
       return true;
@@ -760,7 +773,7 @@ test('keeps connector rejection primary and schedules close without prompting', 
   const peer = createScriptedPeer();
   const failure = new Error('connector failed');
   scriptSuccessfulLifecycle(peer, 'session-connector');
-  await assert.rejects(runAcpInvocation(REQUEST_ONE, {
+  await assert.rejects(runInvocation(REQUEST_ONE, {
     ...dependenciesFor(peer), connector: { async configure() { throw failure; } },
   }), (error) => error === failure);
   await new Promise<void>((resolve) => setImmediate(resolve));
@@ -853,11 +866,11 @@ test('consumes hostile inbound resolve and reject values without coercion or unh
       toString() { throw new Error('toString must not execute'); },
     };
     const resolvedPeer = createScriptedPeer();
-    const resolved = runAcpInvocation(REQUEST_ONE, dependenciesFor(resolvedPeer));
+    const resolved = runInvocation(REQUEST_ONE, dependenciesFor(resolvedPeer));
     resolvedPeer.resolveInboundFailure(throwingProxy);
     await assert.rejects(resolved, /ACP operation failed with a non-Error value/);
     const rejectedPeer = createScriptedPeer();
-    const rejected = runAcpInvocation(REQUEST_TWO, dependenciesFor(rejectedPeer));
+    const rejected = runInvocation(REQUEST_TWO, dependenciesFor(rejectedPeer));
     rejectedPeer.rejectInboundFailure(coercive);
     await assert.rejects(rejected, /ACP operation failed with a non-Error value/);
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -907,7 +920,7 @@ test('reports exactly one observer throw diagnostic and isolates the diagnostic 
   const diagnostics: AcpInvocationDiagnostic[] = [];
   scriptSuccessfulLifecycle(peer, 'session-observer', { advertiseClose: false });
   let observerCalls = 0;
-  const outcome = await runAcpInvocation(REQUEST_ONE, {
+  const outcome = await runInvocation(REQUEST_ONE, {
     ...dependenciesFor(peer, diagnostics),
     onSessionUpdate() { observerCalls += 1; if (observerCalls === 1) throw new Error('observer failed'); },
     onDiagnostic(diagnostic) { diagnostics.push(diagnostic); throw new Error('diagnostic observer failed'); },
@@ -923,7 +936,7 @@ test('reports one late inbound failure without mutating the returned outcome', a
   const peer = createScriptedPeer();
   const diagnostics: AcpInvocationDiagnostic[] = [];
   scriptSuccessfulLifecycle(peer, 'session-late', { advertiseClose: false });
-  const outcome = await runAcpInvocation(REQUEST_ONE, dependenciesFor(peer, diagnostics));
+  const outcome = await runInvocation(REQUEST_ONE, dependenciesFor(peer, diagnostics));
   const snapshot = structuredClone(outcome);
   peer.resolveInboundFailure(new Error('late read failed'));
   await new Promise<void>((resolve) => setImmediate(resolve));
@@ -968,7 +981,7 @@ test('reports exact close failures and does not await null, rejecting, malformed
         }
       });
     }
-    const invocation = runAcpInvocation(REQUEST_ONE, dependenciesFor(peer, diagnostics));
+    const invocation = runInvocation(REQUEST_ONE, dependenciesFor(peer, diagnostics));
     const result = await Promise.race([
       invocation.then((outcome) => ({ kind: 'outcome' as const, outcome })),
       new Promise<Readonly<{ kind: 'test-timeout' }>>((resolve) => {
@@ -996,8 +1009,8 @@ test('keeps two concurrent invocation states isolated', async () => {
   scriptSuccessfulLifecycle(first, 'session-concurrent-one', { advertiseClose: false });
   scriptSuccessfulLifecycle(second, 'session-concurrent-two', { advertiseClose: false });
   const [firstOutcome, secondOutcome] = await Promise.all([
-    runAcpInvocation(REQUEST_ONE, dependenciesFor(first, firstDiagnostics)),
-    runAcpInvocation(REQUEST_TWO, dependenciesFor(second, secondDiagnostics)),
+    runInvocation(REQUEST_ONE, dependenciesFor(first, firstDiagnostics)),
+    runInvocation(REQUEST_TWO, dependenciesFor(second, secondDiagnostics)),
   ]);
   first.resolveInboundFailure(new Error('late first failure'));
   await new Promise<void>((resolve) => setImmediate(resolve));
