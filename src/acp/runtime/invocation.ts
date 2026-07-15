@@ -160,7 +160,7 @@ function normalizeRecord(
         typeof key === "string" &&
         Object.getOwnPropertyDescriptor(input, key)?.enumerable === true,
     )
-    .sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
+    .sort(compareUtf16CodeUnits);
   if (enumerable.length > MAX_DIAGNOSTIC_ENTRIES)
     return { kind: "truncated", reason: "entries" };
   const normalized: Record<string, AcpDiagnosticDetails> = {};
@@ -172,6 +172,12 @@ function normalizeRecord(
         : { kind: "unsupported", type: "accessor" };
   }
   return normalized;
+}
+
+function compareUtf16CodeUnits(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
 }
 
 function freezeDiagnostic(details: AcpDiagnosticDetails): AcpDiagnosticDetails {
